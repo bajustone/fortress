@@ -98,6 +98,45 @@ const CREATE_TABLES_SQL = `
     is_revoked INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS fortress_two_factor_secret (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES fortress_user(id) ON DELETE CASCADE,
+    secret TEXT NOT NULL,
+    is_enabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_backup_code (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    is_used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_trusted_device (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    device_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_social_account (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    email TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    token_expires_at TEXT,
+    profile TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `;
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';

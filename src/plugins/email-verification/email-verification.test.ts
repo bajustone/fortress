@@ -74,11 +74,11 @@ describe('email-verification plugin', () => {
     });
 
     it('rejects expired token', async () => {
-      // Create with 0-second expiry
+      // Create with negative expiry to guarantee token is already expired
       const shortFortress = createFortress({
         jwt: { secret: SECRET },
         database: createTestAdapter(),
-        plugins: [emailVerification({ tokenExpirySeconds: 0, onSendVerification: onSend })],
+        plugins: [emailVerification({ tokenExpirySeconds: -1, onSendVerification: onSend })],
       });
 
       await shortFortress.auth.createUser({

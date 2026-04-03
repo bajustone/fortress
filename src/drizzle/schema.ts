@@ -121,6 +121,49 @@ const apiKeys = sqliteTable('fortress_api_key', {
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
+// --- Plugins: Two-Factor ---
+
+const twoFactorSecrets = sqliteTable('fortress_two_factor_secret', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
+  secret: text('secret').notNull(), // Base32-encoded TOTP secret
+  isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+const backupCodes = sqliteTable('fortress_backup_code', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  codeHash: text('code_hash').notNull(),
+  isUsed: integer('is_used', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+const trustedDevices = sqliteTable('fortress_trusted_device', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  deviceHash: text('device_hash').notNull(), // Hash of device fingerprint
+  expiresAt: text('expires_at').notNull(),
+  lastUsedAt: text('last_used_at').notNull(),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// --- Plugins: Social Login ---
+
+const socialAccounts = sqliteTable('fortress_social_account', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),
+  providerAccountId: text('provider_account_id').notNull(),
+  email: text('email'),
+  accessToken: text('access_token'), // Encrypted
+  refreshToken: text('refresh_token'), // Encrypted
+  tokenExpiresAt: text('token_expires_at'),
+  profile: text('profile'), // JSON
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 // --- All tables for easy iteration ---
 
 export const fortressSchema = {
@@ -136,4 +179,8 @@ export const fortressSchema = {
   roleBindings,
   emailVerificationTokens,
   apiKeys,
+  twoFactorSecrets,
+  backupCodes,
+  trustedDevices,
+  socialAccounts,
 };
