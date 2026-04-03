@@ -17,6 +17,7 @@ import type {
   TokenClaims,
 } from '../types';
 import { Errors } from '../errors';
+import { createInternalAdapter } from '../internal-adapter';
 import { signAccessToken, verifyAccessToken } from './jwt';
 import { createDefaultHasher } from './password';
 import { generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
@@ -57,6 +58,7 @@ export function createAuthService(
 ): AuthService {
   const resolved = resolveConfig(config);
   const hasher: PasswordHasher = config.passwordHasher ?? createDefaultHasher();
+  const adapter = createInternalAdapter(db);
 
   async function runBeforeHooks<T extends Record<string, unknown>>(
     hookName: 'beforeLogin' | 'beforeRegister' | 'beforeTokenRefresh' | 'beforeLogout',
@@ -109,23 +111,7 @@ export function createAuthService(
     return customClaims;
   }
 
-  async function getUserGroups(userId: number): Promise<string[]> {
-    const memberships = await db.findMany<{ groupId: number }>({
-      model: 'group_user',
-      where: [{ field: 'userId', operator: '=', value: userId }],
-    });
-
-    if (memberships.length === 0)
-      return [];
-
-    const groupIds = memberships.map(m => m.groupId);
-    const groups = await db.findMany<{ name: string }>({
-      model: 'group',
-      where: [{ field: 'id', operator: 'in', value: groupIds }],
-    });
-
-    return groups.map(g => g.name);
-  }
+  const getUserGroups = adapter.getUserGroups;
 
   async function issueTokens(
     user: FortressUser,
@@ -174,26 +160,7 @@ export function createAuthService(
       }
 
       // Resolve user via login_identifier first, fall back to email on user table
-      let user: (FortressUser & { passwordHash: string }) | null = null;
-
-      const loginId = await db.findOne<LoginIdentifier>({
-        model: 'login_identifier',
-        where: [{ field: 'value', operator: '=', value: identifier }],
-      });
-
-      if (loginId) {
-        user = await db.findOne<FortressUser & { passwordHash: string }>({
-          model: 'user',
-          where: [{ field: 'id', operator: '=', value: loginId.userId }],
-        });
-      }
-      else {
-        // Fallback: direct email lookup (for backwards compat or before identifiers are set up)
-        user = await db.findOne<FortressUser & { passwordHash: string }>({
-          model: 'user',
-          where: [{ field: 'email', operator: '=', value: identifier }],
-        });
-      }
+      const user = await adapter.findUserByIdentifier(identifier);
 
       if (!user) {
         throw Errors.unauthorized('Invalid credentials');
@@ -236,18 +203,7 @@ export function createAuthService(
 
       const tokenHash = await hashToken(refreshToken);
 
-      const stored = await db.findOne<{
-        id: number;
-        userId: number;
-        tokenFamily: string;
-        isRevoked: boolean;
-        expiresAt: Date;
-        ipAddress: string | null;
-        userAgent: string | null;
-      }>({
-        model: 'refresh_token',
-        where: [{ field: 'tokenHash', operator: '=', value: tokenHash }],
-      });
+      const stored = await adapter.findRefreshTokenByHash(tokenHash);
 
       if (!stored) {
         throw Errors.unauthorized('Invalid refresh token');

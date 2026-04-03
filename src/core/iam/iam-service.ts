@@ -10,6 +10,7 @@ import type {
 } from '../types';
 import type { EvaluationMode } from './permission-evaluator';
 import { Errors } from '../errors';
+import { createInternalAdapter } from '../internal-adapter';
 import { evaluatePermissions } from './permission-evaluator';
 import { loadResourceFile, pullResources, pushResources, writeResourceFile } from './resource-sync';
 
@@ -34,68 +35,7 @@ export function createIamService(
 ): IamService {
   const evaluationMode: EvaluationMode = config.rbac?.evaluationMode ?? 'allow-only';
   const resourceFile = config.rbac?.resourceFile ?? './fortress.resources.json';
-
-  /**
-   * Get all permissions for a user through their direct bindings and group memberships.
-   * Chain: User → (direct + via Group) → RoleBinding → Role → RolePermission → Permission
-   */
-  async function getUserPermissions(userId: number): Promise<Permission[]> {
-    // 1. Get user's direct role bindings
-    const directBindings = await db.findMany<{ roleId: number }>({
-      model: 'role_binding',
-      where: [
-        { field: 'subjectType', operator: '=', value: 'USER' },
-        { field: 'subjectId', operator: '=', value: userId },
-      ],
-    });
-
-    // 2. Get user's group memberships
-    const groupMemberships = await db.findMany<{ groupId: number }>({
-      model: 'group_user',
-      where: [{ field: 'userId', operator: '=', value: userId }],
-    });
-
-    // 3. Get role bindings for user's groups
-    let groupBindings: { roleId: number }[] = [];
-    if (groupMemberships.length > 0) {
-      const groupIds = groupMemberships.map(m => m.groupId);
-      groupBindings = await db.findMany<{ roleId: number }>({
-        model: 'role_binding',
-        where: [
-          { field: 'subjectType', operator: '=', value: 'GROUP' },
-          { field: 'subjectId', operator: 'in', value: groupIds },
-        ],
-      });
-    }
-
-    // 4. Collect unique role IDs
-    const roleIds = [...new Set([
-      ...directBindings.map(b => b.roleId),
-      ...groupBindings.map(b => b.roleId),
-    ])];
-
-    if (roleIds.length === 0)
-      return [];
-
-    // 5. Get role → permission mappings
-    const rolePermissions = await db.findMany<{ permissionId: number }>({
-      model: 'role_permission',
-      where: [{ field: 'roleId', operator: 'in', value: roleIds }],
-    });
-
-    const permissionIds = [...new Set(rolePermissions.map(rp => rp.permissionId))];
-
-    if (permissionIds.length === 0)
-      return [];
-
-    // 6. Get actual permissions
-    const permissions = await db.findMany<Permission>({
-      model: 'permission',
-      where: [{ field: 'id', operator: 'in', value: permissionIds }],
-    });
-
-    return permissions;
-  }
+  const adapter = createInternalAdapter(db);
 
   return {
     async checkPermission(
@@ -104,7 +44,7 @@ export function createIamService(
       action: string,
       context?: PermissionContext,
     ): Promise<boolean> {
-      const permissions = await getUserPermissions(userId);
+      const permissions = await adapter.getUserPermissions(userId);
 
       // Enrich context with user info
       const enrichedContext: PermissionContext = {
@@ -115,7 +55,7 @@ export function createIamService(
       return evaluatePermissions(permissions, resource, action, evaluationMode, enrichedContext);
     },
 
-    getUserPermissions,
+    getUserPermissions: adapter.getUserPermissions,
 
     async createRole(name: string, permissions: PermissionInput[], description?: string): Promise<Role> {
       const role = await db.create<Role>({
@@ -124,36 +64,8 @@ export function createIamService(
       });
 
       for (const perm of permissions) {
-        // Ensure the resource exists (auto-create if missing)
-        const existingResource = await db.findOne<{ name: string }>({
-          model: 'resource',
-          where: [{ field: 'name', operator: '=', value: perm.resource }],
-        });
-        if (!existingResource) {
-          await db.create({ model: 'resource', data: { name: perm.resource } });
-        }
-
-        // Find or create the permission
-        let permission = await db.findOne<Permission>({
-          model: 'permission',
-          where: [
-            { field: 'resource', operator: '=', value: perm.resource },
-            { field: 'action', operator: '=', value: perm.action },
-          ],
-        });
-
-        if (!permission) {
-          permission = await db.create<Permission>({
-            model: 'permission',
-            data: {
-              resource: perm.resource,
-              action: perm.action,
-              effect: perm.effect ?? 'ALLOW',
-              conditions: perm.conditions ? JSON.stringify(perm.conditions) : null,
-              description: `${perm.action} ${perm.resource}`,
-            },
-          });
-        }
+        await adapter.ensureResource(perm.resource);
+        const permission = await adapter.findOrCreatePermission(perm);
 
         await db.create({
           model: 'role_permission',
