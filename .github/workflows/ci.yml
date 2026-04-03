@@ -6,6 +6,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: oven-sh/setup-bun@v2
       - run: bun install
       - run: bun run lint
@@ -17,4 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
-      - run: deno publish --dry-run
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: deno publish --dry-run --allow-dirty
