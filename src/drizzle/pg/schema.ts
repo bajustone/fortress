@@ -2,7 +2,7 @@ import { boolean, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, 
 
 // --- Core Identity ---
 
-export const users = pgTable('fortress_user', {
+const users = pgTable('fortress_user', {
   id: serial('id').primaryKey(),
   email: varchar('email', { length: 255 }).notNull().unique(),
   name: varchar('name', { length: 255 }).notNull(),
@@ -14,7 +14,7 @@ export const users = pgTable('fortress_user', {
 
 // --- Login Identifiers ---
 
-export const loginIdentifiers = pgTable('fortress_login_identifier', {
+const loginIdentifiers = pgTable('fortress_login_identifier', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   type: varchar('type', { length: 20 }).notNull(), // 'email' | 'phone' | 'username'
@@ -23,7 +23,7 @@ export const loginIdentifiers = pgTable('fortress_login_identifier', {
 
 // --- Auth ---
 
-export const refreshTokens = pgTable('fortress_refresh_token', {
+const refreshTokens = pgTable('fortress_refresh_token', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
@@ -37,13 +37,13 @@ export const refreshTokens = pgTable('fortress_refresh_token', {
 
 // --- IAM: Groups ---
 
-export const groups = pgTable('fortress_group', {
+const groups = pgTable('fortress_group', {
   id: serial('id').primaryKey(),
   name: varchar('name', { length: 100 }).notNull().unique(),
   description: text('description'),
 });
 
-export const groupUsers = pgTable(
+const groupUsers = pgTable(
   'fortress_group_user',
   {
     groupId: integer('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
@@ -54,12 +54,12 @@ export const groupUsers = pgTable(
 
 // --- IAM: Resources & Permissions ---
 
-export const resources = pgTable('fortress_resource', {
+const resources = pgTable('fortress_resource', {
   name: varchar('name', { length: 100 }).primaryKey(),
   description: text('description'),
 });
 
-export const permissions = pgTable('fortress_permission', {
+const permissions = pgTable('fortress_permission', {
   id: serial('id').primaryKey(),
   resource: varchar('resource', { length: 100 }).notNull().references(() => resources.name, { onDelete: 'cascade' }),
   action: varchar('action', { length: 100 }).notNull(),
@@ -70,13 +70,13 @@ export const permissions = pgTable('fortress_permission', {
 
 // --- IAM: Roles ---
 
-export const roles = pgTable('fortress_role', {
+const roles = pgTable('fortress_role', {
   id: serial('id').primaryKey(),
   name: varchar('name', { length: 100 }).notNull().unique(),
   description: text('description'),
 });
 
-export const rolePermissions = pgTable(
+const rolePermissions = pgTable(
   'fortress_role_permission',
   {
     roleId: integer('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
@@ -87,7 +87,7 @@ export const rolePermissions = pgTable(
 
 // --- IAM: Role Bindings ---
 
-export const roleBindings = pgTable('fortress_role_binding', {
+const roleBindings = pgTable('fortress_role_binding', {
   id: serial('id').primaryKey(),
   roleId: integer('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
   subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'

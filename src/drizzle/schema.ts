@@ -2,7 +2,7 @@ import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 // --- Core Identity ---
 
-export const users = sqliteTable('fortress_user', {
+const users = sqliteTable('fortress_user', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
@@ -14,7 +14,7 @@ export const users = sqliteTable('fortress_user', {
 
 // --- Login Identifiers ---
 
-export const loginIdentifiers = sqliteTable('fortress_login_identifier', {
+const loginIdentifiers = sqliteTable('fortress_login_identifier', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   type: text('type').notNull(), // 'email' | 'phone' | 'username'
@@ -23,7 +23,7 @@ export const loginIdentifiers = sqliteTable('fortress_login_identifier', {
 
 // --- Auth ---
 
-export const refreshTokens = sqliteTable('fortress_refresh_token', {
+const refreshTokens = sqliteTable('fortress_refresh_token', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').notNull().unique(),
@@ -37,13 +37,13 @@ export const refreshTokens = sqliteTable('fortress_refresh_token', {
 
 // --- IAM: Groups ---
 
-export const groups = sqliteTable('fortress_group', {
+const groups = sqliteTable('fortress_group', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull().unique(),
   description: text('description'),
 });
 
-export const groupUsers = sqliteTable(
+const groupUsers = sqliteTable(
   'fortress_group_user',
   {
     groupId: integer('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
@@ -54,12 +54,12 @@ export const groupUsers = sqliteTable(
 
 // --- IAM: Resources & Permissions ---
 
-export const resources = sqliteTable('fortress_resource', {
+const resources = sqliteTable('fortress_resource', {
   name: text('name').primaryKey(),
   description: text('description'),
 });
 
-export const permissions = sqliteTable('fortress_permission', {
+const permissions = sqliteTable('fortress_permission', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   resource: text('resource').notNull().references(() => resources.name, { onDelete: 'cascade' }),
   action: text('action').notNull(),
@@ -70,13 +70,13 @@ export const permissions = sqliteTable('fortress_permission', {
 
 // --- IAM: Roles ---
 
-export const roles = sqliteTable('fortress_role', {
+const roles = sqliteTable('fortress_role', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull().unique(),
   description: text('description'),
 });
 
-export const rolePermissions = sqliteTable(
+const rolePermissions = sqliteTable(
   'fortress_role_permission',
   {
     roleId: integer('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
@@ -87,7 +87,7 @@ export const rolePermissions = sqliteTable(
 
 // --- IAM: Role Bindings ---
 
-export const roleBindings = sqliteTable('fortress_role_binding', {
+const roleBindings = sqliteTable('fortress_role_binding', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   roleId: integer('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
   subjectType: text('subject_type').notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
