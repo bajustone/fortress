@@ -95,13 +95,21 @@ function sanitizeForSqlite(data: Record<string, unknown>): Record<string, unknow
 }
 
 /**
+ * Minimal Drizzle DB interface — accepts any Drizzle database instance.
+ * Drizzle DB types vary by dialect (BunSQLiteDatabase, PostgresJsDatabase, etc.)
+ * so we use a loose structural type rather than importing a specific one.
+ */
+// eslint-disable-next-line ts/no-unsafe-function-type -- Drizzle DB methods have dialect-specific signatures
+interface DrizzleDB { insert: Function; select: Function; update: Function; delete: Function; transaction: Function }
+
+/**
  * Create a DatabaseAdapter backed by any Drizzle instance.
  * Works with PostgreSQL, MySQL, and SQLite (bun:sqlite, better-sqlite3).
  *
  * @param db - Any Drizzle database instance
  * @param options - Optional table overrides and dialect configuration
  */
-export function createDrizzleAdapter(db: any, options?: DrizzleAdapterOptions): DatabaseAdapter {
+export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOptions): DatabaseAdapter {
   const dialect = options?.dialect ?? 'sqlite';
   const tableMap: Record<string, Table> = { ...DEFAULT_TABLE_MAP, ...(options?.tables as Record<string, Table>) };
   const sanitize = dialect === 'sqlite' ? sanitizeForSqlite : (d: Record<string, unknown>) => d;
@@ -114,84 +122,109 @@ export function createDrizzleAdapter(db: any, options?: DrizzleAdapterOptions): 
     return table;
   }
 
-  const adapter: DatabaseAdapter = {
-    async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
-      const table = getTable(params.model);
-      const result = db.insert(table).values(sanitize(params.data) as any).returning().get();
-      return result as T;
-    },
+  /** Build a DatabaseAdapter backed by a specific Drizzle instance (db or tx) */
+  function buildAdapter(drizzle: DrizzleDB): DatabaseAdapter {
+    const self: DatabaseAdapter = {
+      async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
+        const table = getTable(params.model);
+        const result = (drizzle as any).insert(table).values(sanitize(params.data) as any).returning().get();
+        return result as T;
+      },
 
-    async findOne<T>(params: { model: string; where: WhereClause[] }): Promise<T | null> {
-      const table = getTable(params.model);
-      const condition = buildWhereCondition(table, params.where);
-      const result = db.select().from(table).where(condition).get();
-      return (result as T) ?? null;
-    },
-
-    async findMany<T>(params: {
-      model: string;
-      where?: WhereClause[];
-      limit?: number;
-      offset?: number;
-      sortBy?: { field: string; direction: 'asc' | 'desc' };
-    }): Promise<T[]> {
-      const table = getTable(params.model);
-      let query = db.select().from(table).$dynamic();
-
-      if (params.where && params.where.length > 0) {
+      async findOne<T>(params: { model: string; where: WhereClause[] }): Promise<T | null> {
+        const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
-        query = query.where(condition);
-      }
+        const result = (drizzle as any).select().from(table).where(condition).get();
+        return (result as T) ?? null;
+      },
 
-      if (params.sortBy) {
-        const column = getColumn(table, params.sortBy.field);
-        query = query.orderBy(
-          params.sortBy.direction === 'desc' ? sql`${column} desc` : sql`${column} asc`,
-        );
-      }
+      async findMany<T>(params: {
+        model: string;
+        where?: WhereClause[];
+        limit?: number;
+        offset?: number;
+        sortBy?: { field: string; direction: 'asc' | 'desc' };
+      }): Promise<T[]> {
+        const table = getTable(params.model);
+        let query = (drizzle as any).select().from(table).$dynamic();
 
-      if (params.limit) {
-        query = query.limit(params.limit);
-      }
+        if (params.where && params.where.length > 0) {
+          const condition = buildWhereCondition(table, params.where);
+          query = query.where(condition);
+        }
 
-      if (params.offset) {
-        query = query.offset(params.offset);
-      }
+        if (params.sortBy) {
+          const column = getColumn(table, params.sortBy.field);
+          query = query.orderBy(
+            params.sortBy.direction === 'desc' ? sql`${column} desc` : sql`${column} asc`,
+          );
+        }
 
-      return query.all() as T[];
-    },
+        if (params.limit) {
+          query = query.limit(params.limit);
+        }
 
-    /** @see DatabaseAdapter.update for no-match behavior documentation */
-    async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T> {
-      const table = getTable(params.model);
-      const condition = buildWhereCondition(table, params.where);
-      const result = db.update(table).set(sanitize(params.data) as any).where(condition).returning().get();
-      return result as T;
-    },
+        if (params.offset) {
+          query = query.offset(params.offset);
+        }
 
-    async delete(params: { model: string; where: WhereClause[] }): Promise<void> {
-      const table = getTable(params.model);
-      const condition = buildWhereCondition(table, params.where);
-      db.delete(table).where(condition).run();
-    },
+        return query.all() as T[];
+      },
 
-    async count(params: { model: string; where?: WhereClause[] }): Promise<number> {
-      const table = getTable(params.model);
-      let query = db.select({ count: sql<number>`count(*)` }).from(table).$dynamic();
-
-      if (params.where && params.where.length > 0) {
+      /** @see DatabaseAdapter.update for no-match behavior documentation */
+      async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T> {
+        const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
-        query = query.where(condition);
-      }
+        const result = (drizzle as any).update(table).set(sanitize(params.data) as any).where(condition).returning().get();
+        return result as T;
+      },
 
-      const result = query.get();
-      return (result as any)?.count ?? 0;
-    },
+      async delete(params: { model: string; where: WhereClause[] }): Promise<void> {
+        const table = getTable(params.model);
+        const condition = buildWhereCondition(table, params.where);
+        (drizzle as any).delete(table).where(condition).run();
+      },
 
-    async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {
-      return fn(adapter);
-    },
-  };
+      async count(params: { model: string; where?: WhereClause[] }): Promise<number> {
+        const table = getTable(params.model);
+        let query = (drizzle as any).select({ count: sql<number>`count(*)` }).from(table).$dynamic();
 
-  return adapter;
+        if (params.where && params.where.length > 0) {
+          const condition = buildWhereCondition(table, params.where);
+          query = query.where(condition);
+        }
+
+        const result = query.get();
+        return (result as any)?.count ?? 0;
+      },
+
+      async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {
+        if (dialect === 'sqlite') {
+          // SQLite (better-sqlite3, bun:sqlite) transactions are synchronous.
+          // Drizzle's SQLite .transaction() doesn't support async callbacks.
+          // We use a manual BEGIN/COMMIT/ROLLBACK approach for async compatibility.
+          (drizzle as any).run(sql`BEGIN`);
+          try {
+            const result = await fn(self);
+            (drizzle as any).run(sql`COMMIT`);
+            return result;
+          }
+          catch (error) {
+            (drizzle as any).run(sql`ROLLBACK`);
+            throw error;
+          }
+        }
+
+        // PostgreSQL/MySQL: use Drizzle's native async transaction
+        return (drizzle as any).transaction(async (tx: DrizzleDB) => {
+          const txAdapter = buildAdapter(tx);
+          return fn(txAdapter);
+        });
+      },
+    };
+
+    return self;
+  }
+
+  return buildAdapter(db);
 }

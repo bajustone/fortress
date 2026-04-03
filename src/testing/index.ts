@@ -77,7 +77,7 @@ const CREATE_TABLES_SQL = `
   );
 `;
 
-const isBun = typeof globalThis.Bun !== 'undefined';
+const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';
 
 /**
  * Create a test DatabaseAdapter using in-memory SQLite.

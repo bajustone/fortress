@@ -17,7 +17,7 @@ const mockDb: DatabaseAdapter = {
 describe('createFortress', () => {
   it('creates a fortress instance with auth and iam services', () => {
     const fortress = createFortress({
-      jwt: { secret: 'test-secret' },
+      jwt: { secret: 'fortress-test-secret-at-least-32!' },
       database: mockDb,
     });
 
@@ -41,14 +41,14 @@ describe('createFortress', () => {
   });
 
   it('exposes config as readonly', () => {
-    const config = { jwt: { secret: 'test' }, database: mockDb };
+    const config = { jwt: { secret: 'fortress-test-secret-at-least-32!' }, database: mockDb };
     const fortress = createFortress(config);
     expect(fortress.config).toBe(config);
   });
 
   it('returns empty plugins when none registered', () => {
     const fortress = createFortress({
-      jwt: { secret: 'test' },
+      jwt: { secret: 'fortress-test-secret-at-least-32!' },
       database: mockDb,
     });
     expect(fortress.plugins).toEqual({});
@@ -56,7 +56,7 @@ describe('createFortress', () => {
 
   it('registers plugin methods', () => {
     const fortress = createFortress({
-      jwt: { secret: 'test' },
+      jwt: { secret: 'fortress-test-secret-at-least-32!' },
       database: mockDb,
       plugins: [
         {
@@ -75,9 +75,23 @@ describe('createFortress', () => {
   it('only requires secret and database', () => {
     // Minimal config — should not throw
     const fortress = createFortress({
-      jwt: { secret: 'minimal' },
+      jwt: { secret: 'fortress-test-secret-at-least-32!' },
       database: mockDb,
     });
     expect(fortress).toBeDefined();
+  });
+
+  it('rejects JWT secrets shorter than 32 bytes', () => {
+    expect(() => createFortress({
+      jwt: { secret: 'too-short' },
+      database: mockDb,
+    })).toThrow('JWT secret must be at least 32 bytes');
+  });
+
+  it('rejects short secrets in rotation arrays', () => {
+    expect(() => createFortress({
+      jwt: { secret: ['valid-secret-that-is-32-bytes!!!', 'short'] },
+      database: mockDb,
+    })).toThrow('JWT secret must be at least 32 bytes');
   });
 });

@@ -12,7 +12,7 @@ import {
 } from './plugin-runner';
 
 const mockDb = {} as DatabaseAdapter;
-const mockConfig = { jwt: { secret: 'test' }, database: mockDb } as FortressConfig;
+const mockConfig = { jwt: { secret: 'plugin-runner-test-secret-32ch!!' }, database: mockDb } as FortressConfig;
 
 function testPlugin(overrides: Partial<FortressPlugin> = {}): FortressPlugin {
   return { name: 'test-plugin', ...overrides };

@@ -8,7 +8,7 @@ export interface WhereClause {
    *  Adapters MAY support additional operators: 'like', 'isNull', 'between', etc.
    *  Adapters throw on unsupported operators at runtime.
    */
-  operator: string;
+  operator: CoreOperator | (string & {});
   value: unknown;
 }
 

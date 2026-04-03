@@ -4,6 +4,7 @@ export type FortressErrorCode
     | 'FORBIDDEN'
     | 'BAD_REQUEST'
     | 'NOT_FOUND'
+    | 'CONFLICT'
     | 'RATE_LIMITED'
     | 'DATABASE_ERROR';
 
@@ -40,6 +41,8 @@ export const Errors = {
     new FortressError('BAD_REQUEST', message, 400),
   notFound: (message = 'Not found'): FortressError =>
     new FortressError('NOT_FOUND', message, 404),
+  conflict: (message = 'Conflict'): FortressError =>
+    new FortressError('CONFLICT', message, 409),
   rateLimited: (retryAfter: number): FortressError =>
     new FortressError('RATE_LIMITED', 'Too many requests', 429, { retryAfter }),
   database: (message = 'Database error', cause?: unknown): FortressError =>

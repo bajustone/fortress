@@ -17,6 +17,7 @@ src/
     config.ts                           # FortressConfig type + defaults
     errors.ts                           # Unified error hierarchy
     plugin.ts                           # FortressPlugin interface, hook runner, plugin registry
+    internal-adapter.ts                 # Entity-specific query layer on top of generic CRUD
 
     auth/
       jwt.ts                            # JWT sign/verify (jose)
@@ -36,12 +37,12 @@ src/
 
   testing/
     index.ts                            # createTestAdapter() — in-memory SQLite via bun:sqlite
+    adapter-conformance.test.ts         # runAdapterTests() — shared adapter contract test suite
 
   drizzle/
     index.ts                            # createDrizzleAdapter() export
     adapter.ts                          # DatabaseAdapter implementation (PostgreSQL, MySQL, SQLite)
     schema.ts                           # Reference Drizzle table definitions
-    internal-adapter.ts                 # Entity-specific query layer on top of generic CRUD
 
   hono/
     index.ts                            # createHonoMiddleware() export
@@ -67,13 +68,15 @@ src/
       index.ts                          # dataIsolation() plugin factory
     social-login/
       index.ts                          # socialLogin() plugin factory
-      providers/                        # Built-in provider configs
-        microsoft.ts
-        google.ts
-        github.ts
-        apple.ts
-        discord.ts
-        oidc.ts                         # Generic OIDC provider
+      types.ts                          # ProviderProfile, ProviderDefinition, SocialLoginConfig
+      providers/
+        index.ts                        # builtInProviders registry + re-exports
+        microsoft.ts                    # Microsoft Entra ID (tenant-parameterized)
+        google.ts                       # Google OIDC
+        github.ts                       # GitHub OAuth2 (not OIDC)
+        apple.ts                        # Apple Sign In (ID token only)
+        discord.ts                      # Discord OAuth2
+        oidc.ts                         # Generic OIDC provider factory
 ```
 
 ## Key Design Decisions
@@ -1809,7 +1812,7 @@ git commit -m "feat: add invoice resource"
 
 ### Phase 1e: Drizzle Adapter
 13. `drizzle/schema.ts` — reference schema for core models (updated: no principal table, permission has resource+action+effect+conditions)
-14. `drizzle/internal-adapter.ts` — entity-specific queries on top of generic CRUD
+14. ~~`drizzle/internal-adapter.ts`~~ → `core/internal-adapter.ts` — entity-specific queries on top of generic CRUD (moved to core/ since auth-service and iam-service consume it)
 15. `drizzle/adapter.ts` — generic CRUD implementation for Drizzle (PostgreSQL, MySQL, SQLite)
 
 ### Phase 1f: Hono Adapter

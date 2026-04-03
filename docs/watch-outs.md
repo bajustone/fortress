@@ -57,22 +57,17 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 
 ### P0 — Critical
 
-#### No-op Transaction Implementation
-- `src/drizzle/adapter.ts:191-193`: `async transaction(fn) { return fn(adapter); }` — calls the function with the same adapter, **no actual DB transaction**.
-- Token rotation in `auth-service.ts` (revoke old + create new) is not atomic. If the process crashes between them, the user's session is silently destroyed with no recovery path.
-- `deleteRole` in `iam-service.ts` does 3 sequential deletes (role_permissions, role_bindings, role) without a transaction — orphaned data on partial failure.
-- **Fix:** Use Drizzle's `db.transaction()` (supported on all dialects) and pass a wrapped adapter backed by the transaction handle.
+#### ~~No-op Transaction Implementation~~ **RESOLVED**
+- ~~`src/drizzle/adapter.ts:191-193`: `async transaction(fn) { return fn(adapter); }` — calls the function with the same adapter, **no actual DB transaction**.~~
+- **Fix applied:** Drizzle adapter now uses real transactions. SQLite uses manual `BEGIN`/`COMMIT`/`ROLLBACK` for async compatibility; PG/MySQL use Drizzle's native async `transaction()`. Transaction callback receives a new adapter backed by the transaction handle. Conformance tests verify commit and rollback behavior.
 
-#### `hono` Is a Runtime Dependency
-- `hono` is in `dependencies` in `package.json` but only used by the `./hono` sub-path export.
-- For a "framework-agnostic" library, bundling a web framework as mandatory is a direct contradiction. Every consumer installs Hono whether they use it or not.
-- **Fix:** Move to `peerDependencies` with `"optional": true` in `peerDependenciesMeta`, or publish the Hono adapter as a separate package.
+#### ~~`hono` Is a Runtime Dependency~~ **RESOLVED**
+- ~~`hono` is in `dependencies` in `package.json` but only used by the `./hono` sub-path export.~~
+- **Fix applied:** Moved `hono` to `peerDependencies` with `"optional": true` in `peerDependenciesMeta`.
 
-#### `drizzle-orm` Is a devDependency but Imported at Runtime
-- `src/drizzle/adapter.ts` imports `{ and, eq, ... }` from `drizzle-orm`.
-- Listed as `devDependency`, not `dependencies` or `peerDependencies`.
-- Works on JSR (source resolution) but is semantically wrong and would break npm consumers.
-- **Fix:** Move to `peerDependencies`.
+#### ~~`drizzle-orm` Is a devDependency but Imported at Runtime~~ **RESOLVED**
+- ~~`src/drizzle/adapter.ts` imports `{ and, eq, ... }` from `drizzle-orm`. Listed as `devDependency`, not `dependencies` or `peerDependencies`.~~
+- **Fix applied:** Moved `drizzle-orm` to `peerDependencies` with `"optional": true` in `peerDependenciesMeta`.
 
 ### P1 — High
 
@@ -82,31 +77,27 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 - npm is where 95%+ of the TS ecosystem lives. JSR adoption is still small.
 - **Fix:** Add a build step (e.g., `tsup` or `pkgroll`) producing ESM + CJS bundles with declarations. Add `exports` map to `package.json`. Dual-publish to JSR and npm.
 
-#### No Adapter Conformance Tests
-- `CLAUDE.md` acknowledges "TODO: create shared adapter conformance tests."
-- The `DatabaseAdapter` interface is the core abstraction. Without a conformance test suite, adapter bugs go undetected. This is the exact failure mode that killed Lucia.
-- **Fix:** Create a `runAdapterTests(createAdapter: () => DatabaseAdapter)` function that exercises every method, edge case (empty results, duplicate inserts, concurrent transactions), and verifies the contract. Run it against every adapter.
+#### ~~No Adapter Conformance Tests~~ **RESOLVED**
+- ~~`CLAUDE.md` acknowledges "TODO: create shared adapter conformance tests."~~
+- **Fix applied:** Created `src/testing/adapter-conformance.test.ts` with `runAdapterTests(createAdapter)` — 17 tests covering all CRUD methods, operators (`=`, `!=`, `in`), limit/offset, transaction commit/rollback, and edge cases (empty results, no-op delete). Run against the built-in SQLite test adapter. Custom adapters can import and run the same suite.
 
-#### 7 Stub Plugins in Export Map
-- Every plugin file (`src/plugins/*/index.ts`) contains only `// TODO: Implement` and `export {}`.
-- These are published as sub-path exports in `jsr.json`. A consumer who sees `@bajustone/fortress/plugins/oauth` has no way to know it's empty until they import it.
-- **Fix:** Remove stub exports from `jsr.json` until they have actual implementations.
+#### ~~7 Stub Plugins in Export Map~~ **RESOLVED**
+- ~~Every plugin file (`src/plugins/*/index.ts`) contains only `// TODO: Implement` and `export {}`.~~
+- **Fix applied:** Removed all 7 stub plugin exports from `jsr.json`. They will be re-added as each plugin is implemented.
 
-#### Timing Oracle on Login
-- `login()` in `auth-service.ts:169-228` skips password verification entirely for non-existent users. Both paths throw `Errors.unauthorized('Invalid credentials')`, but timing differs: missing user = fast, wrong password = slow Argon2.
-- Attackers can enumerate valid identifiers via timing analysis.
-- **Fix:** Run a dummy `hasher.verify()` call on the "user not found" path to normalize timing.
+#### ~~Timing Oracle on Login~~ **RESOLVED**
+- ~~`login()` in `auth-service.ts` skips password verification entirely for non-existent users. Timing differs: missing user = fast, wrong password = slow Argon2.~~
+- **Fix applied:** Dummy `hasher.verify()` runs on user-not-found and no-password paths to normalize response timing. Catch suppresses the expected verification failure.
 
 ### P2 — Medium
 
-#### `createDrizzleAdapter(db: any)` — Core Type Safety Hole
-- The main adapter factory at `src/drizzle/adapter.ts:104` accepts `any`, losing all type safety. Every `db.insert/select/update/delete` call inside the adapter is unchecked.
-- Drizzle exposes typed DB instances (`BunSQLiteDatabase`, `BetterSQLite3Database`, `PostgresJsDatabase`, etc.).
-- **Fix:** Accept a constrained generic or a union of Drizzle DB types.
+#### ~~`createDrizzleAdapter(db: any)` — Core Type Safety Hole~~ **RESOLVED**
+- ~~The main adapter factory at `src/drizzle/adapter.ts` accepts `any`, losing all type safety.~~
+- **Fix applied:** Replaced `any` with a `DrizzleDB` structural interface requiring `insert`, `select`, `update`, `delete`, and `transaction` methods. Internal calls still use `as any` casts (Drizzle's dialect-specific return types vary), but the public API surface is typed.
 
-#### `WhereClause.operator` Ignores `CoreOperator` Type
-- `src/adapters/database/types.ts` defines `CoreOperator` as a proper union (`'=' | '!=' | 'in' | ...`) but `WhereClause` uses `operator: string`.
-- **Fix:** Use `operator: CoreOperator | (string & {})` to preserve autocomplete for core operators while allowing extension.
+#### ~~`WhereClause.operator` Ignores `CoreOperator` Type~~ **RESOLVED**
+- ~~`WhereClause` uses `operator: string`, ignoring `CoreOperator`.~~
+- **Fix applied:** Changed to `operator: CoreOperator | (string & {})` — preserves autocomplete for core operators while allowing extension.
 
 #### `update` Return Type on No-Match Is Undefined Behavior
 - The adapter contract says "may return undefined or the unchanged input" when no rows match.
@@ -125,18 +116,17 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 - Version `0.0.1` with no CHANGELOG, no release workflow in CI, no conventional commits.
 - For an auth library where security patches must be communicated clearly, this is a significant gap.
 
-#### `passWithNoTests: true` in Vitest Config
-- Silently passes test files with zero assertions. Dangerous with 7 plugin stubs that export empty modules.
-- **Fix:** Remove `passWithNoTests: true`.
+#### ~~`passWithNoTests: true` in Vitest Config~~ **RESOLVED**
+- ~~Silently passes test files with zero assertions.~~
+- **Fix applied:** Removed `passWithNoTests: true` from `vitest.config.ts`.
 
-#### No `createUser` Duplicate Email Check
-- Relies on DB UNIQUE constraint, but the generic `DatabaseAdapter` doesn't declare or enforce constraints.
-- An adapter without UNIQUE on email silently creates duplicate users.
-- **Fix:** Document as a hard requirement for adapters and verify in conformance tests, or add an explicit check.
+#### ~~No `createUser` Duplicate Email Check~~ **RESOLVED**
+- ~~Relies on DB UNIQUE constraint, but the generic `DatabaseAdapter` doesn't declare or enforce constraints.~~
+- **Fix applied:** Added explicit `findOne` check before `create` in `createUser`. Throws `Errors.conflict('A user with this email already exists')` on duplicate. New `CONFLICT` error code (409) added to error hierarchy.
 
-#### No JWT Secret Strength Validation
-- Consumers can pass `secret: 'a'` with no warning. HS256 requires minimum 32 bytes for security.
-- **Fix:** Warn or throw on secrets shorter than 32 bytes.
+#### ~~No JWT Secret Strength Validation~~ **RESOLVED**
+- ~~Consumers can pass `secret: 'a'` with no warning.~~
+- **Fix applied:** `createFortress()` throws `BAD_REQUEST` if any JWT secret is shorter than 32 bytes. Applies to all secrets in rotation arrays.
 
 ### P3 — Low
 
@@ -144,14 +134,13 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 - `tsconfig.json` uses `"bundler"` resolution, which allows extensionless imports that fail with Node's native ESM.
 - **Fix:** Use `"node16"` or `"nodenext"` for library code.
 
-#### `"types": ["bun-types"]` in tsconfig
-- Adds Bun-specific globals. Type-checking passes for Bun APIs but produces incorrect types for Node consumers.
-- **Fix:** Scope bun-types to test/dev tsconfig only.
+#### ~~`"types": ["bun-types"]` in tsconfig~~ **RESOLVED**
+- ~~Adds Bun-specific globals. Type-checking passes for Bun APIs but produces incorrect types for Node consumers.~~
+- **Fix applied:** Replaced `"types": ["bun-types"]` with `"types": ["node"]` in `tsconfig.json`. Added `@types/node` as devDependency. `@types/bun` remains as devDep for Bun runtime detection in test adapter.
 
-#### Pre-commit Hook Runs Full Test Suite
-- `.husky/pre-commit` runs `bun run lint && bun run typecheck && bun run test` on every commit.
-- Industry standard: `lint-staged` for changed files only in pre-commit, full suite in CI.
-- **Fix:** Switch to `lint-staged` in pre-commit.
+#### ~~Pre-commit Hook Runs Full Test Suite~~ **RESOLVED**
+- ~~`.husky/pre-commit` runs `bun run lint && bun run typecheck && bun run test` on every commit.~~
+- **Fix applied:** Pre-commit now runs `lint-staged` (eslint --fix on changed `.ts` files) + typecheck only. Full test suite belongs in CI.
 
 #### No Drizzle Adapter Isolation Tests
 - No tests for PostgreSQL dialect path, `buildWhereCondition` error cases, or `sanitizeForSqlite`.

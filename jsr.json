@@ -9,13 +9,6 @@
     "./testing": "./src/testing/index.ts",
     "./drizzle": "./src/drizzle/index.ts",
     "./drizzle/pg": "./src/drizzle/pg/index.ts",
-    "./hono": "./src/hono/index.ts",
-    "./plugins/tenancy": "./src/plugins/tenancy/index.ts",
-    "./plugins/oauth": "./src/plugins/oauth/index.ts",
-    "./plugins/two-factor": "./src/plugins/two-factor/index.ts",
-    "./plugins/email-verification": "./src/plugins/email-verification/index.ts",
-    "./plugins/api-key": "./src/plugins/api-key/index.ts",
-    "./plugins/data-isolation": "./src/plugins/data-isolation/index.ts",
-    "./plugins/social-login": "./src/plugins/social-login/index.ts"
+    "./hono": "./src/hono/index.ts"
   }
 }

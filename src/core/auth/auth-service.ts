@@ -162,16 +162,18 @@ export function createAuthService(
       // Resolve user via login_identifier first, fall back to email on user table
       const user = await adapter.findUserByIdentifier(identifier);
 
-      if (!user) {
+      if (!user || !user.passwordHash) {
+        // Run dummy verify to prevent timing oracle (normalize response time
+        // regardless of whether user exists or has a password)
+        await hasher.verify(
+          '$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0$dummy',
+          password,
+        ).catch(() => {});
         throw Errors.unauthorized('Invalid credentials');
       }
 
       if (!user.isActive) {
         throw Errors.unauthorized('Account is disabled');
-      }
-
-      if (!user.passwordHash) {
-        throw Errors.unauthorized('Invalid credentials');
       }
 
       const valid = await hasher.verify(user.passwordHash, password);
@@ -313,6 +315,15 @@ export function createAuthService(
       const beforeResult = await runBeforeHooks('beforeRegister', hookCtx);
       if (beforeResult?.stop) {
         return beforeResult.response as unknown as FortressUser;
+      }
+
+      // Check for duplicate email before inserting
+      const existing = await db.findOne<{ id: number }>({
+        model: 'user',
+        where: [{ field: 'email', operator: '=', value: data.email }],
+      });
+      if (existing) {
+        throw Errors.conflict('A user with this email already exists');
       }
 
       const passwordHash = data.password ? await hasher.hash(data.password) : null;

@@ -49,6 +49,22 @@ describe('auth integration', () => {
     ).rejects.toThrow('Invalid credentials');
   });
 
+  it('rejects duplicate email on createUser', async () => {
+    await fortress.auth.createUser({
+      email: 'dupe@example.com',
+      name: 'First',
+      password: 'password-123',
+    });
+
+    await expect(
+      fortress.auth.createUser({
+        email: 'dupe@example.com',
+        name: 'Second',
+        password: 'password-456',
+      }),
+    ).rejects.toThrow('A user with this email already exists');
+  });
+
   it('verifies a signed token', async () => {
     await fortress.auth.createUser({
       email: 'carol@example.com',

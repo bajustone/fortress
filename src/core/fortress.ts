@@ -14,7 +14,19 @@ export interface Fortress {
   config: Readonly<FortressConfig>;
 }
 
+const MIN_SECRET_BYTES = 32;
+
 export function createFortress(config: FortressConfig): Fortress {
+  // Validate JWT secret strength
+  const secrets = Array.isArray(config.jwt.secret) ? config.jwt.secret : [config.jwt.secret];
+  for (const secret of secrets) {
+    if (new TextEncoder().encode(secret).length < MIN_SECRET_BYTES) {
+      throw Errors.badRequest(
+        `JWT secret must be at least ${MIN_SECRET_BYTES} bytes for HS256 security. Got ${new TextEncoder().encode(secret).length} bytes.`,
+      );
+    }
+  }
+
   const plugins = config.plugins ?? [];
   const db = config.database;
 
