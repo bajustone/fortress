@@ -27,6 +27,8 @@ const DEFAULT_TABLE_MAP: Record<string, Table> = {
   role: fortressSchema.roles,
   role_permission: fortressSchema.rolePermissions,
   role_binding: fortressSchema.roleBindings,
+  email_verification_token: fortressSchema.emailVerificationTokens,
+  api_key: fortressSchema.apiKeys,
 };
 
 function getColumn(table: Table, field: string): Column {

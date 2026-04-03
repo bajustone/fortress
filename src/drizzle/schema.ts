@@ -94,6 +94,33 @@ const roleBindings = sqliteTable('fortress_role_binding', {
   subjectId: integer('subject_id').notNull(),
 });
 
+// --- Plugins: Email Verification ---
+
+const emailVerificationTokens = sqliteTable('fortress_email_verification_token', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  token: text('token').notNull(),
+  email: text('email').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  usedAt: text('used_at'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// --- Plugins: API Key ---
+
+const apiKeys = sqliteTable('fortress_api_key', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  keyHash: text('key_hash').notNull().unique(),
+  keyPrefix: text('key_prefix').notNull(),
+  scopes: text('scopes'), // JSON array of "resource:action" strings
+  expiresAt: text('expires_at'),
+  lastUsedAt: text('last_used_at'),
+  isRevoked: integer('is_revoked', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 // --- All tables for easy iteration ---
 
 export const fortressSchema = {
@@ -107,4 +134,6 @@ export const fortressSchema = {
   roles,
   rolePermissions,
   roleBindings,
+  emailVerificationTokens,
+  apiKeys,
 };

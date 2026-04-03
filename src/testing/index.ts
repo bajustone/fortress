@@ -75,6 +75,29 @@ const CREATE_TABLES_SQL = `
     subject_type TEXT NOT NULL,
     subject_id INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    token TEXT NOT NULL,
+    email TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_api_key (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    key_prefix TEXT NOT NULL,
+    scopes TEXT,
+    expires_at TEXT,
+    last_used_at TEXT,
+    is_revoked INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `;
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';

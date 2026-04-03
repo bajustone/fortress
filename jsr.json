@@ -9,6 +9,8 @@
     "./testing": "./src/testing/index.ts",
     "./drizzle": "./src/drizzle/index.ts",
     "./drizzle/pg": "./src/drizzle/pg/index.ts",
-    "./hono": "./src/hono/index.ts"
+    "./hono": "./src/hono/index.ts",
+    "./plugins/email-verification": "./src/plugins/email-verification/index.ts",
+    "./plugins/api-key": "./src/plugins/api-key/index.ts"
   }
 }

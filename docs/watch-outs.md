@@ -41,9 +41,16 @@
 
 | Gap | Who Has It | Priority | Notes |
 |-----|-----------|----------|-------|
-| **Rate limiting** | Keycloak, Auth0, Clerk | High | Critical for login/token endpoints. Build as plugin. `RateLimitError` (429) already in error hierarchy. |
-| **Account lockout** | Most managed services | Medium | Lock after N failed login attempts. Simple plugin using `hooks.beforeLogin`. |
-| **Audit logging** | Keycloak, Ory | Medium | Auth events (login, failed login, permission denied, role changes). Plugin using hooks. |
+| **Password policy & breach checking** | Auth0, Clerk, Keycloak, Better Auth | **Critical** | No password validation anywhere. Configurable min/max length (NIST 800-63B: 8/128). HIBP k-anonymity API to reject breached passwords. Hook into `beforeRegister` and password reset. Config: `passwordPolicy?: { minLength?, maxLength?, checkBreached? }`. New file: `src/core/auth/password-policy.ts`. |
+| **Rate limiting** | Keycloak, Auth0, Clerk | **Critical** | Critical for login/token endpoints. Build as plugin. `RateLimitError` (429) already in error hierarchy. |
+| **Account lockout** | Most managed services | High | Lock after N failed login attempts. Simple plugin using `hooks.beforeLogin`. Exponential backoff (15min → 30min → 1hr). Required for SOC 2, ISO 27001, HIPAA. |
+| **Session/device management** | Auth0, Clerk, Keycloak, Better Auth | High | Refresh tokens store IP/userAgent but no list/revoke API. Add `listSessions(userId)`, `revokeSession(tokenId)`, `revokeAllOtherSessions(userId, currentTokenId)`. Enrich refresh token with `deviceName?`, `lastActiveAt`. Modify `auth-service.ts`. |
+| **Token fingerprinting on refresh** | Auth0, Clerk | High | Fortress stores IP/userAgent but doesn't validate on refresh. Optionally compare fingerprint on token refresh. Config: `jwt.validateRefreshFingerprint?: boolean \| 'warn'`. `'warn'` mode logs mismatch but allows (mobile users); `true` rejects. Prevents stolen token reuse. |
+| **CSRF explicit strategy** | Auth.js, Better Auth, Keycloak | High | Architecture mentions `SameSite` cookies via `responseHeaders` but no explicit CSRF token pattern. Provide `csrfMiddleware()` for Hono. Document that `SameSite=Strict` + custom header requirement is sufficient for modern browsers. New files: `src/hono/middleware/csrf.ts`, `docs/security.md`. |
+| **Audit logging** | Keycloak, Ory | High | Auth events (login, failed login, permission denied, role changes). Plugin using hooks. Immutable event log, 2-year retention recommended. Required for SOC 2, HIPAA, PCI-DSS. |
+| **Admin impersonation** | Keycloak, Auth0, WorkOS, Ory | Medium | Admin acts as user without knowing password. Method: `fortress.auth.impersonate(adminUserId, targetUserId)`. Returns scoped token with `impersonatedBy` claim + shorter expiry (30min). Requires `fortress:impersonate` permission. Audit log entry. |
+| **Webhooks plugin** | Auth0, Clerk, WorkOS, Ory | Medium | Not in architecture.md. Notify external systems on auth events. `fortress_webhook` model. HMAC-SHA256 signed payloads, delivery retries (3x exponential backoff). New plugin: `src/plugins/webhook/index.ts`. |
+| **`isSystem` flag on roles** | Keycloak | Medium | Prevents accidental deletion of seeded roles. Add `isSystem: boolean` (default false) to role model. `deleteRole` throws if `isSystem === true`. Roles from `sync:push` marked as system. Modify `schema.ts`, `iam-service.ts`, `resource-sync.ts`. |
 | **WebAuthn / Passkeys** | Auth.js, Clerk, @oslojs/webauthn | Medium | Growing fast. Plugin using routes + models. Architecture validated — no gaps. |
 | **Magic link auth** | Better Auth, Auth.js | Low | Easy plugin — same pattern as email verification but issues tokens. |
 | **Session management (stateful)** | Auth.js, Lucia (was), Better Auth | Low | JWT + refresh tokens is valid. Cookie handling via `AfterHookContext.responseHeaders: Headers`. |
@@ -75,7 +82,7 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 - JSR-only. No build step, no `dist/` output, no compiled `.js` + `.d.ts` files.
 - `package.json` has no `exports` field, no `main`, no `types`. The `module: "src/index.ts"` field is a Bun convention, not a Node standard.
 - npm is where 95%+ of the TS ecosystem lives. JSR adoption is still small.
-- **Fix:** Add a build step (e.g., `tsup` or `pkgroll`) producing ESM + CJS bundles with declarations. Add `exports` map to `package.json`. Dual-publish to JSR and npm.
+- **Fix:** Add `tsup` for ESM + CJS bundles with declarations. Add `exports` map to `package.json`. Add `prepublishOnly` script. CI workflow: publish to both JSR and npm on git tag. New files: `tsup.config.ts`, `.github/workflows/publish.yml`.
 
 #### ~~No Adapter Conformance Tests~~ **RESOLVED**
 - ~~`CLAUDE.md` acknowledges "TODO: create shared adapter conformance tests."~~
@@ -88,6 +95,16 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 #### ~~Timing Oracle on Login~~ **RESOLVED**
 - ~~`login()` in `auth-service.ts` skips password verification entirely for non-existent users. Timing differs: missing user = fast, wrong password = slow Argon2.~~
 - **Fix applied:** Dummy `hasher.verify()` runs on user-not-found and no-password paths to normalize response timing. Catch suppresses the expected verification failure.
+
+### P1 — High
+
+#### No Security Documentation
+- No `docs/security.md` exists. Recommended CSRF strategy, JWT secret requirements, rotation procedure, password hashing guide, rate limiting deployment patterns, token storage best practices (httpOnly cookies vs localStorage), HTTPS requirements — none documented.
+- **Fix:** Create `docs/security.md` covering all security recommendations.
+
+#### CLI Tool Not Implemented
+- `architecture.md` references `sync:push`, `sync:pull`, `sync:types` commands but no CLI exists.
+- **Fix:** Create `bin/fortress.ts` with commands: `init` (scaffold config, .env template, fortress.resources.json), `sync:push`, `sync:pull`, `sync:types`, `generate-secret` (64-byte cryptographically random hex).
 
 ### P2 — Medium
 
@@ -102,7 +119,7 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 #### `update` Return Type on No-Match Is Undefined Behavior
 - The adapter contract says "may return undefined or the unchanged input" when no rows match.
 - A contract with undefined behavior at its boundaries is not a contract.
-- **Fix:** Change return type to `T | null` (null = no match) or throw on no match.
+- **Fix:** Change return type to `Promise<T | null>` (null = no match). Update adapter conformance tests to verify null on no-match.
 
 #### `InferPlugins` Utility Type Is Never Used
 - `src/core/plugin.ts` defines `InferPlugins` but the `Fortress` interface doesn't use it. `fortress.plugins.myPlugin.myMethod()` has no type safety.
@@ -112,9 +129,11 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 - JSR and npm both surface README as primary documentation. Without one, the library has no public-facing docs.
 - `CLAUDE.md` is an AI context file, not user documentation.
 
-#### No CHANGELOG or Release Process
+#### No CHANGELOG, Release Process, or Security Policy
 - Version `0.0.1` with no CHANGELOG, no release workflow in CI, no conventional commits.
+- No `SECURITY.md` for vulnerability disclosure.
 - For an auth library where security patches must be communicated clearly, this is a significant gap.
+- **Fix:** Create `README.md` (quick start, API overview, plugin list), `CHANGELOG.md` (start at v0.1.0), `SECURITY.md` (disclosure process). Enforce conventional commits via commitlint. Semantic versioning.
 
 #### ~~`passWithNoTests: true` in Vitest Config~~ **RESOLVED**
 - ~~Silently passes test files with zero assertions.~~
@@ -123,6 +142,7 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 #### ~~No `createUser` Duplicate Email Check~~ **RESOLVED**
 - ~~Relies on DB UNIQUE constraint, but the generic `DatabaseAdapter` doesn't declare or enforce constraints.~~
 - **Fix applied:** Added explicit `findOne` check before `create` in `createUser`. Throws `Errors.conflict('A user with this email already exists')` on duplicate. New `CONFLICT` error code (409) added to error hierarchy.
+- **Note:** `CONFLICT` error code exists in implementation but is missing from the error hierarchy in `architecture.md`. Update architecture.md to include it.
 
 #### ~~No JWT Secret Strength Validation~~ **RESOLVED**
 - ~~Consumers can pass `secret: 'a'` with no warning.~~
