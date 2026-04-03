@@ -90,6 +90,15 @@ export interface RoleBinding {
   subjectId: number;
 }
 
+export type LoginIdentifierType = 'email' | 'phone' | 'username';
+
+export interface LoginIdentifier {
+  id: number;
+  userId: number;
+  type: LoginIdentifierType;
+  value: string;
+}
+
 export interface Group {
   id: number;
   name: string;

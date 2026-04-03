@@ -35,6 +35,8 @@ export type {
   CreateUserInput,
   FortressUser,
   Group,
+  LoginIdentifier,
+  LoginIdentifierType,
   Permission,
   PermissionCondition,
   PermissionContext,

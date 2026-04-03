@@ -12,6 +12,15 @@ export const users = sqliteTable('fortress_user', {
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
+// --- Login Identifiers ---
+
+export const loginIdentifiers = sqliteTable('fortress_login_identifier', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  type: text('type').notNull(), // 'email' | 'phone' | 'username'
+  value: text('value').notNull().unique(),
+});
+
 // --- Auth ---
 
 export const refreshTokens = sqliteTable('fortress_refresh_token', {
@@ -89,6 +98,7 @@ export const roleBindings = sqliteTable('fortress_role_binding', {
 
 export const fortressSchema = {
   users,
+  loginIdentifiers,
   refreshTokens,
   groups,
   groupUsers,

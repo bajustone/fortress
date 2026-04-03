@@ -126,6 +126,97 @@ describe('auth integration', () => {
   });
 });
 
+describe('multi-key login', () => {
+  it('auto-creates email login identifier on user creation', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'multi@example.com',
+      name: 'Multi User',
+      password: 'password-123',
+    });
+
+    const identifiers = await fortress.auth.getLoginIdentifiers(user.id);
+    expect(identifiers).toHaveLength(1);
+    expect(identifiers[0].type).toBe('email');
+    expect(identifiers[0].value).toBe('multi@example.com');
+  });
+
+  it('allows login with phone after adding phone identifier', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'phone-user@example.com',
+      name: 'Phone User',
+      password: 'password-123',
+    });
+
+    await fortress.auth.addLoginIdentifier(user.id, 'phone', '+250788123456');
+
+    // Login with phone
+    const result = await fortress.auth.login('+250788123456', 'password-123');
+    expect(result.user.name).toBe('Phone User');
+    expect(result.accessToken).toBeTruthy();
+  });
+
+  it('allows login with username after adding username identifier', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'username-user@example.com',
+      name: 'Username User',
+      password: 'password-123',
+    });
+
+    await fortress.auth.addLoginIdentifier(user.id, 'username', 'alice');
+
+    // Login with username
+    const result = await fortress.auth.login('alice', 'password-123');
+    expect(result.user.name).toBe('Username User');
+  });
+
+  it('still allows login with email', async () => {
+    await fortress.auth.createUser({
+      email: 'email-login@example.com',
+      name: 'Email User',
+      password: 'password-123',
+    });
+
+    const result = await fortress.auth.login('email-login@example.com', 'password-123');
+    expect(result.user.name).toBe('Email User');
+  });
+
+  it('can remove a login identifier', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'remove-id@example.com',
+      name: 'Remove ID',
+      password: 'password-123',
+    });
+
+    await fortress.auth.addLoginIdentifier(user.id, 'phone', '+250788999999');
+    await fortress.auth.removeLoginIdentifier(user.id, 'phone', '+250788999999');
+
+    // Phone login should fail now (falls back to email lookup, which won't match a phone)
+    await expect(
+      fortress.auth.login('+250788999999', 'password-123'),
+    ).rejects.toThrow('Invalid credentials');
+  });
+
+  it('multiple identifiers all share the same password', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'shared@example.com',
+      name: 'Shared Password',
+      password: 'same-password',
+    });
+
+    await fortress.auth.addLoginIdentifier(user.id, 'phone', '+250781111111');
+    await fortress.auth.addLoginIdentifier(user.id, 'username', 'shared_user');
+
+    // All three work with the same password
+    const r1 = await fortress.auth.login('shared@example.com', 'same-password');
+    const r2 = await fortress.auth.login('+250781111111', 'same-password');
+    const r3 = await fortress.auth.login('shared_user', 'same-password');
+
+    expect(r1.user.id).toBe(user.id);
+    expect(r2.user.id).toBe(user.id);
+    expect(r3.user.id).toBe(user.id);
+  });
+});
+
 describe('iAM integration', () => {
   it('creates groups and adds users', async () => {
     const user = await fortress.auth.createUser({

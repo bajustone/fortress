@@ -11,6 +11,8 @@ import type {
   AuthTokenPair,
   CreateUserInput,
   FortressUser,
+  LoginIdentifier,
+  LoginIdentifierType,
   RequestMeta,
   TokenClaims,
 } from '../types';
@@ -43,6 +45,9 @@ export interface AuthService {
   createUser: (data: CreateUserInput) => Promise<FortressUser>;
   verifyToken: (token: string) => Promise<TokenClaims>;
   signToken: (claims: Omit<TokenClaims, 'iat' | 'exp'>) => Promise<string>;
+  addLoginIdentifier: (userId: number, type: LoginIdentifierType, value: string) => Promise<void>;
+  removeLoginIdentifier: (userId: number, type: LoginIdentifierType, value: string) => Promise<void>;
+  getLoginIdentifiers: (userId: number) => Promise<LoginIdentifier[]>;
 }
 
 export function createAuthService(
@@ -168,10 +173,27 @@ export function createAuthService(
         return beforeResult.response as unknown as AuthResponse;
       }
 
-      const user = await db.findOne<FortressUser & { passwordHash: string }>({
-        model: 'user',
-        where: [{ field: 'email', operator: '=', value: identifier }],
+      // Resolve user via login_identifier first, fall back to email on user table
+      let user: (FortressUser & { passwordHash: string }) | null = null;
+
+      const loginId = await db.findOne<LoginIdentifier>({
+        model: 'login_identifier',
+        where: [{ field: 'value', operator: '=', value: identifier }],
       });
+
+      if (loginId) {
+        user = await db.findOne<FortressUser & { passwordHash: string }>({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: loginId.userId }],
+        });
+      }
+      else {
+        // Fallback: direct email lookup (for backwards compat or before identifiers are set up)
+        user = await db.findOne<FortressUser & { passwordHash: string }>({
+          model: 'user',
+          where: [{ field: 'email', operator: '=', value: identifier }],
+        });
+      }
 
       if (!user) {
         throw Errors.unauthorized('Invalid credentials');
@@ -349,6 +371,14 @@ export function createAuthService(
         },
       });
 
+      // Auto-create email login identifier
+      if (data.email) {
+        await db.create({
+          model: 'login_identifier',
+          data: { userId: user.id, type: 'email', value: data.email },
+        });
+      }
+
       const afterCtx: AfterHookContext = { db, config, responseHeaders: new Headers() };
       for (const plugin of plugins) {
         if (plugin.hooks?.afterRegister) {
@@ -365,6 +395,31 @@ export function createAuthService(
 
     async signToken(claims: Omit<TokenClaims, 'iat' | 'exp'>): Promise<string> {
       return signAccessToken(claims, resolved.secret, resolved.accessTokenExpiry);
+    },
+
+    async addLoginIdentifier(userId: number, type: LoginIdentifierType, value: string): Promise<void> {
+      await db.create({
+        model: 'login_identifier',
+        data: { userId, type, value },
+      });
+    },
+
+    async removeLoginIdentifier(userId: number, type: LoginIdentifierType, value: string): Promise<void> {
+      await db.delete({
+        model: 'login_identifier',
+        where: [
+          { field: 'userId', operator: '=', value: userId },
+          { field: 'type', operator: '=', value: type },
+          { field: 'value', operator: '=', value },
+        ],
+      });
+    },
+
+    async getLoginIdentifiers(userId: number): Promise<LoginIdentifier[]> {
+      return db.findMany<LoginIdentifier>({
+        model: 'login_identifier',
+        where: [{ field: 'userId', operator: '=', value: userId }],
+      });
     },
   };
 }

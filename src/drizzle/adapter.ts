@@ -11,6 +11,7 @@ type DrizzleDb = BaseSQLiteDatabase<'sync' | 'async', unknown, Record<string, un
 // Map model names to their Drizzle table definitions
 const MODEL_TABLE_MAP: Record<string, SQLiteTableWithColumns<any>> = {
   user: fortressSchema.users,
+  login_identifier: fortressSchema.loginIdentifiers,
   refresh_token: fortressSchema.refreshTokens,
   group: fortressSchema.groups,
   group_user: fortressSchema.groupUsers,

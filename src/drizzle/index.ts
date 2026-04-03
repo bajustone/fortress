@@ -3,6 +3,7 @@ export { fortressSchema } from './schema';
 export {
   groups,
   groupUsers,
+  loginIdentifiers,
   permissions,
   refreshTokens,
   resources,

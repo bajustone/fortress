@@ -12,6 +12,13 @@ const CREATE_TABLES_SQL = `
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS fortress_login_identifier (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    value TEXT NOT NULL UNIQUE
+  );
+
   CREATE TABLE IF NOT EXISTS fortress_refresh_token (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,

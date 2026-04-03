@@ -241,17 +241,37 @@ Fortress core and the Drizzle adapter work with **any Drizzle-supported database
 
 The **tenancy plugin** (schema-per-tenant via `SET LOCAL search_path`) is the only PostgreSQL-specific feature. It's opt-in — consumers on MySQL or SQLite use the **data isolation plugin** for row-level multi-tenancy instead.
 
-For **testing**, `bun:sqlite` in-memory provides a zero-setup, zero-dependency database via Drizzle:
+**Dialect-specific schemas:** Fortress provides default table definitions per dialect:
+- `@bajustone/fortress/drizzle` — SQLite schema (default, used for testing)
+- `@bajustone/fortress/drizzle/pg` — PostgreSQL schema (`pgTable`, `serial`, `varchar`, `timestamp`)
+
+**Configurable table mapping:** For existing projects with their own tables, the adapter accepts a table map that overrides defaults:
 
 ```typescript
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
-
-const db = drizzle();  // in-memory SQLite, no Docker, no setup
+// New project — use fortress default schema
 const adapter = createDrizzleAdapter(db);
+
+// Existing project — map to your own tables
+import { users, refreshTokens } from './your-schema';
+
+const adapter = createDrizzleAdapter(db, {
+  tables: {
+    user: users,                    // your Drizzle table definition
+    refresh_token: refreshTokens,   // fortress maps model names to your tables
+    login_identifier: loginKeys,    // bring your own login identifiers table
+    // ... any table you want to override
+  },
+});
 ```
 
-This is exported as `@bajustone/fortress/testing` for library and consumer tests.
+When `tables` is provided, fortress uses the consumer's table definitions instead of its own. Unmapped models fall back to the default fortress tables. This lets existing projects adopt fortress incrementally — override only the tables you already have, let fortress create the rest.
+
+For **testing**, in-memory SQLite provides a zero-setup database:
+
+```typescript
+import { createTestAdapter } from '@bajustone/fortress/testing';
+const adapter = createTestAdapter();  // in-memory SQLite, auto-creates tables
+```
 
 ### 8. Transport-Agnostic Permissions (Resource + Action)
 
@@ -371,7 +391,8 @@ interface RoleBinding {
 
 | Model | Fields | Notes |
 |-------|--------|-------|
-| `user` | id, email, name, passwordHash, isActive, timestamps | Core identity |
+| `user` | id, email, name, passwordHash, isActive, timestamps | Core identity. Password on user row (not in junction table). |
+| `login_identifier` | id, userId, type, value | Multiple login methods per user (email, phone, username). Value is globally unique. |
 | `refresh_token` | id, userId, tokenHash, tokenFamily, isRevoked, expiresAt, ipAddress, userAgent | Token rotation |
 | `group` | id, name, description | User grouping |
 | `group_user` | groupId, userId | M2M junction |
@@ -380,6 +401,43 @@ interface RoleBinding {
 | `role` | id, name, description | Collection of permissions |
 | `role_permission` | roleId, permissionId | M2M junction |
 | `role_binding` | id, roleId, subjectType, subjectId | Direct subject reference |
+
+### Multi-Key Login
+
+Users can login with email, phone number, or username — all sharing the same password.
+
+```typescript
+// login_identifier model
+{
+  id: number;
+  userId: number;           // FK to user
+  type: 'email' | 'phone' | 'username';
+  value: string;            // globally unique — the actual login identifier
+}
+```
+
+**Login flow:**
+```
+1. login('alice@example.com', password)
+2. Find login_identifier where value = 'alice@example.com'
+3. Get user by identifier.userId
+4. Verify user.passwordHash against password
+5. Issue tokens
+```
+
+**Why not a junction table (loyalbook's approach):**
+Loyalbook uses `user_keys → userKeysPasswords → keyPasswords` (3 tables, many-to-many). This implies users could have different passwords for different login methods — but that feature is never used. One password per user on the `user` row + a flat `login_identifier` table achieves the same result with one JOIN instead of three, no orphaned records, and no dead fields.
+
+**Identifier management:**
+```typescript
+fortress.auth.addLoginIdentifier(userId, 'phone', '+250788123456');
+fortress.auth.addLoginIdentifier(userId, 'username', 'alice');
+fortress.auth.removeLoginIdentifier(userId, 'phone', '+250788123456');
+fortress.auth.getLoginIdentifiers(userId);
+// → [{ type: 'email', value: 'alice@example.com' }, { type: 'phone', value: '+250788123456' }]
+```
+
+When a user is created with `createUser({ email, name, password })`, a `login_identifier` of type `email` is automatically created.
 
 ### Permission Evaluation
 
@@ -1285,6 +1343,9 @@ interface Fortress<TPlugins extends FortressPlugin[] = FortressPlugin[]> {
     createUser(data: CreateUserInput): Promise<FortressUser>;
     verifyToken(token: string): Promise<TokenClaims>;
     signToken(claims: TokenClaims): Promise<string>;
+    addLoginIdentifier(userId: number, type: 'email' | 'phone' | 'username', value: string): Promise<void>;
+    removeLoginIdentifier(userId: number, type: string, value: string): Promise<void>;
+    getLoginIdentifiers(userId: number): Promise<LoginIdentifier[]>;
   };
   iam: {
     checkPermission(userId: number, resource: string, action: string, context?: PermissionContext): Promise<boolean>;
@@ -1417,6 +1478,13 @@ interface AuthResponse {
 interface RequestMeta {
   ipAddress?: string;
   userAgent?: string;
+}
+
+interface LoginIdentifier {
+  id: number;
+  userId: number;
+  type: 'email' | 'phone' | 'username';
+  value: string;
 }
 
 // --- IAM ---
