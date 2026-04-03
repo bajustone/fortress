@@ -9,6 +9,11 @@ export type { FortressConfig, PasswordHasher } from './core/config';
 export { Errors, FortressError } from './core/errors';
 
 export type { FortressErrorCode } from './core/errors';
+// Fortress factory
+export { createFortress } from './core/fortress';
+
+export type { Fortress } from './core/fortress';
+
 // Plugin system
 export type {
   AfterHookContext,
@@ -23,7 +28,6 @@ export type {
   PluginHooks,
   RouteDefinition,
 } from './core/plugin';
-
 // Core types
 export type {
   AuthResponse,
@@ -41,6 +45,3 @@ export type {
   SubjectType,
   TokenClaims,
 } from './core/types';
-
-// TODO: Implement and export createFortress()
-// export { createFortress } from './core/fortress';
