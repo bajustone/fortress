@@ -21,6 +21,11 @@ export interface DatabaseAdapter {
     sortBy?: { field: string; direction: 'asc' | 'desc' };
   }) => Promise<T[]>;
 
+  /**
+   * Update rows matching the where clause. If no rows match, behavior is
+   *  adapter-specific — may return undefined or the unchanged input. Callers
+   *  should not rely on the return value for no-match detection.
+   */
   update: <T>(params: {
     model: string;
     where: WhereClause[];

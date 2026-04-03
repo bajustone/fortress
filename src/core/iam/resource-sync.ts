@@ -1,4 +1,6 @@
 import type { DatabaseAdapter } from '../../adapters/database';
+import { existsSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
 
 export interface ResourceDefinition {
   actions: string[];
@@ -11,22 +13,22 @@ export interface ResourceFile {
 
 /**
  * Load a fortress.resources.json file.
+ * Uses node:fs which works in Bun, Deno, and Node.
  */
 export async function loadResourceFile(filePath: string): Promise<ResourceFile> {
-  const file = Bun.file(filePath);
-  const exists = await file.exists();
-  if (!exists) {
+  if (!existsSync(filePath)) {
     return { resources: {} };
   }
-  const text = await file.text();
+  const text = await readFile(filePath, 'utf-8');
   return JSON.parse(text) as ResourceFile;
 }
 
 /**
  * Write a fortress.resources.json file.
+ * Uses node:fs which works in Bun, Deno, and Node.
  */
 export async function writeResourceFile(filePath: string, data: ResourceFile): Promise<void> {
-  await Bun.write(filePath, JSON.stringify(data, null, 2));
+  await writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
 }
 
 /**

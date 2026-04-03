@@ -83,6 +83,9 @@ function sanitizeData(data: Record<string, unknown>): Record<string, unknown> {
     else if (typeof value === 'boolean') {
       result[key] = value ? 1 : 0;
     }
+    else if (value === undefined) {
+      result[key] = null;
+    }
     else {
       result[key] = value;
     }
@@ -172,11 +175,6 @@ export function createDrizzleAdapter(db: DrizzleDb): DatabaseAdapter {
       // SQLite transactions in Drizzle use db.transaction()
       // For simplicity, we run within the same connection (SQLite is single-writer)
       return fn(adapter);
-    },
-
-    async rawQuery<T>(sqlStr: string, _params?: unknown[]): Promise<T[]> {
-      const stmt = db.run(sql.raw(sqlStr));
-      return stmt as unknown as T[];
     },
   };
 

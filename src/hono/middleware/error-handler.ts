@@ -15,8 +15,8 @@ export function createErrorHandler(): ErrorHandler {
       return c.json(err.toJSON(), err.statusCode as any);
     }
 
-    // Unknown error — don't leak internals
-    console.error('Unhandled error:', err);
+    // Unknown error — log message only, don't leak stack traces
+    console.error('Unhandled error:', err instanceof Error ? err.message : 'Unknown error');
     return c.json({ code: 'INTERNAL_ERROR', message: 'Internal server error', statusCode: 500 }, 500);
   };
 }
