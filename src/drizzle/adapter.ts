@@ -33,6 +33,13 @@ const DEFAULT_TABLE_MAP: Record<string, Table> = {
   backup_code: fortressSchema.backupCodes,
   trusted_device: fortressSchema.trustedDevices,
   social_account: fortressSchema.socialAccounts,
+  tenant: fortressSchema.tenants,
+  tenant_user: fortressSchema.tenantUsers,
+  oauth_client: fortressSchema.oauthClients,
+  oauth_authorization_code: fortressSchema.oauthAuthorizationCodes,
+  oauth_access_token: fortressSchema.oauthAccessTokens,
+  oauth_pending_flow: fortressSchema.oauthPendingFlows,
+  user_scope_assignment: fortressSchema.userScopeAssignments,
 };
 
 function getColumn(table: Table, field: string): Column {

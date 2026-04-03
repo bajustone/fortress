@@ -164,6 +164,85 @@ const socialAccounts = sqliteTable('fortress_social_account', {
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
+// --- Plugins: Tenancy ---
+
+const tenants = sqliteTable('fortress_tenant', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  taxId: text('tax_id').notNull().unique(),
+  description: text('description'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+const tenantUsers = sqliteTable(
+  'fortress_tenant_user',
+  {
+    tenantId: integer('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+  },
+  table => [primaryKey({ columns: [table.tenantId, table.userId] })],
+);
+
+// --- Plugins: OAuth ---
+
+const oauthClients = sqliteTable('fortress_oauth_client', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  clientId: text('client_id').notNull().unique(),
+  clientSecretHash: text('client_secret_hash').notNull(),
+  name: text('name').notNull(),
+  redirectUris: text('redirect_uris').notNull(), // JSON array
+  grantTypes: text('grant_types').notNull(), // JSON array
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+const oauthAuthorizationCodes = sqliteTable('fortress_oauth_authorization_code', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  code: text('code').notNull().unique(),
+  clientId: text('client_id').notNull(),
+  userId: integer('user_id').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  scope: text('scope'),
+  codeChallenge: text('code_challenge'),
+  codeChallengeMethod: text('code_challenge_method'),
+  expiresAt: text('expires_at').notNull(),
+  usedAt: text('used_at'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+const oauthAccessTokens = sqliteTable('fortress_oauth_access_token', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  token: text('token').notNull().unique(),
+  clientId: text('client_id').notNull(),
+  userId: integer('user_id'),
+  scope: text('scope'),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  clientId: text('client_id').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  scope: text('scope'),
+  state: text('state').notNull(),
+  codeChallenge: text('code_challenge'),
+  codeChallengeMethod: text('code_challenge_method'),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// --- Plugins: Data Isolation ---
+
+const userScopeAssignments = sqliteTable('fortress_user_scope_assignment', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  scopeName: text('scope_name').notNull(),
+  scopeValue: text('scope_value').notNull(),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 // --- All tables for easy iteration ---
 
 export const fortressSchema = {
@@ -183,4 +262,11 @@ export const fortressSchema = {
   backupCodes,
   trustedDevices,
   socialAccounts,
+  tenants,
+  tenantUsers,
+  oauthClients,
+  oauthAuthorizationCodes,
+  oauthAccessTokens,
+  oauthPendingFlows,
+  userScopeAssignments,
 };

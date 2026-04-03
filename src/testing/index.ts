@@ -137,6 +137,76 @@ const CREATE_TABLES_SQL = `
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS fortress_tenant (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    tax_id TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_tenant_user (
+    tenant_id INTEGER NOT NULL REFERENCES fortress_tenant(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_client (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id TEXT NOT NULL UNIQUE,
+    client_secret_hash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    grant_types TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    client_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    scope TEXT,
+    code_challenge TEXT,
+    code_challenge_method TEXT,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    client_id TEXT NOT NULL,
+    user_id INTEGER,
+    scope TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    scope TEXT,
+    state TEXT NOT NULL,
+    code_challenge TEXT,
+    code_challenge_method TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_user_scope_assignment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    scope_name TEXT NOT NULL,
+    scope_value TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `;
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';
