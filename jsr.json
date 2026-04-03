@@ -7,6 +7,7 @@
     "./jwt": "./src/core/auth/jwt.ts",
     "./testing": "./src/testing/index.ts",
     "./drizzle": "./src/drizzle/index.ts",
+    "./drizzle/pg": "./src/drizzle/pg/index.ts",
     "./hono": "./src/hono/index.ts",
     "./plugins/tenancy": "./src/plugins/tenancy/index.ts",
     "./plugins/oauth": "./src/plugins/oauth/index.ts",

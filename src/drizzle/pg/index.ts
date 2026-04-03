@@ -1,6 +1,4 @@
-export { createDrizzleAdapter } from './adapter';
-export type { DrizzleAdapterOptions, DrizzleDialect } from './adapter';
-export { fortressSchema } from './schema';
+export { fortressPgSchema } from './schema';
 export {
   groups,
   groupUsers,

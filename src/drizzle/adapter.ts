@@ -1,15 +1,22 @@
-import type { BaseSQLiteDatabase, SQLiteColumn, SQLiteTableWithColumns } from 'drizzle-orm/sqlite-core';
+import type { Column, SQL, Table } from 'drizzle-orm';
 import type { DatabaseAdapter } from '../adapters/database';
 import type { WhereClause } from '../adapters/database/types';
 
-import { and, eq, gt, gte, inArray, lt, lte, ne, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, gt, gte, inArray, lt, lte, ne, sql } from 'drizzle-orm';
 import { Errors } from '../core/errors';
 import { fortressSchema } from './schema';
 
-type DrizzleDb = BaseSQLiteDatabase<'sync' | 'async', unknown, Record<string, unknown>>;
+export type DrizzleDialect = 'sqlite' | 'pg' | 'mysql';
 
-// Map model names to their Drizzle table definitions
-const MODEL_TABLE_MAP: Record<string, SQLiteTableWithColumns<any>> = {
+export interface DrizzleAdapterOptions {
+  /** Override default fortress table definitions with your own Drizzle tables */
+  tables?: Partial<Record<string, Table>>;
+  /** Database dialect — controls data sanitization (default: 'sqlite') */
+  dialect?: DrizzleDialect;
+}
+
+// Default model-to-table mapping (SQLite fortress tables)
+const DEFAULT_TABLE_MAP: Record<string, Table> = {
   user: fortressSchema.users,
   login_identifier: fortressSchema.loginIdentifiers,
   refresh_token: fortressSchema.refreshTokens,
@@ -22,29 +29,21 @@ const MODEL_TABLE_MAP: Record<string, SQLiteTableWithColumns<any>> = {
   role_binding: fortressSchema.roleBindings,
 };
 
-function getTable(model: string): SQLiteTableWithColumns<any> {
-  const table = MODEL_TABLE_MAP[model];
-  if (!table) {
-    throw Errors.badRequest(`Unknown model: ${model}`);
-  }
-  return table;
-}
-
-function getColumn(table: SQLiteTableWithColumns<any>, field: string): SQLiteColumn {
-  const columns = table as unknown as Record<string, SQLiteColumn>;
-  // Try exact match first, then camelCase conversion
+function getColumn(table: Table, field: string): Column {
+  const columns = getTableColumns(table);
+  // Try exact match first
   if (columns[field])
     return columns[field];
 
   // Convert snake_case field names to camelCase column references
-  const camelCase = field.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  const camelCase = field.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
   if (columns[camelCase])
     return columns[camelCase];
 
   throw Errors.badRequest(`Unknown field: ${field} on table`);
 }
 
-function buildWhereCondition(table: SQLiteTableWithColumns<any>, where: WhereClause[]): ReturnType<typeof and> {
+function buildWhereCondition(table: Table, where: WhereClause[]): SQL | undefined {
   const conditions = where.map((clause) => {
     const column = getColumn(table, clause.field);
 
@@ -73,9 +72,10 @@ function buildWhereCondition(table: SQLiteTableWithColumns<any>, where: WhereCla
 
 /**
  * Sanitize data values for SQLite compatibility.
- * Converts Date → ISO string, boolean �� 0/1.
+ * SQLite doesn't support Date objects or booleans natively.
+ * PostgreSQL and MySQL handle them fine — skip sanitization for those dialects.
  */
-function sanitizeData(data: Record<string, unknown>): Record<string, unknown> {
+function sanitizeForSqlite(data: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value instanceof Date) {
@@ -95,14 +95,29 @@ function sanitizeData(data: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * Create a DatabaseAdapter backed by a Drizzle SQLite instance.
- * Works with bun:sqlite (in-memory or file), better-sqlite3, etc.
+ * Create a DatabaseAdapter backed by any Drizzle instance.
+ * Works with PostgreSQL, MySQL, and SQLite (bun:sqlite, better-sqlite3).
+ *
+ * @param db - Any Drizzle database instance
+ * @param options - Optional table overrides and dialect configuration
  */
-export function createDrizzleAdapter(db: DrizzleDb): DatabaseAdapter {
+export function createDrizzleAdapter(db: any, options?: DrizzleAdapterOptions): DatabaseAdapter {
+  const dialect = options?.dialect ?? 'sqlite';
+  const tableMap: Record<string, Table> = { ...DEFAULT_TABLE_MAP, ...(options?.tables as Record<string, Table>) };
+  const sanitize = dialect === 'sqlite' ? sanitizeForSqlite : (d: Record<string, unknown>) => d;
+
+  function getTable(model: string): Table {
+    const table = tableMap[model];
+    if (!table) {
+      throw Errors.badRequest(`Unknown model: ${model}`);
+    }
+    return table;
+  }
+
   const adapter: DatabaseAdapter = {
     async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
       const table = getTable(params.model);
-      const result = db.insert(table).values(sanitizeData(params.data) as any).returning().get();
+      const result = db.insert(table).values(sanitize(params.data) as any).returning().get();
       return result as T;
     },
 
@@ -146,10 +161,11 @@ export function createDrizzleAdapter(db: DrizzleDb): DatabaseAdapter {
       return query.all() as T[];
     },
 
+    /** @see DatabaseAdapter.update for no-match behavior documentation */
     async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T> {
       const table = getTable(params.model);
       const condition = buildWhereCondition(table, params.where);
-      const result = db.update(table).set(sanitizeData(params.data) as any).where(condition).returning().get();
+      const result = db.update(table).set(sanitize(params.data) as any).where(condition).returning().get();
       return result as T;
     },
 
@@ -173,8 +189,6 @@ export function createDrizzleAdapter(db: DrizzleDb): DatabaseAdapter {
     },
 
     async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {
-      // SQLite transactions in Drizzle use db.transaction()
-      // For simplicity, we run within the same connection (SQLite is single-writer)
       return fn(adapter);
     },
   };
