@@ -1,0 +1,19 @@
+{
+  "name": "@bajustone/fortress",
+  "version": "0.0.1",
+  "exports": {
+    ".": "./src/index.ts",
+    "./crypto": "./src/core/auth/password.ts",
+    "./jwt": "./src/core/auth/jwt.ts",
+    "./testing": "./src/testing/index.ts",
+    "./drizzle": "./src/drizzle/index.ts",
+    "./hono": "./src/hono/index.ts",
+    "./plugins/tenancy": "./src/plugins/tenancy/index.ts",
+    "./plugins/oauth": "./src/plugins/oauth/index.ts",
+    "./plugins/two-factor": "./src/plugins/two-factor/index.ts",
+    "./plugins/email-verification": "./src/plugins/email-verification/index.ts",
+    "./plugins/api-key": "./src/plugins/api-key/index.ts",
+    "./plugins/data-isolation": "./src/plugins/data-isolation/index.ts",
+    "./plugins/social-login": "./src/plugins/social-login/index.ts"
+  }
+}
