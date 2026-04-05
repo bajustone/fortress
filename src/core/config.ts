@@ -1,4 +1,5 @@
 import type { DatabaseAdapter } from '../adapters/database';
+import type { PasswordPolicyConfig } from './auth/password-policy';
 import type { FortressPlugin } from './plugin';
 
 export interface PasswordHasher {
@@ -19,6 +20,7 @@ export interface FortressConfig {
   };
   database: DatabaseAdapter;
   passwordHasher?: PasswordHasher;
+  passwordPolicy?: PasswordPolicyConfig;
   plugins?: FortressPlugin[];
 }
 

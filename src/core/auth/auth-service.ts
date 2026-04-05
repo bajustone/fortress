@@ -20,6 +20,7 @@ import { Errors } from '../errors';
 import { createInternalAdapter } from '../internal-adapter';
 import { signAccessToken, verifyAccessToken } from './jwt';
 import { createDefaultHasher } from './password';
+import { validatePassword } from './password-policy';
 import { generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
 
 interface ResolvedConfig {
@@ -333,6 +334,10 @@ export function createAuthService(
       });
       if (existing) {
         throw Errors.conflict('A user with this email already exists');
+      }
+
+      if (data.password) {
+        await validatePassword(data.password, config.passwordPolicy);
       }
 
       const passwordHash = data.password ? await hasher.hash(data.password) : null;

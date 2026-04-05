@@ -96,6 +96,7 @@ export async function collectScopeRules(
       continue;
     }
     allFilters.push(...rule.filters);
+    Object.assign(allDefaults, rule.defaults);
   }
 
   if (allFilters.length === 0 && Object.keys(allDefaults).length === 0) {
