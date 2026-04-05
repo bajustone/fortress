@@ -105,6 +105,15 @@ export function createAuthService(
     for (const plugin of plugins) {
       if (plugin.enrichTokenClaims) {
         const claims = await plugin.enrichTokenClaims(userId, { db, config });
+        if (process.env.NODE_ENV !== 'production') {
+          for (const key of Object.keys(claims)) {
+            if (key in customClaims) {
+              console.warn(
+                `[fortress] Plugin '${plugin.name}' overwrites token claim '${key}' set by a previous plugin`,
+              );
+            }
+          }
+        }
         Object.assign(customClaims, claims);
       }
     }

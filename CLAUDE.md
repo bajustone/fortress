@@ -25,7 +25,7 @@ See `docs/architecture.md` for the full technical design.
 - `src/core/auth/` — JWT (jose), password hashing (pluggable), refresh tokens (SHA256, family rotation)
 - `src/core/iam/` — resource+action permissions, conditions, deny rules, groups, roles
 - `src/core/errors.ts` — single `FortressError` class + `Errors` factory
-- `src/core/plugin.ts` — `FortressPlugin` interface (9 capabilities)
+- `src/core/plugin.ts` — `FortressPlugin` interface (8 capabilities)
 - `src/core/config.ts` — `FortressConfig` type
 
 **Adapters:**
@@ -50,7 +50,7 @@ See `docs/architecture.md` for the full technical design.
 3. **Pluggable PasswordHasher** — WASM Argon2id default, swappable for native.
 4. **Database-agnostic** — Drizzle adapter works with PostgreSQL, MySQL, SQLite. Only the tenancy plugin is PostgreSQL-specific.
 5. **Transport-agnostic permissions** — `resource + action`, not `path + httpVerb`. Works in HTTP, CLI, cron, WebSocket.
-6. **Plugin system** — 9 capabilities: models, hooks, methods, routes, middleware, wrapAdapter, enrichTokenClaims, scopeRules, rawQuery.
+6. **Plugin system** — 8 capabilities: models, hooks, methods, routes, middleware, wrapAdapter, enrichTokenClaims, scopeRules.
 7. **`WhereClause.operator` is an open string** — extensible without breaking adapters.
 8. **Secret rotation** — `jwt.secret` accepts `string | string[]` for zero-downtime rotation.
 9. **`scopeRules`** — handles both reads (WHERE filters) and writes (default values on create).

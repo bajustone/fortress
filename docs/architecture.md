@@ -665,7 +665,7 @@ interface FieldDefinition {
 interface PluginContext {
   db: DatabaseAdapter;
   config: FortressConfig;
-  auth: Fortress['auth'];
+  auth?: Record<string, Function>;  // AuthService ref; avoids circular import. Available at runtime; undefined during init-time method binding
 }
 
 interface RouteDefinition {
@@ -1345,7 +1345,7 @@ interface Fortress<TPlugins extends FortressPlugin[] = FortressPlugin[]> {
     me(userId: number): Promise<FortressUser>;
     createUser(data: CreateUserInput): Promise<FortressUser>;
     verifyToken(token: string): Promise<TokenClaims>;
-    signToken(claims: TokenClaims): Promise<string>;
+    signToken(claims: Omit<TokenClaims, 'iat' | 'exp'>): Promise<string>;
     addLoginIdentifier(userId: number, type: 'email' | 'phone' | 'username', value: string): Promise<void>;
     removeLoginIdentifier(userId: number, type: string, value: string): Promise<void>;
     getLoginIdentifiers(userId: number): Promise<LoginIdentifier[]>;
@@ -1553,6 +1553,7 @@ type FortressErrorCode =
   | 'FORBIDDEN'
   | 'BAD_REQUEST'
   | 'NOT_FOUND'
+  | 'CONFLICT'
   | 'RATE_LIMITED'
   | 'DATABASE_ERROR';
 
@@ -1590,6 +1591,8 @@ const Errors = {
     new FortressError('BAD_REQUEST', message, 400),
   notFound: (message = 'Not found') =>
     new FortressError('NOT_FOUND', message, 404),
+  conflict: (message = 'Conflict') =>
+    new FortressError('CONFLICT', message, 409),
   rateLimited: (retryAfter: number) =>
     new FortressError('RATE_LIMITED', 'Too many requests', 429, { retryAfter }),
   database: (message = 'Database error', cause?: unknown) =>

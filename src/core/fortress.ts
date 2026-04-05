@@ -41,7 +41,8 @@ export function createFortress(config: FortressConfig): Fortress {
 
   const auth = createAuthService(db, config, plugins);
   const iam = createIamService(db, config);
-  const pluginMethods = processPlugins(plugins, db, config);
+  // eslint-disable-next-line ts/no-unsafe-function-type -- auth service cast for plugin context
+  const pluginMethods = processPlugins(plugins, db, config, auth as unknown as Record<string, Function>);
 
   return {
     auth,

@@ -4,7 +4,7 @@ import { createAuthMiddleware } from './middleware/auth';
 import { createErrorHandler } from './middleware/error-handler';
 import { createRbacMiddleware } from './middleware/rbac';
 
-export { getClaims, getUserId } from './helpers';
+export { getClaims, getDb, getScopedDb, getUserId } from './helpers';
 export type { FortressEnv } from './middleware/auth';
 export type { RbacOptions, RouteMapping } from './middleware/rbac';
 

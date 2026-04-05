@@ -94,6 +94,9 @@ export interface FieldDefinition {
 export interface PluginContext {
   db: DatabaseAdapter;
   config: FortressConfig;
+  /** Auth service reference. Optional at init time; available at runtime (enrichTokenClaims, scopeRules). */
+  // eslint-disable-next-line ts/no-unsafe-function-type -- avoids circular import with auth-service.ts
+  auth?: Record<string, Function>;
 }
 
 export interface RouteDefinition {
