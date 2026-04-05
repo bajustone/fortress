@@ -17,6 +17,11 @@
     "./plugins/data-isolation": "./src/plugins/data-isolation/index.ts",
     "./plugins/tenancy": "./src/plugins/tenancy/index.ts",
     "./plugins/oauth": "./src/plugins/oauth/index.ts",
-    "./plugins/rate-limit": "./src/plugins/rate-limit/index.ts"
+    "./plugins/rate-limit": "./src/plugins/rate-limit/index.ts",
+    "./plugins/audit-log": "./src/plugins/audit-log/index.ts",
+    "./plugins/account-lockout": "./src/plugins/account-lockout/index.ts",
+    "./plugins/webauthn": "./src/plugins/webauthn/index.ts",
+    "./plugins/magic-link": "./src/plugins/magic-link/index.ts",
+    "./plugins/webhook": "./src/plugins/webhook/index.ts"
   }
 }

@@ -28,6 +28,9 @@ const CREATE_TABLES_SQL = `
     expires_at TEXT NOT NULL,
     ip_address TEXT,
     user_agent TEXT,
+    device_name TEXT,
+    last_active_at TEXT,
+    fingerprint_hash TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -60,7 +63,8 @@ const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS fortress_role (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    description TEXT
+    description TEXT,
+    is_system INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS fortress_role_permission (
@@ -81,6 +85,15 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     token TEXT NOT NULL,
     email TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_magic_link_token (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    token TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     used_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -205,6 +218,54 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     scope_name TEXT NOT NULL,
     scope_value TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_account_lockout (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    identifier TEXT NOT NULL UNIQUE,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    last_failed_at TEXT,
+    locked_until TEXT,
+    lockout_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    event_type TEXT NOT NULL,
+    actor_id INTEGER,
+    actor_type TEXT NOT NULL DEFAULT 'USER',
+    target_id INTEGER,
+    target_type TEXT,
+    ip_address TEXT,
+    user_agent TEXT,
+    outcome TEXT NOT NULL DEFAULT 'SUCCESS',
+    metadata TEXT,
+    previous_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    events TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_webhook_delivery (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint_id INTEGER NOT NULL REFERENCES fortress_webhook_endpoint(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TEXT,
+    next_retry_at TEXT,
+    response_status INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `;

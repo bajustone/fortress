@@ -16,6 +16,9 @@ export interface StoredRefreshToken {
   expiresAt: Date;
   ipAddress: string | null;
   userAgent: string | null;
+  deviceName: string | null;
+  lastActiveAt: string | null;
+  fingerprintHash: string | null;
 }
 
 // --- Interface ---

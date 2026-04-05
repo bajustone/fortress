@@ -28,6 +28,7 @@ const DEFAULT_TABLE_MAP: Record<string, Table> = {
   role_permission: fortressSchema.rolePermissions,
   role_binding: fortressSchema.roleBindings,
   email_verification_token: fortressSchema.emailVerificationTokens,
+  magic_link_token: fortressSchema.magicLinkTokens,
   api_key: fortressSchema.apiKeys,
   two_factor_secret: fortressSchema.twoFactorSecrets,
   backup_code: fortressSchema.backupCodes,
@@ -40,6 +41,10 @@ const DEFAULT_TABLE_MAP: Record<string, Table> = {
   oauth_access_token: fortressSchema.oauthAccessTokens,
   oauth_pending_flow: fortressSchema.oauthPendingFlows,
   user_scope_assignment: fortressSchema.userScopeAssignments,
+  account_lockout: fortressSchema.accountLockouts,
+  audit_log: fortressSchema.auditLogs,
+  webhook_endpoint: fortressSchema.webhookEndpoints,
+  webhook_delivery: fortressSchema.webhookDeliveries,
 };
 
 function getColumn(table: Table, field: string): Column {
@@ -184,12 +189,11 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
         return query.all() as T[];
       },
 
-      /** @see DatabaseAdapter.update for no-match behavior documentation */
-      async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T> {
+      async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T | null> {
         const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
         const result = (drizzle as any).update(table).set(sanitize(params.data) as any).where(condition).returning().get();
-        return result as T;
+        return (result as T) ?? null;
       },
 
       async delete(params: { model: string; where: WhereClause[] }): Promise<void> {

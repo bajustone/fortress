@@ -13,6 +13,7 @@ export interface FortressConfig {
     issuer?: string;
     accessTokenExpirySeconds?: number;
     refreshTokenExpirySeconds?: number;
+    validateRefreshFingerprint?: boolean | 'warn';
   };
   rbac?: {
     evaluationMode?: 'allow-only' | 'deny-overrides';

@@ -32,6 +32,9 @@ const refreshTokens = sqliteTable('fortress_refresh_token', {
   expiresAt: text('expires_at').notNull(),
   ipAddress: text('ip_address'),
   userAgent: text('user_agent'),
+  deviceName: text('device_name'),
+  lastActiveAt: text('last_active_at'),
+  fingerprintHash: text('fingerprint_hash'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
@@ -74,6 +77,7 @@ const roles = sqliteTable('fortress_role', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull().unique(),
   description: text('description'),
+  isSystem: integer('is_system', { mode: 'boolean' }).notNull().default(false),
 });
 
 const rolePermissions = sqliteTable(
@@ -101,6 +105,17 @@ const emailVerificationTokens = sqliteTable('fortress_email_verification_token',
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   token: text('token').notNull(),
   email: text('email').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  usedAt: text('used_at'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// --- Plugins: Magic Link ---
+
+const magicLinkTokens = sqliteTable('fortress_magic_link_token', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  email: text('email').notNull(),
+  token: text('token').notNull(),
   expiresAt: text('expires_at').notNull(),
   usedAt: text('used_at'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
@@ -243,6 +258,60 @@ const userScopeAssignments = sqliteTable('fortress_user_scope_assignment', {
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
+// --- Plugins: Account Lockout ---
+
+const accountLockouts = sqliteTable('fortress_account_lockout', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  identifier: text('identifier').notNull().unique(),
+  failedAttempts: integer('failed_attempts').notNull().default(0),
+  lastFailedAt: text('last_failed_at'),
+  lockedUntil: text('locked_until'),
+  lockoutCount: integer('lockout_count').notNull().default(0),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// --- Core: Audit Log ---
+
+const auditLogs = sqliteTable('fortress_audit_log', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  timestamp: text('timestamp').notNull().$defaultFn(() => new Date().toISOString()),
+  eventType: text('event_type').notNull(),
+  actorId: integer('actor_id'),
+  actorType: text('actor_type').notNull().default('USER'),
+  targetId: integer('target_id'),
+  targetType: text('target_type'),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  outcome: text('outcome').notNull().default('SUCCESS'),
+  metadata: text('metadata'),
+  previousHash: text('previous_hash'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// --- Plugins: Webhook ---
+
+const webhookEndpoints = sqliteTable('fortress_webhook_endpoint', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  url: text('url').notNull(),
+  events: text('events').notNull(), // JSON array
+  secret: text('secret').notNull(),
+  isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+const webhookDeliveries = sqliteTable('fortress_webhook_delivery', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  endpointId: integer('endpoint_id').notNull().references(() => webhookEndpoints.id, { onDelete: 'cascade' }),
+  eventType: text('event_type').notNull(),
+  payload: text('payload').notNull(), // JSON
+  status: text('status').notNull().default('pending'), // pending | success | failed
+  attempts: integer('attempts').notNull().default(0),
+  lastAttemptAt: text('last_attempt_at'),
+  nextRetryAt: text('next_retry_at'),
+  responseStatus: integer('response_status'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 // --- All tables for easy iteration ---
 
 export const fortressSchema = {
@@ -257,6 +326,7 @@ export const fortressSchema = {
   rolePermissions,
   roleBindings,
   emailVerificationTokens,
+  magicLinkTokens,
   apiKeys,
   twoFactorSecrets,
   backupCodes,
@@ -269,4 +339,8 @@ export const fortressSchema = {
   oauthAccessTokens,
   oauthPendingFlows,
   userScopeAssignments,
+  accountLockouts,
+  auditLogs,
+  webhookEndpoints,
+  webhookDeliveries,
 };

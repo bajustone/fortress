@@ -77,6 +77,14 @@ export function createIamService(
     },
 
     async deleteRole(roleId: number): Promise<void> {
+      const role = await db.findOne<Role & { isSystem?: boolean }>({
+        model: 'role',
+        where: [{ field: 'id', operator: '=', value: roleId }],
+      });
+      if (role?.isSystem) {
+        throw Errors.badRequest('Cannot delete a system role');
+      }
+
       // Remove role bindings and role permissions first
       await db.delete({ model: 'role_permission', where: [{ field: 'roleId', operator: '=', value: roleId }] });
       await db.delete({ model: 'role_binding', where: [{ field: 'roleId', operator: '=', value: roleId }] });

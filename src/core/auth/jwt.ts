@@ -32,6 +32,7 @@ export async function signAccessToken(
   return new SignJWT({
     name: claims.name,
     groups: claims.groups,
+    ...(claims.act ? { act: claims.act } : {}),
     ...(claims.customClaims ?? {}),
   })
     .setProtectedHeader({ alg: 'HS256' })
@@ -61,9 +62,10 @@ export async function verifyAccessToken(
         iss: payload.iss ?? '',
         iat: payload.iat ?? 0,
         exp: payload.exp ?? 0,
+        act: payload.act as { sub: number } | undefined,
         customClaims: Object.fromEntries(
           Object.entries(payload).filter(
-            ([k]) => !['sub', 'name', 'groups', 'iss', 'iat', 'exp'].includes(k),
+            ([k]) => !['sub', 'name', 'groups', 'iss', 'iat', 'exp', 'act'].includes(k),
           ),
         ),
       };

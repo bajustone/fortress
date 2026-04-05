@@ -22,15 +22,14 @@ export interface DatabaseAdapter {
   }) => Promise<T[]>;
 
   /**
-   * Update rows matching the where clause. If no rows match, behavior is
-   *  adapter-specific — may return undefined or the unchanged input. Callers
-   *  should not rely on the return value for no-match detection.
+   * Update rows matching the where clause.
+   * Returns the updated row, or null if no rows matched the where clause.
    */
   update: <T>(params: {
     model: string;
     where: WhereClause[];
     data: Record<string, unknown>;
-  }) => Promise<T>;
+  }) => Promise<T | null>;
 
   delete: (params: {
     model: string;

@@ -56,6 +56,7 @@ export interface PluginHooks {
   beforeRegister?: (ctx: HookContext & { data: CreateUserInput }) => Promise<HookResult | void>;
   beforeTokenRefresh?: (ctx: HookContext & { token: string }) => Promise<HookResult | void>;
   beforeLogout?: (ctx: HookContext & { token: string }) => Promise<void>;
+  onLoginFailure?: (ctx: HookContext & { identifier: string; error: Error }) => Promise<void>;
 
   afterLogin?: (ctx: AfterHookContext, result: AuthResponse) => Promise<AuthResponse>;
   afterRegister?: (ctx: AfterHookContext, user: FortressUser) => Promise<void>;

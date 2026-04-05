@@ -14,6 +14,31 @@ export interface Fortress {
   config: Readonly<FortressConfig>;
 }
 
+/**
+ * Type-safe helper to retrieve a plugin's methods from a Fortress instance.
+ *
+ * Since plugin methods are dynamically typed at runtime, this helper lets
+ * consumers provide a known interface for type-safe access without casting.
+ *
+ * @example
+ * ```ts
+ * interface TwoFactorMethods {
+ *   setup: (userId: number) => Promise<{ secret: string; qrCode: string }>;
+ *   verify: (userId: number, code: string) => Promise<boolean>;
+ * }
+ *
+ * const twoFactor = getPluginMethods<TwoFactorMethods>(fortress, 'two-factor');
+ * const result = await twoFactor.setup(userId); // fully typed
+ * ```
+ */
+export function getPluginMethods<T>(fortress: Fortress, pluginName: string): T {
+  const methods = fortress.plugins[pluginName];
+  if (!methods) {
+    throw Errors.notFound(`Plugin '${pluginName}' is not registered`);
+  }
+  return methods as T;
+}
+
 const MIN_SECRET_BYTES = 32;
 
 export function createFortress(config: FortressConfig): Fortress {

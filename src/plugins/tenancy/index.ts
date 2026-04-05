@@ -108,7 +108,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin {
           }
           return adapter.findMany<T>(params);
         },
-        async update<T>(params: Parameters<DatabaseAdapter['update']>[0]): Promise<T> {
+        async update<T>(params: Parameters<DatabaseAdapter['update']>[0]): Promise<T | null> {
           if (adapter.rawQuery) {
             await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
           }

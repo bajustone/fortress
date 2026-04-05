@@ -18,6 +18,7 @@ export interface TokenClaims {
   iss: string;
   iat: number;
   exp: number;
+  act?: { sub: number }; // RFC 8693 actor claim for impersonation
   customClaims?: Record<string, unknown>;
 }
 
@@ -36,6 +37,16 @@ export interface AuthResponse {
 export interface RequestMeta {
   ipAddress?: string;
   userAgent?: string;
+  deviceName?: string;
+}
+
+export interface SessionInfo {
+  id: number;
+  ipAddress: string | null;
+  userAgent: string | null;
+  deviceName: string | null;
+  createdAt: string;
+  lastActiveAt: string | null;
 }
 
 export interface CreateUserInput {
@@ -81,6 +92,7 @@ export interface Role {
   id: number;
   name: string;
   description?: string;
+  isSystem?: boolean;
 }
 
 export interface RoleBinding {

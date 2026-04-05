@@ -6,6 +6,8 @@ import { createRbacMiddleware } from './middleware/rbac';
 
 export { getClaims, getDb, getScopedDb, getUserId } from './helpers';
 export type { FortressEnv } from './middleware/auth';
+export { createCsrfMiddleware } from './middleware/csrf';
+export type { CsrfConfig } from './middleware/csrf';
 export type { RbacOptions, RouteMapping } from './middleware/rbac';
 
 export interface HonoAdapterOptions extends RbacOptions {}

@@ -10,7 +10,7 @@ export { Errors, FortressError } from './core/errors';
 
 export type { FortressErrorCode } from './core/errors';
 // Fortress factory
-export { createFortress } from './core/fortress';
+export { createFortress, getPluginMethods } from './core/fortress';
 
 export type { Fortress } from './core/fortress';
 

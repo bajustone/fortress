@@ -14,6 +14,7 @@ import type {
   LoginIdentifier,
   LoginIdentifierType,
   RequestMeta,
+  SessionInfo,
   TokenClaims,
 } from '../types';
 import { Errors } from '../errors';
@@ -47,9 +48,19 @@ export interface AuthService {
   createUser: (data: CreateUserInput) => Promise<FortressUser>;
   verifyToken: (token: string) => Promise<TokenClaims>;
   signToken: (claims: Omit<TokenClaims, 'iat' | 'exp'>) => Promise<string>;
+  listSessions: (userId: number) => Promise<SessionInfo[]>;
+  revokeSession: (userId: number, tokenId: number) => Promise<void>;
+  revokeAllOtherSessions: (userId: number, currentTokenId: number) => Promise<void>;
   addLoginIdentifier: (userId: number, type: LoginIdentifierType, value: string) => Promise<void>;
   removeLoginIdentifier: (userId: number, type: LoginIdentifierType, value: string) => Promise<void>;
   getLoginIdentifiers: (userId: number) => Promise<LoginIdentifier[]>;
+  /**
+   * Issue a short-lived, non-renewable access token that lets an admin act as another user.
+   * The token carries an RFC 8693 `act` claim identifying the real admin.
+   *
+   * **Caller must verify the admin has the `fortress:impersonate` permission before calling this method.**
+   */
+  impersonate: (adminUserId: number, targetUserId: number, options?: { reason?: string; expirySeconds?: number }) => Promise<AuthResponse>;
 }
 
 export function createAuthService(
@@ -101,6 +112,14 @@ export function createAuthService(
     return current;
   }
 
+  async function runOnLoginFailureHooks(identifier: string, error: Error): Promise<void> {
+    for (const plugin of plugins) {
+      if (plugin.hooks?.onLoginFailure) {
+        await plugin.hooks.onLoginFailure({ db, config, identifier, error });
+      }
+    }
+  }
+
   async function enrichClaims(userId: number): Promise<Record<string, unknown>> {
     const customClaims: Record<string, unknown> = {};
     for (const plugin of plugins) {
@@ -122,6 +141,11 @@ export function createAuthService(
   }
 
   const getUserGroups = adapter.getUserGroups;
+
+  async function computeFingerprintHash(userAgent: string): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userAgent));
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
 
   async function issueTokens(
     user: FortressUser,
@@ -145,6 +169,10 @@ export function createAuthService(
     const { raw, hash } = await generateRefreshToken();
     const family = generateTokenFamily();
 
+    const fingerprintHash = meta?.userAgent
+      ? await computeFingerprintHash(meta.userAgent)
+      : null;
+
     await db.create({
       model: 'refresh_token',
       data: {
@@ -155,6 +183,9 @@ export function createAuthService(
         expiresAt: new Date(Date.now() + resolved.refreshTokenExpiry * 1000),
         ipAddress: meta?.ipAddress ?? null,
         userAgent: meta?.userAgent ?? null,
+        deviceName: meta?.deviceName ?? null,
+        lastActiveAt: null,
+        fingerprintHash,
       },
     });
 
@@ -170,25 +201,32 @@ export function createAuthService(
       }
 
       // Resolve user via login_identifier first, fall back to email on user table
-      const user = await adapter.findUserByIdentifier(identifier);
+      let user: (FortressUser & { passwordHash: string | null }) | null;
+      try {
+        user = await adapter.findUserByIdentifier(identifier);
 
-      if (!user || !user.passwordHash) {
-        // Run dummy verify to prevent timing oracle (normalize response time
-        // regardless of whether user exists or has a password)
-        await hasher.verify(
-          '$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0$dummy',
-          password,
-        ).catch(() => {});
-        throw Errors.unauthorized('Invalid credentials');
+        if (!user || !user.passwordHash) {
+          // Run dummy verify to prevent timing oracle (normalize response time
+          // regardless of whether user exists or has a password)
+          await hasher.verify(
+            '$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0$dummy',
+            password,
+          ).catch(() => {});
+          throw Errors.unauthorized('Invalid credentials');
+        }
+
+        if (!user.isActive) {
+          throw Errors.unauthorized('Account is disabled');
+        }
+
+        const valid = await hasher.verify(user.passwordHash, password);
+        if (!valid) {
+          throw Errors.unauthorized('Invalid credentials');
+        }
       }
-
-      if (!user.isActive) {
-        throw Errors.unauthorized('Account is disabled');
-      }
-
-      const valid = await hasher.verify(user.passwordHash, password);
-      if (!valid) {
-        throw Errors.unauthorized('Invalid credentials');
+      catch (error) {
+        await runOnLoginFailureHooks(identifier, error as Error);
+        throw error;
       }
 
       const tokens = await issueTokens(user, meta);
@@ -235,6 +273,32 @@ export function createAuthService(
         throw Errors.unauthorized('Refresh token expired');
       }
 
+      // Token fingerprint validation
+      if (config.jwt.validateRefreshFingerprint && stored.fingerprintHash) {
+        const currentFingerprint = meta?.userAgent
+          ? await computeFingerprintHash(meta.userAgent)
+          : null;
+
+        if (currentFingerprint !== stored.fingerprintHash) {
+          if (config.jwt.validateRefreshFingerprint === true) {
+            // Hard mode: invalidate entire token family and reject
+            await db.update({
+              model: 'refresh_token',
+              where: [{ field: 'tokenFamily', operator: '=', value: stored.tokenFamily }],
+              data: { isRevoked: true },
+            });
+            throw Errors.unauthorized('Refresh token fingerprint mismatch');
+          }
+          else {
+            // Warn mode: log but allow
+            console.warn(
+              '[fortress] Refresh token fingerprint mismatch for token family:',
+              stored.tokenFamily,
+            );
+          }
+        }
+      }
+
       // Revoke old token
       await db.update({
         model: 'refresh_token',
@@ -270,6 +334,10 @@ export function createAuthService(
 
       const newToken = await generateRefreshToken();
 
+      const newFingerprintHash = meta?.userAgent
+        ? await computeFingerprintHash(meta.userAgent)
+        : stored.fingerprintHash;
+
       await db.create({
         model: 'refresh_token',
         data: {
@@ -280,6 +348,9 @@ export function createAuthService(
           expiresAt: new Date(Date.now() + resolved.refreshTokenExpiry * 1000),
           ipAddress: meta?.ipAddress ?? stored.ipAddress,
           userAgent: meta?.userAgent ?? stored.userAgent,
+          deviceName: meta?.deviceName ?? stored.deviceName,
+          lastActiveAt: new Date().toISOString(),
+          fingerprintHash: newFingerprintHash,
         },
       });
 
@@ -378,6 +449,64 @@ export function createAuthService(
       return signAccessToken(claims, resolved.secret, resolved.accessTokenExpiry);
     },
 
+    async listSessions(userId: number): Promise<SessionInfo[]> {
+      const tokens = await db.findMany<{
+        id: number;
+        ipAddress: string | null;
+        userAgent: string | null;
+        deviceName: string | null;
+        createdAt: string;
+        lastActiveAt: string | null;
+      }>({
+        model: 'refresh_token',
+        where: [
+          { field: 'userId', operator: '=', value: userId },
+          { field: 'isRevoked', operator: '=', value: false },
+          { field: 'expiresAt', operator: 'gt', value: new Date().toISOString() },
+        ],
+      });
+
+      return tokens.map(t => ({
+        id: t.id,
+        ipAddress: t.ipAddress,
+        userAgent: t.userAgent,
+        deviceName: t.deviceName,
+        createdAt: t.createdAt,
+        lastActiveAt: t.lastActiveAt,
+      }));
+    },
+
+    async revokeSession(userId: number, tokenId: number): Promise<void> {
+      await db.update({
+        model: 'refresh_token',
+        where: [
+          { field: 'id', operator: '=', value: tokenId },
+          { field: 'userId', operator: '=', value: userId },
+        ],
+        data: { isRevoked: true },
+      });
+    },
+
+    async revokeAllOtherSessions(userId: number, currentTokenId: number): Promise<void> {
+      const tokens = await db.findMany<{ id: number }>({
+        model: 'refresh_token',
+        where: [
+          { field: 'userId', operator: '=', value: userId },
+          { field: 'isRevoked', operator: '=', value: false },
+        ],
+      });
+
+      for (const token of tokens) {
+        if (token.id !== currentTokenId) {
+          await db.update({
+            model: 'refresh_token',
+            where: [{ field: 'id', operator: '=', value: token.id }],
+            data: { isRevoked: true },
+          });
+        }
+      }
+    },
+
     async addLoginIdentifier(userId: number, type: LoginIdentifierType, value: string): Promise<void> {
       await db.create({
         model: 'login_identifier',
@@ -401,6 +530,54 @@ export function createAuthService(
         model: 'login_identifier',
         where: [{ field: 'userId', operator: '=', value: userId }],
       });
+    },
+
+    async impersonate(
+      adminUserId: number,
+      targetUserId: number,
+      options?: { reason?: string; expirySeconds?: number },
+    ): Promise<AuthResponse> {
+      const targetUser = await db.findOne<FortressUser>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: targetUserId }],
+      });
+
+      if (!targetUser) {
+        throw Errors.notFound('Target user not found');
+      }
+
+      const expirySeconds = options?.expirySeconds ?? 3600;
+      const groups = await getUserGroups(targetUser.id);
+      const customClaims = await enrichClaims(targetUser.id);
+
+      const accessToken = await signAccessToken(
+        {
+          sub: targetUser.id,
+          name: targetUser.name,
+          groups,
+          iss: resolved.issuer,
+          act: { sub: adminUserId },
+          customClaims: Object.keys(customClaims).length > 0 ? customClaims : undefined,
+        },
+        resolved.secret,
+        expirySeconds,
+      );
+
+      // Do NOT issue a refresh token for impersonation — non-renewable
+      const { passwordHash: _, ...safeUser } = targetUser as FortressUser & { passwordHash?: string };
+
+      return {
+        user: safeUser,
+        accessToken,
+        refreshToken: null,
+        pluginData: {
+          impersonation: {
+            adminUserId,
+            reason: options?.reason ?? null,
+            expiresInSeconds: expirySeconds,
+          },
+        },
+      };
     },
   };
 }

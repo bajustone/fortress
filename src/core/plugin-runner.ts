@@ -155,7 +155,7 @@ export function wrapAdapterWithScopeRules(
       model: string;
       where: WhereClause[];
       data: Record<string, unknown>;
-    }): Promise<T> =>
+    }): Promise<T | null> =>
       adapter.update<T>({
         ...params,
         where: [...params.where, ...filters],
