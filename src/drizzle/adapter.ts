@@ -131,6 +131,31 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
   const dialect = options?.dialect ?? 'sqlite';
   const tableMap: Record<string, Table> = { ...DEFAULT_TABLE_MAP, ...(options?.tables as Record<string, Table>) };
   const sanitize = dialect === 'sqlite' ? sanitizeForSqlite : (d: Record<string, unknown>) => d;
+  const isSqlite = dialect === 'sqlite';
+
+  /** Execute a query expecting a single row (or undefined). SQLite uses .get(), PG/MySQL awaits the query. */
+  async function execOne<T>(query: any): Promise<T | undefined> {
+    if (isSqlite)
+      return query.get() as T | undefined;
+    const rows = await query;
+    return (rows as T[])[0];
+  }
+
+  /** Execute a query expecting an array of rows. SQLite uses .all(), PG/MySQL awaits the query. */
+  async function execMany<T>(query: any): Promise<T[]> {
+    if (isSqlite)
+      return query.all() as T[];
+    return await query as T[];
+  }
+
+  /** Execute a query where the result is discarded. SQLite uses .run(), PG/MySQL awaits the query. */
+  async function execRun(query: any): Promise<void> {
+    if (isSqlite) {
+      query.run();
+      return;
+    }
+    await query;
+  }
 
   function getTable(model: string): Table {
     const table = tableMap[model];
@@ -145,14 +170,14 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
     const self: DatabaseAdapter = {
       async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
         const table = getTable(params.model);
-        const result = (drizzle as any).insert(table).values(sanitize(params.data) as any).returning().get();
+        const result = await execOne<T>((drizzle as any).insert(table).values(sanitize(params.data) as any).returning());
         return result as T;
       },
 
       async findOne<T>(params: { model: string; where: WhereClause[] }): Promise<T | null> {
         const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
-        const result = (drizzle as any).select().from(table).where(condition).get();
+        const result = await execOne<T>((drizzle as any).select().from(table).where(condition));
         return (result as T) ?? null;
       },
 
@@ -186,20 +211,20 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
           query = query.offset(params.offset);
         }
 
-        return query.all() as T[];
+        return execMany<T>(query);
       },
 
       async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T | null> {
         const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
-        const result = (drizzle as any).update(table).set(sanitize(params.data) as any).where(condition).returning().get();
+        const result = await execOne<T>((drizzle as any).update(table).set(sanitize(params.data) as any).where(condition).returning());
         return (result as T) ?? null;
       },
 
       async delete(params: { model: string; where: WhereClause[] }): Promise<void> {
         const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
-        (drizzle as any).delete(table).where(condition).run();
+        await execRun((drizzle as any).delete(table).where(condition));
       },
 
       async count(params: { model: string; where?: WhereClause[] }): Promise<number> {
@@ -211,8 +236,8 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
           query = query.where(condition);
         }
 
-        const result = query.get();
-        return (result as any)?.count ?? 0;
+        const result = await execOne<{ count: number | string }>(query);
+        return Number(result?.count) || 0;
       },
 
       async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {
