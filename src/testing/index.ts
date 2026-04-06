@@ -8,6 +8,7 @@ const CREATE_TABLES_SQL = `
     name TEXT NOT NULL,
     password_hash TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
+    email_verified INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );

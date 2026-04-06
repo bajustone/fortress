@@ -5,6 +5,7 @@ export interface FortressUser {
   email: string;
   name: string;
   isActive: boolean;
+  emailVerified?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -27,12 +28,31 @@ export interface AuthTokenPair {
   refreshToken: string;
 }
 
-export interface AuthResponse {
+export interface AuthResponseSuccess {
+  status: 'success';
   user: FortressUser;
-  accessToken: string | null;
-  refreshToken: string | null;
+  accessToken: string;
+  refreshToken: string;
   pluginData?: Record<string, unknown>;
 }
+
+export interface AuthResponseImpersonation {
+  status: 'impersonation';
+  user: FortressUser;
+  accessToken: string;
+  refreshToken: null;
+  pluginData?: Record<string, unknown>;
+}
+
+export interface AuthResponsePending {
+  status: 'pending';
+  user: FortressUser;
+  accessToken: null;
+  refreshToken: null;
+  pluginData?: Record<string, unknown>;
+}
+
+export type AuthResponse = AuthResponseSuccess | AuthResponseImpersonation | AuthResponsePending;
 
 export interface RequestMeta {
   ipAddress?: string;
@@ -76,10 +96,16 @@ export interface PermissionInput {
   conditions?: PermissionCondition[];
 }
 
+export interface ConditionRef {
+  ref: string;
+}
+
+export type ConditionValue = string | string[] | ConditionRef | ConditionRef[];
+
 export interface PermissionCondition {
   field: string;
   operator: 'eq' | 'neq' | 'in' | 'startsWith';
-  value: string | string[];
+  value: ConditionValue;
 }
 
 export interface PermissionContext {
@@ -111,6 +137,8 @@ export interface LoginIdentifier {
   userId: number;
   type: LoginIdentifierType;
   value: string;
+  /** Reserved for future multi-tenant support. Not yet stored in the database. */
+  tenantId?: string | null;
 }
 
 export interface Group {

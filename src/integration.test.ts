@@ -72,8 +72,8 @@ describe('auth integration', () => {
       password: 'password-123',
     });
 
-    const { accessToken } = await fortress.auth.login('carol@example.com', 'password-123');
-    const claims = await fortress.auth.verifyToken(accessToken!);
+    const login = await fortress.auth.login('carol@example.com', 'password-123');
+    const claims = await fortress.auth.verifyToken(login.accessToken as string);
 
     expect(claims.name).toBe('Carol');
     expect(claims.iss).toBe('fortress');
@@ -88,12 +88,12 @@ describe('auth integration', () => {
     });
 
     const login = await fortress.auth.login('dave@example.com', 'password-123');
-    const refreshed = await fortress.auth.refresh(login.refreshToken!);
+    const refreshed = await fortress.auth.refresh(login.refreshToken as string);
 
     expect(refreshed.accessToken).toBeTruthy();
     expect(refreshed.refreshToken).toBeTruthy();
     // Refresh token must be different (new random bytes)
-    expect(refreshed.refreshToken).not.toBe(login.refreshToken);
+    expect(refreshed.refreshToken).not.toBe(login.refreshToken as string);
     // Access tokens may be identical if generated in the same second (same iat/exp)
     // — that's fine, the important thing is we got a valid new token
   });
@@ -106,7 +106,7 @@ describe('auth integration', () => {
     });
 
     const login = await fortress.auth.login('eve@example.com', 'password-123');
-    const oldRefreshToken = login.refreshToken!;
+    const oldRefreshToken = login.refreshToken as string;
 
     // Use the refresh token (rotates it)
     await fortress.auth.refresh(oldRefreshToken);
@@ -123,10 +123,10 @@ describe('auth integration', () => {
     });
 
     const login = await fortress.auth.login('frank@example.com', 'password-123');
-    await fortress.auth.logout(login.refreshToken!);
+    await fortress.auth.logout(login.refreshToken as string);
 
     // Trying to refresh with logged out token should fail
-    await expect(fortress.auth.refresh(login.refreshToken!)).rejects.toThrow('Token reuse detected');
+    await expect(fortress.auth.refresh(login.refreshToken as string)).rejects.toThrow('Token reuse detected');
   });
 
   it('me() returns user by id', async () => {

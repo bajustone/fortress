@@ -1,4 +1,4 @@
-import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, primaryKey, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
 
 // --- Core Identity ---
 
@@ -8,6 +8,7 @@ const users = sqliteTable('fortress_user', {
   name: text('name').notNull(),
   passwordHash: text('password_hash'),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  emailVerified: integer('email_verified', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
@@ -188,7 +189,9 @@ const socialAccounts = sqliteTable('fortress_social_account', {
   profile: text('profile'), // JSON
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [
+  unique().on(table.userId, table.provider),
+]);
 
 // --- Plugins: Tenancy ---
 

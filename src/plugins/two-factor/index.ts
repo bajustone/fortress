@@ -250,6 +250,7 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
 
         // 2FA required — return partial response without tokens
         return {
+          status: 'pending' as const,
           user: result.user,
           accessToken: null,
           refreshToken: null,

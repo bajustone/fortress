@@ -59,7 +59,11 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
         if (!user)
           return; // Let auth-service handle "user not found"
 
-        // Check if user has any verified token
+        // Fast path: check emailVerified field on user
+        if (user.emailVerified)
+          return;
+
+        // Fallback: check verification tokens (for users verified before emailVerified field existed)
         const tokens = await ctx.db.findMany<VerificationTokenRecord>({
           model: 'email_verification_token',
           where: [{ field: 'userId', operator: '=', value: user.id }],
@@ -151,6 +155,13 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
           model: 'email_verification_token',
           where: [{ field: 'id', operator: '=', value: record.id }],
           data: { usedAt: new Date() },
+        });
+
+        // Mark user as email-verified
+        await ctx.db.update({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: record.userId }],
+          data: { emailVerified: true },
         });
 
         return { userId: record.userId, email: record.email };

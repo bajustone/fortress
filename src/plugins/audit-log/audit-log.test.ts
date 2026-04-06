@@ -93,7 +93,7 @@ describe('audit-log plugin', () => {
       });
 
       const loginResult = await fortress.auth.login('dave@example.com', 'password-123');
-      await fortress.auth.logout(loginResult.refreshToken!);
+      await fortress.auth.logout(loginResult.refreshToken as string);
 
       const entries = await getAuditLog();
       const logoutEntry = entries.find(e => e.eventType === 'LOGOUT');
@@ -113,7 +113,7 @@ describe('audit-log plugin', () => {
       });
 
       const loginResult = await fortress.auth.login('eve@example.com', 'password-123');
-      await fortress.auth.refresh(loginResult.refreshToken!);
+      await fortress.auth.refresh(loginResult.refreshToken as string);
 
       const entries = await getAuditLog();
       const refreshEntry = entries.find(e => e.eventType === 'TOKEN_REFRESH');

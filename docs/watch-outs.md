@@ -2,12 +2,29 @@
 
 ## Design Watch-Outs
 
+### Multi-Tenant Login Identifier Uniqueness
+The `login_identifier` table lives in the shared (public) schema with a global `UNIQUE` constraint on `value`. This means `alice@example.com` can only exist once across all tenants. In schema-per-tenant mode (PostgreSQL), if the same person needs accounts in multiple tenants, use tenant-scoped identifiers (e.g., `acme:alice@example.com`) or a single user with multiple tenant memberships (the `tenant_user` table supports this).
+
+A future version may add a nullable `tenantId` column to `login_identifier` with a composite unique on `(value, tenantId)` to support per-tenant identity isolation.
+
 ### Generic CRUD DatabaseAdapter
 - **`rawQuery` escape hatch** — optional method for performance-critical multi-table operations (IAM permission chain JOINs). Adapters that don't implement it fall back to multiple `findMany` calls. Design decision: the generic CRUD is for simple ops and plugins; core IAM queries can use `rawQuery` for performance.
 - **`create` return type `Promise<T>` is unconstrained** — no type relationship between `model: 'user'` and return type `T`. Intentional trade-off (same as Better Auth). The internal adapter layer handles typing. Document as a known limitation.
 
 ### Plugin System
 - **Plugin ordering** — hooks run in registration order. Document this clearly. Consider if any hooks need explicit priority.
+
+### Plugin `wrapAdapter` Chaining Order
+When multiple plugins define `wrapAdapter`, they chain in registration order — each wrapper receives the output of the previous. This means the **last registered plugin's wrapper is outermost** and executes first on each request:
+
+```typescript
+plugins: [tenancy(), dataIsolation()]
+// Result: dataIsolation.wrapAdapter(tenancy.wrapAdapter(baseAdapter))
+// Per-request: dataIsolation's logic runs first, delegates to tenancy's wrapper,
+// which delegates to the base adapter.
+```
+
+This is the standard decorator pattern (last applied = outermost), but can be counterintuitive. If plugin A must run before plugin B at request time, register B before A.
 
 ### Plugin Runtime Integration
 - ~~**`wrapAdapter` and `scopeRules` are not wired into request handling.**~~ **RESOLVED.** The auth middleware now calls `chainAdapterWrappers` after JWT verification and exposes `fortressDb` (adapter with wrappers applied) and `fortressGetScopedDb(model)` (additionally applies scopeRules) on the Hono context. Helpers: `getDb(c)`, `getScopedDb(c, model)`.

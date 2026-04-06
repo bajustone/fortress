@@ -233,6 +233,7 @@ export function createAuthService(
 
       const { passwordHash: _, ...safeUser } = user;
       let response: AuthResponse = {
+        status: 'success',
         user: safeUser,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
@@ -421,6 +422,7 @@ export function createAuthService(
           name: data.name,
           passwordHash,
           isActive: data.isActive ?? true,
+          emailVerified: false,
         },
       });
 
@@ -568,6 +570,7 @@ export function createAuthService(
       const { passwordHash: _, ...safeUser } = targetUser as FortressUser & { passwordHash?: string };
 
       return {
+        status: 'impersonation' as const,
         user: safeUser,
         accessToken,
         refreshToken: null,

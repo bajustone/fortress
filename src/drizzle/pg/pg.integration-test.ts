@@ -535,12 +535,12 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('refresh@test.com', 'password-123');
-    const refreshed = await fortress.auth.refresh(login.refreshToken!);
+    const refreshed = await fortress.auth.refresh(login.refreshToken as string);
 
     expect(refreshed.accessToken).toBeTruthy();
     expect(refreshed.refreshToken).toBeTruthy();
-    expect(refreshed.accessToken).not.toBe(login.accessToken);
-    expect(refreshed.refreshToken).not.toBe(login.refreshToken);
+    expect(refreshed.accessToken).not.toBe(login.accessToken as string);
+    expect(refreshed.refreshToken).not.toBe(login.refreshToken as string);
   });
 
   it('detects token reuse after refresh', async () => {
@@ -551,11 +551,11 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('reuse@test.com', 'password-123');
-    await fortress.auth.refresh(login.refreshToken!);
+    await fortress.auth.refresh(login.refreshToken as string);
 
     // Using the old refresh token again should fail
     await expect(
-      fortress.auth.refresh(login.refreshToken!),
+      fortress.auth.refresh(login.refreshToken as string),
     ).rejects.toThrow();
   });
 
@@ -567,10 +567,10 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('logout@test.com', 'password-123');
-    await fortress.auth.logout(login.refreshToken!);
+    await fortress.auth.logout(login.refreshToken as string);
 
     await expect(
-      fortress.auth.refresh(login.refreshToken!),
+      fortress.auth.refresh(login.refreshToken as string),
     ).rejects.toThrow();
   });
 
@@ -582,7 +582,7 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('verify@test.com', 'password-123');
-    const claims = await fortress.auth.verifyToken(login.accessToken!);
+    const claims = await fortress.auth.verifyToken(login.accessToken as string);
 
     expect(claims.sub).toBe(login.user.id);
     expect(claims.name).toBe('Verify');

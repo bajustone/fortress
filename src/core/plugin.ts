@@ -80,9 +80,14 @@ export interface HookResult {
 
 // --- Supporting Types ---
 
+export type ModelConstraint
+  = | { type: 'unique'; fields: string[] }
+    | { type: 'index'; fields: string[]; name?: string };
+
 export interface ModelDefinition {
   name: string;
   fields: Record<string, FieldDefinition>;
+  constraints?: ModelConstraint[];
 }
 
 export interface FieldDefinition {
@@ -101,7 +106,7 @@ export interface PluginContext {
 }
 
 export interface RouteDefinition {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   path: string;
   handler: string;
 }

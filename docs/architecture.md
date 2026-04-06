@@ -124,8 +124,12 @@ interface DatabaseAdapter {
   transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T>;
 
   /** Optional: raw query for performance-critical multi-table operations (e.g., permission chain JOINs).
-   *  Adapters that implement this get optimized IAM queries. Others fall back to multiple findMany calls. */
+   *  Adapters that implement this get optimized IAM queries. Others fall back to multiple findMany calls.
+   *  SQL uses dialect-specific placeholders: ? for SQLite/MySQL, $1 for PostgreSQL. */
   rawQuery?<T>(sql: string, params?: unknown[]): Promise<T[]>;
+
+  /** Database dialect hint for adapters that implement rawQuery */
+  readonly dialect?: 'sqlite' | 'pg' | 'mysql';
 }
 
 interface WhereClause {
@@ -650,9 +654,14 @@ interface HookResult {
 ### Supporting Types
 
 ```typescript
+type ModelConstraint =
+  | { type: 'unique'; fields: string[] }
+  | { type: 'index'; fields: string[]; name?: string };
+
 interface ModelDefinition {
   name: string;
   fields: Record<string, FieldDefinition>;
+  constraints?: ModelConstraint[];
 }
 
 interface FieldDefinition {
@@ -669,7 +678,7 @@ interface PluginContext {
 }
 
 interface RouteDefinition {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   path: string;
   handler: string;  // method name from methods
 }
@@ -1451,6 +1460,7 @@ interface FortressUser {
   email: string;
   name: string;
   isActive: boolean;
+  emailVerified?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -1471,11 +1481,31 @@ interface AuthTokenPair {
   refreshToken: string;
 }
 
-interface AuthResponse {
+// Discriminated union — check result.status to narrow
+type AuthResponse = AuthResponseSuccess | AuthResponseImpersonation | AuthResponsePending;
+
+interface AuthResponseSuccess {
+  status: 'success';
   user: FortressUser;
-  accessToken: string | null;     // null when 2FA required
-  refreshToken: string | null;    // null when 2FA required
-  pluginData?: Record<string, unknown>;  // plugin-specific extras (requires2FA, etc.)
+  accessToken: string;
+  refreshToken: string;
+  pluginData?: Record<string, unknown>;
+}
+
+interface AuthResponseImpersonation {
+  status: 'impersonation';
+  user: FortressUser;
+  accessToken: string;
+  refreshToken: null;
+  pluginData?: Record<string, unknown>;
+}
+
+interface AuthResponsePending {
+  status: 'pending';           // e.g., 2FA required
+  user: FortressUser;
+  accessToken: null;
+  refreshToken: null;
+  pluginData?: Record<string, unknown>;
 }
 
 interface RequestMeta {
@@ -1510,10 +1540,13 @@ interface Permission {
   description?: string;
 }
 
+interface ConditionRef { ref: string; }
+type ConditionValue = string | string[] | ConditionRef | ConditionRef[];
+
 interface PermissionCondition {
   field: string;
   operator: 'eq' | 'neq' | 'in' | 'startsWith';
-  value: string | string[];
+  value: ConditionValue;  // string templates like "${user.id}" still work; ConditionRef is the typed alternative
 }
 
 interface PermissionContext {

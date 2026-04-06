@@ -119,16 +119,22 @@ function resolveFieldValue(field: string, context: PermissionContext): unknown {
 }
 
 /**
- * Resolve expected value — supports ${variable} template syntax.
- * e.g., "${user.id}" resolves to context.user.id
+ * Resolve expected value — supports both ${variable} template syntax
+ * and structured ConditionRef objects ({ ref: "user.id" }).
  */
 function resolveExpectedValue(
-  value: string | string[],
+  value: string | string[] | { ref: string } | { ref: string }[],
   context: PermissionContext,
 ): unknown {
   if (Array.isArray(value)) {
-    return value.map(v => resolveSingleValue(v, context));
+    return value.map((v) => {
+      if (typeof v === 'object' && 'ref' in v)
+        return resolveFieldValue(v.ref, context);
+      return resolveSingleValue(v, context);
+    });
   }
+  if (typeof value === 'object' && 'ref' in value)
+    return resolveFieldValue(value.ref, context);
   return resolveSingleValue(value, context);
 }
 

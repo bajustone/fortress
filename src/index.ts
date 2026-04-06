@@ -22,6 +22,7 @@ export type {
   HookContext,
   HookResult,
   MiddlewareDefinition,
+  ModelConstraint,
   ModelDefinition,
   PluginContext,
   PluginHooks,
@@ -31,7 +32,12 @@ export type { InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
 // Core types
 export type {
   AuthResponse,
+  AuthResponseImpersonation,
+  AuthResponsePending,
+  AuthResponseSuccess,
   AuthTokenPair,
+  ConditionRef,
+  ConditionValue,
   CreateUserInput,
   FortressUser,
   Group,

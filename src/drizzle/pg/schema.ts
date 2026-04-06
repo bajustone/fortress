@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, varchar } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, varchar } from 'drizzle-orm/pg-core';
 
 // --- Core Identity ---
 
@@ -8,6 +8,7 @@ const users = pgTable('fortress_user', {
   name: varchar('name', { length: 255 }).notNull(),
   passwordHash: text('password_hash'),
   isActive: boolean('is_active').notNull().default(true),
+  emailVerified: boolean('email_verified').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
@@ -188,7 +189,9 @@ const socialAccounts = pgTable('fortress_social_account', {
   profile: jsonb('profile'), // JSON
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
-});
+}, table => [
+  unique().on(table.userId, table.provider),
+]);
 
 // --- Plugins: Tenancy ---
 

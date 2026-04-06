@@ -40,17 +40,15 @@ const fortress = createFortress({
 });
 
 // Register a user
-const { user, tokens } = await fortress.auth.createUser({
+const user = await fortress.auth.createUser({
   email: 'alice@example.com',
+  name: 'Alice',
   password: 'correct-horse-battery-staple',
 });
 
 // Login
-const { user, tokens } = await fortress.auth.login({
-  identifier: 'alice@example.com',
-  identifierType: 'email',
-  password: 'correct-horse-battery-staple',
-});
+const result = await fortress.auth.login('alice@example.com', 'correct-horse-battery-staple');
+// result.user, result.accessToken, result.refreshToken
 
 // Check permissions
 const allowed = await fortress.iam.checkPermission({

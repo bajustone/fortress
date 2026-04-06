@@ -27,12 +27,12 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      const { refreshToken } = await fortress.auth.login('hook-user@example.com', 'password-123');
-      await fortress.auth.logout(refreshToken!);
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123');
+      await fortress.auth.logout(login.refreshToken as string);
 
       expect(beforeLogout).toHaveBeenCalledOnce();
       expect(beforeLogout).toHaveBeenCalledWith(expect.objectContaining({
-        token: refreshToken,
+        token: login.refreshToken,
       }));
     });
   });
@@ -93,12 +93,12 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      const { refreshToken } = await fortress.auth.login('hook-user@example.com', 'password-123');
-      await fortress.auth.refresh(refreshToken!);
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123');
+      await fortress.auth.refresh(login.refreshToken as string);
 
       expect(beforeTokenRefresh).toHaveBeenCalledOnce();
       expect(beforeTokenRefresh).toHaveBeenCalledWith(expect.objectContaining({
-        token: refreshToken,
+        token: login.refreshToken,
       }));
     });
 
@@ -117,8 +117,8 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      const { refreshToken } = await fortress.auth.login('hook-user@example.com', 'password-123');
-      const result = await fortress.auth.refresh(refreshToken!);
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123');
+      const result = await fortress.auth.refresh(login.refreshToken as string);
 
       expect((result as any).blocked).toBe(true);
     });
@@ -140,8 +140,8 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      const { refreshToken } = await fortress.auth.login('hook-user@example.com', 'password-123');
-      const result = await fortress.auth.refresh(refreshToken!);
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123');
+      const result = await fortress.auth.refresh(login.refreshToken as string);
 
       expect(result.accessToken).toMatch(/^modified-/);
     });

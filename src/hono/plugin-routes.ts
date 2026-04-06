@@ -53,6 +53,9 @@ export function mountPluginRoutes(
         case 'DELETE':
           app.delete(fullPath, honoHandler);
           break;
+        case 'PATCH':
+          app.patch(fullPath, honoHandler);
+          break;
       }
     }
   }

@@ -47,6 +47,11 @@ export interface DatabaseAdapter {
    * Optional: raw query for performance-critical multi-table operations.
    *  Adapters that implement this get optimized IAM queries.
    *  Others fall back to multiple findMany calls.
+   *  @param sql SQL string with dialect-specific placeholders (? for SQLite/MySQL, $1 for PostgreSQL)
+   *  @param params Positional parameters matching the placeholders
    */
   rawQuery?: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
+
+  /** Database dialect hint for adapters that implement rawQuery */
+  readonly dialect?: 'sqlite' | 'pg' | 'mysql';
 }

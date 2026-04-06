@@ -93,6 +93,9 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
         createdAt: { type: 'date', required: true },
         updatedAt: { type: 'date', required: true },
       },
+      constraints: [
+        { type: 'unique', fields: ['userId', 'provider'] },
+      ],
     }],
 
     methods: ctx => ({

@@ -34,14 +34,14 @@ beforeEach(async () => {
 describe('impersonation', () => {
   it('returns an access token with act claim containing admin userId', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
-    const claims = await fortress.auth.verifyToken(result.accessToken!);
+    const claims = await fortress.auth.verifyToken(result.accessToken as string);
 
     expect(claims.act).toEqual({ sub: adminId });
   });
 
   it('token has the target user sub, name, and groups', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
-    const claims = await fortress.auth.verifyToken(result.accessToken!);
+    const claims = await fortress.auth.verifyToken(result.accessToken as string);
 
     expect(claims.sub).toBe(targetId);
     expect(claims.name).toBe('Target User');
@@ -68,7 +68,7 @@ describe('impersonation', () => {
 
   it('uses custom expiry when provided', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId, { expirySeconds: 600 });
-    const claims = await fortress.auth.verifyToken(result.accessToken!);
+    const claims = await fortress.auth.verifyToken(result.accessToken as string);
 
     expect(result.pluginData).toMatchObject({
       impersonation: { expiresInSeconds: 600 },
