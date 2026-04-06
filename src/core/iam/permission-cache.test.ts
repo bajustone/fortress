@@ -1,0 +1,79 @@
+import type { Permission } from '../types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPermissionCache } from './permission-cache';
+
+function perm(id: number, resource = 'post', action = 'read'): Permission {
+  return { id, resource, action, effect: 'ALLOW' };
+}
+
+describe('permissionCache', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns undefined on cache miss', () => {
+    const cache = createPermissionCache(30_000, 100);
+    expect(cache.get(1)).toBeUndefined();
+  });
+
+  it('returns cached permissions on hit', () => {
+    const cache = createPermissionCache(30_000, 100);
+    const perms = [perm(1), perm(2, 'user', 'write')];
+    cache.set(1, perms);
+    expect(cache.get(1)).toEqual(perms);
+  });
+
+  it('expires entries after TTL', () => {
+    const cache = createPermissionCache(5_000, 100);
+    cache.set(1, [perm(1)]);
+    expect(cache.get(1)).toBeDefined();
+
+    vi.advanceTimersByTime(5_001);
+    expect(cache.get(1)).toBeUndefined();
+  });
+
+  it('invalidate removes a specific user', () => {
+    const cache = createPermissionCache(30_000, 100);
+    cache.set(1, [perm(1)]);
+    cache.set(2, [perm(2)]);
+
+    cache.invalidate(1);
+    expect(cache.get(1)).toBeUndefined();
+    expect(cache.get(2)).toBeDefined();
+  });
+
+  it('invalidateAll clears everything', () => {
+    const cache = createPermissionCache(30_000, 100);
+    cache.set(1, [perm(1)]);
+    cache.set(2, [perm(2)]);
+
+    cache.invalidateAll();
+    expect(cache.get(1)).toBeUndefined();
+    expect(cache.get(2)).toBeUndefined();
+  });
+
+  it('evicts oldest entry when at capacity', () => {
+    const cache = createPermissionCache(30_000, 2);
+    cache.set(1, [perm(1)]);
+    cache.set(2, [perm(2)]);
+    cache.set(3, [perm(3)]); // should evict user 1
+
+    expect(cache.get(1)).toBeUndefined();
+    expect(cache.get(2)).toBeDefined();
+    expect(cache.get(3)).toBeDefined();
+  });
+
+  it('does not evict when updating existing entry', () => {
+    const cache = createPermissionCache(30_000, 2);
+    cache.set(1, [perm(1)]);
+    cache.set(2, [perm(2)]);
+    cache.set(1, [perm(1), perm(3)]); // update, not new entry
+
+    expect(cache.get(1)).toHaveLength(2);
+    expect(cache.get(2)).toBeDefined();
+  });
+});

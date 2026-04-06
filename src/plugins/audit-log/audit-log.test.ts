@@ -1,5 +1,5 @@
 import type { Fortress } from '../../core/fortress';
-import type { AuditLogEntry, AuditLogQueryOptions } from './index';
+import type { AuditLogEntry, AuditLogQueryOptions, ChainVerificationResult } from './index';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
@@ -193,6 +193,128 @@ describe('audit-log plugin', () => {
       expect(sortedEntries[1].previousHash).toBeTruthy();
       expect(typeof sortedEntries[1].previousHash).toBe('string');
       expect(sortedEntries[1].previousHash!.length).toBe(64); // SHA-256 hex is 64 chars
+    });
+  });
+
+  describe('logCustomEvent method', () => {
+    it('logs a custom event', async () => {
+      const logCustomEvent = fortress.plugins['audit-log'].logCustomEvent as (event: any) => Promise<void>;
+
+      await logCustomEvent({
+        eventType: 'ROLE_CREATED',
+        actorId: 1,
+        actorType: 'user',
+        targetId: 10,
+        targetType: 'role',
+        outcome: 'success',
+        metadata: { name: 'admin' },
+      });
+
+      const entries = await getAuditLog();
+      const entry = entries.find(e => e.eventType === 'ROLE_CREATED');
+
+      expect(entry).toBeDefined();
+      expect(entry!.actorId).toBe(1);
+      expect(entry!.targetId).toBe(10);
+      expect(entry!.targetType).toBe('role');
+      expect(JSON.parse(entry!.metadata!)).toEqual({ name: 'admin' });
+    });
+
+    it('defaults actorType to system when not provided', async () => {
+      const logCustomEvent = fortress.plugins['audit-log'].logCustomEvent as (event: any) => Promise<void>;
+
+      await logCustomEvent({ eventType: 'PERMISSION_CHANGED' });
+
+      const entries = await getAuditLog();
+      const entry = entries.find(e => e.eventType === 'PERMISSION_CHANGED');
+      expect(entry!.actorType).toBe('system');
+    });
+  });
+
+  describe('verifyChain method', () => {
+    it('reports valid chain when hash chain is enabled', async () => {
+      const chainFortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [auditLog({ hashChain: true })],
+      });
+
+      const verifyChain = chainFortress.plugins['audit-log'].verifyChain as () => Promise<ChainVerificationResult>;
+      const logCustomEvent = chainFortress.plugins['audit-log'].logCustomEvent as (event: any) => Promise<void>;
+
+      await chainFortress.auth.createUser({ email: 'a@b.com', name: 'A', password: 'password-123' });
+      await chainFortress.auth.login('a@b.com', 'password-123');
+      await logCustomEvent({ eventType: 'ROLE_CREATED', actorId: 1 });
+
+      const result = await verifyChain();
+      expect(result.valid).toBe(true);
+      expect(result.totalEntries).toBe(3);
+      expect(result.brokenLinks).toHaveLength(0);
+    });
+
+    it('reports empty chain as valid', async () => {
+      const verifyChain = fortress.plugins['audit-log'].verifyChain as () => Promise<ChainVerificationResult>;
+      const result = await verifyChain();
+      expect(result.valid).toBe(true);
+      expect(result.totalEntries).toBe(0);
+    });
+  });
+
+  describe('iAM event integration', () => {
+    it('logs ROLE_CREATED when a role is created', async () => {
+      const auditFortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [auditLog()],
+      });
+
+      const auditGetLog = auditFortress.plugins['audit-log'].getAuditLog as typeof getAuditLog;
+
+      await auditFortress.iam.createRole('editor', [
+        { resource: 'post', action: 'read' },
+      ]);
+
+      const entries = await auditGetLog();
+      const entry = entries.find(e => e.eventType === 'ROLE_CREATED');
+      expect(entry).toBeDefined();
+      expect(entry!.targetType).toBe('role');
+    });
+
+    it('logs ROLE_BOUND when a role is bound to a user', async () => {
+      const auditFortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [auditLog()],
+      });
+
+      const auditGetLog = auditFortress.plugins['audit-log'].getAuditLog as typeof getAuditLog;
+
+      const user = await auditFortress.auth.createUser({ email: 'x@y.com', name: 'X', password: 'password-123' });
+      const role = await auditFortress.iam.createRole('viewer', [{ resource: 'post', action: 'read' }]);
+      await auditFortress.iam.bindRoleToUser(user.id, role.id);
+
+      const entries = await auditGetLog();
+      const entry = entries.find(e => e.eventType === 'ROLE_BOUND');
+      expect(entry).toBeDefined();
+      expect(entry!.actorId).toBe(user.id);
+      expect(entry!.targetId).toBe(role.id);
+    });
+
+    it('logs GROUP_CREATED when a group is created', async () => {
+      const auditFortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [auditLog()],
+      });
+
+      const auditGetLog = auditFortress.plugins['audit-log'].getAuditLog as typeof getAuditLog;
+
+      await auditFortress.iam.createGroup('editors', 'Content editors');
+
+      const entries = await auditGetLog();
+      const entry = entries.find(e => e.eventType === 'GROUP_CREATED');
+      expect(entry).toBeDefined();
+      expect(entry!.targetType).toBe('group');
     });
   });
 

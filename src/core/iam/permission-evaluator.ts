@@ -53,7 +53,14 @@ export function evaluatePermissions(
 }
 
 function matchesResourceAction(permission: Permission, resource: string, action: string): boolean {
-  return permission.resource === resource && permission.action === action;
+  return matchesWildcard(permission.resource, resource)
+    && matchesWildcard(permission.action, action);
+}
+
+function matchesWildcard(pattern: string, value: string): boolean {
+  if (pattern === '*')
+    return true;
+  return pattern === value;
 }
 
 /**

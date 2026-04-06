@@ -77,6 +77,86 @@ describe('evaluatePermissions', () => {
     });
   });
 
+  describe('wildcard matching', () => {
+    it('action wildcard matches any action', () => {
+      const result = evaluatePermissions(
+        [perm({ resource: 'post', action: '*' })],
+        'post',
+        'delete',
+        'allow-only',
+      );
+      expect(result).toBe(true);
+    });
+
+    it('resource wildcard matches any resource', () => {
+      const result = evaluatePermissions(
+        [perm({ resource: '*', action: 'read' })],
+        'invoice',
+        'read',
+        'allow-only',
+      );
+      expect(result).toBe(true);
+    });
+
+    it('double wildcard matches everything', () => {
+      const result = evaluatePermissions(
+        [perm({ resource: '*', action: '*' })],
+        'anything',
+        'whatever',
+        'allow-only',
+      );
+      expect(result).toBe(true);
+    });
+
+    it('wildcard does not match when other field is wrong', () => {
+      const result = evaluatePermissions(
+        [perm({ resource: 'post', action: '*' })],
+        'user',
+        'read',
+        'allow-only',
+      );
+      expect(result).toBe(false);
+    });
+
+    it('exact DENY overrides wildcard ALLOW in deny-overrides mode', () => {
+      const result = evaluatePermissions(
+        [
+          perm({ id: 1, resource: 'post', action: '*', effect: 'ALLOW' }),
+          perm({ id: 2, resource: 'post', action: 'delete', effect: 'DENY' }),
+        ],
+        'post',
+        'delete',
+        'deny-overrides',
+      );
+      expect(result).toBe(false);
+    });
+
+    it('wildcard ALLOW still works when no DENY in deny-overrides mode', () => {
+      const result = evaluatePermissions(
+        [perm({ resource: 'post', action: '*', effect: 'ALLOW' })],
+        'post',
+        'update',
+        'deny-overrides',
+      );
+      expect(result).toBe(true);
+    });
+
+    it('conditions still apply on wildcard permissions', () => {
+      const result = evaluatePermissions(
+        [perm({
+          resource: 'post',
+          action: '*',
+          conditions: [{ field: 'resource.ownerId', operator: 'eq', value: '${user.id}' }],
+        })],
+        'post',
+        'update',
+        'allow-only',
+        { resource: { ownerId: 42 }, user: { id: 99 } },
+      );
+      expect(result).toBe(false);
+    });
+  });
+
   describe('with conditions', () => {
     it('allows when condition is met', () => {
       const result = evaluatePermissions(

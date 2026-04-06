@@ -11,8 +11,19 @@ import type {
 import type { EvaluationMode } from './permission-evaluator';
 import { Errors } from '../errors';
 import { createInternalAdapter } from '../internal-adapter';
+import { createPermissionCache } from './permission-cache';
 import { evaluatePermissions } from './permission-evaluator';
 import { loadResourceFile, pullResources, pushResources, writeResourceFile } from './resource-sync';
+
+export interface IamEvent {
+  eventType: string;
+  actorId?: number | null;
+  targetId?: number | null;
+  targetType?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export type IamEventListener = (event: IamEvent) => Promise<void>;
 
 export interface IamService {
   checkPermission: (userId: number, resource: string, action: string, context?: PermissionContext) => Promise<boolean>;
@@ -27,6 +38,8 @@ export interface IamService {
   addUserToGroup: (groupId: number, userId: number) => Promise<void>;
   removeUserFromGroup: (groupId: number, userId: number) => Promise<void>;
   syncResources: (direction: 'push' | 'pull', filePath?: string) => Promise<void>;
+  clearPermissionCache: () => void;
+  setIamObserver: (listener: IamEventListener) => void;
 }
 
 export function createIamService(
@@ -36,6 +49,18 @@ export function createIamService(
   const evaluationMode: EvaluationMode = config.rbac?.evaluationMode ?? 'allow-only';
   const resourceFile = config.rbac?.resourceFile ?? './fortress.resources.json';
   const adapter = createInternalAdapter(db);
+  let observer: IamEventListener | null = null;
+
+  function emit(event: IamEvent): void {
+    observer?.(event).catch(() => { /* audit log failure should not break IAM operations */ });
+  }
+  const cacheConfig = config.rbac?.cache;
+  const cache = cacheConfig
+    ? createPermissionCache(
+        (cacheConfig.ttlSeconds ?? 30) * 1000,
+        cacheConfig.maxEntries ?? 1000,
+      )
+    : null;
 
   return {
     async checkPermission(
@@ -44,7 +69,11 @@ export function createIamService(
       action: string,
       context?: PermissionContext,
     ): Promise<boolean> {
-      const permissions = await adapter.getUserPermissions(userId);
+      let permissions = cache?.get(userId);
+      if (!permissions) {
+        permissions = await adapter.getUserPermissions(userId);
+        cache?.set(userId, permissions);
+      }
 
       // Enrich context with user info
       const enrichedContext: PermissionContext = {
@@ -73,6 +102,7 @@ export function createIamService(
         });
       }
 
+      emit({ eventType: 'ROLE_CREATED', targetId: role.id, targetType: 'role', metadata: { name, permissions } });
       return role;
     },
 
@@ -89,6 +119,7 @@ export function createIamService(
       await db.delete({ model: 'role_permission', where: [{ field: 'roleId', operator: '=', value: roleId }] });
       await db.delete({ model: 'role_binding', where: [{ field: 'roleId', operator: '=', value: roleId }] });
       await db.delete({ model: 'role', where: [{ field: 'id', operator: '=', value: roleId }] });
+      emit({ eventType: 'ROLE_DELETED', targetId: roleId, targetType: 'role' });
     },
 
     async bindRole(subjectType: SubjectType, subjectId: number, roleId: number): Promise<void> {
@@ -96,6 +127,7 @@ export function createIamService(
         model: 'role_binding',
         data: { roleId, subjectType, subjectId },
       });
+      emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId } });
     },
 
     async bindRoleToUser(userId: number, roleId: number): Promise<void> {
@@ -103,6 +135,8 @@ export function createIamService(
         model: 'role_binding',
         data: { roleId, subjectType: 'USER', subjectId: userId },
       });
+      cache?.invalidate(userId);
+      emit({ eventType: 'ROLE_BOUND', actorId: userId, targetId: roleId, targetType: 'role', metadata: { subjectType: 'USER' } });
     },
 
     async bindRoleToGroup(groupId: number, roleId: number): Promise<void> {
@@ -110,6 +144,8 @@ export function createIamService(
         model: 'role_binding',
         data: { roleId, subjectType: 'GROUP', subjectId: groupId },
       });
+      cache?.invalidateAll();
+      emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType: 'GROUP', groupId } });
     },
 
     async unbindRole(subjectType: SubjectType, subjectId: number, roleId: number): Promise<void> {
@@ -121,13 +157,19 @@ export function createIamService(
           { field: 'subjectId', operator: '=', value: subjectId },
         ],
       });
+      if (subjectType === 'USER')
+        cache?.invalidate(subjectId);
+      else cache?.invalidateAll();
+      emit({ eventType: 'ROLE_UNBOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId } });
     },
 
     async createGroup(name: string, description?: string): Promise<Group> {
-      return db.create<Group>({
+      const group = await db.create<Group>({
         model: 'group',
         data: { name, description: description ?? null },
       });
+      emit({ eventType: 'GROUP_CREATED', targetId: group.id, targetType: 'group', metadata: { name } });
+      return group;
     },
 
     async addUserToGroup(groupId: number, userId: number): Promise<void> {
@@ -135,6 +177,8 @@ export function createIamService(
         model: 'group_user',
         data: { groupId, userId },
       });
+      cache?.invalidate(userId);
+      emit({ eventType: 'GROUP_MEMBER_ADDED', actorId: userId, targetId: groupId, targetType: 'group' });
     },
 
     async removeUserFromGroup(groupId: number, userId: number): Promise<void> {
@@ -145,6 +189,16 @@ export function createIamService(
           { field: 'userId', operator: '=', value: userId },
         ],
       });
+      cache?.invalidate(userId);
+      emit({ eventType: 'GROUP_MEMBER_REMOVED', actorId: userId, targetId: groupId, targetType: 'group' });
+    },
+
+    clearPermissionCache(): void {
+      cache?.invalidateAll();
+    },
+
+    setIamObserver(listener: IamEventListener): void {
+      observer = listener;
     },
 
     async syncResources(direction: 'push' | 'pull', filePath?: string): Promise<void> {

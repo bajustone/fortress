@@ -18,6 +18,10 @@ export interface FortressConfig {
   rbac?: {
     evaluationMode?: 'allow-only' | 'deny-overrides';
     resourceFile?: string;
+    cache?: {
+      ttlSeconds?: number;
+      maxEntries?: number;
+    };
   };
   database: DatabaseAdapter;
   passwordHasher?: PasswordHasher;
