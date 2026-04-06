@@ -25,7 +25,7 @@ interface TwoFactorSecretRecord {
   userId: number;
   secret: string;
   isEnabled: boolean;
-  createdAt: string;
+  createdAt: Date;
 }
 
 interface BackupCodeRecord {
@@ -39,8 +39,8 @@ interface TrustedDeviceRecord {
   id: number;
   userId: number;
   deviceHash: string;
-  expiresAt: string;
-  lastUsedAt: string;
+  expiresAt: Date;
+  lastUsedAt: Date;
 }
 
 // --- TOTP Implementation (RFC 6238 / RFC 4226) ---
@@ -237,12 +237,12 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
             ],
           });
 
-          if (trusted && new Date(trusted.expiresAt) > new Date()) {
+          if (trusted && trusted.expiresAt > new Date()) {
             // Device is trusted — update lastUsedAt and allow login
             await ctx.db.update({
               model: 'trusted_device',
               where: [{ field: 'id', operator: '=', value: trusted.id }],
-              data: { lastUsedAt: new Date().toISOString() },
+              data: { lastUsedAt: new Date() },
             });
             return result;
           }
@@ -360,8 +360,8 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
                 data: {
                   userId,
                   deviceHash,
-                  expiresAt: expiresAt.toISOString(),
-                  lastUsedAt: new Date().toISOString(),
+                  expiresAt,
+                  lastUsedAt: new Date(),
                 },
               });
             }

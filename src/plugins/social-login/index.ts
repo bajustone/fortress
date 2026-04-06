@@ -14,10 +14,10 @@ interface SocialAccountRecord {
   email: string | null;
   accessToken: string | null;
   refreshToken: string | null;
-  tokenExpiresAt: string | null;
+  tokenExpiresAt: Date | null;
   profile: string | null;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 interface OAuthState {
@@ -235,11 +235,11 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
               accessToken: tokens.access_token,
               refreshToken: tokens.refresh_token ?? socialAccount.refreshToken,
               tokenExpiresAt: tokens.expires_in
-                ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+                ? new Date(Date.now() + tokens.expires_in * 1000)
                 : null,
               profile: JSON.stringify(profile.raw),
               email: profile.email,
-              updatedAt: new Date().toISOString(),
+              updatedAt: new Date(),
             },
           });
         }
@@ -292,7 +292,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
               accessToken: tokens.access_token,
               refreshToken: tokens.refresh_token ?? null,
               tokenExpiresAt: tokens.expires_in
-                ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+                ? new Date(Date.now() + tokens.expires_in * 1000)
                 : null,
               profile: JSON.stringify(profile.raw),
             },

@@ -23,7 +23,7 @@ export interface WebhookEndpoint {
   events: string; // JSON array
   secret: string;
   isActive: boolean;
-  createdAt: string;
+  createdAt: Date;
 }
 
 export interface WebhookDelivery {
@@ -33,10 +33,10 @@ export interface WebhookDelivery {
   payload: string; // JSON
   status: 'pending' | 'success' | 'failed';
   attempts: number;
-  lastAttemptAt: string | null;
-  nextRetryAt: string | null;
+  lastAttemptAt: Date | null;
+  nextRetryAt: Date | null;
   responseStatus: number | null;
-  createdAt: string;
+  createdAt: Date;
 }
 
 const RETRY_INTERVALS_MS = [
@@ -102,7 +102,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
     };
 
     const success = await deliver(endpoint.url, delivery.payload, headers);
-    const now = new Date().toISOString();
+    const now = new Date();
 
     if (success) {
       await db.update({
@@ -133,7 +133,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
       }
       else {
         const retryMs = RETRY_INTERVALS_MS[Math.min(newAttempts - 1, RETRY_INTERVALS_MS.length - 1)];
-        const nextRetryAt = new Date(Date.now() + retryMs).toISOString();
+        const nextRetryAt = new Date(Date.now() + retryMs);
         await db.update({
           model: 'webhook_delivery',
           where: [{ field: 'id', operator: '=', value: delivery.id }],
@@ -311,7 +311,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
       },
 
       async processRetries(): Promise<void> {
-        const now = new Date().toISOString();
+        const now = new Date();
         const pendingDeliveries = await ctx.db.findMany<WebhookDelivery>({
           model: 'webhook_delivery',
           where: [

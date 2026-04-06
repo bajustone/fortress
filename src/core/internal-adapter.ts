@@ -17,7 +17,7 @@ export interface StoredRefreshToken {
   ipAddress: string | null;
   userAgent: string | null;
   deviceName: string | null;
-  lastActiveAt: string | null;
+  lastActiveAt: Date | null;
   fingerprintHash: string | null;
 }
 

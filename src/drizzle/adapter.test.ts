@@ -73,7 +73,7 @@ describe('drizzle adapter: buildWhereCondition edge cases', () => {
         tokenHash: 'hash123',
         tokenFamily: 'fam1',
         isRevoked: false,
-        expiresAt: '2099-01-01T00:00:00.000Z',
+        expiresAt: new Date('2099-01-01T00:00:00.000Z'),
         userAgent: 'Mozilla/5.0',
       },
     });
@@ -89,8 +89,8 @@ describe('drizzle adapter: buildWhereCondition edge cases', () => {
   });
 });
 
-describe('drizzle adapter: sanitizeForSqlite', () => {
-  it('converts Date objects to ISO strings on create', async () => {
+describe('drizzle adapter: date and value handling', () => {
+  it('stores and retrieves Date objects correctly', async () => {
     const user = await db.create<{ id: number }>({
       model: 'user',
       data: { email: 'date@test.com', name: 'Date', passwordHash: 'h', isActive: true },
@@ -108,30 +108,29 @@ describe('drizzle adapter: sanitizeForSqlite', () => {
       },
     });
 
-    const found = await db.findOne<{ expiresAt: string }>({
+    const found = await db.findOne<{ expiresAt: Date }>({
       model: 'refresh_token',
       where: [{ field: 'token_hash', operator: '=', value: 'hash-date-test' }],
     });
 
     expect(found).not.toBeNull();
-    expect(found!.expiresAt).toBe('2025-06-15T12:00:00.000Z');
+    expect(found!.expiresAt).toBeInstanceOf(Date);
+    expect(found!.expiresAt.getTime()).toBe(now.getTime());
   });
 
-  it('converts booleans to 0/1 on create', async () => {
-    const user = await db.create<{ id: number; isActive: boolean | number }>({
+  it('handles booleans correctly', async () => {
+    const user = await db.create<{ id: number; isActive: boolean }>({
       model: 'user',
       data: { email: 'bool@test.com', name: 'Bool', passwordHash: 'h', isActive: false },
     });
 
-    // In SQLite, booleans are stored as 0/1
-    const found = await db.findOne<{ id: number; isActive: boolean | number }>({
+    const found = await db.findOne<{ id: number; isActive: boolean }>({
       model: 'user',
       where: [{ field: 'id', operator: '=', value: user.id }],
     });
 
     expect(found).not.toBeNull();
-    // The value should be falsy (either 0 or false depending on Drizzle mode)
-    expect(found!.isActive).toBeFalsy();
+    expect(found!.isActive).toBe(false);
   });
 
   it('passes null values through unchanged', async () => {
@@ -147,7 +146,7 @@ describe('drizzle adapter: sanitizeForSqlite', () => {
         tokenHash: 'hash-null-test',
         tokenFamily: 'fam-null',
         isRevoked: false,
-        expiresAt: '2099-01-01T00:00:00.000Z',
+        expiresAt: new Date('2099-01-01T00:00:00.000Z'),
         ipAddress: null,
       },
     });
@@ -174,7 +173,7 @@ describe('drizzle adapter: sanitizeForSqlite', () => {
         tokenHash: 'hash-undef-test',
         tokenFamily: 'fam-undef',
         isRevoked: false,
-        expiresAt: '2099-01-01T00:00:00.000Z',
+        expiresAt: new Date('2099-01-01T00:00:00.000Z'),
         deviceName: undefined,
       },
     });

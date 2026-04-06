@@ -45,8 +45,8 @@ export interface SessionInfo {
   ipAddress: string | null;
   userAgent: string | null;
   deviceName: string | null;
-  createdAt: string;
-  lastActiveAt: string | null;
+  createdAt: Date;
+  lastActiveAt: Date | null;
 }
 
 export interface CreateUserInput {

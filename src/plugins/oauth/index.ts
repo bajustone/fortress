@@ -24,7 +24,7 @@ interface OAuthClientRecord {
   name: string;
   redirectUris: string; // JSON
   grantTypes: string; // JSON
-  createdAt: string;
+  createdAt: Date;
 }
 
 interface AuthCodeRecord {
@@ -36,8 +36,8 @@ interface AuthCodeRecord {
   scope: string | null;
   codeChallenge: string | null;
   codeChallengeMethod: string | null;
-  expiresAt: string;
-  usedAt: string | null;
+  expiresAt: Date;
+  usedAt: Date | null;
 }
 
 interface AccessTokenRecord {
@@ -46,7 +46,7 @@ interface AccessTokenRecord {
   clientId: string;
   userId: number | null;
   scope: string | null;
-  expiresAt: string;
+  expiresAt: Date;
 }
 
 export interface PendingFlowRecord {
@@ -57,7 +57,7 @@ export interface PendingFlowRecord {
   state: string;
   codeChallenge: string | null;
   codeChallengeMethod: string | null;
-  expiresAt: string;
+  expiresAt: Date;
 }
 
 /** Client authentication extracted from HTTP request (Basic auth or body params) */
@@ -239,7 +239,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             scope: params.scope ?? null,
             codeChallenge: params.codeChallenge ?? null,
             codeChallengeMethod: params.codeChallengeMethod ?? null,
-            expiresAt: expiresAt.toISOString(),
+            expiresAt,
             usedAt: null,
           },
         });
@@ -283,7 +283,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         if (authCode.usedAt)
           throw Errors.badRequest('Authorization code already used');
 
-        if (new Date(authCode.expiresAt) < new Date())
+        if (authCode.expiresAt < new Date())
           throw Errors.badRequest('Authorization code expired');
 
         if (authCode.clientId !== params.clientId)
@@ -311,7 +311,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         await ctx.db.update({
           model: 'oauth_authorization_code',
           where: [{ field: 'id', operator: '=', value: authCode.id }],
-          data: { usedAt: new Date().toISOString() },
+          data: { usedAt: new Date() },
         });
 
         // Issue access token
@@ -325,7 +325,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             clientId: params.clientId,
             userId: authCode.userId,
             scope: authCode.scope,
-            expiresAt: expiresAt.toISOString(),
+            expiresAt,
           },
         });
 
@@ -371,7 +371,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             clientId: params.clientId,
             userId: null,
             scope: params.scope ?? null,
-            expiresAt: expiresAt.toISOString(),
+            expiresAt,
           },
         });
 
@@ -408,7 +408,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           where: [{ field: 'token', operator: '=', value: tokenHash }],
         });
 
-        if (!record || new Date(record.expiresAt) < new Date()) {
+        if (!record || record.expiresAt < new Date()) {
           return { active: false };
         }
 
@@ -442,7 +442,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             state: params.state,
             codeChallenge: params.codeChallenge ?? null,
             codeChallengeMethod: params.codeChallengeMethod ?? null,
-            expiresAt: expiresAt.toISOString(),
+            expiresAt,
           },
         });
 
@@ -462,7 +462,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         if (!flow)
           throw Errors.notFound('Pending flow not found');
 
-        if (new Date(flow.expiresAt) < new Date())
+        if (flow.expiresAt < new Date())
           throw Errors.badRequest('Pending flow expired');
 
         // Delete the flow (single-use)
@@ -484,7 +484,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           where: [{ field: 'token', operator: '=', value: tokenHash }],
         });
 
-        if (!record || !record.userId || new Date(record.expiresAt) < new Date())
+        if (!record || !record.userId || record.expiresAt < new Date())
           return null;
 
         return ctx.db.findOne<FortressUser>({

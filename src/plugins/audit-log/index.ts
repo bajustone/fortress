@@ -18,7 +18,7 @@ export type AuditEventType
 
 export interface AuditLogEntry {
   id: number;
-  timestamp: string;
+  timestamp: Date;
   eventType: AuditEventType;
   actorId: number | null;
   actorType: string;
@@ -29,7 +29,7 @@ export interface AuditLogEntry {
   outcome: string;
   metadata: string | null;
   previousHash: string | null;
-  createdAt: string;
+  createdAt: Date;
 }
 
 export interface AuditLogQueryOptions {
@@ -105,7 +105,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         await ctx.db.create({
           model: 'audit_log',
           data: {
-            timestamp: new Date().toISOString(),
+            timestamp: new Date(),
             eventType: 'LOGIN_SUCCESS',
             actorId: result.user.id,
             actorType: 'user',
@@ -144,7 +144,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         await ctx.db.create({
           model: 'audit_log',
           data: {
-            timestamp: new Date().toISOString(),
+            timestamp: new Date(),
             eventType: 'LOGIN_FAILURE',
             actorId: null,
             actorType: 'anonymous',
@@ -184,7 +184,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         await ctx.db.create({
           model: 'audit_log',
           data: {
-            timestamp: new Date().toISOString(),
+            timestamp: new Date(),
             eventType: 'LOGOUT',
             actorId: null,
             actorType: 'user',
@@ -221,7 +221,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         await ctx.db.create({
           model: 'audit_log',
           data: {
-            timestamp: new Date().toISOString(),
+            timestamp: new Date(),
             eventType: 'REGISTER',
             actorId: user.id,
             actorType: 'user',
@@ -258,7 +258,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         await ctx.db.create({
           model: 'audit_log',
           data: {
-            timestamp: new Date().toISOString(),
+            timestamp: new Date(),
             eventType: 'TOKEN_REFRESH',
             actorId: null,
             actorType: 'user',
@@ -289,11 +289,11 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         }
 
         if (options?.from) {
-          where.push({ field: 'timestamp', operator: '>=', value: options.from.toISOString() });
+          where.push({ field: 'timestamp', operator: '>=', value: options.from });
         }
 
         if (options?.to) {
-          where.push({ field: 'timestamp', operator: '<=', value: options.to.toISOString() });
+          where.push({ field: 'timestamp', operator: '<=', value: options.to });
         }
 
         return ctx.db.findMany<AuditLogEntry>({

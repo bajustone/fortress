@@ -9,7 +9,7 @@ const SECRET = 'api-key-test-secret-at-least-32!!';
 // Type helpers for plugin methods
 interface ApiKeyMethods {
   createKey: (userId: number, options: { name: string; scopes?: string[]; expiresAt?: Date }) => Promise<{ key: string; id: number }>;
-  listKeys: (userId: number) => Promise<{ id: number; name: string; keyPrefix: string; scopes: string[] | null; expiresAt: string | null; lastUsedAt: string | null; createdAt: string }[]>;
+  listKeys: (userId: number) => Promise<{ id: number; name: string; keyPrefix: string; scopes: string[] | null; expiresAt: Date | null; lastUsedAt: Date | null; createdAt: Date }[]>;
   revokeKey: (userId: number, keyId: number) => Promise<void>;
   rotateKey: (userId: number, keyId: number) => Promise<{ key: string; id: number }>;
   resolveKey: (rawKey: string) => Promise<{ userId: number; scopes: string[] | null } | null>;

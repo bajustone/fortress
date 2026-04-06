@@ -16,9 +16,9 @@ export interface ApiKeyInfo {
   name: string;
   keyPrefix: string;
   scopes: string[] | null;
-  expiresAt: string | null;
-  lastUsedAt: string | null;
-  createdAt: string;
+  expiresAt: Date | null;
+  lastUsedAt: Date | null;
+  createdAt: Date;
 }
 
 interface ApiKeyRecord {
@@ -28,10 +28,10 @@ interface ApiKeyRecord {
   keyHash: string;
   keyPrefix: string;
   scopes: string | null;
-  expiresAt: string | null;
-  lastUsedAt: string | null;
+  expiresAt: Date | null;
+  lastUsedAt: Date | null;
   isRevoked: boolean;
-  createdAt: string;
+  createdAt: Date;
 }
 
 async function generateApiKey(prefix: string): Promise<{ raw: string; hash: string; keyPrefix: string }> {
@@ -95,12 +95,12 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
 
         const { raw, hash, keyPrefix } = await generateApiKey(prefix);
 
-        let expiresAt: string | null = null;
+        let expiresAt: Date | null = null;
         if (options.expiresAt) {
-          expiresAt = options.expiresAt.toISOString();
+          expiresAt = options.expiresAt;
         }
         else if (defaultExpirySeconds) {
-          expiresAt = new Date(Date.now() + defaultExpirySeconds * 1000).toISOString();
+          expiresAt = new Date(Date.now() + defaultExpirySeconds * 1000);
         }
 
         const record = await ctx.db.create<ApiKeyRecord>({
@@ -205,14 +205,14 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
         if (!record || record.isRevoked)
           return null;
 
-        if (record.expiresAt && new Date(record.expiresAt) < new Date())
+        if (record.expiresAt && record.expiresAt < new Date())
           return null;
 
         // Update lastUsedAt
         await ctx.db.update({
           model: 'api_key',
           where: [{ field: 'id', operator: '=', value: record.id }],
-          data: { lastUsedAt: new Date().toISOString() },
+          data: { lastUsedAt: new Date() },
         });
 
         return {

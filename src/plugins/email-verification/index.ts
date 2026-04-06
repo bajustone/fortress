@@ -17,8 +17,8 @@ interface VerificationTokenRecord {
   userId: number;
   token: string;
   email: string;
-  expiresAt: string;
-  usedAt: string | null;
+  expiresAt: Date;
+  usedAt: Date | null;
 }
 
 export interface EmailVerificationMethods {
@@ -87,7 +87,7 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
             userId: user.id,
             token: hash,
             email: user.email,
-            expiresAt: expiresAt.toISOString(),
+            expiresAt,
             usedAt: null,
           },
         });
@@ -118,7 +118,7 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
             userId,
             token: hash,
             email: targetEmail,
-            expiresAt: expiresAt.toISOString(),
+            expiresAt,
             usedAt: null,
           },
         });
@@ -144,13 +144,13 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
         if (record.usedAt)
           throw Errors.badRequest('Token already used');
 
-        if (new Date(record.expiresAt) < new Date())
+        if (record.expiresAt < new Date())
           throw Errors.badRequest('Verification token expired');
 
         await ctx.db.update({
           model: 'email_verification_token',
           where: [{ field: 'id', operator: '=', value: record.id }],
-          data: { usedAt: new Date().toISOString() },
+          data: { usedAt: new Date() },
         });
 
         return { userId: record.userId, email: record.email };

@@ -14,9 +14,9 @@ interface MagicLinkTokenRecord {
   id: number;
   email: string;
   token: string;
-  expiresAt: string;
-  usedAt: string | null;
-  createdAt: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
 }
 
 export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
@@ -47,7 +47,7 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
           data: {
             email,
             token: hash,
-            expiresAt: expiresAt.toISOString(),
+            expiresAt,
             usedAt: null,
           },
         });
@@ -75,7 +75,7 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
           throw Errors.badRequest('Magic link token already used');
         }
 
-        if (new Date(record.expiresAt) < new Date()) {
+        if (record.expiresAt < new Date()) {
           throw Errors.badRequest('Magic link token expired');
         }
 
@@ -83,7 +83,7 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
         await ctx.db.update({
           model: 'magic_link_token',
           where: [{ field: 'id', operator: '=', value: record.id }],
-          data: { usedAt: new Date().toISOString() },
+          data: { usedAt: new Date() },
         });
 
         // Find or create user by email (JIT provisioning)

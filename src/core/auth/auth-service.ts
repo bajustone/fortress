@@ -269,7 +269,7 @@ export function createAuthService(
         throw Errors.tokenReuse();
       }
 
-      if (new Date(stored.expiresAt) < new Date()) {
+      if (stored.expiresAt < new Date()) {
         throw Errors.unauthorized('Refresh token expired');
       }
 
@@ -349,7 +349,7 @@ export function createAuthService(
           ipAddress: meta?.ipAddress ?? stored.ipAddress,
           userAgent: meta?.userAgent ?? stored.userAgent,
           deviceName: meta?.deviceName ?? stored.deviceName,
-          lastActiveAt: new Date().toISOString(),
+          lastActiveAt: new Date(),
           fingerprintHash: newFingerprintHash,
         },
       });
@@ -455,14 +455,14 @@ export function createAuthService(
         ipAddress: string | null;
         userAgent: string | null;
         deviceName: string | null;
-        createdAt: string;
-        lastActiveAt: string | null;
+        createdAt: Date;
+        lastActiveAt: Date | null;
       }>({
         model: 'refresh_token',
         where: [
           { field: 'userId', operator: '=', value: userId },
           { field: 'isRevoked', operator: '=', value: false },
-          { field: 'expiresAt', operator: 'gt', value: new Date().toISOString() },
+          { field: 'expiresAt', operator: 'gt', value: new Date() },
         ],
       });
 

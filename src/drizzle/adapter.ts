@@ -93,26 +93,11 @@ function buildWhereCondition(table: Table, where: WhereClause[]): SQL | undefine
   return conditions.length === 1 ? conditions[0] : and(...conditions);
 }
 
-/**
- * Sanitize data values for SQLite compatibility.
- * SQLite doesn't support Date objects or booleans natively.
- * PostgreSQL and MySQL handle them fine — skip sanitization for those dialects.
- */
-function sanitizeForSqlite(data: Record<string, unknown>): Record<string, unknown> {
+/** Replace undefined values with null for database compatibility. */
+function sanitizeData(data: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    if (value instanceof Date) {
-      result[key] = value.toISOString();
-    }
-    else if (typeof value === 'boolean') {
-      result[key] = value ? 1 : 0;
-    }
-    else if (value === undefined) {
-      result[key] = null;
-    }
-    else {
-      result[key] = value;
-    }
+    result[key] = value === undefined ? null : value;
   }
   return result;
 }
@@ -136,7 +121,6 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
   const dialect = options?.dialect ?? 'sqlite';
   const defaults = dialect === 'pg' ? PG_DEFAULT_TABLE_MAP : SQLITE_DEFAULT_TABLE_MAP;
   const tableMap: Record<string, Table> = { ...defaults, ...(options?.tables as Record<string, Table>) };
-  const sanitize = dialect === 'sqlite' ? sanitizeForSqlite : (d: Record<string, unknown>) => d;
   const isSqlite = dialect === 'sqlite';
 
   /** Execute a query expecting a single row (or undefined). SQLite uses .get(), PG/MySQL awaits the query. */
@@ -176,7 +160,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
     const self: DatabaseAdapter = {
       async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
         const table = getTable(params.model);
-        const result = await execOne<T>((drizzle as any).insert(table).values(sanitize(params.data) as any).returning());
+        const result = await execOne<T>((drizzle as any).insert(table).values(sanitizeData(params.data) as any).returning());
         return result as T;
       },
 
@@ -223,7 +207,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
       async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T | null> {
         const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
-        const result = await execOne<T>((drizzle as any).update(table).set(sanitize(params.data) as any).where(condition).returning());
+        const result = await execOne<T>((drizzle as any).update(table).set(sanitizeData(params.data) as any).where(condition).returning());
         return (result as T) ?? null;
       },
 

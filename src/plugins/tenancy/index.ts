@@ -14,8 +14,8 @@ interface TenantRecord {
   name: string;
   taxId: string;
   description: string | null;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 interface TenantUserRecord {
@@ -25,9 +25,9 @@ interface TenantUserRecord {
 }
 
 export interface TenancyMethods {
-  createTenant: (data: { name: string; taxId: string; description?: string }) => Promise<{ id: number; name: string; taxId: string; description: string | null; createdAt: string; updatedAt: string }>;
+  createTenant: (data: { name: string; taxId: string; description?: string }) => Promise<{ id: number; name: string; taxId: string; description: string | null; createdAt: Date; updatedAt: Date }>;
   addUserToTenant: (userId: number, tenantId: number) => Promise<void>;
-  getUserTenants: (userId: number) => Promise<{ id: number; name: string; taxId: string; description: string | null; createdAt: string; updatedAt: string }[]>;
+  getUserTenants: (userId: number) => Promise<{ id: number; name: string; taxId: string; description: string | null; createdAt: Date; updatedAt: Date }[]>;
   switchTenant: (userId: number, taxId: string) => Promise<void>;
 }
 export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly name: 'tenancy' } {

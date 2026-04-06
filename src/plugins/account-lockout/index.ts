@@ -16,8 +16,8 @@ export interface LockoutStatus {
   identifier: string;
   failedAttempts: number;
   lockoutCount: number;
-  lockedUntil: string | null;
-  lastFailedAt: string | null;
+  lockedUntil: Date | null;
+  lastFailedAt: Date | null;
   isLocked: boolean;
 }
 
@@ -25,10 +25,10 @@ interface LockoutRecord {
   id: number;
   identifier: string;
   failedAttempts: number;
-  lastFailedAt: string | null;
-  lockedUntil: string | null;
+  lastFailedAt: Date | null;
+  lockedUntil: Date | null;
   lockoutCount: number;
-  createdAt: string;
+  createdAt: Date;
 }
 
 export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugin {
@@ -74,7 +74,7 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
           return undefined;
         }
 
-        if (record.lockedUntil && new Date(record.lockedUntil) > new Date()) {
+        if (record.lockedUntil && record.lockedUntil > new Date()) {
           throw Errors.unauthorized('Account temporarily locked. Try again later.');
         }
 
@@ -106,13 +106,13 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
         const newFailedAttempts = record.failedAttempts + 1;
         const updateData: Record<string, unknown> = {
           failedAttempts: newFailedAttempts,
-          lastFailedAt: now.toISOString(),
+          lastFailedAt: now,
         };
 
         if (newFailedAttempts >= maxFailedAttempts) {
           const duration = calculateLockoutDuration(record.lockoutCount);
           const lockedUntil = new Date(now.getTime() + duration * 1000);
-          updateData.lockedUntil = lockedUntil.toISOString();
+          updateData.lockedUntil = lockedUntil;
           updateData.lockoutCount = record.lockoutCount + 1;
         }
 
@@ -165,7 +165,7 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
         }
 
         const isLocked = record.lockedUntil !== null
-          && new Date(record.lockedUntil) > new Date();
+          && record.lockedUntil > new Date();
 
         return {
           identifier: record.identifier,

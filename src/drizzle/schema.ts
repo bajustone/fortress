@@ -8,8 +8,8 @@ const users = sqliteTable('fortress_user', {
   name: text('name').notNull(),
   passwordHash: text('password_hash'),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
-  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Login Identifiers ---
@@ -29,13 +29,13 @@ const refreshTokens = sqliteTable('fortress_refresh_token', {
   tokenHash: text('token_hash').notNull().unique(),
   tokenFamily: text('token_family').notNull(),
   isRevoked: integer('is_revoked', { mode: 'boolean' }).notNull().default(false),
-  expiresAt: text('expires_at').notNull(),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   ipAddress: text('ip_address'),
   userAgent: text('user_agent'),
   deviceName: text('device_name'),
-  lastActiveAt: text('last_active_at'),
+  lastActiveAt: integer('last_active_at', { mode: 'timestamp' }),
   fingerprintHash: text('fingerprint_hash'),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- IAM: Groups ---
@@ -105,9 +105,9 @@ const emailVerificationTokens = sqliteTable('fortress_email_verification_token',
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   token: text('token').notNull(),
   email: text('email').notNull(),
-  expiresAt: text('expires_at').notNull(),
-  usedAt: text('used_at'),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  usedAt: integer('used_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Plugins: Magic Link ---
@@ -116,9 +116,9 @@ const magicLinkTokens = sqliteTable('fortress_magic_link_token', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   email: text('email').notNull(),
   token: text('token').notNull(),
-  expiresAt: text('expires_at').notNull(),
-  usedAt: text('used_at'),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  usedAt: integer('used_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Plugins: API Key ---
@@ -130,10 +130,10 @@ const apiKeys = sqliteTable('fortress_api_key', {
   keyHash: text('key_hash').notNull().unique(),
   keyPrefix: text('key_prefix').notNull(),
   scopes: text('scopes'), // JSON array of "resource:action" strings
-  expiresAt: text('expires_at'),
-  lastUsedAt: text('last_used_at'),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }),
+  lastUsedAt: integer('last_used_at', { mode: 'timestamp' }),
   isRevoked: integer('is_revoked', { mode: 'boolean' }).notNull().default(false),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Plugins: Two-Factor ---
@@ -143,7 +143,7 @@ const twoFactorSecrets = sqliteTable('fortress_two_factor_secret', {
   userId: integer('user_id').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
   secret: text('secret').notNull(), // Base32-encoded TOTP secret
   isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(false),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 const backupCodes = sqliteTable('fortress_backup_code', {
@@ -151,16 +151,16 @@ const backupCodes = sqliteTable('fortress_backup_code', {
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   codeHash: text('code_hash').notNull(),
   isUsed: integer('is_used', { mode: 'boolean' }).notNull().default(false),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 const trustedDevices = sqliteTable('fortress_trusted_device', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   deviceHash: text('device_hash').notNull(), // Hash of device fingerprint
-  expiresAt: text('expires_at').notNull(),
-  lastUsedAt: text('last_used_at').notNull(),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  lastUsedAt: integer('last_used_at', { mode: 'timestamp' }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Plugins: Social Login ---
@@ -173,10 +173,10 @@ const socialAccounts = sqliteTable('fortress_social_account', {
   email: text('email'),
   accessToken: text('access_token'), // Encrypted
   refreshToken: text('refresh_token'), // Encrypted
-  tokenExpiresAt: text('token_expires_at'),
+  tokenExpiresAt: integer('token_expires_at', { mode: 'timestamp' }),
   profile: text('profile'), // JSON
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
-  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Plugins: Tenancy ---
@@ -186,8 +186,8 @@ const tenants = sqliteTable('fortress_tenant', {
   name: text('name').notNull(),
   taxId: text('tax_id').notNull().unique(),
   description: text('description'),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
-  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 const tenantUsers = sqliteTable(
@@ -209,7 +209,7 @@ const oauthClients = sqliteTable('fortress_oauth_client', {
   name: text('name').notNull(),
   redirectUris: text('redirect_uris').notNull(), // JSON array
   grantTypes: text('grant_types').notNull(), // JSON array
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 const oauthAuthorizationCodes = sqliteTable('fortress_oauth_authorization_code', {
@@ -221,9 +221,9 @@ const oauthAuthorizationCodes = sqliteTable('fortress_oauth_authorization_code',
   scope: text('scope'),
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: text('code_challenge_method'),
-  expiresAt: text('expires_at').notNull(),
-  usedAt: text('used_at'),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  usedAt: integer('used_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 const oauthAccessTokens = sqliteTable('fortress_oauth_access_token', {
@@ -232,8 +232,8 @@ const oauthAccessTokens = sqliteTable('fortress_oauth_access_token', {
   clientId: text('client_id').notNull(),
   userId: integer('user_id'),
   scope: text('scope'),
-  expiresAt: text('expires_at').notNull(),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
@@ -244,8 +244,8 @@ const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
   state: text('state').notNull(),
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: text('code_challenge_method'),
-  expiresAt: text('expires_at').notNull(),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Plugins: Data Isolation ---
@@ -255,7 +255,7 @@ const userScopeAssignments = sqliteTable('fortress_user_scope_assignment', {
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   scopeName: text('scope_name').notNull(),
   scopeValue: text('scope_value').notNull(),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Plugins: Account Lockout ---
@@ -264,17 +264,17 @@ const accountLockouts = sqliteTable('fortress_account_lockout', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   identifier: text('identifier').notNull().unique(),
   failedAttempts: integer('failed_attempts').notNull().default(0),
-  lastFailedAt: text('last_failed_at'),
-  lockedUntil: text('locked_until'),
+  lastFailedAt: integer('last_failed_at', { mode: 'timestamp' }),
+  lockedUntil: integer('locked_until', { mode: 'timestamp' }),
   lockoutCount: integer('lockout_count').notNull().default(0),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Core: Audit Log ---
 
 const auditLogs = sqliteTable('fortress_audit_log', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  timestamp: text('timestamp').notNull().$defaultFn(() => new Date().toISOString()),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   eventType: text('event_type').notNull(),
   actorId: integer('actor_id'),
   actorType: text('actor_type').notNull().default('USER'),
@@ -285,7 +285,7 @@ const auditLogs = sqliteTable('fortress_audit_log', {
   outcome: text('outcome').notNull().default('SUCCESS'),
   metadata: text('metadata'),
   previousHash: text('previous_hash'),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- Plugins: Webhook ---
@@ -296,7 +296,7 @@ const webhookEndpoints = sqliteTable('fortress_webhook_endpoint', {
   events: text('events').notNull(), // JSON array
   secret: text('secret').notNull(),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 const webhookDeliveries = sqliteTable('fortress_webhook_delivery', {
@@ -306,10 +306,10 @@ const webhookDeliveries = sqliteTable('fortress_webhook_delivery', {
   payload: text('payload').notNull(), // JSON
   status: text('status').notNull().default('pending'), // pending | success | failed
   attempts: integer('attempts').notNull().default(0),
-  lastAttemptAt: text('last_attempt_at'),
-  nextRetryAt: text('next_retry_at'),
+  lastAttemptAt: integer('last_attempt_at', { mode: 'timestamp' }),
+  nextRetryAt: integer('next_retry_at', { mode: 'timestamp' }),
   responseStatus: integer('response_status'),
-  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // --- All tables for easy iteration ---
