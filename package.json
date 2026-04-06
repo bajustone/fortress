@@ -1,6 +1,6 @@
 {
   "name": "@bajustone/fortress",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "type": "module",
   "module": "src/index.ts",
   "main": "./dist/index.cjs",
