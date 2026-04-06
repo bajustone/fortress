@@ -25,13 +25,6 @@ export interface EmailVerificationMethods {
   sendVerification: (userId: number, email?: string) => Promise<{ token: string }>;
   verify: (rawToken: string) => Promise<{ userId: number; email: string }>;
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    'email-verification': EmailVerificationMethods;
-  }
-}
-
 export function emailVerification(config: EmailVerificationConfig = {}): FortressPlugin & { readonly name: 'email-verification' } {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 86400;
   const requireVerification = config.requireVerification ?? true;

@@ -7,13 +7,6 @@ export interface WebAuthnMethods {
   generateAuthenticationOptions: (userId?: number) => Promise<never>;
   verifyAuthentication: (response: unknown) => Promise<never>;
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    webauthn: WebAuthnMethods;
-  }
-}
-
 export function webauthn(): FortressPlugin & { readonly name: 'webauthn' } {
   return {
     name: 'webauthn',

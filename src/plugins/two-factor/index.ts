@@ -166,13 +166,6 @@ export interface TwoFactorMethods {
   verify: (userId: number, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>;
   disable: (userId: number) => Promise<void>;
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    'two-factor': TwoFactorMethods;
-  }
-}
-
 export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { readonly name: 'two-factor' } {
   const issuer = config.totp?.issuer ?? 'Fortress';
   const period = config.totp?.period ?? 30;

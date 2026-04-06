@@ -21,14 +21,13 @@ export type {
   FortressPlugin,
   HookContext,
   HookResult,
-  InferPlugins,
   MiddlewareDefinition,
   ModelDefinition,
   PluginContext,
   PluginHooks,
-  PluginMethodsMap,
   RouteDefinition,
 } from './core/plugin';
+export type { InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
 // Core types
 export type {
   AuthResponse,

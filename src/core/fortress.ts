@@ -1,7 +1,8 @@
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
 import type { IamService } from './iam/iam-service';
-import type { FortressPlugin, InferPlugins } from './plugin';
+import type { FortressPlugin } from './plugin';
+import type { InferPlugins } from './plugin-methods-map';
 import { createAuthService } from './auth/auth-service';
 import { Errors } from './errors';
 import { createIamService } from './iam/iam-service';

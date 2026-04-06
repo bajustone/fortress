@@ -24,13 +24,6 @@ export interface DataIsolationMethods {
   withoutScope: <T>(scopeName: string, fn: () => Promise<T>) => Promise<T>;
   unscoped: <T>(fn: () => Promise<T>) => Promise<T>;
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    'data-isolation': DataIsolationMethods;
-  }
-}
-
 export function dataIsolation(config: DataIsolationConfig): FortressPlugin & { readonly name: 'data-isolation' } {
   return {
     name: 'data-isolation',

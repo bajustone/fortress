@@ -50,13 +50,6 @@ async function sha256Hex(input: string): Promise<string> {
 export interface AuditLogMethods {
   getAuditLog: (options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>;
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    'audit-log': AuditLogMethods;
-  }
-}
-
 export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readonly name: 'audit-log' } {
   const allowedEvents = config.events ?? null;
   const hashChain = config.hashChain ?? false;

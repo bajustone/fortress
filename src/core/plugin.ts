@@ -111,15 +111,3 @@ export interface MiddlewareDefinition {
   position: 'before-auth' | 'after-auth' | 'after-rbac';
   handler: (ctx: PluginContext, request: unknown, next: () => Promise<void>) => Promise<void>;
 }
-
-/** Augmented by plugins to register their typed methods. See each plugin's `declare module` block. */
-
-export interface PluginMethodsMap {}
-
-/** Infer typed plugin methods from the plugins array */
-export type InferPlugins<T extends readonly FortressPlugin[]> = {
-
-  [P in T[number] as P['name']]: P['name'] extends keyof PluginMethodsMap
-    ? PluginMethodsMap[P['name']]
-    : Record<string, (...args: any[]) => any>;
-};

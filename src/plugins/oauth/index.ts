@@ -107,13 +107,6 @@ export interface OAuthMethods {
   handleDiscovery: () => Record<string, unknown>;
   resolveTokenPermissions: (token: string) => Promise<{ resource: string; action: string }[]>;
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    oauth: OAuthMethods;
-  }
-}
-
 export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly name: 'oauth' } {
   const authCodeExpiry = config.authCodeExpirySeconds ?? 600;
   const pendingFlowExpiry = config.pendingFlowExpirySeconds ?? 600;

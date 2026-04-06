@@ -51,13 +51,6 @@ export interface ApiKeyMethods {
   rotateKey: (userId: number, keyId: number) => Promise<{ key: string; id: number }>;
   resolveKey: (rawKey: string) => Promise<{ userId: number; scopes: string[] | null } | null>;
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    'api-key': ApiKeyMethods;
-  }
-}
-
 export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly name: 'api-key' } {
   const prefix = config.prefix ?? 'fortress';
   const defaultExpirySeconds = config.defaultExpirySeconds ?? null;

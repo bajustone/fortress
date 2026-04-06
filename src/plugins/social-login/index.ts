@@ -65,13 +65,6 @@ export interface SocialLoginMethods {
   unlinkAccount: (userId: number, provider: string) => Promise<void>;
   getProviders: () => string[];
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    'social-login': SocialLoginMethods;
-  }
-}
-
 export function socialLogin(config: SocialLoginConfig): FortressPlugin & { readonly name: 'social-login' } {
   const autoRegister = config.autoRegister ?? true;
   const linkAccounts = config.linkAccounts ?? true;

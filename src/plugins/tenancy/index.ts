@@ -30,13 +30,6 @@ export interface TenancyMethods {
   getUserTenants: (userId: number) => Promise<{ id: number; name: string; taxId: string; description: string | null; createdAt: string; updatedAt: string }[]>;
   switchTenant: (userId: number, taxId: string) => Promise<void>;
 }
-
-declare module '../../core/plugin' {
-  interface PluginMethodsMap {
-    tenancy: TenancyMethods;
-  }
-}
-
 export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly name: 'tenancy' } {
   const schemaPrefix = config.schemaPrefix ?? 'tenant_';
 
