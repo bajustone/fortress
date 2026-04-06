@@ -1,6 +1,6 @@
 {
   "name": "@bajustone/fortress",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "module": "src/index.ts",
   "main": "./dist/index.cjs",
@@ -10,74 +10,110 @@
   },
   "exports": {
     ".": {
-      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+      "import": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
-    "./hono": {
-      "import": { "types": "./dist/hono.d.ts", "default": "./dist/hono.js" },
-      "require": { "types": "./dist/hono.d.cts", "default": "./dist/hono.cjs" }
-    },
-    "./drizzle": {
-      "import": { "types": "./dist/drizzle.d.ts", "default": "./dist/drizzle.js" },
-      "require": { "types": "./dist/drizzle.d.cts", "default": "./dist/drizzle.cjs" }
-    },
-    "./testing": {
-      "import": { "types": "./dist/testing.d.ts", "default": "./dist/testing.js" },
-      "require": { "types": "./dist/testing.d.cts", "default": "./dist/testing.cjs" }
-    },
-    "./crypto": {
-      "import": { "types": "./dist/crypto.d.ts", "default": "./dist/crypto.js" },
-      "require": { "types": "./dist/crypto.d.cts", "default": "./dist/crypto.cjs" }
-    },
-    "./jwt": {
-      "import": { "types": "./dist/jwt.d.ts", "default": "./dist/jwt.js" },
-      "require": { "types": "./dist/jwt.d.cts", "default": "./dist/jwt.cjs" }
-    }
-  },
-  "files": ["dist", "src", "README.md", "LICENSE"],
-  "scripts": {
-    "dev": "bun run --watch examples/hono-app/index.ts",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
-    "publish:dry": "npx jsr publish --dry-run --allow-slow-types --allow-dirty",
-    "prepublishOnly": "tsup",
-    "prepare": "husky"
-  },
-  "devDependencies": {
-    "@antfu/eslint-config": "^8.0.0",
-    "tsup": "^8.0.0",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/bun": "^1.3.11",
-    "@types/node": "^25.5.2",
-    "better-sqlite3": "^12.8.0",
-    "drizzle-orm": "^0.45.2",
-    "eslint": "^10.1.0",
-    "hono": "^4.12.10",
-    "husky": "^9.1.7",
-    "lint-staged": "^16.4.0",
-    "vitest": "^4.1.2"
-  },
-  "peerDependencies": {
-    "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.10",
-    "typescript": "^5.0.0"
-  },
-  "peerDependenciesMeta": {
-    "drizzle-orm": {
-      "optional": true
-    },
-    "hono": {
-      "optional": true
-    }
-  },
-  "dependencies": {
-    "hash-wasm": "^4.12.0",
-    "jose": "^6.2.2"
-  },
-  "lint-staged": {
-    "*.ts": "eslint --fix"
+    "require": {
+    "types": "./dist/index.d.cts",
+    "default": "./dist/index.cjs"
   }
+},
+"./hono": {
+  "import": {
+  "types": "./dist/hono.d.ts",
+  "default": "./dist/hono.js"
+},
+"require": {
+"types": "./dist/hono.d.cts",
+"default": "./dist/hono.cjs"
+}
+},
+"./drizzle": {
+  "import": {
+  "types": "./dist/drizzle.d.ts",
+  "default": "./dist/drizzle.js"
+},
+"require": {
+"types": "./dist/drizzle.d.cts",
+"default": "./dist/drizzle.cjs"
+}
+},
+"./testing": {
+  "import": {
+  "types": "./dist/testing.d.ts",
+  "default": "./dist/testing.js"
+},
+"require": {
+"types": "./dist/testing.d.cts",
+"default": "./dist/testing.cjs"
+}
+},
+"./crypto": {
+  "import": {
+  "types": "./dist/crypto.d.ts",
+  "default": "./dist/crypto.js"
+},
+"require": {
+"types": "./dist/crypto.d.cts",
+"default": "./dist/crypto.cjs"
+}
+},
+"./jwt": {
+  "import": {
+  "types": "./dist/jwt.d.ts",
+  "default": "./dist/jwt.js"
+},
+"require": {
+"types": "./dist/jwt.d.cts",
+"default": "./dist/jwt.cjs"
+}
+}
+},
+"files": ["dist", "src", "README.md", "LICENSE"],
+"scripts": {
+  "dev": "bun run --watch examples/hono-app/index.ts",
+  "lint": "eslint .",
+  "lint:fix": "eslint . --fix",
+  "test": "vitest run",
+  "test:watch": "vitest",
+  "typecheck": "tsc --noEmit",
+  "publish:dry": "npx jsr publish --dry-run --allow-slow-types --allow-dirty",
+  "prepublishOnly": "tsup",
+  "prepare": "husky"
+},
+"devDependencies": {
+  "@antfu/eslint-config": "^8.0.0",
+  "tsup": "^8.0.0",
+  "@types/better-sqlite3": "^7.6.13",
+  "@types/bun": "^1.3.11",
+  "@types/node": "^25.5.2",
+  "better-sqlite3": "^12.8.0",
+  "drizzle-orm": "^0.45.2",
+  "eslint": "^10.1.0",
+  "hono": "^4.12.10",
+  "husky": "^9.1.7",
+  "lint-staged": "^16.4.0",
+  "vitest": "^4.1.2"
+},
+"peerDependencies": {
+  "drizzle-orm": "^0.45.2",
+  "hono": "^4.12.10",
+  "typescript": "^5.0.0"
+},
+"peerDependenciesMeta": {
+  "drizzle-orm": {
+    "optional": true
+  },
+  "hono": {
+    "optional": true
+  }
+},
+"dependencies": {
+  "hash-wasm": "^4.12.0",
+  "jose": "^6.2.2"
+},
+"lint-staged": {
+  "*.ts": "eslint --fix"
+}
 }
