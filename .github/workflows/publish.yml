@@ -18,7 +18,7 @@ jobs:
       - run: bun run lint
 
       # Publish to JSR
-      - run: npx jsr publish
+      - run: npx jsr publish --allow-slow-types
 
       # Build and publish to npm
       - uses: actions/setup-node@v4

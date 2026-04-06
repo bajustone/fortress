@@ -42,7 +42,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "publish:dry": "npx jsr publish --dry-run",
+    "publish:dry": "npx jsr publish --dry-run --allow-slow-types --allow-dirty",
     "prepublishOnly": "tsup",
     "prepare": "husky"
   },
