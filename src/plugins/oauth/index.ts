@@ -11,6 +11,10 @@ export interface OAuthConfig {
   pendingFlowExpirySeconds?: number;
   /** Access token expiry in seconds (default: 3600 = 1 hour) */
   accessTokenExpirySeconds?: number;
+  /** Map OAuth scopes to IAM permissions. Example: `{ 'read:posts': { resource: 'post', action: 'read' } }` */
+  scopePermissionMap?: Record<string, { resource: string; action: string }>;
+  /** Base URL for the OAuth server (used in OIDC discovery document) */
+  issuerUrl?: string;
 }
 
 interface OAuthClientRecord {
@@ -45,7 +49,7 @@ interface AccessTokenRecord {
   expiresAt: string;
 }
 
-interface PendingFlowRecord {
+export interface PendingFlowRecord {
   id: number;
   clientId: string;
   redirectUri: string;
@@ -56,10 +60,65 @@ interface PendingFlowRecord {
   expiresAt: string;
 }
 
-export function oauth(config: OAuthConfig = {}): FortressPlugin {
+/** Client authentication extracted from HTTP request (Basic auth or body params) */
+export interface ClientAuth {
+  clientId: string;
+  clientSecret: string;
+}
+
+/** Token endpoint request body (application/x-www-form-urlencoded) */
+export interface TokenRequestBody {
+  grant_type: string;
+  code?: string;
+  redirect_uri?: string;
+  client_id?: string;
+  client_secret?: string;
+  code_verifier?: string;
+  scope?: string;
+}
+
+/** Authorization endpoint query params */
+export interface AuthorizeRequestParams {
+  client_id: string;
+  redirect_uri: string;
+  response_type: string;
+  scope?: string;
+  state?: string;
+  code_challenge?: string;
+  code_challenge_method?: string;
+}
+
+export interface OAuthMethods {
+  // Programmatic API
+  createClient: (data: { name: string; redirectUris: string[]; grantTypes: string[] }) => Promise<{ clientId: string; clientSecret: string }>;
+  createAuthorizationCode: (params: { clientId: string; userId: number; redirectUri: string; scope?: string; codeChallenge?: string; codeChallengeMethod?: string }) => Promise<{ code: string }>;
+  exchangeCode: (params: { code: string; clientId: string; clientSecret: string; redirectUri: string; codeVerifier?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number; scope?: string }>;
+  clientCredentialsGrant: (params: { clientId: string; clientSecret: string; scope?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number }>;
+  revokeToken: (token: string) => Promise<void>;
+  introspectToken: (token: string) => Promise<{ active: boolean; clientId?: string; userId?: number; scope?: string }>;
+  createPendingFlow: (params: { clientId: string; redirectUri: string; scope?: string; state: string; codeChallenge?: string; codeChallengeMethod?: string }) => Promise<{ flowId: number }>;
+  resumePendingFlow: (flowId: number) => Promise<PendingFlowRecord>;
+  getUserInfo: (token: string) => Promise<FortressUser | null>;
+  // HTTP handler methods (transport-agnostic, accept/return plain objects)
+  handleTokenRequest: (body: TokenRequestBody, clientAuth?: ClientAuth) => Promise<Record<string, unknown>>;
+  handleIntrospectRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<Record<string, unknown>>;
+  handleRevokeRequest: (body: { token: string }) => Promise<void>;
+  handleUserInfoRequest: (bearerToken: string) => Promise<FortressUser | null>;
+  handleDiscovery: () => Record<string, unknown>;
+  resolveTokenPermissions: (token: string) => Promise<{ resource: string; action: string }[]>;
+}
+
+declare module '../../core/plugin' {
+  interface PluginMethodsMap {
+    oauth: OAuthMethods;
+  }
+}
+
+export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly name: 'oauth' } {
   const authCodeExpiry = config.authCodeExpirySeconds ?? 600;
   const pendingFlowExpiry = config.pendingFlowExpirySeconds ?? 600;
   const accessTokenExpiry = config.accessTokenExpirySeconds ?? 3600;
+  const scopePermissionMap = config.scopePermissionMap;
 
   return {
     name: 'oauth',
@@ -440,7 +499,156 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin {
           where: [{ field: 'id', operator: '=', value: record.userId }],
         });
       },
+
+      // --- HTTP handler methods (RFC 6749 / 7662 / 7009) ---
+
+      /**
+       * Handle POST /oauth/token — dispatches to exchangeCode or clientCredentialsGrant.
+       */
+      async handleTokenRequest(
+        body: TokenRequestBody,
+        clientAuth?: ClientAuth,
+      ): Promise<Record<string, unknown>> {
+        const clientId = clientAuth?.clientId ?? body.client_id;
+        const clientSecret = clientAuth?.clientSecret ?? body.client_secret;
+
+        if (!clientId || !clientSecret)
+          throw Errors.unauthorized('Client authentication required');
+
+        if (body.grant_type === 'authorization_code') {
+          if (!body.code || !body.redirect_uri)
+            throw Errors.badRequest('Missing required parameters: code, redirect_uri');
+
+          const result = await this.exchangeCode({
+            code: body.code,
+            clientId,
+            clientSecret,
+            redirectUri: body.redirect_uri,
+            codeVerifier: body.code_verifier,
+          });
+
+          return {
+            access_token: result.accessToken,
+            token_type: result.tokenType,
+            expires_in: result.expiresIn,
+            ...(result.scope ? { scope: result.scope } : {}),
+          };
+        }
+
+        if (body.grant_type === 'client_credentials') {
+          const result = await this.clientCredentialsGrant({
+            clientId,
+            clientSecret,
+            scope: body.scope,
+          });
+
+          return {
+            access_token: result.accessToken,
+            token_type: result.tokenType,
+            expires_in: result.expiresIn,
+          };
+        }
+
+        throw Errors.badRequest(`Unsupported grant_type: ${body.grant_type}`);
+      },
+
+      /**
+       * Handle POST /oauth/introspect (RFC 7662).
+       */
+      async handleIntrospectRequest(
+        body: { token: string },
+        clientAuth: ClientAuth,
+      ): Promise<Record<string, unknown>> {
+        // Validate client credentials
+        const client = await ctx.db.findOne<OAuthClientRecord>({
+          model: 'oauth_client',
+          where: [{ field: 'clientId', operator: '=', value: clientAuth.clientId }],
+        });
+
+        if (!client)
+          throw Errors.unauthorized('Invalid client credentials');
+
+        const secretValid = await hashToken(clientAuth.clientSecret) === client.clientSecretHash;
+        if (!secretValid)
+          throw Errors.unauthorized('Invalid client credentials');
+
+        const result = await this.introspectToken(body.token);
+
+        if (!result.active)
+          return { active: false };
+
+        return {
+          active: true,
+          client_id: result.clientId,
+          ...(result.userId != null ? { sub: String(result.userId) } : {}),
+          ...(result.scope ? { scope: result.scope } : {}),
+          token_type: 'Bearer',
+        };
+      },
+
+      /**
+       * Handle POST /oauth/revoke (RFC 7009). Always returns success.
+       */
+      async handleRevokeRequest(body: { token: string }): Promise<void> {
+        await this.revokeToken(body.token);
+      },
+
+      /**
+       * Handle GET /oauth/userinfo (OpenID Connect).
+       */
+      async handleUserInfoRequest(bearerToken: string): Promise<FortressUser | null> {
+        return this.getUserInfo(bearerToken);
+      },
+
+      /**
+       * Handle GET /.well-known/openid-configuration (RFC 8414).
+       */
+      handleDiscovery(): Record<string, unknown> {
+        const issuer = config.issuerUrl ?? 'https://localhost';
+        return {
+          issuer,
+          authorization_endpoint: `${issuer}/oauth/authorize`,
+          token_endpoint: `${issuer}/oauth/token`,
+          introspection_endpoint: `${issuer}/oauth/introspect`,
+          revocation_endpoint: `${issuer}/oauth/revoke`,
+          userinfo_endpoint: `${issuer}/oauth/userinfo`,
+          response_types_supported: ['code'],
+          grant_types_supported: ['authorization_code', 'client_credentials'],
+          token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+          code_challenge_methods_supported: ['S256'],
+          subject_types_supported: ['public'],
+        };
+      },
+
+      /**
+       * Resolve an access token's scopes to IAM permissions using the configured scopePermissionMap.
+       */
+      async resolveTokenPermissions(token: string): Promise<{ resource: string; action: string }[]> {
+        const info = await this.introspectToken(token);
+        if (!info.active || !info.scope || !scopePermissionMap)
+          return [];
+
+        const scopes = info.scope.split(' ');
+        const permissions: { resource: string; action: string }[] = [];
+
+        for (const scope of scopes) {
+          const mapping = scopePermissionMap[scope];
+          if (mapping) {
+            permissions.push(mapping);
+          }
+        }
+
+        return permissions;
+      },
     }),
+
+    routes: [
+      { method: 'POST', path: '/oauth/token', handler: 'handleTokenRequest' },
+      { method: 'POST', path: '/oauth/introspect', handler: 'handleIntrospectRequest' },
+      { method: 'POST', path: '/oauth/revoke', handler: 'handleRevokeRequest' },
+      { method: 'GET', path: '/oauth/userinfo', handler: 'handleUserInfoRequest' },
+      { method: 'GET', path: '/oauth/.well-known/openid-configuration', handler: 'handleDiscovery' },
+    ],
   };
 }
 

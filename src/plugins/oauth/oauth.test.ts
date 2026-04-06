@@ -1,19 +1,8 @@
 import type { DatabaseAdapter } from '../../adapters/database';
+import type { OAuthMethods } from './index';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { generateCodeChallenge, generateCodeVerifier, oauth } from './index';
-
-interface OAuthMethods {
-  createClient: (data: { name: string; redirectUris: string[]; grantTypes: string[] }) => Promise<{ clientId: string; clientSecret: string }>;
-  createAuthorizationCode: (params: { clientId: string; userId: number; redirectUri: string; scope?: string; codeChallenge?: string; codeChallengeMethod?: string }) => Promise<{ code: string }>;
-  exchangeCode: (params: { code: string; clientId: string; clientSecret: string; redirectUri: string; codeVerifier?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number }>;
-  clientCredentialsGrant: (params: { clientId: string; clientSecret: string; scope?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number }>;
-  revokeToken: (token: string) => Promise<void>;
-  introspectToken: (token: string) => Promise<{ active: boolean; clientId?: string; userId?: number }>;
-  createPendingFlow: (params: { clientId: string; redirectUri: string; state: string; scope?: string; codeChallenge?: string; codeChallengeMethod?: string }) => Promise<{ flowId: number }>;
-  resumePendingFlow: (flowId: number) => Promise<{ clientId: string; redirectUri: string; state: string }>;
-  getUserInfo: (token: string) => Promise<{ id: number; email: string; name: string } | null>;
-}
 
 describe('oauth plugin', () => {
   let db: DatabaseAdapter;
@@ -23,7 +12,15 @@ describe('oauth plugin', () => {
   beforeEach(async () => {
     db = createTestAdapter();
 
-    const plugin = oauth({ authCodeExpirySeconds: 600, accessTokenExpirySeconds: 3600 });
+    const plugin = oauth({
+      authCodeExpirySeconds: 600,
+      accessTokenExpirySeconds: 3600,
+      issuerUrl: 'https://auth.example.com',
+      scopePermissionMap: {
+        'read:posts': { resource: 'post', action: 'read' },
+        'write:posts': { resource: 'post', action: 'create' },
+      },
+    });
     methods = plugin.methods!({ db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } }) as unknown as OAuthMethods;
 
     // Create a test user
@@ -316,6 +313,204 @@ describe('oauth plugin', () => {
     it('returns null for invalid token', async () => {
       const user = await methods.getUserInfo('invalid-token');
       expect(user).toBeNull();
+    });
+  });
+
+  describe('handleTokenRequest', () => {
+    it('handles authorization_code grant type', async () => {
+      const client = await methods.createClient({
+        name: 'App',
+        redirectUris: ['https://app.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+
+      const { code } = await methods.createAuthorizationCode({
+        clientId: client.clientId,
+        userId,
+        redirectUri: 'https://app.com/callback',
+      });
+
+      const result = await methods.handleTokenRequest(
+        { grant_type: 'authorization_code', code, redirect_uri: 'https://app.com/callback' },
+        { clientId: client.clientId, clientSecret: client.clientSecret },
+      );
+
+      expect(result.access_token).toBeTruthy();
+      expect(result.token_type).toBe('Bearer');
+      expect(result.expires_in).toBe(3600);
+    });
+
+    it('handles client_credentials grant type', async () => {
+      const client = await methods.createClient({
+        name: 'Service',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      const result = await methods.handleTokenRequest(
+        { grant_type: 'client_credentials' },
+        { clientId: client.clientId, clientSecret: client.clientSecret },
+      );
+
+      expect(result.access_token).toBeTruthy();
+      expect(result.token_type).toBe('Bearer');
+    });
+
+    it('reads client credentials from body when no auth header', async () => {
+      const client = await methods.createClient({
+        name: 'Service',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      const result = await methods.handleTokenRequest({
+        grant_type: 'client_credentials',
+        client_id: client.clientId,
+        client_secret: client.clientSecret,
+      });
+
+      expect(result.access_token).toBeTruthy();
+    });
+
+    it('rejects unsupported grant_type', async () => {
+      await expect(
+        methods.handleTokenRequest(
+          { grant_type: 'implicit' },
+          { clientId: 'any', clientSecret: 'any' },
+        ),
+      ).rejects.toThrow('Unsupported grant_type');
+    });
+
+    it('rejects missing client authentication', async () => {
+      await expect(
+        methods.handleTokenRequest({ grant_type: 'client_credentials' }),
+      ).rejects.toThrow('Client authentication required');
+    });
+  });
+
+  describe('handleIntrospectRequest', () => {
+    it('returns active token info in RFC 7662 format', async () => {
+      const client = await methods.createClient({
+        name: 'Service',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      const { accessToken } = await methods.clientCredentialsGrant({
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        scope: 'read:posts',
+      });
+
+      const result = await methods.handleIntrospectRequest(
+        { token: accessToken },
+        { clientId: client.clientId, clientSecret: client.clientSecret },
+      );
+
+      expect(result.active).toBe(true);
+      expect(result.client_id).toBe(client.clientId);
+      expect(result.token_type).toBe('Bearer');
+      expect(result.scope).toBe('read:posts');
+    });
+
+    it('returns inactive for revoked token', async () => {
+      const client = await methods.createClient({
+        name: 'Service',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      const { accessToken } = await methods.clientCredentialsGrant({
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      });
+
+      await methods.revokeToken(accessToken);
+
+      const result = await methods.handleIntrospectRequest(
+        { token: accessToken },
+        { clientId: client.clientId, clientSecret: client.clientSecret },
+      );
+
+      expect(result.active).toBe(false);
+    });
+  });
+
+  describe('handleRevokeRequest', () => {
+    it('revokes token and always succeeds', async () => {
+      // RFC 7009: revocation endpoint always returns 200
+      await expect(methods.handleRevokeRequest({ token: 'nonexistent' })).resolves.toBeUndefined();
+    });
+  });
+
+  describe('handleDiscovery', () => {
+    it('returns OIDC discovery document', () => {
+      const doc = methods.handleDiscovery();
+
+      expect(doc.issuer).toBe('https://auth.example.com');
+      expect(doc.token_endpoint).toBe('https://auth.example.com/oauth/token');
+      expect(doc.introspection_endpoint).toBe('https://auth.example.com/oauth/introspect');
+      expect(doc.revocation_endpoint).toBe('https://auth.example.com/oauth/revoke');
+      expect(doc.userinfo_endpoint).toBe('https://auth.example.com/oauth/userinfo');
+      expect(doc.grant_types_supported).toContain('authorization_code');
+      expect(doc.grant_types_supported).toContain('client_credentials');
+      expect(doc.code_challenge_methods_supported).toContain('S256');
+    });
+  });
+
+  describe('resolveTokenPermissions', () => {
+    it('maps scopes to IAM permissions', async () => {
+      const client = await methods.createClient({
+        name: 'Service',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      const { accessToken } = await methods.clientCredentialsGrant({
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        scope: 'read:posts write:posts',
+      });
+
+      const permissions = await methods.resolveTokenPermissions(accessToken);
+
+      expect(permissions).toEqual([
+        { resource: 'post', action: 'read' },
+        { resource: 'post', action: 'create' },
+      ]);
+    });
+
+    it('returns empty for unknown scopes', async () => {
+      const client = await methods.createClient({
+        name: 'Service',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      const { accessToken } = await methods.clientCredentialsGrant({
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        scope: 'unknown:scope',
+      });
+
+      const permissions = await methods.resolveTokenPermissions(accessToken);
+      expect(permissions).toEqual([]);
+    });
+
+    it('returns empty for token with no scope', async () => {
+      const client = await methods.createClient({
+        name: 'Service',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      const { accessToken } = await methods.clientCredentialsGrant({
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      });
+
+      const permissions = await methods.resolveTokenPermissions(accessToken);
+      expect(permissions).toEqual([]);
     });
   });
 });

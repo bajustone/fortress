@@ -26,6 +26,7 @@ export type {
   ModelDefinition,
   PluginContext,
   PluginHooks,
+  PluginMethodsMap,
   RouteDefinition,
 } from './core/plugin';
 // Core types
@@ -47,3 +48,14 @@ export type {
   SubjectType,
   TokenClaims,
 } from './core/types';
+
+export type { ApiKeyMethods } from './plugins/api-key';
+export type { AuditLogMethods } from './plugins/audit-log';
+export type { DataIsolationMethods } from './plugins/data-isolation';
+export type { EmailVerificationMethods } from './plugins/email-verification';
+export type { AuthorizeRequestParams, ClientAuth, OAuthMethods, PendingFlowRecord, TokenRequestBody } from './plugins/oauth';
+export type { SocialLoginMethods } from './plugins/social-login';
+export type { TenancyMethods } from './plugins/tenancy';
+// Plugin method interfaces (for type-safe plugin access)
+export type { TwoFactorMethods } from './plugins/two-factor';
+export type { WebAuthnMethods } from './plugins/webauthn';

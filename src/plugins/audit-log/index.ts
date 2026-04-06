@@ -47,7 +47,17 @@ async function sha256Hex(input: string): Promise<string> {
   return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export function auditLog(config: AuditLogConfig = {}): FortressPlugin {
+export interface AuditLogMethods {
+  getAuditLog: (options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>;
+}
+
+declare module '../../core/plugin' {
+  interface PluginMethodsMap {
+    'audit-log': AuditLogMethods;
+  }
+}
+
+export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readonly name: 'audit-log' } {
   const allowedEvents = config.events ?? null;
   const hashChain = config.hashChain ?? false;
 

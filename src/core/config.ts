@@ -22,7 +22,7 @@ export interface FortressConfig {
   database: DatabaseAdapter;
   passwordHasher?: PasswordHasher;
   passwordPolicy?: PasswordPolicyConfig;
-  plugins?: FortressPlugin[];
+  plugins?: readonly FortressPlugin[];
 }
 
 export const DEFAULT_CONFIG = {

@@ -1,7 +1,20 @@
 import type { FortressPlugin } from '../../core/plugin';
 import { Errors } from '../../core/errors';
 
-export function webauthn(): FortressPlugin {
+export interface WebAuthnMethods {
+  generateRegistrationOptions: (userId: number) => Promise<never>;
+  verifyRegistration: (userId: number, response: unknown) => Promise<never>;
+  generateAuthenticationOptions: (userId?: number) => Promise<never>;
+  verifyAuthentication: (response: unknown) => Promise<never>;
+}
+
+declare module '../../core/plugin' {
+  interface PluginMethodsMap {
+    webauthn: WebAuthnMethods;
+  }
+}
+
+export function webauthn(): FortressPlugin & { readonly name: 'webauthn' } {
   return {
     name: 'webauthn',
 

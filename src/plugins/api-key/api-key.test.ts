@@ -16,7 +16,7 @@ interface ApiKeyMethods {
 }
 
 describe('api-key plugin', () => {
-  let fortress: Fortress;
+  let fortress: Fortress<any>;
   let methods: ApiKeyMethods;
   let userId: number;
 

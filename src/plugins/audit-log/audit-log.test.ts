@@ -8,7 +8,7 @@ import { auditLog } from './index';
 const SECRET = 'audit-log-test-secret-32chars!!x';
 
 describe('audit-log plugin', () => {
-  let fortress: Fortress;
+  let fortress: Fortress<any>;
   let getAuditLog: (options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>;
 
   beforeEach(() => {

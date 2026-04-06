@@ -58,7 +58,21 @@ async function generatePKCE(): Promise<{ codeVerifier: string; codeChallenge: st
   return { codeVerifier, codeChallenge };
 }
 
-export function socialLogin(config: SocialLoginConfig): FortressPlugin {
+export interface SocialLoginMethods {
+  getAuthorizationUrl: (providerName: string, redirectUri: string) => Promise<{ url: string; state: { provider: string; codeVerifier: string; nonce: string } }>;
+  handleCallback: (providerName: string, code: string, redirectUri: string, codeVerifier: string) => Promise<{ user: FortressUser; profile: ProviderProfile; isNewUser: boolean }>;
+  getLinkedAccounts: (userId: number) => Promise<{ provider: string; providerAccountId: string; email: string | null }[]>;
+  unlinkAccount: (userId: number, provider: string) => Promise<void>;
+  getProviders: () => string[];
+}
+
+declare module '../../core/plugin' {
+  interface PluginMethodsMap {
+    'social-login': SocialLoginMethods;
+  }
+}
+
+export function socialLogin(config: SocialLoginConfig): FortressPlugin & { readonly name: 'social-login' } {
   const autoRegister = config.autoRegister ?? true;
   const linkAccounts = config.linkAccounts ?? true;
 

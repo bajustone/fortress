@@ -9,6 +9,7 @@ export type { FortressEnv } from './middleware/auth';
 export { createCsrfMiddleware } from './middleware/csrf';
 export type { CsrfConfig } from './middleware/csrf';
 export type { RbacOptions, RouteMapping } from './middleware/rbac';
+export { mountPluginRoutes } from './plugin-routes';
 
 export interface HonoAdapterOptions extends RbacOptions {}
 

@@ -74,7 +74,7 @@ _Reviewed 2026-04-03 against TypeScript library authoring best practices._
 - Changed `DatabaseAdapter.update<T>` return type to `Promise<T | null>`. Updated Drizzle adapter, plugin-runner wrapper, and tenancy wrapper.
 
 #### ~~`InferPlugins` Utility Type Is Never Used~~ — RESOLVED
-- Added `getPluginMethods<T>(fortress, pluginName)` helper for typed plugin access. Full generic Fortress type deferred — current approach is pragmatic without breaking changes.
+- `createFortress` is now generic: `createFortress<const T>()` infers plugin types via `InferPlugins<T>`. Each plugin augments `PluginMethodsMap` via declaration merging, and factory return types include `readonly name: 'literal'`. Result: `fortress.plugins['two-factor'].enable(userId)` is fully typed with no casting. `getPluginMethods<T>()` kept as fallback for untyped contexts.
 
 #### ~~No README~~ — RESOLVED
 - Created `README.md` with features, quick start, plugin list, framework integrations, database support.

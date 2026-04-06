@@ -8,25 +8,6 @@ import { GenericContainer, Wait } from 'testcontainers';
 import { afterAll, beforeAll, beforeEach, describe } from 'vitest';
 import { runAdapterTests } from '../../testing/adapter-conformance.test';
 import { createDrizzleAdapter } from '../adapter';
-import { fortressPgSchema } from './schema';
-
-const PG_TABLE_MAP = {
-  user: fortressPgSchema.users,
-  login_identifier: fortressPgSchema.loginIdentifiers,
-  refresh_token: fortressPgSchema.refreshTokens,
-  group: fortressPgSchema.groups,
-  group_user: fortressPgSchema.groupUsers,
-  resource: fortressPgSchema.resources,
-  permission: fortressPgSchema.permissions,
-  role: fortressPgSchema.roles,
-  role_permission: fortressPgSchema.rolePermissions,
-  role_binding: fortressPgSchema.roleBindings,
-  magic_link_token: fortressPgSchema.magicLinkTokens,
-  account_lockout: fortressPgSchema.accountLockouts,
-  audit_log: fortressPgSchema.auditLogs,
-  webhook_endpoint: fortressPgSchema.webhookEndpoints,
-  webhook_delivery: fortressPgSchema.webhookDeliveries,
-};
 
 const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS fortress_user (
@@ -107,12 +88,144 @@ const CREATE_TABLES_SQL = `
     subject_id INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    token TEXT NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
   CREATE TABLE IF NOT EXISTS fortress_magic_link_token (
     id SERIAL PRIMARY KEY,
     email VARCHAR(255) NOT NULL,
     token VARCHAR(64) NOT NULL,
     expires_at TIMESTAMP NOT NULL,
     used_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_api_key (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    key_hash VARCHAR(64) NOT NULL UNIQUE,
+    key_prefix VARCHAR(20) NOT NULL,
+    scopes TEXT,
+    expires_at TIMESTAMP,
+    last_used_at TIMESTAMP,
+    is_revoked BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_two_factor_secret (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES fortress_user(id) ON DELETE CASCADE,
+    secret TEXT NOT NULL,
+    is_enabled BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_backup_code (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    is_used BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_trusted_device (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    device_hash VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    last_used_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_social_account (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    provider VARCHAR(50) NOT NULL,
+    provider_account_id VARCHAR(255) NOT NULL,
+    email VARCHAR(255),
+    access_token TEXT,
+    refresh_token TEXT,
+    token_expires_at TIMESTAMP,
+    profile JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_tenant (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    tax_id VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_tenant_user (
+    tenant_id INTEGER NOT NULL REFERENCES fortress_tenant(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    is_default BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (tenant_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_client (
+    id SERIAL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL UNIQUE,
+    client_secret_hash TEXT NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    grant_types TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(255) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    user_id INTEGER NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    scope TEXT,
+    code_challenge TEXT,
+    code_challenge_method VARCHAR(10),
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
+    id SERIAL PRIMARY KEY,
+    token VARCHAR(255) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    user_id INTEGER,
+    scope TEXT,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
+    id SERIAL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    scope TEXT,
+    state VARCHAR(255) NOT NULL,
+    code_challenge TEXT,
+    code_challenge_method VARCHAR(10),
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_user_scope_assignment (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    scope_name VARCHAR(100) NOT NULL,
+    scope_value VARCHAR(255) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
 
@@ -171,7 +284,20 @@ const TRUNCATE_SQL = `
     fortress_webhook_endpoint,
     fortress_audit_log,
     fortress_account_lockout,
+    fortress_user_scope_assignment,
+    fortress_oauth_pending_flow,
+    fortress_oauth_access_token,
+    fortress_oauth_authorization_code,
+    fortress_oauth_client,
+    fortress_tenant_user,
+    fortress_tenant,
+    fortress_social_account,
+    fortress_trusted_device,
+    fortress_backup_code,
+    fortress_two_factor_secret,
+    fortress_api_key,
     fortress_magic_link_token,
+    fortress_email_verification_token,
     fortress_role_binding,
     fortress_role_permission,
     fortress_permission,
@@ -219,10 +345,7 @@ beforeEach(async () => {
 });
 
 function createPgTestAdapter(): DatabaseAdapter {
-  return createDrizzleAdapter(db as any, {
-    dialect: 'pg',
-    tables: PG_TABLE_MAP,
-  });
+  return createDrizzleAdapter(db as any, { dialect: 'pg' });
 }
 
 describe('adapter conformance: PostgreSQL (drizzle)', () => {

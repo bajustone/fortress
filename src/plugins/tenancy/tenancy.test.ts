@@ -14,7 +14,7 @@ interface TenancyMethods {
 }
 
 describe('tenancy plugin', () => {
-  let fortress: Fortress;
+  let fortress: Fortress<any>;
   let methods: TenancyMethods;
   let userId: number;
 

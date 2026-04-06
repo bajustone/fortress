@@ -7,7 +7,7 @@ import { emailVerification } from './index';
 const SECRET = 'email-verify-test-secret-32chars!';
 
 describe('email-verification plugin', () => {
-  let fortress: Fortress;
+  let fortress: Fortress<any>;
   let capturedToken: string | null;
   let capturedEmail: string | null;
   const onSend = vi.fn(async (email: string, token: string, _userId: number) => {

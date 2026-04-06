@@ -4,6 +4,7 @@ import type { WhereClause } from '../adapters/database/types';
 
 import { and, eq, getTableColumns, gt, gte, inArray, lt, lte, ne, sql } from 'drizzle-orm';
 import { Errors } from '../core/errors';
+import { fortressPgSchema } from './pg/schema';
 import { fortressSchema } from './schema';
 
 export type DrizzleDialect = 'sqlite' | 'pg' | 'mysql';
@@ -11,41 +12,45 @@ export type DrizzleDialect = 'sqlite' | 'pg' | 'mysql';
 export interface DrizzleAdapterOptions {
   /** Override default fortress table definitions with your own Drizzle tables */
   tables?: Partial<Record<string, Table>>;
-  /** Database dialect — controls data sanitization (default: 'sqlite') */
+  /** Database dialect — controls query execution and default table definitions (default: 'sqlite') */
   dialect?: DrizzleDialect;
 }
 
-// Default model-to-table mapping (SQLite fortress tables)
-const DEFAULT_TABLE_MAP: Record<string, Table> = {
-  user: fortressSchema.users,
-  login_identifier: fortressSchema.loginIdentifiers,
-  refresh_token: fortressSchema.refreshTokens,
-  group: fortressSchema.groups,
-  group_user: fortressSchema.groupUsers,
-  resource: fortressSchema.resources,
-  permission: fortressSchema.permissions,
-  role: fortressSchema.roles,
-  role_permission: fortressSchema.rolePermissions,
-  role_binding: fortressSchema.roleBindings,
-  email_verification_token: fortressSchema.emailVerificationTokens,
-  magic_link_token: fortressSchema.magicLinkTokens,
-  api_key: fortressSchema.apiKeys,
-  two_factor_secret: fortressSchema.twoFactorSecrets,
-  backup_code: fortressSchema.backupCodes,
-  trusted_device: fortressSchema.trustedDevices,
-  social_account: fortressSchema.socialAccounts,
-  tenant: fortressSchema.tenants,
-  tenant_user: fortressSchema.tenantUsers,
-  oauth_client: fortressSchema.oauthClients,
-  oauth_authorization_code: fortressSchema.oauthAuthorizationCodes,
-  oauth_access_token: fortressSchema.oauthAccessTokens,
-  oauth_pending_flow: fortressSchema.oauthPendingFlows,
-  user_scope_assignment: fortressSchema.userScopeAssignments,
-  account_lockout: fortressSchema.accountLockouts,
-  audit_log: fortressSchema.auditLogs,
-  webhook_endpoint: fortressSchema.webhookEndpoints,
-  webhook_delivery: fortressSchema.webhookDeliveries,
-};
+function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema): Record<string, Table> {
+  return {
+    user: schema.users,
+    login_identifier: schema.loginIdentifiers,
+    refresh_token: schema.refreshTokens,
+    group: schema.groups,
+    group_user: schema.groupUsers,
+    resource: schema.resources,
+    permission: schema.permissions,
+    role: schema.roles,
+    role_permission: schema.rolePermissions,
+    role_binding: schema.roleBindings,
+    email_verification_token: schema.emailVerificationTokens,
+    magic_link_token: schema.magicLinkTokens,
+    api_key: schema.apiKeys,
+    two_factor_secret: schema.twoFactorSecrets,
+    backup_code: schema.backupCodes,
+    trusted_device: schema.trustedDevices,
+    social_account: schema.socialAccounts,
+    tenant: schema.tenants,
+    tenant_user: schema.tenantUsers,
+    oauth_client: schema.oauthClients,
+    oauth_authorization_code: schema.oauthAuthorizationCodes,
+    oauth_access_token: schema.oauthAccessTokens,
+    oauth_pending_flow: schema.oauthPendingFlows,
+    user_scope_assignment: schema.userScopeAssignments,
+    account_lockout: schema.accountLockouts,
+    audit_log: schema.auditLogs,
+    webhook_endpoint: schema.webhookEndpoints,
+    webhook_delivery: schema.webhookDeliveries,
+  };
+}
+
+const SQLITE_DEFAULT_TABLE_MAP = buildTableMap(fortressSchema);
+const PG_DEFAULT_TABLE_MAP = buildTableMap(fortressPgSchema);
 
 function getColumn(table: Table, field: string): Column {
   const columns = getTableColumns(table);
@@ -129,7 +134,8 @@ interface DrizzleDB { insert: Function; select: Function; update: Function; dele
  */
 export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOptions): DatabaseAdapter {
   const dialect = options?.dialect ?? 'sqlite';
-  const tableMap: Record<string, Table> = { ...DEFAULT_TABLE_MAP, ...(options?.tables as Record<string, Table>) };
+  const defaults = dialect === 'pg' ? PG_DEFAULT_TABLE_MAP : SQLITE_DEFAULT_TABLE_MAP;
+  const tableMap: Record<string, Table> = { ...defaults, ...(options?.tables as Record<string, Table>) };
   const sanitize = dialect === 'sqlite' ? sanitizeForSqlite : (d: Record<string, unknown>) => d;
   const isSqlite = dialect === 'sqlite';
 

@@ -112,8 +112,14 @@ export interface MiddlewareDefinition {
   handler: (ctx: PluginContext, request: unknown, next: () => Promise<void>) => Promise<void>;
 }
 
+/** Augmented by plugins to register their typed methods. See each plugin's `declare module` block. */
+
+export interface PluginMethodsMap {}
+
 /** Infer typed plugin methods from the plugins array */
-export type InferPlugins<T extends FortressPlugin[]> = {
-  // eslint-disable-next-line ts/no-unsafe-function-type -- fallback type for untyped plugins
-  [P in T[number] as P['name']]: P extends { _methods: infer M } ? M : Record<string, Function>;
+export type InferPlugins<T extends readonly FortressPlugin[]> = {
+
+  [P in T[number] as P['name']]: P['name'] extends keyof PluginMethodsMap
+    ? PluginMethodsMap[P['name']]
+    : Record<string, (...args: any[]) => any>;
 };

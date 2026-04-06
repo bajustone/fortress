@@ -13,7 +13,7 @@ interface TwoFactorMethods {
 }
 
 describe('two-factor plugin', () => {
-  let fortress: Fortress;
+  let fortress: Fortress<any>;
   let methods: TwoFactorMethods;
   let userId: number;
 

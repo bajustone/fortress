@@ -66,7 +66,7 @@ export interface AuthService {
 export function createAuthService(
   db: DatabaseAdapter,
   config: FortressConfig,
-  plugins: FortressPlugin[] = [],
+  plugins: readonly FortressPlugin[] = [],
 ): AuthService {
   const resolved = resolveConfig(config);
   const hasher: PasswordHasher = config.passwordHasher ?? createDefaultHasher();

@@ -98,6 +98,18 @@ const roleBindings = pgTable('fortress_role_binding', {
   subjectId: integer('subject_id').notNull(),
 });
 
+// --- Plugins: Email Verification ---
+
+const emailVerificationTokens = pgTable('fortress_email_verification_token', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  token: text('token').notNull(),
+  email: varchar('email', { length: 255 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
 // --- Plugins: Magic Link ---
 
 const magicLinkTokens = pgTable('fortress_magic_link_token', {
@@ -106,6 +118,143 @@ const magicLinkTokens = pgTable('fortress_magic_link_token', {
   token: varchar('token', { length: 64 }).notNull(),
   expiresAt: timestamp('expires_at').notNull(),
   usedAt: timestamp('used_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+// --- Plugins: API Key ---
+
+const apiKeys = pgTable('fortress_api_key', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 255 }).notNull(),
+  keyHash: varchar('key_hash', { length: 64 }).notNull().unique(),
+  keyPrefix: varchar('key_prefix', { length: 20 }).notNull(),
+  scopes: text('scopes'), // JSON array of "resource:action" strings
+  expiresAt: timestamp('expires_at'),
+  lastUsedAt: timestamp('last_used_at'),
+  isRevoked: boolean('is_revoked').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+// --- Plugins: Two-Factor ---
+
+const twoFactorSecrets = pgTable('fortress_two_factor_secret', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
+  secret: text('secret').notNull(), // Base32-encoded TOTP secret
+  isEnabled: boolean('is_enabled').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+const backupCodes = pgTable('fortress_backup_code', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  codeHash: text('code_hash').notNull(),
+  isUsed: boolean('is_used').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+const trustedDevices = pgTable('fortress_trusted_device', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  deviceHash: varchar('device_hash', { length: 64 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  lastUsedAt: timestamp('last_used_at').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+// --- Plugins: Social Login ---
+
+const socialAccounts = pgTable('fortress_social_account', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: varchar('provider', { length: 50 }).notNull(),
+  providerAccountId: varchar('provider_account_id', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }),
+  accessToken: text('access_token'), // Encrypted
+  refreshToken: text('refresh_token'), // Encrypted
+  tokenExpiresAt: timestamp('token_expires_at'),
+  profile: jsonb('profile'), // JSON
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// --- Plugins: Tenancy ---
+
+const tenants = pgTable('fortress_tenant', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  taxId: varchar('tax_id', { length: 100 }).notNull().unique(),
+  description: text('description'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+const tenantUsers = pgTable(
+  'fortress_tenant_user',
+  {
+    tenantId: integer('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    isDefault: boolean('is_default').notNull().default(false),
+  },
+  table => [primaryKey({ columns: [table.tenantId, table.userId] })],
+);
+
+// --- Plugins: OAuth ---
+
+const oauthClients = pgTable('fortress_oauth_client', {
+  id: serial('id').primaryKey(),
+  clientId: varchar('client_id', { length: 255 }).notNull().unique(),
+  clientSecretHash: text('client_secret_hash').notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  redirectUris: text('redirect_uris').notNull(), // JSON array
+  grantTypes: text('grant_types').notNull(), // JSON array
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+const oauthAuthorizationCodes = pgTable('fortress_oauth_authorization_code', {
+  id: serial('id').primaryKey(),
+  code: varchar('code', { length: 255 }).notNull().unique(),
+  clientId: varchar('client_id', { length: 255 }).notNull(),
+  userId: integer('user_id').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  scope: text('scope'),
+  codeChallenge: text('code_challenge'),
+  codeChallengeMethod: varchar('code_challenge_method', { length: 10 }),
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+const oauthAccessTokens = pgTable('fortress_oauth_access_token', {
+  id: serial('id').primaryKey(),
+  token: varchar('token', { length: 255 }).notNull().unique(),
+  clientId: varchar('client_id', { length: 255 }).notNull(),
+  userId: integer('user_id'),
+  scope: text('scope'),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+const oauthPendingFlows = pgTable('fortress_oauth_pending_flow', {
+  id: serial('id').primaryKey(),
+  clientId: varchar('client_id', { length: 255 }).notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  scope: text('scope'),
+  state: varchar('state', { length: 255 }).notNull(),
+  codeChallenge: text('code_challenge'),
+  codeChallengeMethod: varchar('code_challenge_method', { length: 10 }),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+// --- Plugins: Data Isolation ---
+
+const userScopeAssignments = pgTable('fortress_user_scope_assignment', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  scopeName: varchar('scope_name', { length: 100 }).notNull(),
+  scopeValue: varchar('scope_value', { length: 255 }).notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -176,7 +325,20 @@ export const fortressPgSchema = {
   roles,
   rolePermissions,
   roleBindings,
+  emailVerificationTokens,
   magicLinkTokens,
+  apiKeys,
+  twoFactorSecrets,
+  backupCodes,
+  trustedDevices,
+  socialAccounts,
+  tenants,
+  tenantUsers,
+  oauthClients,
+  oauthAuthorizationCodes,
+  oauthAccessTokens,
+  oauthPendingFlows,
+  userScopeAssignments,
   accountLockouts,
   auditLogs,
   webhookEndpoints,

@@ -161,7 +161,19 @@ async function generateBackupCodes(count: number): Promise<{ raw: string[]; hash
   return { raw, hashes };
 }
 
-export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin {
+export interface TwoFactorMethods {
+  enable: (userId: number) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
+  verify: (userId: number, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>;
+  disable: (userId: number) => Promise<void>;
+}
+
+declare module '../../core/plugin' {
+  interface PluginMethodsMap {
+    'two-factor': TwoFactorMethods;
+  }
+}
+
+export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { readonly name: 'two-factor' } {
   const issuer = config.totp?.issuer ?? 'Fortress';
   const period = config.totp?.period ?? 30;
   const digits = config.totp?.digits ?? 6;

@@ -44,7 +44,21 @@ async function generateApiKey(prefix: string): Promise<{ raw: string; hash: stri
   return { raw, hash, keyPrefix };
 }
 
-export function apiKey(config: ApiKeyConfig = {}): FortressPlugin {
+export interface ApiKeyMethods {
+  createKey: (userId: number, options: { name: string; scopes?: string[]; expiresAt?: Date }) => Promise<{ key: string; id: number }>;
+  listKeys: (userId: number) => Promise<ApiKeyInfo[]>;
+  revokeKey: (userId: number, keyId: number) => Promise<void>;
+  rotateKey: (userId: number, keyId: number) => Promise<{ key: string; id: number }>;
+  resolveKey: (rawKey: string) => Promise<{ userId: number; scopes: string[] | null } | null>;
+}
+
+declare module '../../core/plugin' {
+  interface PluginMethodsMap {
+    'api-key': ApiKeyMethods;
+  }
+}
+
+export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly name: 'api-key' } {
   const prefix = config.prefix ?? 'fortress';
   const defaultExpirySeconds = config.defaultExpirySeconds ?? null;
   const maxKeysPerUser = config.maxKeysPerUser ?? 10;

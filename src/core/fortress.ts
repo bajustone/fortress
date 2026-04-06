@@ -1,16 +1,17 @@
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
 import type { IamService } from './iam/iam-service';
+import type { FortressPlugin, InferPlugins } from './plugin';
 import { createAuthService } from './auth/auth-service';
 import { Errors } from './errors';
 import { createIamService } from './iam/iam-service';
 import { processPlugins } from './plugin-runner';
 
-export interface Fortress {
+// eslint-disable-next-line ts/no-unsafe-function-type -- fallback type for untyped plugin access
+export interface Fortress<TPlugins = Record<string, Record<string, Function>>> {
   auth: AuthService;
   iam: IamService;
-  // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
-  plugins: Record<string, Record<string, Function>>;
+  plugins: TPlugins;
   config: Readonly<FortressConfig>;
 }
 
@@ -41,7 +42,9 @@ export function getPluginMethods<T>(fortress: Fortress, pluginName: string): T {
 
 const MIN_SECRET_BYTES = 32;
 
-export function createFortress(config: FortressConfig): Fortress {
+export function createFortress<const T extends readonly FortressPlugin[]>(
+  config: FortressConfig & { plugins?: T },
+): Fortress<InferPlugins<T>> {
   // Validate JWT secret strength
   const secrets = Array.isArray(config.jwt.secret) ? config.jwt.secret : [config.jwt.secret];
   for (const secret of secrets) {
@@ -72,7 +75,7 @@ export function createFortress(config: FortressConfig): Fortress {
   return {
     auth,
     iam,
-    plugins: pluginMethods,
+    plugins: pluginMethods as InferPlugins<T>,
     config,
   };
 }

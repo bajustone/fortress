@@ -256,7 +256,7 @@ describe('hono authMiddleware — fortressDb and getScopedDb', () => {
 });
 
 describe('hono authMiddleware — data-isolation scopeRules', () => {
-  let isolatedFortress: Fortress;
+  let isolatedFortress: Fortress<any>;
   let isolatedApp: Hono<FortressEnv>;
 
   beforeEach(async () => {

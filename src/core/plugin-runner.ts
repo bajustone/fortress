@@ -9,7 +9,7 @@ import type { FortressPlugin, PluginContext } from './plugin';
  */
 
 export function processPlugins(
-  plugins: FortressPlugin[],
+  plugins: readonly FortressPlugin[],
   db: DatabaseAdapter,
   config: FortressConfig,
   auth?: Record<string, Function>,
@@ -29,7 +29,7 @@ export function processPlugins(
  * Each wrapper receives the result of the previous.
  */
 export function chainAdapterWrappers(
-  plugins: FortressPlugin[],
+  plugins: readonly FortressPlugin[],
   baseAdapter: DatabaseAdapter,
   requestContext: Record<string, unknown>,
 ): DatabaseAdapter {
@@ -49,7 +49,7 @@ export function chainAdapterWrappers(
  * Later plugins override earlier ones on key conflicts.
  */
 export async function mergeTokenClaims(
-  plugins: FortressPlugin[],
+  plugins: readonly FortressPlugin[],
   userId: number,
   ctx: PluginContext,
 ): Promise<Record<string, unknown>> {
@@ -79,7 +79,7 @@ export async function mergeTokenClaims(
  * All filters are AND'd together. All defaults are merged.
  */
 export async function collectScopeRules(
-  plugins: FortressPlugin[],
+  plugins: readonly FortressPlugin[],
   userId: number,
   model: string,
   ctx: PluginContext,
@@ -185,7 +185,7 @@ export function wrapAdapterWithScopeRules(
  * Get all model definitions declared by plugins.
  */
 export function collectPluginModels(
-  plugins: FortressPlugin[],
+  plugins: readonly FortressPlugin[],
 ): { pluginName: string; models: FortressPlugin['models'] }[] {
   return plugins
     .filter(p => p.models && p.models.length > 0)
