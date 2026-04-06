@@ -27,9 +27,9 @@ export function createMemoryStore(): RateLimitStore {
     }
   }, 60_000);
 
-  // Allow the process to exit even if the interval is active
-  if (cleanupInterval.unref) {
-    cleanupInterval.unref();
+  // Allow the process to exit even if the interval is active (Node/Bun)
+  if (typeof cleanupInterval === 'object' && 'unref' in cleanupInterval) {
+    (cleanupInterval as { unref: () => void }).unref();
   }
 
   return {
