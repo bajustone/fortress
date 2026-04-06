@@ -77,14 +77,16 @@ const CREATE_TABLES_SQL = `
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     role_id INTEGER NOT NULL REFERENCES fortress_role(id) ON DELETE CASCADE,
     subject_type TEXT NOT NULL,
-    subject_id INTEGER NOT NULL
+    subject_id INTEGER NOT NULL,
+    tenant_id TEXT
   );
 
   CREATE TABLE IF NOT EXISTS fortress_direct_permission_binding (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     permission_id INTEGER NOT NULL REFERENCES fortress_permission(id) ON DELETE CASCADE,
     subject_type TEXT NOT NULL,
-    subject_id INTEGER NOT NULL
+    subject_id INTEGER NOT NULL,
+    tenant_id TEXT
   );
 
   CREATE TABLE IF NOT EXISTS fortress_email_verification_token (

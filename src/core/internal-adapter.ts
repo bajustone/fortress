@@ -31,7 +31,7 @@ export interface InternalAdapter {
   /** Find a refresh token by its SHA-256 hash */
   findRefreshTokenByHash: (tokenHash: string) => Promise<StoredRefreshToken | null>;
   /** Get all permissions for a user through direct + group role bindings */
-  getUserPermissions: (userId: number) => Promise<Permission[]>;
+  getUserPermissions: (userId: number, tenantId?: string) => Promise<Permission[]>;
   /** Find an existing permission or create it if missing */
   findOrCreatePermission: (input: PermissionInput) => Promise<Permission>;
   /** Ensure a resource exists (no-op if already present) */
@@ -88,9 +88,17 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       });
     },
 
-    async getUserPermissions(userId: number): Promise<Permission[]> {
+    async getUserPermissions(userId: number, tenantId?: string): Promise<Permission[]> {
+      const tenantFilter = tenantId != null;
+
       // Optimized path: single JOIN query when rawQuery is available
       if (db.rawQuery) {
+        const rbTenant = tenantFilter ? ' AND (rb.tenant_id = ? OR rb.tenant_id IS NULL)' : '';
+        const dpbTenant = tenantFilter ? ' AND (dpb.tenant_id = ? OR dpb.tenant_id IS NULL)' : '';
+        const params = tenantFilter
+          ? [userId, userId, tenantId, userId, userId, tenantId]
+          : [userId, userId, userId, userId];
+
         const rows = await db.rawQuery<Permission>(
           `SELECT DISTINCT p.id, p.resource, p.action, p.effect, p.conditions, p.description
            FROM fortress_permission p
@@ -98,19 +106,19 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
              -- Role-based permissions
              SELECT rp.permission_id FROM fortress_role_permission rp
              JOIN fortress_role_binding rb ON rb.role_id = rp.role_id
-             WHERE (rb.subject_type = 'USER' AND rb.subject_id = ?)
+             WHERE ((rb.subject_type = 'USER' AND rb.subject_id = ?)
                 OR (rb.subject_type = 'GROUP' AND rb.subject_id IN (
                   SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
-                ))
+                )))${rbTenant}
              UNION
              -- Direct permission bindings
              SELECT dpb.permission_id FROM fortress_direct_permission_binding dpb
-             WHERE (dpb.subject_type = 'USER' AND dpb.subject_id = ?)
+             WHERE ((dpb.subject_type = 'USER' AND dpb.subject_id = ?)
                 OR (dpb.subject_type = 'GROUP' AND dpb.subject_id IN (
                   SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
-                ))
+                )))${dpbTenant}
            )`,
-          [userId, userId, userId, userId],
+          params,
         );
         return rows.map(r => ({
           ...r,
@@ -119,6 +127,13 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       }
 
       // Fallback: sequential findMany queries
+      // Helper to filter bindings by tenant (global bindings always included)
+      function matchesTenant<T extends { tenantId?: string | null }>(bindings: T[]): T[] {
+        if (!tenantFilter)
+          return bindings;
+        return bindings.filter(b => b.tenantId == null || b.tenantId === tenantId);
+      }
+
       // 1. Group memberships (shared by role-based and direct paths)
       const groupMemberships = await db.findMany<{ groupId: number }>({
         model: 'group_user',
@@ -127,23 +142,23 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       const groupIds = groupMemberships.map(m => m.groupId);
 
       // 2. Role-based permission IDs
-      const directRoleBindings = await db.findMany<{ roleId: number }>({
+      const directRoleBindings = matchesTenant(await db.findMany<{ roleId: number; tenantId?: string | null }>({
         model: 'role_binding',
         where: [
           { field: 'subjectType', operator: '=', value: 'USER' },
           { field: 'subjectId', operator: '=', value: userId },
         ],
-      });
+      }));
 
-      let groupRoleBindings: { roleId: number }[] = [];
+      let groupRoleBindings: { roleId: number; tenantId?: string | null }[] = [];
       if (groupIds.length > 0) {
-        groupRoleBindings = await db.findMany<{ roleId: number }>({
+        groupRoleBindings = matchesTenant(await db.findMany<{ roleId: number; tenantId?: string | null }>({
           model: 'role_binding',
           where: [
             { field: 'subjectType', operator: '=', value: 'GROUP' },
             { field: 'subjectId', operator: 'in', value: groupIds },
           ],
-        });
+        }));
       }
 
       const roleIds = [...new Set([
@@ -161,23 +176,23 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       }
 
       // 3. Direct permission binding IDs
-      const directUserBindings = await db.findMany<{ permissionId: number }>({
+      const directUserBindings = matchesTenant(await db.findMany<{ permissionId: number; tenantId?: string | null }>({
         model: 'direct_permission_binding',
         where: [
           { field: 'subjectType', operator: '=', value: 'USER' },
           { field: 'subjectId', operator: '=', value: userId },
         ],
-      });
+      }));
 
-      let directGroupBindings: { permissionId: number }[] = [];
+      let directGroupBindings: { permissionId: number; tenantId?: string | null }[] = [];
       if (groupIds.length > 0) {
-        directGroupBindings = await db.findMany<{ permissionId: number }>({
+        directGroupBindings = matchesTenant(await db.findMany<{ permissionId: number; tenantId?: string | null }>({
           model: 'direct_permission_binding',
           where: [
             { field: 'subjectType', operator: '=', value: 'GROUP' },
             { field: 'subjectId', operator: 'in', value: groupIds },
           ],
-        });
+        }));
       }
 
       // 4. Merge and deduplicate permission IDs

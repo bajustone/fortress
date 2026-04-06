@@ -86,6 +86,7 @@ export interface PermissionContext {
   resource?: Record<string, unknown>;
   request?: Record<string, unknown>;
   user?: Record<string, unknown>;
+  tenantId?: string;
 }
 
 export interface Role {
@@ -100,6 +101,7 @@ export interface RoleBinding {
   roleId: number;
   subjectType: SubjectType;
   subjectId: number;
+  tenantId?: string | null;
 }
 
 export type LoginIdentifierType = 'email' | 'phone' | 'username';

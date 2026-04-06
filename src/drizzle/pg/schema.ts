@@ -96,6 +96,7 @@ const roleBindings = pgTable('fortress_role_binding', {
   roleId: integer('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
   subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
+  tenantId: varchar('tenant_id', { length: 100 }),
 });
 
 // --- IAM: Direct Permission Bindings ---
@@ -105,6 +106,7 @@ const directPermissionBindings = pgTable('fortress_direct_permission_binding', {
   permissionId: integer('permission_id').notNull().references(() => permissions.id, { onDelete: 'cascade' }),
   subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'GROUP'
   subjectId: integer('subject_id').notNull(),
+  tenantId: varchar('tenant_id', { length: 100 }),
 });
 
 // --- Plugins: Email Verification ---

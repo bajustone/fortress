@@ -27,17 +27,17 @@ export type IamEventListener = (event: IamEvent) => Promise<void>;
 
 export interface IamService {
   checkPermission: (userId: number, resource: string, action: string, context?: PermissionContext) => Promise<boolean>;
-  getUserPermissions: (userId: number) => Promise<Permission[]>;
+  getUserPermissions: (userId: number, tenantId?: string) => Promise<Permission[]>;
   createRole: (name: string, permissions: PermissionInput[], description?: string) => Promise<Role>;
   deleteRole: (roleId: number) => Promise<void>;
-  bindRole: (subjectType: SubjectType, subjectId: number, roleId: number) => Promise<void>;
-  bindRoleToUser: (userId: number, roleId: number) => Promise<void>;
-  bindRoleToGroup: (groupId: number, roleId: number) => Promise<void>;
-  unbindRole: (subjectType: SubjectType, subjectId: number, roleId: number) => Promise<void>;
-  bindPermissionToUser: (userId: number, permission: PermissionInput) => Promise<void>;
-  bindPermissionToGroup: (groupId: number, permission: PermissionInput) => Promise<void>;
-  unbindPermissionFromUser: (userId: number, permissionId: number) => Promise<void>;
-  unbindPermissionFromGroup: (groupId: number, permissionId: number) => Promise<void>;
+  bindRole: (subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string) => Promise<void>;
+  bindRoleToUser: (userId: number, roleId: number, tenantId?: string) => Promise<void>;
+  bindRoleToGroup: (groupId: number, roleId: number, tenantId?: string) => Promise<void>;
+  unbindRole: (subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string) => Promise<void>;
+  bindPermissionToUser: (userId: number, permission: PermissionInput, tenantId?: string) => Promise<void>;
+  bindPermissionToGroup: (groupId: number, permission: PermissionInput, tenantId?: string) => Promise<void>;
+  unbindPermissionFromUser: (userId: number, permissionId: number, tenantId?: string) => Promise<void>;
+  unbindPermissionFromGroup: (groupId: number, permissionId: number, tenantId?: string) => Promise<void>;
   createGroup: (name: string, description?: string) => Promise<Group>;
   addUserToGroup: (groupId: number, userId: number) => Promise<void>;
   removeUserFromGroup: (groupId: number, userId: number) => Promise<void>;
@@ -73,10 +73,20 @@ export function createIamService(
       action: string,
       context?: PermissionContext,
     ): Promise<boolean> {
-      let permissions = cache?.get(userId);
-      if (!permissions) {
-        permissions = await adapter.getUserPermissions(userId);
-        cache?.set(userId, permissions);
+      const tenantId = context?.tenantId;
+      let permissions: Permission[];
+
+      if (tenantId) {
+        // Tenant-scoped: bypass cache (tenant varies per request)
+        permissions = await adapter.getUserPermissions(userId, tenantId);
+      }
+      else {
+        // Global: use cache
+        permissions = cache?.get(userId) ?? await (async () => {
+          const perms = await adapter.getUserPermissions(userId);
+          cache?.set(userId, perms);
+          return perms;
+        })();
       }
 
       // Enrich context with user info
@@ -88,7 +98,9 @@ export function createIamService(
       return evaluatePermissions(permissions, resource, action, evaluationMode, enrichedContext);
     },
 
-    getUserPermissions: adapter.getUserPermissions,
+    async getUserPermissions(userId: number, tenantId?: string): Promise<Permission[]> {
+      return adapter.getUserPermissions(userId, tenantId);
+    },
 
     async createRole(name: string, permissions: PermissionInput[], description?: string): Promise<Role> {
       const role = await db.create<Role>({
@@ -126,93 +138,90 @@ export function createIamService(
       emit({ eventType: 'ROLE_DELETED', targetId: roleId, targetType: 'role' });
     },
 
-    async bindRole(subjectType: SubjectType, subjectId: number, roleId: number): Promise<void> {
+    async bindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string): Promise<void> {
       await db.create({
         model: 'role_binding',
-        data: { roleId, subjectType, subjectId },
+        data: { roleId, subjectType, subjectId, tenantId: tenantId ?? null },
       });
-      emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId } });
+      emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId, tenantId } });
     },
 
-    async bindRoleToUser(userId: number, roleId: number): Promise<void> {
+    async bindRoleToUser(userId: number, roleId: number, tenantId?: string): Promise<void> {
       await db.create({
         model: 'role_binding',
-        data: { roleId, subjectType: 'USER', subjectId: userId },
+        data: { roleId, subjectType: 'USER', subjectId: userId, tenantId: tenantId ?? null },
       });
       cache?.invalidate(userId);
-      emit({ eventType: 'ROLE_BOUND', actorId: userId, targetId: roleId, targetType: 'role', metadata: { subjectType: 'USER' } });
+      emit({ eventType: 'ROLE_BOUND', actorId: userId, targetId: roleId, targetType: 'role', metadata: { subjectType: 'USER', tenantId } });
     },
 
-    async bindRoleToGroup(groupId: number, roleId: number): Promise<void> {
+    async bindRoleToGroup(groupId: number, roleId: number, tenantId?: string): Promise<void> {
       await db.create({
         model: 'role_binding',
-        data: { roleId, subjectType: 'GROUP', subjectId: groupId },
+        data: { roleId, subjectType: 'GROUP', subjectId: groupId, tenantId: tenantId ?? null },
       });
       cache?.invalidateAll();
-      emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType: 'GROUP', groupId } });
+      emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType: 'GROUP', groupId, tenantId } });
     },
 
-    async unbindRole(subjectType: SubjectType, subjectId: number, roleId: number): Promise<void> {
-      await db.delete({
-        model: 'role_binding',
-        where: [
-          { field: 'roleId', operator: '=', value: roleId },
-          { field: 'subjectType', operator: '=', value: subjectType },
-          { field: 'subjectId', operator: '=', value: subjectId },
-        ],
-      });
+    async unbindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string): Promise<void> {
+      const where = [
+        { field: 'roleId' as const, operator: '=' as const, value: roleId },
+        { field: 'subjectType' as const, operator: '=' as const, value: subjectType },
+        { field: 'subjectId' as const, operator: '=' as const, value: subjectId },
+        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+      ];
+      await db.delete({ model: 'role_binding', where });
       if (subjectType === 'USER')
         cache?.invalidate(subjectId);
       else cache?.invalidateAll();
-      emit({ eventType: 'ROLE_UNBOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId } });
+      emit({ eventType: 'ROLE_UNBOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId, tenantId } });
     },
 
-    async bindPermissionToUser(userId: number, permission: PermissionInput): Promise<void> {
+    async bindPermissionToUser(userId: number, permission: PermissionInput, tenantId?: string): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
       await db.create({
         model: 'direct_permission_binding',
-        data: { permissionId: perm.id, subjectType: 'USER', subjectId: userId },
+        data: { permissionId: perm.id, subjectType: 'USER', subjectId: userId, tenantId: tenantId ?? null },
       });
       cache?.invalidate(userId);
-      emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'USER' } });
+      emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'USER', tenantId } });
     },
 
-    async bindPermissionToGroup(groupId: number, permission: PermissionInput): Promise<void> {
+    async bindPermissionToGroup(groupId: number, permission: PermissionInput, tenantId?: string): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
       await db.create({
         model: 'direct_permission_binding',
-        data: { permissionId: perm.id, subjectType: 'GROUP', subjectId: groupId },
+        data: { permissionId: perm.id, subjectType: 'GROUP', subjectId: groupId, tenantId: tenantId ?? null },
       });
       cache?.invalidateAll();
-      emit({ eventType: 'PERMISSION_CHANGED', targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'GROUP', groupId } });
+      emit({ eventType: 'PERMISSION_CHANGED', targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'GROUP', groupId, tenantId } });
     },
 
-    async unbindPermissionFromUser(userId: number, permissionId: number): Promise<void> {
-      await db.delete({
-        model: 'direct_permission_binding',
-        where: [
-          { field: 'permissionId', operator: '=', value: permissionId },
-          { field: 'subjectType', operator: '=', value: 'USER' },
-          { field: 'subjectId', operator: '=', value: userId },
-        ],
-      });
+    async unbindPermissionFromUser(userId: number, permissionId: number, tenantId?: string): Promise<void> {
+      const where = [
+        { field: 'permissionId' as const, operator: '=' as const, value: permissionId },
+        { field: 'subjectType' as const, operator: '=' as const, value: 'USER' },
+        { field: 'subjectId' as const, operator: '=' as const, value: userId },
+        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+      ];
+      await db.delete({ model: 'direct_permission_binding', where });
       cache?.invalidate(userId);
-      emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'USER' } });
+      emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'USER', tenantId } });
     },
 
-    async unbindPermissionFromGroup(groupId: number, permissionId: number): Promise<void> {
-      await db.delete({
-        model: 'direct_permission_binding',
-        where: [
-          { field: 'permissionId', operator: '=', value: permissionId },
-          { field: 'subjectType', operator: '=', value: 'GROUP' },
-          { field: 'subjectId', operator: '=', value: groupId },
-        ],
-      });
+    async unbindPermissionFromGroup(groupId: number, permissionId: number, tenantId?: string): Promise<void> {
+      const where = [
+        { field: 'permissionId' as const, operator: '=' as const, value: permissionId },
+        { field: 'subjectType' as const, operator: '=' as const, value: 'GROUP' },
+        { field: 'subjectId' as const, operator: '=' as const, value: groupId },
+        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+      ];
+      await db.delete({ model: 'direct_permission_binding', where });
       cache?.invalidateAll();
-      emit({ eventType: 'PERMISSION_CHANGED', targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'GROUP', groupId } });
+      emit({ eventType: 'PERMISSION_CHANGED', targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'GROUP', groupId, tenantId } });
     },
 
     async createGroup(name: string, description?: string): Promise<Group> {
