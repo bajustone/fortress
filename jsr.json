@@ -10,6 +10,7 @@
     "./drizzle": "./src/drizzle/index.ts",
     "./drizzle/pg": "./src/drizzle/pg/index.ts",
     "./hono": "./src/hono/index.ts",
+    "./express": "./src/express/index.ts",
     "./plugins/email-verification": "./src/plugins/email-verification/index.ts",
     "./plugins/api-key": "./src/plugins/api-key/index.ts",
     "./plugins/two-factor": "./src/plugins/two-factor/index.ts",
