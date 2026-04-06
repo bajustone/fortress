@@ -388,7 +388,8 @@ export function createAuthService(
         throw Errors.notFound('User not found');
       }
 
-      return user;
+      const { passwordHash: _, ...safeUser } = user as FortressUser & { passwordHash?: string };
+      return safeUser;
     },
 
     async createUser(data: CreateUserInput): Promise<FortressUser> {

@@ -8,8 +8,8 @@ const CREATE_TABLES_SQL = `
     name TEXT NOT NULL,
     password_hash TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_login_identifier (
@@ -25,13 +25,13 @@ const CREATE_TABLES_SQL = `
     token_hash TEXT NOT NULL UNIQUE,
     token_family TEXT NOT NULL,
     is_revoked INTEGER NOT NULL DEFAULT 0,
-    expires_at TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
     ip_address TEXT,
     user_agent TEXT,
     device_name TEXT,
-    last_active_at TEXT,
+    last_active_at INTEGER,
     fingerprint_hash TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_group (
@@ -85,18 +85,18 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     token TEXT NOT NULL,
     email TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    used_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_magic_link_token (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL,
     token TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    used_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_api_key (
@@ -106,10 +106,10 @@ const CREATE_TABLES_SQL = `
     key_hash TEXT NOT NULL UNIQUE,
     key_prefix TEXT NOT NULL,
     scopes TEXT,
-    expires_at TEXT,
-    last_used_at TEXT,
+    expires_at INTEGER,
+    last_used_at INTEGER,
     is_revoked INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_two_factor_secret (
@@ -117,7 +117,7 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL UNIQUE REFERENCES fortress_user(id) ON DELETE CASCADE,
     secret TEXT NOT NULL,
     is_enabled INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_backup_code (
@@ -125,16 +125,16 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     code_hash TEXT NOT NULL,
     is_used INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_trusted_device (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     device_hash TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    last_used_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    expires_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_social_account (
@@ -145,10 +145,10 @@ const CREATE_TABLES_SQL = `
     email TEXT,
     access_token TEXT,
     refresh_token TEXT,
-    token_expires_at TEXT,
+    token_expires_at INTEGER,
     profile TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_tenant (
@@ -156,8 +156,8 @@ const CREATE_TABLES_SQL = `
     name TEXT NOT NULL,
     tax_id TEXT NOT NULL UNIQUE,
     description TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_tenant_user (
@@ -174,7 +174,7 @@ const CREATE_TABLES_SQL = `
     name TEXT NOT NULL,
     redirect_uris TEXT NOT NULL,
     grant_types TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
@@ -186,9 +186,9 @@ const CREATE_TABLES_SQL = `
     scope TEXT,
     code_challenge TEXT,
     code_challenge_method TEXT,
-    expires_at TEXT NOT NULL,
-    used_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
@@ -197,8 +197,8 @@ const CREATE_TABLES_SQL = `
     client_id TEXT NOT NULL,
     user_id INTEGER,
     scope TEXT,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
@@ -209,8 +209,8 @@ const CREATE_TABLES_SQL = `
     state TEXT NOT NULL,
     code_challenge TEXT,
     code_challenge_method TEXT,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_user_scope_assignment (
@@ -218,22 +218,22 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     scope_name TEXT NOT NULL,
     scope_value TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_account_lockout (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     identifier TEXT NOT NULL UNIQUE,
     failed_attempts INTEGER NOT NULL DEFAULT 0,
-    last_failed_at TEXT,
-    locked_until TEXT,
+    last_failed_at INTEGER,
+    locked_until INTEGER,
     lockout_count INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    timestamp INTEGER NOT NULL DEFAULT (unixepoch()),
     event_type TEXT NOT NULL,
     actor_id INTEGER,
     actor_type TEXT NOT NULL DEFAULT 'USER',
@@ -244,7 +244,7 @@ const CREATE_TABLES_SQL = `
     outcome TEXT NOT NULL DEFAULT 'SUCCESS',
     metadata TEXT,
     previous_hash TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
@@ -253,7 +253,7 @@ const CREATE_TABLES_SQL = `
     events TEXT NOT NULL,
     secret TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   CREATE TABLE IF NOT EXISTS fortress_webhook_delivery (
@@ -263,10 +263,10 @@ const CREATE_TABLES_SQL = `
     payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
-    last_attempt_at TEXT,
-    next_retry_at TEXT,
+    last_attempt_at INTEGER,
+    next_retry_at INTEGER,
     response_status INTEGER,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 `;
 

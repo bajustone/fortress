@@ -139,6 +139,7 @@ describe('auth integration', () => {
     const user = await fortress.auth.me(created.id);
     expect(user.name).toBe('Grace');
     expect(user.email).toBe('grace@example.com');
+    expect((user as any).passwordHash).toBeUndefined();
   });
 });
 
