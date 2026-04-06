@@ -4,7 +4,34 @@ on:
     tags: ['v*']
 
 jobs:
-  publish:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run test
+      - run: bun run typecheck
+      - run: bun run lint
+
+  publish-jsr:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - name: Sync version from package.json to jsr.json
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          jq --arg v "$VERSION" '.version = $v' jsr.json > jsr.tmp && mv jsr.tmp jsr.json
+      - run: npx jsr publish --allow-slow-types
+
+  publish-npm:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -17,12 +44,6 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - uses: oven-sh/setup-bun@v2
       - run: bun install
-      - run: bun run test
-      - run: bun run typecheck
-      - run: bun run lint
-
-      # Publish to JSR
-      - run: npx jsr publish --allow-slow-types
       - run: bunx tsup
       - run: npm publish --access public
         env:
