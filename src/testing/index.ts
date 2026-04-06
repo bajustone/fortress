@@ -80,6 +80,13 @@ const CREATE_TABLES_SQL = `
     subject_id INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS fortress_direct_permission_binding (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    permission_id INTEGER NOT NULL REFERENCES fortress_permission(id) ON DELETE CASCADE,
+    subject_type TEXT NOT NULL,
+    subject_id INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,

@@ -28,6 +28,7 @@ function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema):
     role: schema.roles,
     role_permission: schema.rolePermissions,
     role_binding: schema.roleBindings,
+    direct_permission_binding: schema.directPermissionBindings,
     email_verification_token: schema.emailVerificationTokens,
     magic_link_token: schema.magicLinkTokens,
     api_key: schema.apiKeys,

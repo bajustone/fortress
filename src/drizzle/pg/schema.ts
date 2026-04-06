@@ -98,6 +98,15 @@ const roleBindings = pgTable('fortress_role_binding', {
   subjectId: integer('subject_id').notNull(),
 });
 
+// --- IAM: Direct Permission Bindings ---
+
+const directPermissionBindings = pgTable('fortress_direct_permission_binding', {
+  id: serial('id').primaryKey(),
+  permissionId: integer('permission_id').notNull().references(() => permissions.id, { onDelete: 'cascade' }),
+  subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'GROUP'
+  subjectId: integer('subject_id').notNull(),
+});
+
 // --- Plugins: Email Verification ---
 
 const emailVerificationTokens = pgTable('fortress_email_verification_token', {
@@ -325,6 +334,7 @@ export const fortressPgSchema = {
   roles,
   rolePermissions,
   roleBindings,
+  directPermissionBindings,
   emailVerificationTokens,
   magicLinkTokens,
   apiKeys,

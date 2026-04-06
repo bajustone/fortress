@@ -98,6 +98,15 @@ const roleBindings = sqliteTable('fortress_role_binding', {
   subjectId: integer('subject_id').notNull(),
 });
 
+// --- IAM: Direct Permission Bindings ---
+
+const directPermissionBindings = sqliteTable('fortress_direct_permission_binding', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  permissionId: integer('permission_id').notNull().references(() => permissions.id, { onDelete: 'cascade' }),
+  subjectType: text('subject_type').notNull(), // 'USER' | 'GROUP'
+  subjectId: integer('subject_id').notNull(),
+});
+
 // --- Plugins: Email Verification ---
 
 const emailVerificationTokens = sqliteTable('fortress_email_verification_token', {
@@ -325,6 +334,7 @@ export const fortressSchema = {
   roles,
   rolePermissions,
   roleBindings,
+  directPermissionBindings,
   emailVerificationTokens,
   magicLinkTokens,
   apiKeys,

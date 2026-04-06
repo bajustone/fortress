@@ -94,13 +94,23 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         const rows = await db.rawQuery<Permission>(
           `SELECT DISTINCT p.id, p.resource, p.action, p.effect, p.conditions, p.description
            FROM fortress_permission p
-           JOIN fortress_role_permission rp ON rp.permission_id = p.id
-           JOIN fortress_role_binding rb ON rb.role_id = rp.role_id
-           WHERE (rb.subject_type = 'USER' AND rb.subject_id = ?)
-              OR (rb.subject_type = 'GROUP' AND rb.subject_id IN (
-                SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
-              ))`,
-          [userId, userId],
+           WHERE p.id IN (
+             -- Role-based permissions
+             SELECT rp.permission_id FROM fortress_role_permission rp
+             JOIN fortress_role_binding rb ON rb.role_id = rp.role_id
+             WHERE (rb.subject_type = 'USER' AND rb.subject_id = ?)
+                OR (rb.subject_type = 'GROUP' AND rb.subject_id IN (
+                  SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
+                ))
+             UNION
+             -- Direct permission bindings
+             SELECT dpb.permission_id FROM fortress_direct_permission_binding dpb
+             WHERE (dpb.subject_type = 'USER' AND dpb.subject_id = ?)
+                OR (dpb.subject_type = 'GROUP' AND dpb.subject_id IN (
+                  SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
+                ))
+           )`,
+          [userId, userId, userId, userId],
         );
         return rows.map(r => ({
           ...r,
@@ -109,8 +119,15 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       }
 
       // Fallback: sequential findMany queries
-      // 1. Direct role bindings
-      const directBindings = await db.findMany<{ roleId: number }>({
+      // 1. Group memberships (shared by role-based and direct paths)
+      const groupMemberships = await db.findMany<{ groupId: number }>({
+        model: 'group_user',
+        where: [{ field: 'userId', operator: '=', value: userId }],
+      });
+      const groupIds = groupMemberships.map(m => m.groupId);
+
+      // 2. Role-based permission IDs
+      const directRoleBindings = await db.findMany<{ roleId: number }>({
         model: 'role_binding',
         where: [
           { field: 'subjectType', operator: '=', value: 'USER' },
@@ -118,17 +135,9 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         ],
       });
 
-      // 2. Group memberships
-      const groupMemberships = await db.findMany<{ groupId: number }>({
-        model: 'group_user',
-        where: [{ field: 'userId', operator: '=', value: userId }],
-      });
-
-      // 3. Role bindings for user's groups
-      let groupBindings: { roleId: number }[] = [];
-      if (groupMemberships.length > 0) {
-        const groupIds = groupMemberships.map(m => m.groupId);
-        groupBindings = await db.findMany<{ roleId: number }>({
+      let groupRoleBindings: { roleId: number }[] = [];
+      if (groupIds.length > 0) {
+        groupRoleBindings = await db.findMany<{ roleId: number }>({
           model: 'role_binding',
           where: [
             { field: 'subjectType', operator: '=', value: 'GROUP' },
@@ -137,29 +146,54 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         });
       }
 
-      // 4. Unique role IDs
       const roleIds = [...new Set([
-        ...directBindings.map(b => b.roleId),
-        ...groupBindings.map(b => b.roleId),
+        ...directRoleBindings.map(b => b.roleId),
+        ...groupRoleBindings.map(b => b.roleId),
       ])];
 
-      if (roleIds.length === 0)
-        return [];
+      let rolePermissionIds: number[] = [];
+      if (roleIds.length > 0) {
+        const rolePerms = await db.findMany<{ permissionId: number }>({
+          model: 'role_permission',
+          where: [{ field: 'roleId', operator: 'in', value: roleIds }],
+        });
+        rolePermissionIds = rolePerms.map(rp => rp.permissionId);
+      }
 
-      // 5. Role → permission mappings
-      const rolePermissions = await db.findMany<{ permissionId: number }>({
-        model: 'role_permission',
-        where: [{ field: 'roleId', operator: 'in', value: roleIds }],
+      // 3. Direct permission binding IDs
+      const directUserBindings = await db.findMany<{ permissionId: number }>({
+        model: 'direct_permission_binding',
+        where: [
+          { field: 'subjectType', operator: '=', value: 'USER' },
+          { field: 'subjectId', operator: '=', value: userId },
+        ],
       });
 
-      const permissionIds = [...new Set(rolePermissions.map(rp => rp.permissionId))];
-      if (permissionIds.length === 0)
+      let directGroupBindings: { permissionId: number }[] = [];
+      if (groupIds.length > 0) {
+        directGroupBindings = await db.findMany<{ permissionId: number }>({
+          model: 'direct_permission_binding',
+          where: [
+            { field: 'subjectType', operator: '=', value: 'GROUP' },
+            { field: 'subjectId', operator: 'in', value: groupIds },
+          ],
+        });
+      }
+
+      // 4. Merge and deduplicate permission IDs
+      const allPermissionIds = [...new Set([
+        ...rolePermissionIds,
+        ...directUserBindings.map(b => b.permissionId),
+        ...directGroupBindings.map(b => b.permissionId),
+      ])];
+
+      if (allPermissionIds.length === 0)
         return [];
 
-      // 6. Actual permissions
+      // 5. Fetch actual permissions
       return db.findMany<Permission>({
         model: 'permission',
-        where: [{ field: 'id', operator: 'in', value: permissionIds }],
+        where: [{ field: 'id', operator: 'in', value: allPermissionIds }],
       });
     },
 

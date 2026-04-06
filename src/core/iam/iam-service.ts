@@ -34,6 +34,10 @@ export interface IamService {
   bindRoleToUser: (userId: number, roleId: number) => Promise<void>;
   bindRoleToGroup: (groupId: number, roleId: number) => Promise<void>;
   unbindRole: (subjectType: SubjectType, subjectId: number, roleId: number) => Promise<void>;
+  bindPermissionToUser: (userId: number, permission: PermissionInput) => Promise<void>;
+  bindPermissionToGroup: (groupId: number, permission: PermissionInput) => Promise<void>;
+  unbindPermissionFromUser: (userId: number, permissionId: number) => Promise<void>;
+  unbindPermissionFromGroup: (groupId: number, permissionId: number) => Promise<void>;
   createGroup: (name: string, description?: string) => Promise<Group>;
   addUserToGroup: (groupId: number, userId: number) => Promise<void>;
   removeUserFromGroup: (groupId: number, userId: number) => Promise<void>;
@@ -161,6 +165,54 @@ export function createIamService(
         cache?.invalidate(subjectId);
       else cache?.invalidateAll();
       emit({ eventType: 'ROLE_UNBOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId } });
+    },
+
+    async bindPermissionToUser(userId: number, permission: PermissionInput): Promise<void> {
+      await adapter.ensureResource(permission.resource);
+      const perm = await adapter.findOrCreatePermission(permission);
+      await db.create({
+        model: 'direct_permission_binding',
+        data: { permissionId: perm.id, subjectType: 'USER', subjectId: userId },
+      });
+      cache?.invalidate(userId);
+      emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'USER' } });
+    },
+
+    async bindPermissionToGroup(groupId: number, permission: PermissionInput): Promise<void> {
+      await adapter.ensureResource(permission.resource);
+      const perm = await adapter.findOrCreatePermission(permission);
+      await db.create({
+        model: 'direct_permission_binding',
+        data: { permissionId: perm.id, subjectType: 'GROUP', subjectId: groupId },
+      });
+      cache?.invalidateAll();
+      emit({ eventType: 'PERMISSION_CHANGED', targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'GROUP', groupId } });
+    },
+
+    async unbindPermissionFromUser(userId: number, permissionId: number): Promise<void> {
+      await db.delete({
+        model: 'direct_permission_binding',
+        where: [
+          { field: 'permissionId', operator: '=', value: permissionId },
+          { field: 'subjectType', operator: '=', value: 'USER' },
+          { field: 'subjectId', operator: '=', value: userId },
+        ],
+      });
+      cache?.invalidate(userId);
+      emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'USER' } });
+    },
+
+    async unbindPermissionFromGroup(groupId: number, permissionId: number): Promise<void> {
+      await db.delete({
+        model: 'direct_permission_binding',
+        where: [
+          { field: 'permissionId', operator: '=', value: permissionId },
+          { field: 'subjectType', operator: '=', value: 'GROUP' },
+          { field: 'subjectId', operator: '=', value: groupId },
+        ],
+      });
+      cache?.invalidateAll();
+      emit({ eventType: 'PERMISSION_CHANGED', targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'GROUP', groupId } });
     },
 
     async createGroup(name: string, description?: string): Promise<Group> {
