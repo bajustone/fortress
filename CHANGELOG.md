@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.23] - 2026-04-07
+
+### Added
+- feat(hono): add typed validation helpers and unmatched route warnings
+
 ## [0.0.23] - 2026-04-08
 
 ### Added
