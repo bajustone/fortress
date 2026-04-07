@@ -1,30 +1,129 @@
 /**
  * Example Hono app using Fortress
  *
- * Demonstrates: registration, login, token refresh, RBAC, 2FA, audit log,
- * and OAuth server endpoints.
+ * Demonstrates EVERY feature Fortress offers:
  *
- * Run: bun run dev
- * Or:  bun run examples/hono-app/index.ts
+ *   Core: registration, login, logout, token refresh, sessions, impersonation,
+ *         RBAC (roles, groups, permissions), password policy
+ *
+ *   Plugins: rate-limit, account-lockout, email-verification, two-factor,
+ *            magic-link, api-key, social-login, tenancy, data-isolation,
+ *            audit-log, webhook, oauth
+ *
+ *   Middleware: auth, RBAC, CSRF, security headers
+ *
+ *   Helpers: getUserId, getClaims, getDb, getScopedDb
+ *
+ * Run:  bun run dev
+ * Or:   bun run examples/hono-app/index.ts
  */
 import { Hono } from 'hono';
 import { createFortress } from '../../src';
-import { createHonoMiddleware, getUserId, mountPluginRoutes } from '../../src/hono';
+import {
+  createCsrfMiddleware,
+  createHonoMiddleware,
+  createSecurityHeadersMiddleware,
+  getClaims,
+  getDb,
+  getScopedDb,
+  getUserId,
+  mountPluginRoutes,
+} from '../../src/hono';
+import { accountLockout } from '../../src/plugins/account-lockout';
+import { apiKey } from '../../src/plugins/api-key';
 import { auditLog } from '../../src/plugins/audit-log';
+import { dataIsolation } from '../../src/plugins/data-isolation';
+import { emailVerification } from '../../src/plugins/email-verification';
+import { magicLink } from '../../src/plugins/magic-link';
 import { oauth } from '../../src/plugins/oauth';
+import { rateLimit } from '../../src/plugins/rate-limit';
+import { socialLogin } from '../../src/plugins/social-login';
+import { tenancy } from '../../src/plugins/tenancy';
 import { twoFactor } from '../../src/plugins/two-factor';
+import { webhook } from '../../src/plugins/webhook';
 import { createTestAdapter } from '../../src/testing';
 
-// --- 1. Create Fortress instance ---
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. Create Fortress instance with ALL plugins
+// ═══════════════════════════════════════════════════════════════════════════
 
 const db = createTestAdapter();
 
 const fortress = createFortress({
-  jwt: { secret: 'dev-secret-minimum-32-bytes-long!' },
+  jwt: {
+    secret: 'dev-secret-minimum-32-bytes-long!',
+    // secret: ['new-secret-32-bytes-minimum!!!!!!', 'old-secret-32-bytes-minimum!!!!!!'],  // ← secret rotation
+    accessTokenExpirySeconds: 900,
+    refreshTokenExpirySeconds: 604800,
+  },
   database: db,
+  passwordPolicy: { minLength: 10 },
+
+  // Plugin order matters — hooks run in array order
   plugins: [
+    // ── Gate plugins (reject early) ──
+    rateLimit({
+      login: { maxPerIp: 100, maxPerAccount: 10, windowSeconds: 60 },
+      register: { maxPerIp: 50, windowSeconds: 60 },
+    }),
+    accountLockout({
+      maxFailedAttempts: 3,
+      lockoutDurationSeconds: 60,
+      escalation: true,
+    }),
+    emailVerification({
+      requireVerification: false, // set true in production
+      onSendVerification: async (email, token, userId) => {
+        console.warn(`[email-verification] userId=${userId} email=${email} token=${token}`);
+      },
+    }),
+
+    // ── Auth enhancement plugins ──
     twoFactor({ totp: { issuer: 'Fortress Example' } }),
+    magicLink({
+      onSendMagicLink: async (email, token) => {
+        console.warn(`[magic-link] email=${email} token=${token}`);
+      },
+    }),
+    apiKey({ prefix: 'fortress', maxKeysPerUser: 5 }),
+    socialLogin({
+      providers: [
+        // Placeholder credentials — shows the config API but won't complete real OAuth flows
+        { name: 'google', clientId: 'GOOGLE_CLIENT_ID', clientSecret: 'GOOGLE_SECRET' },
+        { name: 'github', clientId: 'GITHUB_CLIENT_ID', clientSecret: 'GITHUB_SECRET' },
+      ],
+    }),
+
+    // ── Multi-tenancy & data isolation ──
+    tenancy(),
+    dataIsolation({
+      scopes: [{
+        name: 'org',
+        field: 'orgId',
+        models: ['document'],
+        resolveValue: async (userId, ctx) => {
+          const assignment = await ctx.db.findOne<{ scopeValue: string }>({
+            model: 'user_scope_assignment',
+            where: [
+              { field: 'userId', operator: '=', value: userId },
+              { field: 'scopeName', operator: '=', value: 'org' },
+            ],
+          });
+          return assignment?.scopeValue ?? null;
+        },
+      }],
+    }),
+
+    // ── Observability plugins (log last) ──
     auditLog({ hashChain: true }),
+    webhook({
+      deliver: async (url, payload, headers) => {
+        console.warn(`[webhook] → ${url}`, JSON.parse(payload), headers);
+        return true;
+      },
+    }),
+
+    // ── OAuth server ──
     oauth({
       issuerUrl: 'http://localhost:3000',
       scopePermissionMap: {
@@ -34,30 +133,52 @@ const fortress = createFortress({
   ],
 });
 
-// Type-safe plugin access — no casting needed (2A)
-// fortress.plugins['two-factor'].enable(userId) ← fully typed
-
-// --- 2. Create Hono app + middleware ---
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. Create Hono app + middleware
+// ═══════════════════════════════════════════════════════════════════════════
 
 const app = new Hono();
 
 const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fortress, {
   routeMap: {
+    // User management
     'GET /api/users': { resource: 'user', action: 'list' },
     'POST /api/users': { resource: 'user', action: 'create' },
+    // Groups
+    'POST /api/groups': { resource: 'group', action: 'create' },
+    'POST /api/groups/:id/members': { resource: 'group', action: 'manage' },
+    'DELETE /api/groups/:id/members/:userId': { resource: 'group', action: 'manage' },
+    // Audit log
+    'GET /api/audit-log': { resource: 'audit-log', action: 'read' },
+    'POST /api/audit-log/verify-chain': { resource: 'audit-log', action: 'read' },
+    // Webhooks
+    'POST /api/webhooks': { resource: 'webhook', action: 'manage' },
+    'GET /api/webhooks': { resource: 'webhook', action: 'manage' },
+    'DELETE /api/webhooks/:id': { resource: 'webhook', action: 'manage' },
+    // Admin
+    'POST /admin/impersonate': { resource: 'user', action: 'impersonate' },
+    'GET /admin/lockout/:identifier': { resource: 'lockout', action: 'read' },
+    'POST /admin/lockout/:identifier/reset': { resource: 'lockout', action: 'manage' },
   },
-  skipPaths: ['/health', '/auth/*'],
+  skipPaths: ['/health', '/auth/*', '/magic-link/*', '/email/*', '/social/*'],
 });
 
+// Global middleware
+app.use('*', createSecurityHeadersMiddleware());
+app.use('*', createCsrfMiddleware({
+  skipPaths: ['/auth', '/oauth', '/magic-link', '/email', '/social', '/health'],
+}));
 app.onError(errorHandler);
 
-// --- 3. Public routes ---
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. Public routes
+// ═══════════════════════════════════════════════════════════════════════════
 
 // curl http://localhost:3000/health
 app.get('/health', c => c.json({ status: 'ok' }));
 
 // curl -X POST http://localhost:3000/auth/register -H 'Content-Type: application/json' \
-//   -d '{"email":"user@example.com","password":"password-at-least-8","name":"Test User"}'
+//   -d '{"email":"new@example.com","password":"MyPassword123!","name":"New User"}'
 app.post('/auth/register', async (c) => {
   const { email, password, name } = await c.req.json();
   const user = await fortress.auth.createUser({ email, password, name });
@@ -65,7 +186,7 @@ app.post('/auth/register', async (c) => {
 });
 
 // curl -X POST http://localhost:3000/auth/login -H 'Content-Type: application/json' \
-//   -d '{"identifier":"admin@example.com","password":"admin-password-123!"}'
+//   -d '{"identifier":"admin@example.com","password":"Password123!"}'
 app.post('/auth/login', async (c) => {
   const { identifier, password } = await c.req.json();
   const result = await fortress.auth.login(identifier, password, {
@@ -83,17 +204,108 @@ app.post('/auth/refresh', async (c) => {
   return c.json({ data: result });
 });
 
-// --- 4. Protected routes (require JWT) ---
+// curl -X POST http://localhost:3000/auth/logout -H 'Content-Type: application/json' \
+//   -d '{"refreshToken":"<token>"}'
+app.post('/auth/logout', async (c) => {
+  const { refreshToken } = await c.req.json();
+  await fortress.auth.logout(refreshToken);
+  return c.json({ data: { loggedOut: true } });
+});
+
+// ── Magic Link (passwordless login) ──
+
+// curl -X POST http://localhost:3000/magic-link/send -H 'Content-Type: application/json' \
+//   -d '{"email":"admin@example.com"}'
+// (token is logged to console — copy it for the verify step)
+app.post('/magic-link/send', async (c) => {
+  const { email } = await c.req.json();
+  const result = await fortress.plugins['magic-link'].sendMagicLink(email);
+  return c.json({ data: result });
+});
+
+// curl -X POST http://localhost:3000/magic-link/verify -H 'Content-Type: application/json' \
+//   -d '{"token":"<token-from-console>"}'
+app.post('/magic-link/verify', async (c) => {
+  const { token } = await c.req.json();
+  const result = await fortress.plugins['magic-link'].verifyMagicLink(token);
+  return c.json({ data: result });
+});
+
+// ── Email Verification ──
+
+// curl -X POST http://localhost:3000/email/verify -H 'Content-Type: application/json' \
+//   -d '{"token":"<token-from-console>"}'
+app.post('/email/verify', async (c) => {
+  const { token } = await c.req.json();
+  const result = await fortress.plugins['email-verification'].verify(token);
+  return c.json({ data: result });
+});
+
+// ── Social Login ──
+
+// curl http://localhost:3000/social/providers
+app.get('/social/providers', (c) => {
+  const providers = fortress.plugins['social-login'].getProviders();
+  return c.json({ data: providers });
+});
+
+// curl 'http://localhost:3000/social/authorize/google?redirect_uri=http://localhost:3000/callback'
+// (returns authorization URL — in a real app you'd redirect the browser)
+app.get('/social/authorize/:provider', async (c) => {
+  const provider = c.req.param('provider');
+  const redirectUri = c.req.query('redirect_uri') ?? 'http://localhost:3000/callback';
+  const result = await fortress.plugins['social-login'].getAuthorizationUrl(provider, redirectUri);
+  return c.json({ data: result });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. Protected auth routes (require JWT)
+// ═══════════════════════════════════════════════════════════════════════════
 
 app.use('/auth/me', authMiddleware);
+app.use('/auth/sessions/*', authMiddleware);
+app.use('/auth/sessions', authMiddleware);
 app.use('/auth/2fa/*', authMiddleware);
+app.use('/auth/email/*', authMiddleware);
+app.use('/auth/api-keys/*', authMiddleware);
+app.use('/auth/api-keys', authMiddleware);
+app.use('/auth/social/*', authMiddleware);
 
 // curl http://localhost:3000/auth/me -H 'Authorization: Bearer <token>'
 app.get('/auth/me', async (c) => {
   const userId = getUserId(c);
-  const user = await db.findOne({ model: 'user', where: [{ field: 'id', operator: '=', value: userId }] });
-  return c.json({ data: user });
+  const claims = getClaims(c);
+  const user = await fortress.auth.me(userId);
+  return c.json({ data: { user, claims } });
 });
+
+// ── Sessions ──
+
+// curl http://localhost:3000/auth/sessions -H 'Authorization: Bearer <token>'
+app.get('/auth/sessions', async (c) => {
+  const userId = getUserId(c);
+  const sessions = await fortress.auth.listSessions(userId);
+  return c.json({ data: sessions });
+});
+
+// curl -X DELETE http://localhost:3000/auth/sessions/1 -H 'Authorization: Bearer <token>'
+app.delete('/auth/sessions/:id', async (c) => {
+  const userId = getUserId(c);
+  const tokenId = Number(c.req.param('id'));
+  await fortress.auth.revokeSession(userId, tokenId);
+  return c.json({ data: { revoked: true } });
+});
+
+// curl -X DELETE http://localhost:3000/auth/sessions -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -d '{"currentTokenId":1}'
+app.delete('/auth/sessions', async (c) => {
+  const userId = getUserId(c);
+  const { currentTokenId } = await c.req.json();
+  await fortress.auth.revokeAllOtherSessions(userId, currentTokenId);
+  return c.json({ data: { revokedOthers: true } });
+});
+
+// ── Two-Factor Auth ──
 
 // curl -X POST http://localhost:3000/auth/2fa/enable -H 'Authorization: Bearer <token>'
 app.post('/auth/2fa/enable', async (c) => {
@@ -113,52 +325,354 @@ app.post('/auth/2fa/verify', async (c) => {
   return c.json({ data: result });
 });
 
-// --- 5. RBAC-protected routes ---
+// curl -X POST http://localhost:3000/auth/2fa/disable -H 'Authorization: Bearer <token>'
+app.post('/auth/2fa/disable', async (c) => {
+  const userId = getUserId(c);
+  await fortress.plugins['two-factor'].disable(userId);
+  return c.json({ data: { disabled: true } });
+});
 
-app.use('/api/*', authMiddleware);
-app.use('/api/*', rbacMiddleware);
+// ── Email Verification (resend) ──
+
+// curl -X POST http://localhost:3000/auth/email/send-verification -H 'Authorization: Bearer <token>'
+// (token is logged to console)
+app.post('/auth/email/send-verification', async (c) => {
+  const userId = getUserId(c);
+  const result = await fortress.plugins['email-verification'].sendVerification(userId);
+  return c.json({ data: result });
+});
+
+// ── API Keys ──
+
+// curl -X POST http://localhost:3000/auth/api-keys -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -d '{"name":"My CI Key","scopes":["read:users"]}'
+app.post('/auth/api-keys', async (c) => {
+  const userId = getUserId(c);
+  const { name, scopes } = await c.req.json();
+  const result = await fortress.plugins['api-key'].createKey(userId, { name, scopes });
+  return c.json({ data: result }, 201);
+});
+
+// curl http://localhost:3000/auth/api-keys -H 'Authorization: Bearer <token>'
+app.get('/auth/api-keys', async (c) => {
+  const userId = getUserId(c);
+  const keys = await fortress.plugins['api-key'].listKeys(userId);
+  return c.json({ data: keys });
+});
+
+// curl -X DELETE http://localhost:3000/auth/api-keys/1 -H 'Authorization: Bearer <token>'
+app.delete('/auth/api-keys/:id', async (c) => {
+  const userId = getUserId(c);
+  const keyId = Number(c.req.param('id'));
+  await fortress.plugins['api-key'].revokeKey(userId, keyId);
+  return c.json({ data: { revoked: true } });
+});
+
+// curl -X POST http://localhost:3000/auth/api-keys/1/rotate -H 'Authorization: Bearer <token>'
+app.post('/auth/api-keys/:id/rotate', async (c) => {
+  const userId = getUserId(c);
+  const keyId = Number(c.req.param('id'));
+  const result = await fortress.plugins['api-key'].rotateKey(userId, keyId);
+  return c.json({ data: result });
+});
+
+// ── Social Login (linked accounts) ──
+
+// curl http://localhost:3000/auth/social/accounts -H 'Authorization: Bearer <token>'
+app.get('/auth/social/accounts', async (c) => {
+  const userId = getUserId(c);
+  const accounts = await fortress.plugins['social-login'].getLinkedAccounts(userId);
+  return c.json({ data: accounts });
+});
+
+// curl -X DELETE http://localhost:3000/auth/social/accounts/google -H 'Authorization: Bearer <token>'
+app.delete('/auth/social/accounts/:provider', async (c) => {
+  const userId = getUserId(c);
+  const provider = c.req.param('provider');
+  await fortress.plugins['social-login'].unlinkAccount(userId, provider);
+  return c.json({ data: { unlinked: true } });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. Tenant routes (require JWT)
+// ═══════════════════════════════════════════════════════════════════════════
+
+app.use('/api/tenants/*', authMiddleware);
+app.use('/api/tenants', authMiddleware);
+
+// curl -X POST http://localhost:3000/api/tenants -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -d '{"name":"Acme Corp","taxId":"acme"}'
+app.post('/api/tenants', async (c) => {
+  const { name, taxId, description } = await c.req.json();
+  const tenant = await fortress.plugins.tenancy.createTenant({ name, taxId, description });
+  return c.json({ data: tenant }, 201);
+});
+
+// curl http://localhost:3000/api/tenants -H 'Authorization: Bearer <token>'
+app.get('/api/tenants', async (c) => {
+  const userId = getUserId(c);
+  const tenants = await fortress.plugins.tenancy.getUserTenants(userId);
+  return c.json({ data: tenants });
+});
+
+// curl -X POST http://localhost:3000/api/tenants/switch -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -d '{"taxId":"acme"}'
+app.post('/api/tenants/switch', async (c) => {
+  const userId = getUserId(c);
+  const { taxId } = await c.req.json();
+  await fortress.plugins.tenancy.switchTenant(userId, taxId);
+  return c.json({ data: { switched: true } });
+});
+
+// curl -X POST http://localhost:3000/api/tenants/1/members -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -d '{"userId":2}'
+app.post('/api/tenants/:id/members', async (c) => {
+  const tenantId = Number(c.req.param('id'));
+  const { userId } = await c.req.json();
+  await fortress.plugins.tenancy.addUserToTenant(userId, tenantId);
+  return c.json({ data: { added: true } });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6. RBAC-protected routes (require JWT + permissions)
+// ═══════════════════════════════════════════════════════════════════════════
+
+app.use('/api/users', authMiddleware);
+app.use('/api/groups/*', authMiddleware);
+app.use('/api/groups', authMiddleware);
+app.use('/api/users', rbacMiddleware);
+app.use('/api/groups/*', rbacMiddleware);
+app.use('/api/groups', rbacMiddleware);
 
 // curl http://localhost:3000/api/users -H 'Authorization: Bearer <token>'
 app.get('/api/users', async (c) => {
-  const users = await db.findMany({ model: 'user' });
+  // getDb() returns the request-scoped adapter (tenant-aware when tenancy plugin is active)
+  const reqDb = getDb(c);
+  const users = await reqDb.findMany({ model: 'user' });
   return c.json({ data: users });
 });
 
 // curl -X POST http://localhost:3000/api/users -H 'Authorization: Bearer <token>' \
-//   -H 'Content-Type: application/json' -d '{"email":"new@example.com","name":"New User"}'
+//   -H 'Content-Type: application/json' -H 'X-Fortress-CSRF: 1' \
+//   -d '{"email":"new@example.com","name":"New User"}'
 app.post('/api/users', async (c) => {
   const body = await c.req.json();
-  const user = await fortress.auth.createUser({ ...body, password: 'temp-password-123!' });
+  const user = await fortress.auth.createUser({ ...body, password: 'TempPassword123!' });
   return c.json({ data: user }, 201);
 });
 
-// --- 6. Mount OAuth server endpoints ---
+// ── Groups ──
+
+// curl -X POST http://localhost:3000/api/groups -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -H 'X-Fortress-CSRF: 1' \
+//   -d '{"name":"engineering","description":"Engineering team"}'
+app.post('/api/groups', async (c) => {
+  const { name, description } = await c.req.json();
+  const group = await fortress.iam.createGroup(name, description);
+  return c.json({ data: group }, 201);
+});
+
+// curl -X POST http://localhost:3000/api/groups/1/members -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -H 'X-Fortress-CSRF: 1' -d '{"userId":2}'
+app.post('/api/groups/:id/members', async (c) => {
+  const groupId = Number(c.req.param('id'));
+  const { userId } = await c.req.json();
+  await fortress.iam.addUserToGroup(groupId, userId);
+  return c.json({ data: { added: true } });
+});
+
+// curl -X DELETE http://localhost:3000/api/groups/1/members/2 -H 'Authorization: Bearer <token>'
+app.delete('/api/groups/:id/members/:userId', async (c) => {
+  const groupId = Number(c.req.param('id'));
+  const userId = Number(c.req.param('userId'));
+  await fortress.iam.removeUserFromGroup(groupId, userId);
+  return c.json({ data: { removed: true } });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7. Admin routes (require JWT + elevated permissions)
+// ═══════════════════════════════════════════════════════════════════════════
+
+app.use('/api/audit-log/*', authMiddleware);
+app.use('/api/audit-log', authMiddleware);
+app.use('/api/webhooks/*', authMiddleware);
+app.use('/api/webhooks', authMiddleware);
+app.use('/admin/*', authMiddleware);
+app.use('/api/audit-log/*', rbacMiddleware);
+app.use('/api/audit-log', rbacMiddleware);
+app.use('/api/webhooks/*', rbacMiddleware);
+app.use('/api/webhooks', rbacMiddleware);
+app.use('/admin/*', rbacMiddleware);
+
+// ── Audit Log ──
+
+// curl 'http://localhost:3000/api/audit-log?limit=20' -H 'Authorization: Bearer <token>'
+app.get('/api/audit-log', async (c) => {
+  const options: Record<string, unknown> = {};
+  const userId = c.req.query('userId');
+  const eventType = c.req.query('eventType');
+  const limit = c.req.query('limit');
+  if (userId)
+    options.userId = Number(userId);
+  if (eventType)
+    options.eventType = eventType;
+  if (limit)
+    options.limit = Number(limit);
+  const entries = await fortress.plugins['audit-log'].getAuditLog(options);
+  return c.json({ data: entries });
+});
+
+// curl -X POST http://localhost:3000/api/audit-log/verify-chain -H 'Authorization: Bearer <token>' \
+//   -H 'X-Fortress-CSRF: 1'
+app.post('/api/audit-log/verify-chain', async (c) => {
+  const result = await fortress.plugins['audit-log'].verifyChain();
+  return c.json({ data: result });
+});
+
+// ── Impersonation ──
+
+// curl -X POST http://localhost:3000/admin/impersonate -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -H 'X-Fortress-CSRF: 1' -d '{"targetUserId":2}'
+app.post('/admin/impersonate', async (c) => {
+  const adminId = getUserId(c);
+  const { targetUserId, reason } = await c.req.json();
+  const result = await fortress.auth.impersonate(adminId, targetUserId, { reason });
+  return c.json({ data: result });
+});
+
+// ── Account Lockout ──
+
+// curl http://localhost:3000/admin/lockout/user@example.com -H 'Authorization: Bearer <token>'
+app.get('/admin/lockout/:identifier', async (c) => {
+  const identifier = c.req.param('identifier');
+  const status = await fortress.plugins['account-lockout'].getLockoutStatus(identifier);
+  return c.json({ data: status });
+});
+
+// curl -X POST http://localhost:3000/admin/lockout/user@example.com/reset \
+//   -H 'Authorization: Bearer <token>' -H 'X-Fortress-CSRF: 1'
+app.post('/admin/lockout/:identifier/reset', async (c) => {
+  const identifier = c.req.param('identifier');
+  await fortress.plugins['account-lockout'].resetLockout(identifier);
+  return c.json({ data: { reset: true } });
+});
+
+// ── Webhooks ──
+
+// curl -X POST http://localhost:3000/api/webhooks -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -H 'X-Fortress-CSRF: 1' \
+//   -d '{"url":"https://example.com/hook","events":["LOGIN_SUCCESS","REGISTER"],"secret":"wh-secret"}'
+app.post('/api/webhooks', async (c) => {
+  const { url, events, secret } = await c.req.json();
+  const endpoint = await fortress.plugins.webhook.registerEndpoint(url, events, secret);
+  return c.json({ data: endpoint }, 201);
+});
+
+// curl http://localhost:3000/api/webhooks -H 'Authorization: Bearer <token>'
+app.get('/api/webhooks', async (c) => {
+  const endpoints = await fortress.plugins.webhook.listEndpoints();
+  return c.json({ data: endpoints });
+});
+
+// curl -X DELETE http://localhost:3000/api/webhooks/1 -H 'Authorization: Bearer <token>'
+app.delete('/api/webhooks/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  await fortress.plugins.webhook.removeEndpoint(id);
+  return c.json({ data: { removed: true } });
+});
+
+// ── Data Isolation (demonstrates getScopedDb) ──
+
+app.use('/api/documents', authMiddleware);
+
+// curl http://localhost:3000/api/documents -H 'Authorization: Bearer <token>'
+// getScopedDb() applies row-level isolation — queries are automatically filtered
+// by the user's org scope (configured in the dataIsolation plugin above).
+app.get('/api/documents', async (c) => {
+  const scopedDb = await getScopedDb(c, 'document');
+  const docs = await scopedDb.findMany({ model: 'document' });
+  return c.json({ data: docs });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 8. Mount OAuth server endpoints
+// ═══════════════════════════════════════════════════════════════════════════
+
 // POST /oauth/token, POST /oauth/introspect, POST /oauth/revoke,
 // GET /oauth/userinfo, GET /oauth/.well-known/openid-configuration
 mountPluginRoutes(app, fortress);
 
-// --- 7. Seed data on startup ---
+// ═══════════════════════════════════════════════════════════════════════════
+// 9. Seed data on startup
+// ═══════════════════════════════════════════════════════════════════════════
 
 async function seed(): Promise<void> {
-  // Create admin user
+  // Create users
   const admin = await fortress.auth.createUser({
     email: 'admin@example.com',
-    password: 'admin-password-123!',
+    password: 'Password123!',
     name: 'Admin User',
   });
+  const user = await fortress.auth.createUser({
+    email: 'user@example.com',
+    password: 'Password123!',
+    name: 'Regular User',
+  });
 
-  // Create role with permissions
+  // Mark emails as verified
+  await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: admin.id }], data: { emailVerified: true } });
+  await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: user.id }], data: { emailVerified: true } });
+
+  // Create roles with permissions
   const adminRole = await fortress.iam.createRole('admin', [
     { resource: 'user', action: 'list' },
     { resource: 'user', action: 'create' },
     { resource: 'user', action: 'read' },
-  ], 'Full access');
+    { resource: 'user', action: 'impersonate' },
+    { resource: 'group', action: 'create' },
+    { resource: 'group', action: 'manage' },
+    { resource: 'audit-log', action: 'read' },
+    { resource: 'webhook', action: 'manage' },
+    { resource: 'lockout', action: 'read' },
+    { resource: 'lockout', action: 'manage' },
+  ], 'Full admin access');
 
-  // Bind role to admin user
+  const viewerRole = await fortress.iam.createRole('viewer', [
+    { resource: 'user', action: 'list' },
+    { resource: 'user', action: 'read' },
+  ], 'Read-only access');
+
+  // Bind roles
   await fortress.iam.bindRole('user', admin.id, adminRole.id);
+  await fortress.iam.bindRole('user', user.id, viewerRole.id);
 
-  console.warn('Seeded admin user: admin@example.com / admin-password-123!');
-  console.warn('Fortress example app running on http://localhost:3000');
+  // Create a group and add admin
+  const engineering = await fortress.iam.createGroup('engineering', 'Engineering team');
+  await fortress.iam.addUserToGroup(engineering.id, admin.id);
+
+  // Create a tenant and add admin
+  const tenant = await fortress.plugins.tenancy.createTenant({ name: 'Acme Corp', taxId: 'acme' });
+  await fortress.plugins.tenancy.addUserToTenant(admin.id, tenant.id);
+
+  // Register a webhook endpoint
+  await fortress.plugins.webhook.registerEndpoint(
+    'https://example.com/webhooks',
+    ['LOGIN_SUCCESS', 'REGISTER'],
+    'webhook-signing-secret',
+  );
+
+  console.warn('');
+  console.warn('╔══════════════════════════════════════════════╗');
+  console.warn('║  Fortress Example App                        ║');
+  console.warn('╠══════════════════════════════════════════════╣');
+  console.warn('║  Admin:  admin@example.com / Password123!    ║');
+  console.warn('║  User:   user@example.com  / Password123!    ║');
+  console.warn('║  Tenant: Acme Corp (taxId: acme)             ║');
+  console.warn('║  Group:  engineering                          ║');
+  console.warn('╠══════════════════════════════════════════════╣');
+  console.warn('║  http://localhost:3000                        ║');
+  console.warn('╚══════════════════════════════════════════════╝');
+  console.warn('');
 }
 
 seed().catch(console.error);
