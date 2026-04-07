@@ -278,6 +278,26 @@ const CREATE_TABLES_SQL = `
     response_status INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS fortress_webauthn_credential (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    credential_id TEXT NOT NULL UNIQUE,
+    public_key TEXT NOT NULL,
+    counter INTEGER NOT NULL DEFAULT 0,
+    device_type TEXT NOT NULL,
+    backed_up INTEGER NOT NULL DEFAULT 0,
+    transports TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_webauthn_challenge (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    challenge TEXT NOT NULL UNIQUE,
+    user_id INTEGER,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `;
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';

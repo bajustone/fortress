@@ -102,7 +102,7 @@ src/
     audit-log/index.ts                  # Append-only event logging with optional hash chain
     webhook/index.ts                    # Standard Webhooks spec (HMAC-SHA256, retries)
     magic-link/index.ts                 # Passwordless token-based auth
-    webauthn/index.ts                   # Passkeys/WebAuthn (stub — architecture done, crypto deferred)
+    webauthn/index.ts                   # Passkeys/WebAuthn (registration, passwordless auth, 2FA mode)
 
 bin/
   fortress.ts                           # CLI tool: init, sync:push, sync:pull, sync:types, generate-secret
@@ -1584,7 +1584,7 @@ const Errors = {
 | `@bajustone/fortress/plugins/rate-limit` | `rateLimit()` plugin factory |
 | `@bajustone/fortress/plugins/audit-log` | `auditLog()` plugin factory |
 | `@bajustone/fortress/plugins/account-lockout` | `accountLockout()` plugin factory |
-| `@bajustone/fortress/plugins/webauthn` | `webauthn()` plugin factory (stub) |
+| `@bajustone/fortress/plugins/webauthn` | `webauthn()` plugin factory |
 | `@bajustone/fortress/plugins/magic-link` | `magicLink()` plugin factory |
 | `@bajustone/fortress/plugins/webhook` | `webhook()` plugin factory |
 

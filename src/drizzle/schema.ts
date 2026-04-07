@@ -326,6 +326,28 @@ const webhookDeliveries = sqliteTable('fortress_webhook_delivery', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
+// --- Plugins: WebAuthn ---
+
+const webauthnCredentials = sqliteTable('fortress_webauthn_credential', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  credentialId: text('credential_id').notNull().unique(),
+  publicKey: text('public_key').notNull(),
+  counter: integer('counter').notNull().default(0),
+  deviceType: text('device_type').notNull(),
+  backedUp: integer('backed_up', { mode: 'boolean' }).notNull().default(false),
+  transports: text('transports'), // JSON array
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
+const webauthnChallenges = sqliteTable('fortress_webauthn_challenge', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  challenge: text('challenge').notNull().unique(),
+  userId: integer('user_id'),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
 // --- All tables for easy iteration ---
 
 export const fortressSchema = {
@@ -358,4 +380,6 @@ export const fortressSchema = {
   auditLogs,
   webhookEndpoints,
   webhookDeliveries,
+  webauthnCredentials,
+  webauthnChallenges,
 };

@@ -326,6 +326,28 @@ const webhookDeliveries = pgTable('fortress_webhook_delivery', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
+// --- Plugins: WebAuthn ---
+
+const webauthnCredentials = pgTable('fortress_webauthn_credential', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  credentialId: text('credential_id').notNull().unique(),
+  publicKey: text('public_key').notNull(),
+  counter: integer('counter').notNull().default(0),
+  deviceType: varchar('device_type', { length: 20 }).notNull(),
+  backedUp: boolean('backed_up').notNull().default(false),
+  transports: text('transports'), // JSON array
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+const webauthnChallenges = pgTable('fortress_webauthn_challenge', {
+  id: serial('id').primaryKey(),
+  challenge: text('challenge').notNull().unique(),
+  userId: integer('user_id'),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
 // --- All tables for easy iteration ---
 
 export const fortressPgSchema = {
@@ -358,4 +380,6 @@ export const fortressPgSchema = {
   auditLogs,
   webhookEndpoints,
   webhookDeliveries,
+  webauthnCredentials,
+  webauthnChallenges,
 };

@@ -47,6 +47,8 @@ function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema):
     audit_log: schema.auditLogs,
     webhook_endpoint: schema.webhookEndpoints,
     webhook_delivery: schema.webhookDeliveries,
+    webauthn_credential: schema.webauthnCredentials,
+    webauthn_challenge: schema.webauthnChallenges,
   };
 }
 
