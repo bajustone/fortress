@@ -2,209 +2,305 @@
 
 ## Overview
 
-Fortress is a framework-agnostic, adapter-based authentication and authorization library for TypeScript. The core provides auth (JWT, refresh tokens, password hashing) and IAM (groups, roles, permissions). Everything else — OAuth, tenancy, 2FA, email verification — is a plugin.
+Fortress (`@bajustone/fortress`) is a framework-agnostic, adapter-based authentication and authorization library for TypeScript. The core provides JWT-based auth (login, refresh tokens, password hashing, session management, impersonation) and IAM (groups, roles, resource+action permissions with conditions and deny rules). Everything else — OAuth, tenancy, 2FA, email verification, API keys, data isolation, social login, rate limiting, account lockout, audit logging, webhooks, magic links — is a plugin.
 
-Published on JSR as `@bajustone/fortress`.
+**Runtime dependencies:** `jose` (JWT via Web Crypto API) and `hash-wasm` (WASM Argon2id default — swappable via `PasswordHasher` interface). No native bindings — works on Bun, Deno, Node, and edge runtimes.
+
+**Published on:** [JSR](https://jsr.io) as `@bajustone/fortress` and npm as `@bajustone/fortress`.
+
+---
 
 ## Module Structure
 
 ```
 src/
-  index.ts                              # createFortress() factory, re-exports
+  index.ts                              # createFortress() factory, re-exports all public types
 
   core/
-    types.ts                            # All domain types and interfaces
+    types.ts                            # All domain types: FortressUser, TokenClaims, Permission, Role, etc.
     config.ts                           # FortressConfig type + defaults
-    errors.ts                           # Unified error hierarchy
-    plugin.ts                           # FortressPlugin interface, hook runner, plugin registry
+    errors.ts                           # FortressError class + Errors factory
+    fortress.ts                         # createFortress() + getPluginMethods()
+    plugin.ts                           # FortressPlugin interface, hook types, model/route definitions
+    plugin-runner.ts                    # processPlugins(), chainAdapterWrappers(), collectScopeRules()
+    plugin-methods-map.ts               # InferPlugins<T> type utility for type-safe plugin access
     internal-adapter.ts                 # Entity-specific query layer on top of generic CRUD
 
     auth/
-      jwt.ts                            # JWT sign/verify (jose)
-      password.ts                       # PasswordHasher interface + default impl
-      refresh-token.ts                  # Token generation, hashing, rotation logic
-      auth-service.ts                   # Login, refresh, logout, me, createUser
+      jwt.ts                            # JWT sign/verify (jose, HS256, key rotation)
+      password.ts                       # PasswordHasher interface + WASM Argon2id default
+      password-policy.ts                # NIST 800-63B policy + HIBP k-anonymity breach check
+      refresh-token.ts                  # Token generation, SHA-256 hashing, family rotation
+      auth-service.ts                   # Login, refresh, logout, sessions, impersonation
 
     iam/
-      permission-evaluator.ts           # Resource+action permission evaluation, conditions, deny
-      iam-service.ts                    # Groups, roles, permissions CRUD
-      resource-sync.ts                  # Load/export fortress.resources.json, DB sync
+      permission-evaluator.ts           # Resource+action evaluation, conditions, deny-overrides
+      iam-service.ts                    # Groups, roles, permissions CRUD, checkPermission
+      resource-sync.ts                  # Load/export fortress.resources.json, DB sync, type generation
+      permission-cache.ts               # LRU cache with TTL and invalidation
 
   adapters/
     database/
       index.ts                          # DatabaseAdapter interface (generic CRUD)
-      types.ts                          # DB adapter types (transaction handle, etc.)
+      types.ts                          # WhereClause, CoreOperator, ScopeRule
 
   testing/
-    index.ts                            # createTestAdapter() — in-memory SQLite via bun:sqlite
+    index.ts                            # createTestAdapter() — in-memory SQLite (bun:sqlite or better-sqlite3)
     adapter-conformance.test.ts         # runAdapterTests() — shared adapter contract test suite
 
   drizzle/
     index.ts                            # createDrizzleAdapter() export
     adapter.ts                          # DatabaseAdapter implementation (PostgreSQL, MySQL, SQLite)
-    schema.ts                           # Reference Drizzle table definitions
+    schema.ts                           # SQLite reference table definitions (24 tables)
+    pg/
+      index.ts                          # PostgreSQL-specific export
+      schema.ts                         # PostgreSQL table definitions (pgTable, serial, varchar, timestamp)
 
   hono/
     index.ts                            # createHonoMiddleware() export
     middleware/
-      auth.ts                           # Bearer token extraction + JWT verify
+      auth.ts                           # Bearer token extraction + JWT verify + plugin adapter wrapping
       rbac.ts                           # Resource+action permission check via route mapping
+      csrf.ts                           # Custom-header CSRF protection (X-Fortress-CSRF)
+      security-headers.ts               # HSTS, CSP, X-Frame-Options, etc.
       error-handler.ts                  # FortressError → HTTP response
-    helpers.ts                          # getUserId() context helpers
+    helpers.ts                          # getUserId(), getClaims(), getDb(), getScopedDb()
+    plugin-routes.ts                    # mountPluginRoutes() — mounts plugin HTTP routes
+
+  express/
+    index.ts                            # Express middleware exports
+    middleware.ts                        # Auth, RBAC, error handler for Express
 
   plugins/
-    tenancy/
-      index.ts                          # tenancy() plugin factory
+    tenancy/index.ts                    # Schema-per-tenant isolation (PostgreSQL only)
     oauth/
-      index.ts                          # oauth() plugin factory
+      index.ts                          # OAuth 2.0 server (auth code + PKCE, client credentials, OIDC)
       pkce.ts                           # PKCE S256 challenge/verification
-    two-factor/
-      index.ts                          # twoFactor() plugin factory
-    email-verification/
-      index.ts                          # emailVerification() plugin factory
-    api-key/
-      index.ts                          # apiKey() plugin factory
-    data-isolation/
-      index.ts                          # dataIsolation() plugin factory
+    two-factor/index.ts                 # TOTP, backup codes, trusted devices
+    email-verification/index.ts         # Token-based email verification
+    api-key/index.ts                    # Scoped API keys for service accounts / devices
+    data-isolation/index.ts             # Row-level data isolation (any database)
     social-login/
-      index.ts                          # socialLogin() plugin factory
+      index.ts                          # OAuth/OIDC consumer flow, account linking
       types.ts                          # ProviderProfile, ProviderDefinition, SocialLoginConfig
       providers/
-        index.ts                        # builtInProviders registry + re-exports
+        index.ts                        # builtInProviders registry
         microsoft.ts                    # Microsoft Entra ID (tenant-parameterized)
         google.ts                       # Google OIDC
-        github.ts                       # GitHub OAuth2 (not OIDC)
+        github.ts                       # GitHub OAuth2 (not OIDC — uses userinfo endpoint)
         apple.ts                        # Apple Sign In (ID token only)
         discord.ts                      # Discord OAuth2
         oidc.ts                         # Generic OIDC provider factory
+    rate-limit/index.ts                 # Sliding window rate limiting (per-IP + per-account)
+    account-lockout/index.ts            # Progressive lockout with escalating duration
+    audit-log/index.ts                  # Append-only event logging with optional hash chain
+    webhook/index.ts                    # Standard Webhooks spec (HMAC-SHA256, retries)
+    magic-link/index.ts                 # Passwordless token-based auth
+    webauthn/index.ts                   # Passkeys/WebAuthn (stub — architecture done, crypto deferred)
+
+bin/
+  fortress.ts                           # CLI tool: init, sync:push, sync:pull, sync:types, generate-secret
+
+examples/
+  hono-app/
+    index.ts                            # Full example demonstrating all features
+    docker-compose.yml                  # PostgreSQL for examples
 ```
+
+---
+
+## Dependency Graph
+
+```
+fortress.ts ─────────────────────────────────────────────────────────┐
+├── auth-service.ts                                                  │
+│   ├── jwt.ts ← jose                                               │
+│   ├── password.ts ← hash-wasm (Argon2id)                          │
+│   ├── password-policy.ts ← HIBP API (fetch)                       │
+│   ├── refresh-token.ts ← crypto.subtle (SHA-256), crypto.getRandomValues │
+│   ├── internal-adapter.ts ← DatabaseAdapter                       │
+│   └── plugin-runner.ts (hooks: before/after login, register, etc.) │
+├── iam-service.ts                                                   │
+│   ├── permission-evaluator.ts                                      │
+│   ├── permission-cache.ts                                          │
+│   ├── resource-sync.ts ← fs (fortress.resources.json)              │
+│   └── internal-adapter.ts ← DatabaseAdapter                       │
+├── plugin-runner.ts                                                 │
+│   └── (chains plugin hooks, wrapAdapter, enrichTokenClaims, scopeRules) │
+└── config.ts (defaults)                                             │
+                                                                     │
+Framework adapters (hono/, express/) ────────────────────────────────┘
+└── Import Fortress instance, create middleware
+```
+
+**Key import rule:** `core/` modules never import from `hono/`, `express/`, `drizzle/`, or `plugins/`. Framework adapters and plugins depend on core, not the reverse.
+
+---
 
 ## Key Design Decisions
 
-### 1. Generic CRUD DatabaseAdapter (Lucia Lesson)
+### 1. Generic CRUD DatabaseAdapter
 
-Lucia Auth was deprecated because its per-entity adapter interface was an unsustainable complexity tax. Better Auth survived by using a generic 5-method CRUD contract. We follow Better Auth's approach.
+Per-entity adapter interfaces are an unsustainable complexity tax — adapter authors must update code for every new feature. Fortress uses a generic 7-method CRUD contract instead. Plugins declare new models (`oauth_client`, `two_factor_secret`) and query them through the same `create`/`findOne`/`update`/`delete` contract. No adapter changes needed.
 
-```typescript
-interface DatabaseAdapter {
-  create<T>(params: {
-    model: string;
-    data: Record<string, unknown>;
-  }): Promise<T>;
-
-  findOne<T>(params: {
-    model: string;
-    where: WhereClause[];
-  }): Promise<T | null>;
-
-  findMany<T>(params: {
-    model: string;
-    where?: WhereClause[];
-    limit?: number;
-    offset?: number;
-    sortBy?: { field: string; direction: 'asc' | 'desc' };
-  }): Promise<T[]>;
-
-  update<T>(params: {
-    model: string;
-    where: WhereClause[];
-    data: Record<string, unknown>;
-  }): Promise<T>;
-
-  delete(params: {
-    model: string;
-    where: WhereClause[];
-  }): Promise<void>;
-
-  count(params: {
-    model: string;
-    where?: WhereClause[];
-  }): Promise<number>;
-
-  transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T>;
-
-  /** Optional: raw query for performance-critical multi-table operations (e.g., permission chain JOINs).
-   *  Adapters that implement this get optimized IAM queries. Others fall back to multiple findMany calls.
-   *  SQL uses dialect-specific placeholders: ? for SQLite/MySQL, $1 for PostgreSQL. */
-  rawQuery?<T>(sql: string, params?: unknown[]): Promise<T[]>;
-
-  /** Database dialect hint for adapters that implement rawQuery */
-  readonly dialect?: 'sqlite' | 'pg' | 'mysql';
-}
-
-interface WhereClause {
-  field: string;
-  operator: string;   // open string — core uses '=', '!=', 'in', 'gt', 'lt', 'gte', 'lte'
-                      // adapters MAY support additional operators: 'like', 'isNull', 'between', etc.
-  value: unknown;
-}
-
-// Built-in operators that all adapters MUST support:
-type CoreOperator = '=' | '!=' | 'in' | 'gt' | 'lt' | 'gte' | 'lte';
-```
-
-**Why `operator` is an open `string`, not a closed union:**
-New operators (`like`, `isNull`, `between`) can be added by plugins or consumers without breaking existing adapters. Adapters throw on unsupported operators at runtime. The `CoreOperator` type documents the required minimum.
-
-**Why `rawQuery` exists:**
-The IAM permission chain (user → group → role_binding → role_permission → permission) requires multi-table JOINs. With only `findMany`, this becomes 4 sequential queries. `rawQuery` lets the Drizzle adapter execute a single JOIN query. Adapters that don't implement it fall back to multiple `findMany` calls — slower but correct.
-
-Entity-specific logic lives in an internal adapter layer that Fortress builds on top of this generic contract. Adapter authors implement 7 required methods (+1 optional), not 40+.
-
-**Core models:** `user`, `refresh_token`, `group`, `group_user`, `role`, `role_binding`, `permission`, `role_permission`, `resource`
-
-**Plugin models:** Plugins declare their own models (e.g., `oauth_client`, `two_factor_secret`) — handled by the same generic CRUD adapter with no adapter changes needed.
+See `src/adapters/database/index.ts` for the interface, `src/drizzle/adapter.ts` for the reference implementation.
 
 ### 2. jose for JWT (not jsonwebtoken)
 
 `jsonwebtoken` doesn't support ESM, doesn't work on edge runtimes, and has no native TypeScript types. `jose` uses the Web Crypto API, works everywhere (Bun, Deno, Cloudflare Workers, Node), is zero-dependency, and tree-shakeable.
 
-```typescript
-// src/core/auth/jwt.ts
-import { SignJWT, jwtVerify } from 'jose';
-
-async function signAccessToken(
-  claims: TokenClaims,
-  secret: Uint8Array,
-  expiresInSeconds: number,
-): Promise<string> {
-  return new SignJWT({ ...claims })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime(`${expiresInSeconds}s`)
-    .setIssuer(claims.iss)
-    .setSubject(String(claims.sub))
-    .sign(secret);
-}
-
-async function verifyAccessToken(
-  token: string,
-  secrets: Uint8Array[],  // try each secret in order (supports rotation)
-): Promise<TokenClaims> {
-  for (const secret of secrets) {
-    try {
-      const { payload } = await jwtVerify(token, secret);
-      return payload as TokenClaims;
-    } catch { continue; }
-  }
-  throw Errors.unauthorized('Invalid token');
-}
-```
-
-**Secret rotation:** `jwt.secret` accepts `string | string[]`. When an array, the first secret is used for signing, all are tried for verification. This allows zero-downtime secret rotation:
-
-```typescript
-// 1. Add new secret, keep old one for verification:
-jwt: { secret: ['new-secret', 'old-secret'] }
-// Signs with 'new-secret', verifies against both
-
-// 2. After all old tokens expire, remove old secret:
-jwt: { secret: 'new-secret' }
-```
+See `src/core/auth/jwt.ts`.
 
 ### 3. Pluggable PasswordHasher (cross-runtime)
 
-`@node-rs/argon2` uses native bindings that break on Deno Deploy and serverless. Password hashing is a pluggable interface with a WASM-based default.
+`@node-rs/argon2` uses native bindings that break on Deno Deploy and serverless. Password hashing is a pluggable `PasswordHasher` interface with a WASM-based Argon2id default (via `hash-wasm`). Consumers can swap for `@node-rs/argon2`, `Bun.password`, or any custom implementation.
+
+See `src/core/auth/password.ts`.
+
+### 4. No FrameworkAdapter Interface
+
+Each framework package (`hono/`, `express/`) exports middleware factories specific to that framework. No shared abstraction — it would just be dead weight since each framework has different middleware signatures.
+
+### 5. Everything Beyond Core Auth + IAM Is a Plugin
+
+12 plugins, all optional. No special `modules` config, no `withX()` wrappers. This keeps the core small (~1500 lines) and makes extensibility uniform. See [Plugin System](#plugin-system) for the full interface.
+
+### 6. Composable Entry Points
+
+Users who only need JWT or password hashing shouldn't pull in the full system. Each piece is independently importable via sub-path exports (`@bajustone/fortress/jwt`, `@bajustone/fortress/crypto`).
+
+### 7. Database-Agnostic Core
+
+The Drizzle adapter works with PostgreSQL, MySQL, and SQLite. Only the tenancy plugin (schema-per-tenant via `SET LOCAL search_path`) is PostgreSQL-specific. For database-agnostic multi-tenancy, use the data isolation plugin with row-level filtering.
+
+### 8. Transport-Agnostic Permissions (Resource + Action)
+
+Permissions are `resource` + `action`, not `path` + `httpVerb`. HTTP-to-resource mapping happens in the framework adapter layer. This means permissions work in HTTP, CLI, cron, WebSocket, and event contexts without modification.
+
+### 9. Open WhereClause Operator
+
+`WhereClause.operator` is `string`, not a closed union. New operators (`like`, `isNull`, `between`) can be added by plugins or consumers without breaking existing adapters. `CoreOperator` documents the required minimum that all adapters must support. Adapters throw on unsupported operators at runtime.
+
+### 10. Secret Rotation
+
+`jwt.secret` accepts `string | string[]`. When an array, the first secret signs, all secrets verify. This allows zero-downtime rotation:
+
+```typescript
+// Step 1: Add new secret, keep old one for verification
+jwt: { secret: ['new-secret', 'old-secret'] }
+
+// Step 2: After all old tokens expire, remove old secret
+jwt: { secret: 'new-secret' }
+```
+
+---
+
+## Core: Authentication
+
+**File:** `src/core/auth/auth-service.ts`
+
+### Auth Service API
+
+```typescript
+interface AuthService {
+  login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResponse>;
+  refresh(refreshToken: string, meta?: RequestMeta): Promise<AuthTokenPair>;
+  logout(refreshToken: string): Promise<void>;
+  me(userId: number): Promise<FortressUser>;
+  createUser(data: CreateUserInput): Promise<FortressUser>;
+  verifyToken(token: string): Promise<TokenClaims>;
+  signToken(claims: Omit<TokenClaims, 'iat' | 'exp'>): Promise<string>;
+  listSessions(userId: number): Promise<SessionInfo[]>;
+  revokeSession(userId: number, tokenId: number): Promise<void>;
+  revokeAllOtherSessions(userId: number, currentTokenId: number): Promise<void>;
+  addLoginIdentifier(userId: number, type: 'email' | 'phone' | 'username', value: string): Promise<void>;
+  removeLoginIdentifier(userId: number, type: string, value: string): Promise<void>;
+  getLoginIdentifiers(userId: number): Promise<LoginIdentifier[]>;
+  impersonate(adminUserId: number, targetUserId: number, options?: { reason?: string; expiresInSeconds?: number }): Promise<AuthResponse>;
+}
+```
+
+### Login Flow
+
+Step-by-step walkthrough of `auth-service.ts:196`:
+
+```
+1. Run beforeLogin hooks (all plugins, in registration order)
+   → Any plugin can short-circuit with { stop: true, response: {...} }
+   → Account lockout plugin checks if user is locked here
+   → Rate limit plugin checks IP/account limits here
+
+2. Resolve user via internal adapter:
+   a. Try login_identifier table (where value = identifier)
+   b. Fall back to user table (where email = identifier)
+   → If not found: run dummy password verify (timing oracle prevention), throw UNAUTHORIZED
+
+3. Check user.isActive — throw UNAUTHORIZED if deactivated
+
+4. Verify password: Argon2id verify(user.passwordHash, password)
+   → If fails: run onLoginFailure hooks (account lockout increments counter), throw UNAUTHORIZED
+
+5. Fetch user's groups via internal adapter (group_user → group names)
+
+6. Collect enriched token claims from all plugins (enrichTokenClaims)
+   → Tenancy plugin adds tenantId, tenantCode
+   → Claims are shallow-merged; later plugin wins on key conflicts
+
+7. Sign access token (JWT, HS256, short-lived — default 900s)
+
+8. Generate refresh token:
+   a. 32 bytes cryptographic randomness → base64url
+   b. SHA-256 hash the raw token
+   c. Store hash + family ID + meta (IP, userAgent, deviceName) in DB
+   d. Optional: store SHA-256(userAgent) as fingerprint
+
+9. Build AuthResponseSuccess { status: 'success', user, accessToken, refreshToken }
+
+10. Run afterLogin hooks (all plugins, in registration order)
+    → 2FA plugin can change status to 'pending' and null out tokens
+    → Email verification plugin can block unverified users
+    → Audit log plugin records LOGIN_SUCCESS
+    → Webhook plugin queues delivery
+
+11. Return final AuthResponse
+```
+
+### Refresh Flow
+
+`auth-service.ts:248`:
+
+```
+1. Hash the incoming refresh token (SHA-256)
+2. Look up token by hash in DB
+3. If not found → throw UNAUTHORIZED
+4. If already revoked → TOKEN REUSE DETECTED:
+   a. Revoke ALL tokens in the same family (invalidate entire session)
+   b. Throw TOKEN_REUSE error
+5. Check expiration — throw UNAUTHORIZED if expired
+6. Optional fingerprint validation:
+   - 'hard' mode (validateRefreshFingerprint: true): reject mismatched fingerprint
+   - 'warn' mode: log warning but allow
+7. Revoke the current token (mark as used)
+8. Generate new refresh token with SAME family ID
+9. Update session metadata (lastActiveAt, IP, userAgent)
+10. Sign new access token with fresh claims
+11. Run afterTokenRefresh hooks
+12. Return new { accessToken, refreshToken }
+```
+
+### JWT Implementation
+
+**File:** `src/core/auth/jwt.ts`
+
+- **Algorithm:** HS256 (HMAC-SHA256 via Web Crypto API)
+- **Library:** `jose` — `SignJWT` for signing, `jwtVerify` for verification
+- **Key encoding:** Secret string → `TextEncoder.encode()` → `Uint8Array`
+- **Key rotation:** When `secret` is an array, the first key signs, all keys are tried for verification (first successful match wins)
+- **Claims set:** `sub` (user ID as string), `iss` (issuer), `iat` (issued at), `exp` (expiration), `name`, `groups`, `customClaims`, optional `act` (impersonation)
+
+### Password Hashing
+
+**File:** `src/core/auth/password.ts`
 
 ```typescript
 interface PasswordHasher {
@@ -213,167 +309,132 @@ interface PasswordHasher {
 }
 ```
 
-**Default:** WASM-based Argon2id (via `hash-wasm` or `@oslojs/crypto`)
-**Optional swaps:** `@node-rs/argon2`, `Bun.password`, custom implementation
+**Default implementation (WASM Argon2id):**
+- Memory: 64 MB (`memorySize: 65536`)
+- Iterations: 3
+- Parallelism: 1
+- Hash length: 32 bytes
+- Salt: 16 bytes random
 
-```typescript
-const fortress = createFortress({
-  // ...
-  passwordHasher: customArgon2Hasher, // optional, defaults to WASM impl
-});
-```
+**Timing oracle prevention:** When a user is not found during login, a dummy `verify()` call is executed against a pre-hashed value. This ensures login attempts for nonexistent users take the same time as attempts for real users.
 
-### 4. No FrameworkAdapter Interface
+### Password Policy
 
-Better Auth and Auth.js both use Web Standard `Request`/`Response` as the abstraction layer. Custom framework interfaces add dead weight. Each framework package (hono/, future express/) exports middleware factories specific to that framework.
+**File:** `src/core/auth/password-policy.ts`
 
-### 5. Everything Beyond Core Auth + IAM Is a Plugin
+Enforced during `createUser()` when `config.passwordPolicy` is set.
 
-OAuth, tenancy, 2FA, email verification — all are plugins. No special `modules` config, no `withX()` wrappers. This keeps the core small and makes extensibility uniform.
-
-### 6. Composable Entry Points
-
-Users who only need JWT or password hashing shouldn't pull in the full system. Following the `@oslojs/*` pattern (by Lucia's author), each piece is independently importable.
-
-### 7. Database-Agnostic Core
-
-Fortress core and the Drizzle adapter work with **any Drizzle-supported database**: PostgreSQL, MySQL, SQLite. The generic CRUD `DatabaseAdapter` uses standard SQL operations that are portable across databases.
-
-| Database | Core Auth | IAM/RBAC | Data Isolation (row-level) | Tenancy (schema isolation) |
-|----------|-----------|----------|---------------------------|---------------------------|
-| PostgreSQL | Yes | Yes | Yes | Yes |
-| MySQL | Yes | Yes | Yes | No |
-| SQLite | Yes | Yes | Yes | No |
-| bun:sqlite (in-memory) | Yes | Yes | Yes | No |
-
-The **tenancy plugin** (schema-per-tenant via `SET LOCAL search_path`) is the only PostgreSQL-specific feature. It's opt-in — consumers on MySQL or SQLite use the **data isolation plugin** for row-level multi-tenancy instead.
-
-**Dialect-specific schemas:** Fortress provides default table definitions per dialect:
-- `@bajustone/fortress/drizzle` — SQLite schema (default, used for testing)
-- `@bajustone/fortress/drizzle/pg` — PostgreSQL schema (`pgTable`, `serial`, `varchar`, `timestamp`)
-
-**Configurable table mapping:** For existing projects with their own tables, the adapter accepts a table map that overrides defaults:
-
-```typescript
-// New project — use fortress default schema
-const adapter = createDrizzleAdapter(db);
-
-// Existing project — map to your own tables
-import { users, refreshTokens } from './your-schema';
-
-const adapter = createDrizzleAdapter(db, {
-  tables: {
-    user: users,                    // your Drizzle table definition
-    refresh_token: refreshTokens,   // fortress maps model names to your tables
-    login_identifier: loginKeys,    // bring your own login identifiers table
-    // ... any table you want to override
-  },
-});
-```
-
-When `tables` is provided, fortress uses the consumer's table definitions instead of its own. Unmapped models fall back to the default fortress tables. This lets existing projects adopt fortress incrementally — override only the tables you already have, let fortress create the rest.
-
-For **testing**, in-memory SQLite provides a zero-setup database:
-
-```typescript
-import { createTestAdapter } from '@bajustone/fortress/testing';
-const adapter = createTestAdapter();  // in-memory SQLite, auto-creates tables
-```
-
-### 8. Transport-Agnostic Permissions (Resource + Action)
-
-Permissions are modeled as `resource` + `action`, not `path` + `httpVerb`. This is the pattern used by GCP IAM (`storage.objects.get`), AWS IAM (`s3:GetObject`), and Kubernetes RBAC (`pods` + `get`). HTTP-to-resource mapping happens in the framework adapter layer, not the permission definition.
-
-**Why not path + httpVerb:**
-- Breaks for non-HTTP contexts (CLI, cron jobs, background workers, WebSocket, events)
-- URL refactoring breaks all permission records in the database
-- Multiple routes mapping to the same logical operation need duplicate permissions
-- `SERVICE_ACCOUNT` principal type becomes unusable without HTTP context
-
-### 8. Resource Definition File (`fortress.resources.json`)
-
-Resources and their allowed actions are defined in a JSON file that serves as the source of truth, with bidirectional sync to the database.
-
-```jsonc
-// fortress.resources.json
-{
-  "resources": {
-    "user": {
-      "actions": ["create", "read", "update", "delete", "list", "ban"],
-      "description": "User management"
-    },
-    "post": {
-      "actions": ["create", "read", "update", "delete", "publish"],
-      "description": "Blog posts"
-    },
-    "invoice": {
-      "actions": ["create", "read", "void", "export"],
-      "description": "Financial invoices"
-    }
+- **Min length:** 8 characters (NIST 800-63B default)
+- **Max length:** 128 characters
+- **HIBP integration:** Optional k-anonymity check against the Have I Been Pwned API
+  - Hash password with SHA-1, send first 5 chars as prefix
+  - API returns all hashes with that prefix — check locally
+  - **Cache:** Module-level `Map<string, { count, expiresAt }>` with 24-hour TTL
+  - **Fail-open:** Network errors don't block registration (logs warning)
+- **Config:**
+  ```typescript
+  interface PasswordPolicyConfig {
+    minLength?: number;     // default: 8
+    maxLength?: number;     // default: 128
+    checkBreached?: boolean; // default: false — enables HIBP check
   }
-}
+  ```
+
+### Refresh Tokens
+
+**File:** `src/core/auth/refresh-token.ts`
+
+- **Generation:** 32 bytes from `crypto.getRandomValues()`, base64url encoded
+- **Storage:** Only SHA-256 hash persisted via `crypto.subtle.digest()` — raw token never stored
+- **Family tracking:** Each token has a `tokenFamily` UUID. New tokens on refresh inherit the family ID. If a revoked token is reused, the entire family is revoked (all sessions for that login)
+- **Fingerprint:** Optional `SHA-256(userAgent)` stored alongside token. On refresh, validated in hard or warn mode per `config.jwt.validateRefreshFingerprint`
+
+### Session Management
+
+`auth-service.ts:455-510`
+
+Sessions are derived from active (non-revoked, non-expired) refresh tokens:
+
+- **`listSessions(userId)`** — Returns all active refresh tokens as `SessionInfo[]` with `id`, `ipAddress`, `userAgent`, `deviceName`, `lastActiveAt`, `createdAt`
+- **`revokeSession(userId, tokenId)`** — Revokes a specific refresh token (logs user out of that device)
+- **`revokeAllOtherSessions(userId, currentTokenId)`** — Revokes all tokens except the current one ("log out everywhere else")
+
+### Impersonation
+
+`auth-service.ts:538`
+
+Admin impersonation using RFC 8693 actor claim:
+
+- Issues a **non-renewable** access token (no refresh token)
+- Token includes `act: { sub: adminUserId }` claim per RFC 8693
+- Short-lived: default 3600s, configurable
+- Returns `AuthResponseImpersonation { status: 'impersonation', refreshToken: null }`
+- **Caller responsibility:** Verify the admin has `fortress:impersonate` permission before calling
+- Includes `reason` and `expiresInSeconds` in `pluginData`
+
+### Multi-Key Login
+
+Users can log in with email, phone, or username — all sharing the same password via the `login_identifier` model:
+
+```
+login_identifier { id, userId, type: 'email'|'phone'|'username', value (globally unique) }
 ```
 
-**Sync commands:**
-```bash
-# JSON → DB: seed/update resources on deploy
-bun run fortress sync:push
-
-# DB → JSON: export after runtime changes via admin UI
-bun run fortress sync:pull
-```
-
-**Benefits:**
-- **Version controlled** — changes tracked in git, reviewed in PRs
-- **Deploy-time seeding** — CI/CD runs `sync:push` after migrations
-- **Runtime flexible** — admin UI creates new resources, `sync:pull` captures them back
-- **Environment consistent** — same file deploys to staging and production
-- **Validation** — `checkPermission()` can validate against known resources/actions
-- **No OpenAPI coupling** — replaces the fragile `setup-resources <openapi-url>` pattern
-
-**Optional type generation:**
-```bash
-# Generate TypeScript types from the resource file
-bun run fortress sync:types
-```
-
-```typescript
-// Generated: fortress.resources.d.ts
-type FortressResource = 'user' | 'post' | 'invoice';
-type FortressAction<R extends FortressResource> =
-  R extends 'user' ? 'create' | 'read' | 'update' | 'delete' | 'list' | 'ban' :
-  R extends 'post' ? 'create' | 'read' | 'update' | 'delete' | 'publish' :
-  R extends 'invoice' ? 'create' | 'read' | 'void' | 'export' :
-  never;
-```
-
-This gives compile-time safety without requiring resources to be defined in code.
+When a user is created via `createUser({ email, name, password })`, a `login_identifier` of type `email` is automatically created. Additional identifiers are managed via `addLoginIdentifier()` / `removeLoginIdentifier()`.
 
 ---
 
-## IAM Permission Model
+## Core: IAM
 
-### Permission Structure
+**File:** `src/core/iam/iam-service.ts`
+
+### IAM Service API
+
+```typescript
+interface IamService {
+  checkPermission(userId: number, resource: string, action: string, context?: PermissionContext): Promise<boolean>;
+  getUserPermissions(userId: number, tenantId?: number): Promise<Permission[]>;
+  createRole(name: string, permissions: PermissionInput[], description?: string): Promise<Role>;
+  deleteRole(roleId: number): Promise<void>;
+  bindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: number): Promise<void>;
+  bindRoleToUser(userId: number, roleId: number, tenantId?: number): Promise<void>;
+  bindRoleToGroup(groupId: number, roleId: number, tenantId?: number): Promise<void>;
+  unbindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: number): Promise<void>;
+  bindPermissionToUser(subjectId: number, permission: PermissionInput, tenantId?: number): Promise<void>;
+  bindPermissionToGroup(subjectId: number, permission: PermissionInput, tenantId?: number): Promise<void>;
+  unbindPermissionFromUser(subjectId: number, permissionId: number, tenantId?: number): Promise<void>;
+  unbindPermissionFromGroup(subjectId: number, permissionId: number, tenantId?: number): Promise<void>;
+  createGroup(name: string, description?: string): Promise<Group>;
+  addUserToGroup(groupId: number, userId: number): Promise<void>;
+  removeUserFromGroup(groupId: number, userId: number): Promise<void>;
+  syncResources(direction: 'push' | 'pull', filePath?: string): Promise<void>;
+  setIamObserver(listener: IamEventListener): void;
+  clearPermissionCache(): void;
+}
+```
+
+### Permission Model
 
 ```typescript
 interface Permission {
   id: number;
   resource: string;     // "user", "post", "invoice"
   action: string;       // "create", "read", "update", "delete"
-  effect: 'ALLOW' | 'DENY';  // default: 'ALLOW'
+  effect: 'ALLOW' | 'DENY';
   conditions?: PermissionCondition[];
+  description?: string;
 }
 
 interface PermissionCondition {
   field: string;        // "resource.ownerId", "request.ip", "user.department"
   operator: 'eq' | 'neq' | 'in' | 'startsWith';
-  value: string | string[];  // supports context variables like "${user.id}"
+  value: ConditionValue;  // string, string[], { ref: string }, or "${user.id}" template
 }
 ```
 
-### Permission Chain (Simplified)
+### Permission Chain
 
-The `principal` table is dropped. Role bindings reference subjects directly via `subjectType` + `subjectId`, matching the Kubernetes RBAC pattern.
+Role bindings reference subjects directly via `subjectType` + `subjectId` — no intermediate `principal` table:
 
 ```
 User ──┐
@@ -382,1067 +443,852 @@ Group ─┘
   (via group_user)
 ```
 
-**Before:** User → Group → Principal → RoleBinding → Role → Permission (5 hops)
-**After:** User → (direct or via Group) → RoleBinding → Role → Permission (3 hops)
-
-```typescript
-interface RoleBinding {
-  id: number;
-  roleId: number;
-  subjectType: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
-  subjectId: number;
-}
-```
-
-### Core DB Models (updated)
-
-| Model | Fields | Notes |
-|-------|--------|-------|
-| `user` | id, email, name, passwordHash, isActive, timestamps | Core identity. Password on user row (not in junction table). |
-| `login_identifier` | id, userId, type, value | Multiple login methods per user (email, phone, username). Value is globally unique. |
-| `refresh_token` | id, userId, tokenHash, tokenFamily, isRevoked, expiresAt, ipAddress, userAgent | Token rotation |
-| `group` | id, name, description | User grouping |
-| `group_user` | groupId, userId | M2M junction |
-| `resource` | name (PK), description | Resource type registry |
-| `permission` | id, resource, action, effect, conditions (JSON), description | Transport-agnostic |
-| `role` | id, name, description | Collection of permissions |
-| `role_permission` | roleId, permissionId | M2M junction |
-| `role_binding` | id, roleId, subjectType, subjectId | Direct subject reference |
-
-### Multi-Key Login
-
-Users can login with email, phone number, or username — all sharing the same password.
-
-```typescript
-// login_identifier model
-{
-  id: number;
-  userId: number;           // FK to user
-  type: 'email' | 'phone' | 'username';
-  value: string;            // globally unique — the actual login identifier
-}
-```
-
-**Login flow:**
-```
-1. login('alice@example.com', password)
-2. Find login_identifier where value = 'alice@example.com'
-3. Get user by identifier.userId
-4. Verify user.passwordHash against password
-5. Issue tokens
-```
-
-**Why not a junction table (loyalbook's approach):**
-Loyalbook uses `user_keys → userKeysPasswords → keyPasswords` (3 tables, many-to-many). This implies users could have different passwords for different login methods — but that feature is never used. One password per user on the `user` row + a flat `login_identifier` table achieves the same result with one JOIN instead of three, no orphaned records, and no dead fields.
-
-**Identifier management:**
-```typescript
-fortress.auth.addLoginIdentifier(userId, 'phone', '+250788123456');
-fortress.auth.addLoginIdentifier(userId, 'username', 'alice');
-fortress.auth.removeLoginIdentifier(userId, 'phone', '+250788123456');
-fortress.auth.getLoginIdentifiers(userId);
-// → [{ type: 'email', value: 'alice@example.com' }, { type: 'phone', value: '+250788123456' }]
-```
-
-When a user is created with `createUser({ email, name, password })`, a `login_identifier` of type `email` is automatically created.
+Permissions are also directly bindable to users/groups without a role (via `permission_binding`).
 
 ### Permission Evaluation
 
-```typescript
-// Evaluation modes (configurable)
-type EvaluationMode = 'allow-only' | 'deny-overrides';
+**File:** `src/core/iam/permission-evaluator.ts`
 
-// 'allow-only': if any ALLOW matches → allow, otherwise deny
-// 'deny-overrides' (AWS-style):
-//   1. Collect all matching permissions
-//   2. If any DENY matches → deny (overrides everything)
-//   3. If any ALLOW matches → allow
-//   4. Otherwise → deny (implicit)
+Two evaluation modes (configured via `config.rbac.evaluationMode`):
+
+1. **`allow-only`** (default): If any ALLOW permission matches → allow. Otherwise deny.
+2. **`deny-overrides`** (AWS-style):
+   - Collect all matching permissions (from roles + direct bindings + group memberships)
+   - If any DENY matches → deny (overrides everything)
+   - If any ALLOW matches → allow
+   - Otherwise → implicit deny
+
+**Condition evaluation:**
+- All conditions on a permission must be true (AND logic)
+- Field paths resolve from context: `resource.ownerId`, `request.tenantId`, `user.id`
+- Variable references: `${user.id}` template syntax or `{ ref: "user.id" }` typed alternative
+- Operators: `eq`, `neq`, `in`, `startsWith`
+- Wildcard: `*` matches any resource or action
+
+**Permission resolution** (in `internal-adapter.ts:91`):
+- **Optimized path:** If `db.rawQuery` is available, uses a single SQL JOIN query across `role_binding` → `role_permission` → `permission` tables
+- **Fallback path:** Multiple sequential `findMany` calls — slower but correct for adapters without `rawQuery`
+- Permissions come from: direct user bindings + group memberships (via `group_user` → group's role bindings)
+- Tenant filtering: Includes bindings where `tenantId IS NULL` (global) OR `tenantId = requested`
+
+### Permission Cache
+
+**File:** `src/core/iam/permission-cache.ts`
+
+LRU cache for permission query results:
+
+- **Key:** `userId` (string)
+- **Value:** Permission array with `expiresAt` timestamp
+- **TTL:** Configurable via `config.rbac.cache.ttlSeconds`
+- **Max entries:** Configurable via `config.rbac.cache.maxEntries`
+- **Eviction:** When capacity reached, oldest entry deleted (Map insertion order)
+- **Invalidation strategies:**
+  - `invalidate(userId)` — Clear cache for a specific user (used after role/permission changes)
+  - `invalidateAll()` — Clear entire cache (used after group membership changes, which affect all users in that group)
+- **Tenant bypass:** Queries with a `tenantId` parameter always bypass cache (tenant varies per request)
+
+### Resource Sync
+
+**File:** `src/core/iam/resource-sync.ts`
+
+Bidirectional sync between `fortress.resources.json` and the database:
+
+- **`sync:push`** (JSON → DB): Reads resource file, creates/updates resources and permissions in DB. Upsert logic — creates only if not exists.
+- **`sync:pull`** (DB → JSON): Exports all resources and permissions from DB to JSON file.
+- **`sync:types`**: Generates TypeScript types from resource definitions:
+  ```typescript
+  // Generated: fortress.resources.d.ts
+  type FortressResource = 'user' | 'post' | 'invoice';
+  type FortressAction<R extends FortressResource> =
+    R extends 'user' ? 'create' | 'read' | 'update' | 'delete' | 'list' | 'ban' :
+    // ...
+  ```
+
+### IAM Events
+
+`iam-service.ts` emits events via `setIamObserver()` for all mutations:
+
+```
+ROLE_CREATED, ROLE_DELETED, ROLE_BOUND, ROLE_UNBOUND,
+PERMISSION_CHANGED, GROUP_CREATED, GROUP_MEMBER_ADDED, GROUP_MEMBER_REMOVED
 ```
 
-### Programmatic Permission Check
+Events are consumed by the audit-log plugin (if registered) for tamper-evident logging.
+
+---
+
+## Database Layer
+
+### DatabaseAdapter Interface
+
+**File:** `src/adapters/database/index.ts`
 
 ```typescript
-// Core API — transport-agnostic, works everywhere
-fortress.iam.checkPermission(
-  userId: number,
-  resource: string,
-  action: string,
-  context?: PermissionContext,
-): Promise<boolean>;
+interface DatabaseAdapter {
+  create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T>;
+  findOne<T>(params: { model: string; where: WhereClause[] }): Promise<T | null>;
+  findMany<T>(params: { model: string; where?: WhereClause[]; limit?: number; offset?: number; sortBy?: { field: string; direction: 'asc' | 'desc' } }): Promise<T[]>;
+  update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T | null>;
+  delete(params: { model: string; where: WhereClause[] }): Promise<void>;
+  count(params: { model: string; where?: WhereClause[] }): Promise<number>;
+  transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T>;
 
-interface PermissionContext {
-  resource?: Record<string, unknown>;  // resource instance attributes
-  request?: Record<string, unknown>;   // request metadata
-  user?: Record<string, unknown>;      // extra user attributes
+  /** Optional: raw SQL for performance-critical multi-table operations.
+   *  Adapters that implement this get optimized IAM queries (single JOIN
+   *  instead of 4 sequential findMany calls).
+   *  Placeholders: ? for SQLite/MySQL, $1 for PostgreSQL. */
+  rawQuery?<T>(sql: string, params?: unknown[]): Promise<T[]>;
+
+  /** Database dialect hint for rawQuery SQL generation */
+  readonly dialect?: 'sqlite' | 'pg' | 'mysql';
 }
 ```
 
-**Usage in different contexts:**
-
+**WhereClause:**
 ```typescript
-// HTTP route handler
-const allowed = await fortress.iam.checkPermission(userId, 'post', 'update', {
-  resource: { ownerId: post.authorId },
-});
-
-// Cron job
-await fortress.iam.checkPermission(serviceAccountId, 'report', 'generate');
-
-// WebSocket handler
-await fortress.iam.checkPermission(userId, 'dashboard', 'subscribe');
-
-// CLI command
-await fortress.iam.checkPermission(adminId, 'user', 'ban');
-```
-
-### Condition Evaluation
-
-Conditions enable fine-grained access control like "users can only edit their own posts":
-
-```typescript
-// Role "author" has this permission:
-{
-  resource: 'post',
-  action: 'update',
-  effect: 'ALLOW',
-  conditions: [
-    { field: 'resource.ownerId', operator: 'eq', value: '${user.id}' }
-  ]
+interface WhereClause {
+  field: string;
+  operator: CoreOperator | string;  // open string for extensibility
+  value: unknown;
 }
 
-// At check time, the condition is evaluated:
-fortress.iam.checkPermission(userId, 'post', 'update', {
-  resource: { ownerId: 42 },  // post's actual owner
-});
-// → userId === 42 ? ALLOW : DENY
+type CoreOperator = '=' | '!=' | 'in' | 'gt' | 'lt' | 'gte' | 'lte';
 ```
 
-`${user.id}` is resolved from the authenticated user context. Other supported variables:
-- `${user.id}` — authenticated user's ID
-- `${user.groups}` — user's group names
-- `${request.ip}` — request IP (if provided in context)
+**ScopeRule** (used by data isolation and plugin `scopeRules`):
+```typescript
+interface ScopeRule {
+  filters: WhereClause[];                  // Auto-injected on findOne, findMany, count, update, delete
+  defaults: Record<string, unknown>;       // Auto-injected on create
+}
+```
 
-### Hono RBAC Middleware: HTTP-to-Resource Mapping
+### Internal Adapter Layer
 
-The Hono adapter maps HTTP requests to resource+action checks. The permission model stays transport-agnostic; the mapping is framework-specific.
+**File:** `src/core/internal-adapter.ts`
+
+Wraps `DatabaseAdapter` with entity-specific query logic used by `auth-service` and `iam-service`. This layer exists so the auth and IAM services don't need to construct raw `WhereClause` arrays everywhere.
+
+Key methods:
+- **`findUserByIdentifier(identifier)`** — Tries `login_identifier` table first, falls back to `user.email`
+- **`getUserGroups(userId)`** — Resolves `group_user` → `group` names
+- **`getUserPermissions(userId, tenantId?)`** — Optimized: single `rawQuery` JOIN if available, fallback to multiple `findMany`. Returns all permissions from role bindings + direct bindings, deduplicated
+- **`findRefreshTokenByHash(tokenHash)`** — Single `findOne` on `refresh_token`
+- **`findOrCreatePermission(input)`** — Upsert by resource+action
+- **`ensureResource(name)`** — Create resource if not exists
+
+### Core DB Models
+
+| Model | Key Fields | Notes |
+|-------|-----------|-------|
+| `user` | id, email, name, passwordHash, isActive, emailVerified, createdAt, updatedAt | Core identity. passwordHash nullable (social-only users). |
+| `login_identifier` | id, userId, type, value, tenantId? | Multiple login methods per user. Value is globally unique. |
+| `refresh_token` | id, userId, tokenHash, tokenFamily, isRevoked, expiresAt, ipAddress, userAgent, deviceName, fingerprintHash, lastActiveAt | Token rotation with family tracking. |
+| `group` | id, name, description | User grouping. |
+| `group_user` | groupId, userId | M2M junction. |
+| `resource` | name (PK), description | Resource type registry. |
+| `permission` | id, resource, action, effect, conditions (JSON), description | Transport-agnostic permission. |
+| `role` | id, name, description, isSystem | Named permission collection. |
+| `role_permission` | roleId, permissionId | M2M junction. |
+| `role_binding` | id, roleId, subjectType, subjectId, tenantId? | Direct subject → role reference. |
+| `permission_binding` | id, permissionId, subjectType, subjectId, tenantId? | Direct permission binding (no role). |
+
+**Plugin models** (24 total across all plugins): `oauth_client`, `oauth_authorization_code`, `oauth_access_token`, `oauth_pending_flow`, `two_factor_secret`, `backup_code`, `trusted_device`, `email_verification_token`, `api_key`, `user_scope_assignment`, `social_account`, `tenant`, `tenant_user`, `account_lockout`, `audit_log`, `magic_link_token`, `webhook_endpoint`, `webhook_delivery`, `webauthn_credential`, `webauthn_challenge`, `rate_limit_counter`.
+
+### Drizzle Adapter
+
+**File:** `src/drizzle/adapter.ts`
+
+Reference `DatabaseAdapter` implementation supporting SQLite, PostgreSQL, and MySQL via Drizzle ORM.
+
+**Dialect handling:**
+- SQLite: Synchronous `.get()`, `.all()`, `.run()` — results returned immediately
+- PostgreSQL/MySQL: Async — results awaited
+
+**Transaction handling:**
+- SQLite: Manual `BEGIN`/`COMMIT`/`ROLLBACK` (Drizzle SQLite transactions aren't truly async-compatible)
+- PostgreSQL/MySQL: Native `db.transaction()` support
+
+**Field conversion:** Automatic `snake_case` ↔ `camelCase` mapping between JS objects and DB columns.
+
+**Operator mapping:** Maps `CoreOperator` values to Drizzle equivalents (`eq`, `ne`, `inArray`, `gt`, `lt`, `gte`, `lte`).
+
+**Table overrides:** For existing projects, accepts a `tables` map to use consumer's own Drizzle table definitions instead of Fortress defaults:
 
 ```typescript
-import { createHonoMiddleware } from '@bajustone/fortress/hono';
-
-const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fortress, {
-  // Declarative route-to-resource mapping
-  routeMap: {
-    'POST /api/users': { resource: 'user', action: 'create' },
-    'GET /api/users': { resource: 'user', action: 'list' },
-    'GET /api/users/:id': { resource: 'user', action: 'read' },
-    'PUT /api/users/:id': { resource: 'user', action: 'update' },
-    'DELETE /api/users/:id': { resource: 'user', action: 'delete' },
-    'POST /api/posts': { resource: 'post', action: 'create' },
-    'POST /api/posts/:id/publish': { resource: 'post', action: 'publish' },
+const adapter = createDrizzleAdapter(db, {
+  tables: {
+    user: myUsersTable,           // your Drizzle table definition
+    refresh_token: myTokensTable, // fortress maps model names to your tables
   },
-
-  // Or a function for dynamic mapping
-  mapRequest: (method, path) => {
-    // Custom logic to derive resource+action from HTTP request
-    return { resource: 'user', action: 'read' };
-  },
-
-  // Paths that skip permission checks entirely
-  skipPaths: ['/health', '/docs', '/auth/*'],
 });
 ```
 
-The `rbacMiddleware` uses the route map to translate `POST /api/users` into `checkPermission(userId, 'user', 'create')`. The permission table never stores HTTP paths.
+**Schemas:**
+- `src/drizzle/schema.ts` — SQLite tables (sqliteTable)
+- `src/drizzle/pg/schema.ts` — PostgreSQL tables (pgTable, serial, varchar, timestamp)
+
+### Testing Adapter
+
+**File:** `src/testing/index.ts`
+
+In-memory SQLite adapter for unit tests:
+
+- **Runtime detection:** Tries `bun:sqlite` first (dynamic import), falls back to `better-sqlite3`
+- **Auto-creates** all 24 fortress tables on initialization
+- **Enables:** Foreign key constraints, WAL journal mode
+- **Returns:** A fully functional `DatabaseAdapter` wrapping Drizzle over the in-memory SQLite
+
+```typescript
+import { createTestAdapter } from '@bajustone/fortress/testing';
+const adapter = createTestAdapter(); // zero-setup, in-memory
+```
+
+**Conformance suite:** `src/testing/adapter-conformance.test.ts` exports `runAdapterTests()` — a shared test suite that any adapter implementation can run to verify it meets the `DatabaseAdapter` contract.
 
 ---
 
 ## Plugin System
 
-### Plugin Interface
+### FortressPlugin Interface
+
+**File:** `src/core/plugin.ts`
 
 ```typescript
 interface FortressPlugin {
-  /** Unique plugin identifier */
-  name: string;
-
-  /** DB models this plugin needs (generic CRUD handles them) */
-  models?: ModelDefinition[];
-
-  /** Hooks into auth lifecycle (executed in plugin registration order) */
-  hooks?: PluginHooks;
-
-  /** Extra methods exposed on fortress.plugins.<name> */
-  methods?: (ctx: PluginContext) => Record<string, Function>;
-
-  /** HTTP routes this plugin adds (e.g., OAuth endpoints) */
-  routes?: RouteDefinition[];
-
-  /** Middleware to inject into the request pipeline */
-  middleware?: MiddlewareDefinition[];
-
-  /** Wrap the DatabaseAdapter per-request (e.g., tenancy schema scoping) */
-  wrapAdapter?: (
-    adapter: DatabaseAdapter,
-    requestContext: Record<string, unknown>,
-  ) => DatabaseAdapter;
-
-  /** Extend JWT token claims (e.g., tenancy adds tenantId/tenantCode) */
-  enrichTokenClaims?: (
-    userId: number,
-    ctx: PluginContext,
-  ) => Promise<Record<string, unknown>>;
-
-  /** Scope data access by user context (row-level data isolation).
-   *  Returns filters for reads (findOne/findMany/count/delete) AND
-   *  default values to auto-inject on creates. */
-  scopeRules?: (
-    userId: number,
-    model: string,
-    ctx: PluginContext,
-  ) => Promise<ScopeRule | null>;
-}
-
-/** Scope rules for a model — applied to both reads and writes */
-interface ScopeRule {
-  /** WHERE clauses auto-injected on findOne, findMany, count, update, delete */
-  filters: WhereClause[];
-  /** Default values auto-injected on create (e.g., { siteId: 3, organizationId: 7 }) */
-  defaults: Record<string, unknown>;
+  name: string;                           // Unique identifier (used as key in fortress.plugins)
+  models?: ModelDefinition[];             // DB tables this plugin needs
+  hooks?: PluginHooks;                    // Auth lifecycle interception
+  methods?: (ctx: PluginContext) => Record<string, Function>;  // Operations exposed on fortress.plugins.<name>
+  routes?: RouteDefinition[];             // HTTP endpoints (auto-mounted by framework adapter)
+  middleware?: MiddlewareDefinition[];     // Per-request middleware
+  wrapAdapter?: (adapter: DatabaseAdapter, requestContext: Record<string, unknown>) => DatabaseAdapter;
+  enrichTokenClaims?: (userId: number, ctx: PluginContext) => Promise<Record<string, unknown>>;
+  scopeRules?: (userId: number, model: string, ctx: PluginContext) => Promise<ScopeRule | null>;
 }
 ```
 
-### Hook Types
+### Plugin Runner Internals
+
+**File:** `src/core/plugin-runner.ts`
+
+**`processPlugins(plugins, ctx)`** (`plugin-runner.ts:11`):
+- Creates the `methods` map for each plugin by calling `plugin.methods(ctx)`
+- Returns `{ methods, plugins }` — methods are keyed by plugin name
+
+**`chainAdapterWrappers(plugins, adapter, requestContext)`** (`plugin-runner.ts:31`):
+- Iterates plugins in registration order
+- Each `wrapAdapter` receives the result of the previous wrapper
+- Last registered plugin's wrapper is **outermost** (processes queries first)
+- Example: `[tenancy, dataIsolation]` → `dataIsolation.wrapAdapter(tenancy.wrapAdapter(adapter))`
+
+**`collectScopeRules(plugins, userId, model, ctx)`** (`plugin-runner.ts:81`):
+- Calls `scopeRules()` on each plugin that defines it
+- Merges results: filters are AND'd together, defaults are shallow-merged
+- Returns `null` only if no plugin returned a rule
+- The merged scope rule is then applied by a **scope rule wrapper** that intercepts all DB operations (`findOne`, `findMany`, `update`, `delete`, `count`, `create`, `transaction`)
+
+### Hook Lifecycle
 
 ```typescript
 interface PluginHooks {
-  // "before" hooks — can inspect/modify input or short-circuit with HookResult
+  // Before hooks — can short-circuit with { stop: true, response: {...} }
   beforeLogin?: (ctx: HookContext & { email: string }) => Promise<HookResult | void>;
   beforeRegister?: (ctx: HookContext & { data: CreateUserInput }) => Promise<HookResult | void>;
   beforeTokenRefresh?: (ctx: HookContext & { token: string }) => Promise<HookResult | void>;
   beforeLogout?: (ctx: HookContext & { token: string }) => Promise<void>;
 
-  // "after" hooks — can modify result and set response headers (cookies, etc.)
+  // After hooks — can transform the response
   afterLogin?: (ctx: AfterHookContext, result: AuthResponse) => Promise<AuthResponse>;
   afterRegister?: (ctx: AfterHookContext, user: FortressUser) => Promise<void>;
   afterTokenRefresh?: (ctx: AfterHookContext, result: AuthTokenPair) => Promise<AuthTokenPair>;
-}
 
-/** Base context for all hooks */
-interface HookContext {
-  db: DatabaseAdapter;
-  config: FortressConfig;
-  meta?: RequestMeta;
-}
-
-/** Extended context for "after" hooks — includes response header access */
-interface AfterHookContext extends HookContext {
-  /** Set response headers (e.g., Set-Cookie for sessions plugin).
-   *  Web Standard Headers API — supports append() for multi-value headers (Set-Cookie),
-   *  case-insensitive names, and works across Bun, Deno, and Node 18+.
-   *  Framework adapter (Hono, Express) forwards these to the HTTP response. */
-  responseHeaders: Headers;
-}
-
-/** Returning HookResult from a "before" hook short-circuits the flow */
-interface HookResult {
-  stop: true;
-  response: Record<string, unknown>;
+  // Failure hooks
+  onLoginFailure?: (ctx: HookContext & { identifier: string; error: Error }) => Promise<void>;
 }
 ```
 
-### Supporting Types
+**Execution order:** Plugins run in registration order. For `before` hooks, if any plugin returns `{ stop: true }`, subsequent plugins and the core operation are skipped. For `after` hooks, each plugin receives the result from the previous plugin (chain transformation).
+
+**`AfterHookContext`** extends `HookContext` with `responseHeaders: Headers` — plugins can set response headers (e.g., `Set-Cookie`). The framework adapter forwards these to the HTTP response.
+
+### Plugin Context
 
 ```typescript
-type ModelConstraint =
-  | { type: 'unique'; fields: string[] }
-  | { type: 'index'; fields: string[]; name?: string };
-
-interface ModelDefinition {
-  name: string;
-  fields: Record<string, FieldDefinition>;
-  constraints?: ModelConstraint[];
-}
-
-interface FieldDefinition {
-  type: 'string' | 'number' | 'boolean' | 'date';
-  required?: boolean;
-  unique?: boolean;
-  references?: { model: string; field: string };
-}
-
 interface PluginContext {
   db: DatabaseAdapter;
   config: FortressConfig;
-  auth?: Record<string, Function>;  // AuthService ref; avoids circular import. Available at runtime; undefined during init-time method binding
-}
-
-interface RouteDefinition {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  path: string;
-  handler: string;  // method name from methods
-}
-
-interface MiddlewareDefinition {
-  path: string;                        // path pattern (e.g., '/api/*')
-  position: 'before-auth' | 'after-auth' | 'after-rbac';
-  handler: (ctx: PluginContext, request: unknown, next: () => Promise<void>) => Promise<void>;
+  auth?: Record<string, Function>;  // AuthService methods — available at runtime, undefined during init
 }
 ```
+
+**Circular reference note:** `auth` is `undefined` when `plugin.methods(ctx)` is called during initialization (because the auth service hasn't been created yet). It's populated later. Plugin methods that need `auth` must access it lazily from the context at call time, not at binding time.
 
 ### Plugin Capability Matrix
 
-| Capability | Use Case | Example |
-|-----------|----------|---------|
-| `models` | Declare new DB tables | 2FA needs `two_factor_secret`, `backup_code` |
-| `hooks` | Intercept/modify auth lifecycle | 2FA intercepts login, email verification blocks unverified users |
-| `methods` | Expose new operations | `fortress.plugins['two-factor'].enable(userId)` |
-| `routes` | Add HTTP endpoints | OAuth adds `/oauth/authorize`, `/oauth/token` |
-| `middleware` | Inject per-request logic | Tenancy sets DB schema search_path |
-| `wrapAdapter` | Modify DB behavior per-request | Tenancy scopes all queries to tenant schema |
-| `enrichTokenClaims` | Add custom JWT claims | Tenancy adds `tenantId`, `tenantCode` to tokens |
-| `scopeRules` | Auto-inject WHERE clauses on reads + default values on creates | Data isolation scopes queries and auto-sets scope fields on inserts |
+| Capability | Use Case | Example Plugins |
+|-----------|----------|-----------------|
+| `models` | Declare new DB tables | 2FA (`two_factor_secret`, `backup_code`), OAuth (`oauth_client`), all plugins |
+| `hooks` | Intercept auth lifecycle | 2FA (afterLogin), email verification (beforeLogin), account lockout (beforeLogin, onLoginFailure) |
+| `methods` | Expose operations | All plugins — e.g., `fortress.plugins['two-factor'].enable(userId)` |
+| `routes` | Add HTTP endpoints | OAuth (`/oauth/token`), social login (`/auth/social/:provider/callback`) |
+| `middleware` | Per-request logic | Tenancy (sets schema search_path) |
+| `wrapAdapter` | Modify DB per-request | Tenancy (schema scoping), data isolation (row filtering) |
+| `enrichTokenClaims` | Extend JWT claims | Tenancy (adds `tenantId`, `tenantCode`) |
+| `scopeRules` | Auto-inject WHERE clauses | Data isolation (row-level scoping) |
 
-### Plugin Composition Rules
+### How to Add a New Plugin
 
-**`wrapAdapter` chaining:** When multiple plugins define `wrapAdapter`, they chain in registration order. Each wrapper receives the result of the previous:
-
-```typescript
-plugins: [
-  tenancy({ ... }),        // wrapAdapter #1: sets search_path
-  dataIsolation({ ... }),  // wrapAdapter #2: injects WHERE clauses
-]
-
-// Execution: dataIsolation wraps tenancy's wrapped adapter
-// adapter → tenancy.wrapAdapter(adapter) → dataIsolation.wrapAdapter(wrappedAdapter)
-```
-
-**`enrichTokenClaims` merging:** Claims from all plugins are shallow-merged into `customClaims`. If two plugins set the same key, the later plugin wins (registration order). Fortress logs a warning on key conflicts in development mode.
-
-**`scopeRules` stacking:** All applicable scope filters from all plugins are AND'd together on every query. A plugin returning `null` means "no filter from me" (not "bypass all").
-
-### Why This Works with Generic CRUD
-
-Plugins declare new models (`oauth_client`, `two_factor_secret`, `trusted_device`) and query them through the same `create`/`findOne`/`update`/`delete` contract. No adapter changes needed. A per-entity adapter (like Lucia's) would require adapter authors to update their code for every new plugin — which is exactly what killed Lucia.
+1. Create `src/plugins/<name>/index.ts`
+2. Export a factory function that returns `FortressPlugin`:
+   ```typescript
+   export function myPlugin(config: MyPluginConfig): FortressPlugin {
+     return {
+       name: 'my-plugin',
+       models: [{ name: 'my_model', fields: { ... } }],
+       hooks: { afterLogin: async (ctx, result) => { ... } },
+       methods: (ctx) => ({
+         doSomething: async (arg: string) => { ... },
+       }),
+     };
+   }
+   ```
+3. Add JSR export in `jsr.json`: `"./plugins/<name>": "./src/plugins/<name>/index.ts"`
+4. Add method types to `src/core/plugin-methods-map.ts` for type-safe access
+5. Add tests in `src/plugins/<name>/<name>.test.ts`
+6. Add Drizzle table definitions to `src/drizzle/schema.ts` (SQLite) and `src/drizzle/pg/schema.ts` (PostgreSQL)
 
 ---
 
 ## Official Plugins
 
-### Tenancy Plugin
+### Security Plugins
 
-Schema-per-tenant isolation for **PostgreSQL only**. Uses the deepest plugin capabilities: `wrapAdapter` (scopes queries to tenant schema via `SET LOCAL search_path`), `middleware` (reads `X-Tenant-Code` header), and `enrichTokenClaims` (adds tenant info to JWT).
+#### Rate Limit
 
-> **Note:** This plugin requires PostgreSQL — it uses schema-level isolation (`SET LOCAL search_path`), which is a PostgreSQL-specific feature. For database-agnostic multi-tenancy, use the **Data Isolation plugin** with row-level filtering (`WHERE tenant_id = ?`) instead — it works on any database (PostgreSQL, MySQL, SQLite).
+**File:** `src/plugins/rate-limit/index.ts`
 
+Sliding window rate limiting with dual-key tracking (per-IP + per-account).
+
+**Config:**
 ```typescript
-import { tenancy } from '@bajustone/fortress/plugins/tenancy';
-
-const fortress = createFortress({
-  // ...
-  plugins: [
-    tenancy({
-      headerName: 'X-Tenant-Code',   // default
-      schemaPrefix: 'tenant_',       // default
-    }),
-  ],
-});
-
-// Plugin methods
-await fortress.plugins.tenancy.createTenant({ name: 'Acme', taxId: 'acme-001' });
-await fortress.plugins.tenancy.addUserToTenant(userId, tenantId);
-await fortress.plugins.tenancy.getUserTenants(userId);
-await fortress.plugins.tenancy.switchTenant(userId, 'acme-001');
+{
+  login: { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 },
+  register: { maxPerIp: 3, windowSeconds: 3600 },
+  store?: RateLimitStore  // Custom counter backend; defaults to in-memory
+}
 ```
 
-**Models:** `tenant`, `tenant_user`
+**Hooks:** `beforeLogin`, `beforeRegister` — checks counters, throws `RATE_LIMITED` with `retryAfter` if exceeded.
+
+**IP normalization:** `normalizeIp()` handles IPv6 /64 prefix grouping and IPv4-mapped IPv6 addresses.
+
+**In-memory store:** Per-key counter with auto-expiring entries. Suitable for single-process; provide a custom `RateLimitStore` (e.g., Redis-backed) for multi-process.
+
+#### Account Lockout
+
+**File:** `src/plugins/account-lockout/index.ts`
+
+Progressive lockout with escalating duration after repeated failed logins.
+
+**Config:**
+```typescript
+{
+  maxFailedAttempts: 5,         // Lock after this many failures
+  lockoutDurationSeconds: 900,  // 15 minutes
+  escalation: true,             // Double duration on repeat lockouts
+  maxLockoutSeconds: 3600       // 1 hour cap
+}
+```
+
+**Models:** `account_lockout` — `failedAttempts`, `lockedUntil`, `lockoutCount`
 
 **Hooks:**
-- `enrichTokenClaims` — adds `tenantId`, `tenantCode` to JWT
-- `afterLogin` — resolves user's default tenant, includes in response
-- `afterRegister` — optionally assigns user to a default tenant
+- `beforeLogin` — Throws `UNAUTHORIZED` if currently locked (with `lockedUntil` in error)
+- `onLoginFailure` — Increments `failedAttempts`. If threshold reached, sets `lockedUntil`. With `escalation: true`, each successive lockout doubles the duration (capped at `maxLockoutSeconds`)
+- `afterLogin` — Resets counter on successful login
 
-**Middleware:**
-- Reads `X-Tenant-Code` header, validates user belongs to tenant, sets tenant context
+**Methods:** `getLockoutStatus(userId)`, `resetLockout(userId)` (manual admin unlock)
 
-**wrapAdapter:**
-- Returns a wrapped `DatabaseAdapter` that executes queries within tenant schema (`SET LOCAL search_path TO tenant_{taxId}, public`)
+#### Audit Log
 
-### OAuth Plugin
+**File:** `src/plugins/audit-log/index.ts`
 
-OAuth 2.0 authorization server with PKCE. Uses `routes` to add OAuth endpoints and `methods` for client management.
+Append-only event logging with optional SHA-256 hash chain for tamper detection.
 
+**Config:**
 ```typescript
-import { oauth } from '@bajustone/fortress/plugins/oauth';
-
-const fortress = createFortress({
-  // ...
-  plugins: [
-    oauth({
-      authCodeExpirySeconds: 600,   // default: 10 min
-    }),
-  ],
-});
-
-// Plugin methods
-await fortress.plugins.oauth.createClient({ name: 'My App', redirectUris: [...], grantTypes: ['authorization_code'] });
-await fortress.plugins.oauth.revokeToken(token);
+{
+  events?: string[],     // Filter which events to log (null = all)
+  hashChain?: boolean    // Enable SHA-256 chain linking each entry to the previous
+}
 ```
 
-**Models:** `oauth_client`, `oauth_authorization_code`, `oauth_access_token`, `oauth_pending_flow`
+**Models:** `audit_log` — `timestamp`, `eventType`, `actorId`, `targetId`, `targetType`, `metadata` (JSON), `previousHash`
 
-**Routes:**
-- `GET /oauth/authorize` — authorization endpoint (handles both authenticated and unauthenticated users)
-- `POST /oauth/token` — token exchange (auth code + PKCE, client credentials)
-- `POST /oauth/revoke` — token revocation (RFC 7009)
-- `GET /oauth/userinfo` — OpenID Connect userinfo
+**Events logged:** `LOGIN_SUCCESS`, `LOGIN_FAILURE`, `LOGOUT`, `REGISTER`, `TOKEN_REFRESH`, `TOKEN_REUSE`, `ROLE_CREATED`, `ROLE_DELETED`, `ROLE_BOUND`, `ROLE_UNBOUND`, `PERMISSION_CHANGED`, `GROUP_CREATED`, `GROUP_MEMBER_ADDED`, `GROUP_MEMBER_REMOVED`
 
-**Login continuation (identity broker support):**
+**Hooks:** Integrated into `afterLogin`, `onLoginFailure`, `beforeLogout`, `afterRegister`, `afterTokenRefresh`. Also listens to IAM events via `setIamObserver()`.
 
-When Fortress acts as an OIDC provider to external apps (e.g., Moodle) and delegates authentication to upstream providers (e.g., Microsoft via social login plugin), the `/oauth/authorize` endpoint must handle unauthenticated users:
+**Methods:**
+- `getAuditLog(filters)` — Query with filters (userId, eventType, date range, limit/offset)
+- `logCustomEvent(event)` — Programmatic event logging for application-level events
+- `verifyChain()` — Walk the hash chain and verify integrity (returns `{ valid, brokenAt? }`)
 
-```
-1. Moodle redirects user to: GET /oauth/authorize?client_id=moodle-lms&redirect_uri=...&code_challenge=...
-2. User is NOT authenticated → Fortress stores the OAuth params in a short-lived pending flow:
-   → oauth_pending_flow { id, clientId, redirectUri, scope, state, codeChallenge, expiresAt }
-3. Fortress redirects to login page: /auth/login?continue=<pending_flow_id>
-4. User authenticates (via Microsoft social login, password, or any method)
-5. After successful auth, Fortress checks for pending flow via the `continue` param
-6. Fortress resumes /oauth/authorize with the now-authenticated user:
-   → Generates authorization code
-   → Redirects back to Moodle with the code
-```
+### Auth Plugins
 
-This is the standard identity broker pattern used by Keycloak, Auth0, and Okta. The `oauth_pending_flow` record is short-lived (default: 10 minutes) and single-use.
+#### Two-Factor Authentication
 
+**File:** `src/plugins/two-factor/index.ts`
+
+TOTP (RFC 6238), backup codes, and trusted devices.
+
+**Config:**
 ```typescript
-oauth({
-  authCodeExpirySeconds: 600,
-  pendingFlowExpirySeconds: 600,      // default: 10 min
-  loginUrl: '/auth/login',            // where to redirect unauthenticated users
-})
+{
+  totp: { issuer: 'Fortress', period: 30, digits: 6 },
+  backupCodes: { count: 10 },
+  trustedDeviceDays: 30
+}
 ```
 
-**Identity broker example (Moodle → Fortress → Microsoft):**
+**Models:** `two_factor_secret` (Base32-encoded, enabled flag), `backup_code` (single-use), `trusted_device` (hash + expiry)
 
-```typescript
-// Fortress configured as both provider and consumer:
-plugins: [
-  // Consumer: authenticate users via Microsoft
-  socialLogin({
-    providers: [{ name: 'microsoft', clientId: '...', clientSecret: '...', tenant: '...' }],
-    autoRegister: true,
-  }),
+**Hook: `afterLogin`** — If 2FA enabled for user, checks trusted device hash. If not trusted, returns `AuthResponsePending { status: 'pending', accessToken: null, refreshToken: null, pluginData: { requires2FA: true } }`. Consumer must then call `verify()` with the TOTP code.
 
-  // Provider: Moodle connects to Fortress as its IdP
-  oauth({ loginUrl: '/auth/login' }),
-]
+**Methods:**
+- `enable(userId)` → `{ secret, otpauthUrl, backupCodes }` — generates TOTP secret + QR URL + backup codes
+- `verify(userId, code, meta?)` → `AuthTokenPair` — validates TOTP (±1 window for clock drift) or backup code, optionally trusts device, issues real tokens
+- `disable(userId)` — revokes secret, backup codes, and all trusted devices
 
-// Register Moodle as an OAuth client:
-await fortress.plugins.oauth.createClient({
-  name: 'RTB Moodle LMS',
-  clientId: 'moodle-lms',
-  clientSecret: 'generated-secret',
-  redirectUris: ['https://lms.rtb.co.rw/auth/oidc/callback'],
-  grantTypes: ['authorization_code'],
-});
+**Internal TOTP implementation:** `generateTOTP()` uses HMAC-SHA1 over the time counter (`floor(now / period)`), extracts a 6-digit code via dynamic truncation per RFC 4226. `verifyTOTP()` checks the current window ±1 step.
 
-// Moodle configuration:
-// Authorization URL: https://tdmp.rtb.co.rw/oauth/authorize
-// Token URL:         https://tdmp.rtb.co.rw/oauth/token
-// UserInfo URL:      https://tdmp.rtb.co.rw/oauth/userinfo
-```
+#### Email Verification
 
-### Two-Factor Authentication Plugin
-
-TOTP, backup codes, and trusted devices.
-
-```typescript
-import { twoFactor } from '@bajustone/fortress/plugins/two-factor';
-
-const fortress = createFortress({
-  // ...
-  plugins: [
-    twoFactor({
-      totp: { issuer: 'MyApp', period: 30, digits: 6 },
-      backupCodes: { count: 10 },
-      trustedDeviceDays: 30,
-      sendOTP: async (user, code) => { await sendSMS(user.phone, code); },
-    }),
-  ],
-});
-
-// Plugin methods
-const setup = await fortress.plugins['two-factor'].enable(userId);
-// → { secret, qrCodeUrl, backupCodes }
-
-await fortress.plugins['two-factor'].verify(userId, code, meta);
-// → { accessToken, refreshToken } (issues real tokens after 2FA)
-
-await fortress.plugins['two-factor'].disable(userId);
-```
-
-**Models:** `two_factor_secret`, `backup_code`, `trusted_device`
-
-**Hooks:**
-- `afterLogin` — if 2FA enabled for user, returns `{ requires2FA: true }` instead of tokens. Consumer must then call `verify()` with the TOTP code to get real tokens.
-
-### Email Verification Plugin
+**File:** `src/plugins/email-verification/index.ts`
 
 Token-based email verification with optional login blocking.
 
-```typescript
-import { emailVerification } from '@bajustone/fortress/plugins/email-verification';
-
-const fortress = createFortress({
-  // ...
-  plugins: [
-    emailVerification({
-      tokenExpirySeconds: 3600,
-      requireBeforeLogin: true,
-      sendEmail: async (user, token, verifyUrl) => {
-        await mailer.send(user.email, `Verify: ${verifyUrl}`);
-      },
-    }),
-  ],
-});
-
-// Plugin methods
-await fortress.plugins['email-verification'].sendVerification(userId);
-await fortress.plugins['email-verification'].verify(token);
-```
-
-**Models:** `email_verification_token`
-
-**Hooks:**
-- `beforeLogin` — if `requireBeforeLogin: true`, checks `user.emailVerified` and blocks unverified users
-- `afterRegister` — auto-sends verification email on registration
-
-### API Key Plugin
-
-Long-lived API keys for service accounts, POS devices, CI/CD pipelines, and M2M communication. Keys authenticate via the same `Authorization: Bearer` header but are resolved to a SERVICE_ACCOUNT subject for permission evaluation.
-
-```typescript
-import { apiKey } from '@bajustone/fortress/plugins/api-key';
-
-const fortress = createFortress({
-  // ...
-  plugins: [
-    apiKey({
-      prefix: 'fortress',                // key prefix: fortress_sk_live_...
-      hashAlgorithm: 'sha256',           // default
-      maxKeysPerAccount: 5,              // default
-    }),
-  ],
-});
-
-// Create a service account for a POS device
-const device = await fortress.auth.createUser({
-  name: 'POS Terminal - Main Counter',
-  email: 'pos-001@devices.internal',
-});
-await fortress.iam.bindRole('SERVICE_ACCOUNT', device.id, posDeviceRoleId);
-
-// Issue an API key for the device
-const result = await fortress.plugins['api-key'].create(device.id, {
-  name: 'POS-001 Production Key',
-  expiresAt: null,              // no expiry (revocable)
-  scopes: ['sale:*', 'shift:*', 'stock:read', 'cash_deposit:create'],  // optional scope restriction
-});
-// → { key: 'fortress_sk_live_a1b2c3d4e5...', keyId: 'key_abc123' }
-// ⚠️ key is shown ONCE — only the SHA256 hash is stored
-
-// List keys for an account (shows metadata, not the key itself)
-await fortress.plugins['api-key'].list(device.id);
-// → [{ id: 'key_abc123', name: 'POS-001 Production Key', lastUsedAt, createdAt, expiresAt }]
-
-// Revoke a key
-await fortress.plugins['api-key'].revoke('key_abc123');
-
-// Rotate: revoke old + issue new in one call
-await fortress.plugins['api-key'].rotate('key_abc123', { name: 'POS-001 Rotated Key' });
-// → { key: 'fortress_sk_live_f6g7h8i9...', keyId: 'key_def456' }
-```
-
-**Models:**
-
-| Model | Fields | Notes |
-|-------|--------|-------|
-| `api_key` | id, userId, keyHash (SHA256), keyPrefix (first 8 chars), name, scopes (JSON), expiresAt, lastUsedAt, lastUsedIp, isRevoked, createdAt | Hash-only storage, same pattern as refresh tokens |
-
-**Key format:** `{prefix}_sk_{environment}_{random}`
-- `fortress_sk_live_a1b2c3d4e5f6...` — production key
-- `fortress_sk_test_a1b2c3d4e5f6...` — test key
-- Prefix enables quick identification and key scanning (e.g., git secret detection)
-
-**Middleware:**
-- Extends the auth middleware to recognize API keys alongside JWTs
-- If the Bearer token matches the key prefix pattern, resolve via key hash lookup instead of JWT verification
-- Sets `subjectType: 'SERVICE_ACCOUNT'` in the request context
-- Updates `lastUsedAt` and `lastUsedIp` on each use
-
-**Scope restriction:**
-- Keys can optionally be scoped to a subset of the account's permissions
-- Format: `resource:action` or `resource:*` (all actions on a resource)
-- If scopes are set, permission checks are intersected: the account must have the permission AND the key must include the scope
-- If no scopes set, the key inherits all of the account's permissions
-
-```typescript
-// Device account has role with: sale:create, sale:void, sale:read, shift:open, shift:close, stock:read
-// Key is scoped to: ['sale:create', 'sale:read', 'stock:read']
-
-// ✅ Allowed (account has it AND key scope includes it)
-await fortress.iam.checkPermission(deviceId, 'sale', 'create');
-
-// ❌ Denied (account has it BUT key scope doesn't include sale:void)
-await fortress.iam.checkPermission(deviceId, 'sale', 'void');
-```
-
-This is the same pattern used by GitHub (fine-grained PATs), Stripe (restricted keys), and AWS (scoped credentials).
-
-**Security:**
-- Key is returned once at creation, never stored or retrievable
-- Only SHA256 hash stored in DB (same pattern as refresh tokens)
-- `keyPrefix` (first 8 chars) stored for identification without exposing the full key
-- Rate limiting recommended on key validation endpoint (via consumer or future rate-limit plugin)
-- Key rotation without downtime via `rotate()` method
-
-### Data Isolation Plugin
-
-General-purpose row-level data isolation primitive. Automatically injects WHERE clauses into queries based on the authenticated user's context. Supports multi-tenancy (shared DB), multi-site, department scoping, or any "users should only see rows that belong to their context" pattern.
-
-```typescript
-import { dataIsolation } from '@bajustone/fortress/plugins/data-isolation';
-
-const fortress = createFortress({
-  // ...
-  plugins: [
-    dataIsolation({
-      scopes: [
-        {
-          name: 'organization',
-          field: 'organizationId',            // column name in scoped tables
-          models: ['invoice', 'product', 'customer', 'report'],
-          resolveValue: async (userId, ctx) => {
-            // Look up the user's org from the DB or JWT claims
-            const membership = await ctx.db.findOne({
-              model: 'org_member',
-              where: [{ field: 'userId', operator: '=', value: userId }],
-            });
-            return membership?.organizationId;
-          },
-        },
-        {
-          name: 'site',
-          field: 'siteId',
-          models: ['sale', 'inventory', 'shift', 'cash_deposit'],
-          resolveValue: async (userId, ctx) => {
-            const assignment = await ctx.db.findOne({
-              model: 'user_site_assignment',
-              where: [{ field: 'userId', operator: '=', value: userId }],
-            });
-            return assignment?.siteId;
-          },
-        },
-      ],
-    }),
-  ],
-});
-```
-
-**How it works:**
-
-When the DatabaseAdapter processes a query, plugins with `scopeRules` are invoked. The data isolation plugin checks if the queried model is in any scope's `models` list, and if so, injects WHERE clauses on reads and default values on creates:
-
-```typescript
-// READS — developer writes:
-await db.findMany({ model: 'sale', where: [{ field: 'date', operator: '=', value: '2026-04-03' }] });
-
-// Data isolation plugin automatically injects WHERE clauses:
-// → findMany({ model: 'sale', where: [
-//     { field: 'date', operator: '=', value: '2026-04-03' },
-//     { field: 'siteId', operator: '=', value: 3 },          ← injected
-//     { field: 'organizationId', operator: '=', value: 7 },  ← injected
-//   ]})
-
-// WRITES — developer writes:
-await db.create({ model: 'sale', data: { amount: 5000, date: '2026-04-03' } });
-
-// Data isolation plugin automatically injects scope defaults:
-// → create({ model: 'sale', data: {
-//     amount: 5000, date: '2026-04-03',
-//     siteId: 3,                                              ← injected
-//     organizationId: 7,                                      ← injected
-//   }})
-
-// Impossible to accidentally read another site's or org's data
-```
-
-**Multiple scopes stack.** A model can belong to multiple scopes (e.g., `sale` is scoped by both `organizationId` and `siteId`). All applicable filters are AND'd together.
-
-**Scope configuration:**
-
-```typescript
-interface DataIsolationScope {
-  /** Scope name for identification and bypass control */
-  name: string;
-
-  /** Column name that holds the scoping value in the target tables */
-  field: string;
-
-  /** Which models (tables) this scope applies to */
-  models: string[];
-
-  /** Resolve the current user's value for this scope */
-  resolveValue: (userId: number, ctx: PluginContext) => Promise<unknown>;
-
-  /** Optional: cache the resolved value per request (default: true) */
-  cachePerRequest?: boolean;
-}
-```
-
-**Bypass for admin/cross-scope queries:**
-
-Some operations legitimately need to cross scope boundaries (admin dashboards, analytics, migrations). The plugin provides a controlled bypass:
-
-```typescript
-// Admin generating a cross-site report:
-await fortress.plugins['data-isolation'].withoutScope('site', async () => {
-  // Queries in this callback skip the 'site' scope filter
-  const allSales = await db.findMany({ model: 'sale', where: [...] });
-  return generateReport(allSales);
-});
-
-// Or bypass all scopes:
-await fortress.plugins['data-isolation'].unscoped(async () => {
-  // No scope filters applied — use with caution
-});
-```
-
-Bypass requires the caller to have explicit permission (e.g., `data-isolation:bypass` action in the IAM system).
-
-**Models:** `user_scope_assignment` (optional — maps users to their scope values if not stored elsewhere)
-
-| Model | Fields | Notes |
-|-------|--------|-------|
-| `user_scope_assignment` | userId, scopeName, scopeValue, createdAt | Optional. Only needed if scope values aren't derivable from existing tables |
-
-**Hooks:**
-- `enrichTokenClaims` — optionally embeds scope values in JWT for fast access without DB lookup
-
-**scopeRules implementation:**
-
-```typescript
-// The plugin implements the scopeRules capability:
-scopeRules: async (userId, model, ctx) => {
-  const filters: WhereClause[] = [];
-  const defaults: Record<string, unknown> = {};
-
-  for (const scope of config.scopes) {
-    if (!scope.models.includes(model)) continue;
-
-    const value = await scope.resolveValue(userId, ctx);
-    if (value === undefined || value === null) continue;
-
-    // For reads: WHERE siteId = 3
-    filters.push({ field: scope.field, operator: '=', value });
-
-    // For writes: auto-set siteId = 3 on create
-    defaults[scope.field] = value;
-  }
-
-  return filters.length > 0 ? { filters, defaults } : null;
-}
-```
-
-This means developers **cannot accidentally create a sale in the wrong site** — the scope value is injected automatically, just like reads are filtered automatically.
-
-**Multi-tenancy strategies comparison:**
-
-| Strategy | Plugin | Isolation | Cross-tenant queries | DB complexity | Best for |
-|----------|--------|-----------|---------------------|---------------|----------|
-| Schema-per-tenant | `tenancy` | Schema-level (`SET search_path`) | Requires explicit schema switching | High (N schemas, N migrations) | **PostgreSQL only.** Regulatory compliance, fully independent data |
-| Row-level (shared DB) | `data-isolation` | Row-level (`WHERE org_id = ?`) | Possible via `unscoped()` bypass | Low (one schema, one migration) | **Any database.** Most SaaS apps, simpler ops |
-| Hybrid | Both | Schema for tenants, rows for sites within tenant | Controlled bypass at each level | Medium | **PostgreSQL only.** Multi-site tenants (loyalbook) |
-
-**Real-world examples:**
-
-```typescript
-// 1. Simple SaaS multi-tenancy (shared DB, no schema isolation)
-dataIsolation({
-  scopes: [
-    { name: 'tenant', field: 'tenantId', models: ['*'], resolveValue: async (userId, ctx) => getUserTenantId(userId, ctx) },
-  ],
-})
-
-// 2. Multi-site within a tenant (loyalbook)
-dataIsolation({
-  scopes: [
-    { name: 'site', field: 'siteId', models: ['sale', 'inventory', 'shift', 'cash_deposit'], resolveValue: async (userId, ctx) => getUserSiteId(userId, ctx) },
-  ],
-})
-
-// 3. Department-scoped data
-dataIsolation({
-  scopes: [
-    { name: 'department', field: 'departmentId', models: ['budget', 'expense', 'timesheet'], resolveValue: async (userId, ctx) => getUserDepartment(userId, ctx) },
-  ],
-})
-
-// 4. Region-based data residency
-dataIsolation({
-  scopes: [
-    { name: 'region', field: 'regionCode', models: ['customer', 'order', 'payment'], resolveValue: async (userId, ctx) => getUserRegion(userId, ctx) },
-  ],
-})
-```
-
-### Social Login Plugin
-
-OAuth/OIDC consumer for authenticating users via external identity providers (Microsoft, Google, GitHub, etc.). While the OAuth plugin makes Fortress an OAuth *server*, this plugin makes Fortress an OAuth/OIDC *consumer* — it delegates authentication to external providers.
-
-```typescript
-import { socialLogin } from '@bajustone/fortress/plugins/social-login';
-
-const fortress = createFortress({
-  // ...
-  plugins: [
-    socialLogin({
-      providers: [
-        {
-          name: 'microsoft',
-          clientId: env.MS_CLIENT_ID,
-          clientSecret: env.MS_CLIENT_SECRET,
-          tenant: env.MS_TENANT_ID,          // or 'common' for multi-tenant
-          allowedDomains: ['rtb.co.rw'],     // restrict to specific email domains
-          scopes: ['openid', 'profile', 'email', 'User.Read'],
-        },
-        {
-          name: 'google',
-          clientId: env.GOOGLE_CLIENT_ID,
-          clientSecret: env.GOOGLE_CLIENT_SECRET,
-        },
-      ],
-      autoRegister: true,       // auto-create user on first social login
-      linkAccounts: true,       // link social identity to existing user by email
-
-      // Map provider profile fields to Fortress user fields
-      mapProfile: (provider, profile) => ({
-        email: profile.email,
-        name: profile.displayName ?? profile.name,
-      }),
-
-      // Called on first-ever login for a social user
-      onFirstLogin: async (user, provider, profile) => {
-        await fortress.iam.bindRole('USER', user.id, defaultEmployeeRoleId);
-      },
-    }),
-  ],
-});
-```
-
-**Authentication flow:**
-
-```
-1. User clicks "Sign in with Microsoft"
-2. App redirects to:    GET /auth/social/microsoft
-3. Plugin redirects to Microsoft OIDC (authorization code + PKCE)
-4. User authenticates at Microsoft
-5. Microsoft redirects to: GET /auth/social/microsoft/callback?code=...&state=...
-6. Plugin exchanges code for MS tokens (ID token + access token)
-7. Plugin reads user profile (from ID token claims or provider API)
-8. Lookup user by provider account ID or email:
-   a. User exists → login, issue Fortress tokens
-   b. User doesn't exist + autoRegister → create user, link social account, issue tokens
-   c. User doesn't exist + !autoRegister → reject with UnauthorizedError
-```
-
-**Models:**
-
-| Model | Fields | Notes |
-|-------|--------|-------|
-| `social_account` | id, userId, provider, providerAccountId, email, accessTokenEncrypted, refreshTokenEncrypted, tokenExpiresAt, profile (JSON), createdAt, updatedAt | Links external identity to Fortress user. Provider tokens encrypted at rest. |
-
-**Configuration types:**
-
-```typescript
-interface SocialLoginConfig {
-  providers: ProviderConfig[];
-  autoRegister?: boolean;               // default: true
-  linkAccounts?: boolean;               // default: true
-  mapProfile?: (provider: string, profile: ProviderProfile) => Partial<CreateUserInput>;
-  onFirstLogin?: (user: FortressUser, provider: string, profile: ProviderProfile) => Promise<void>;
-}
-
-interface ProviderConfig {
-  name: string;                         // 'microsoft', 'google', 'github', etc.
-  clientId: string;
-  clientSecret: string;
-  scopes?: string[];                    // defaults per provider
-  // Provider-specific options:
-  tenant?: string;                      // Microsoft: tenant ID, 'common', 'organizations'
-  allowedDomains?: string[];            // restrict to email domains (e.g., ['rtb.co.rw'])
-}
-
-interface ProviderProfile {
-  id: string;                           // provider's user ID
-  email: string;
-  name?: string;
-  displayName?: string;
-  avatar?: string;
-  raw: Record<string, unknown>;         // full provider response
-}
-```
-
-**Routes:**
-- `GET /auth/social/:provider` — initiate OAuth flow (generates state + PKCE, redirects to provider)
-- `GET /auth/social/:provider/callback` — handle callback (exchange code, verify state, login/register)
-
-**Hooks:**
-- `afterLogin` — for social login sessions, skips password verification (social-only users have no password)
-- `afterRegister` — links social account to new user, calls `onFirstLogin` callback
-- `enrichTokenClaims` — optionally adds `provider` and `providerAccountId` to JWT
-
-**Key behaviors:**
-
-| Scenario | Behavior |
-|----------|----------|
-| First login, user doesn't exist | Auto-creates user if `autoRegister: true`, rejects otherwise |
-| First login, user exists by email | Links social account to existing user if `linkAccounts: true` |
-| Subsequent login | Matches by `providerAccountId`, updates profile/tokens |
-| Social-only user (no password) | `passwordHash` is nullable — user can only login via provider |
-| User has both password + social | Either login method works independently |
-| Provider token refresh | Stored encrypted, refreshed transparently when expired |
-| Email domain restriction | `allowedDomains` checked before registration — rejects non-matching domains |
-| Multiple providers per user | User can link multiple social accounts (MS + Google) |
-
-**Built-in providers** (pre-configured OIDC discovery URLs, scopes, profile mapping):
-- Microsoft Entra ID (Azure AD)
-- Google
-- GitHub
-- Apple
-- Discord
-
-**Generic OIDC provider** (for any standards-compliant provider):
-
+**Config:**
 ```typescript
 {
-  name: 'corporate-sso',
-  clientId: env.SSO_CLIENT_ID,
-  clientSecret: env.SSO_CLIENT_SECRET,
-  issuer: 'https://sso.company.com',    // OIDC discovery via .well-known
+  tokenExpirySeconds: 86400,        // 24 hours
+  requireVerification: true,        // Block unverified logins
+  onSendVerification: async (email, token, userId) => { ... }  // Send email callback
 }
 ```
 
-**Security:**
-- PKCE (S256) used for all OAuth flows — no implicit grants
-- `state` parameter with CSRF protection
-- Provider access/refresh tokens encrypted before storage (AES-256-GCM)
-- `allowedDomains` prevents registration from unauthorized email domains
-- ID token signature verified against provider's JWKS
+**Models:** `email_verification_token` — single-use token
+
+**Hooks:**
+- `beforeLogin` — If `requireVerification: true`, blocks login for users with `emailVerified: false` (checks if any verification token was used)
+- `afterRegister` — Auto-generates verification token, calls `onSendVerification`
+
+**Methods:**
+- `sendVerification(email)` — Generate new token (for email changes)
+- `verify(token)` — Validate token, mark user `emailVerified: true`
+
+#### Magic Link
+
+**File:** `src/plugins/magic-link/index.ts`
+
+Passwordless authentication via single-use tokens.
+
+**Config:**
+```typescript
+{
+  tokenExpirySeconds: 600,  // 10 minutes
+  onSendMagicLink: async (email, token) => { ... }  // Send email/SMS callback
+}
+```
+
+**Models:** `magic_link_token` — single-use token
+
+**Methods:**
+- `sendMagicLink(email)` — Generate token, call `onSendMagicLink`
+- `verifyMagicLink(token)` — Validate token, JIT provision user if needed, return `{ accessToken, refreshToken }`
+
+#### API Key
+
+**File:** `src/plugins/api-key/index.ts`
+
+Long-lived API keys for service accounts, devices, CI/CD, and M2M communication.
+
+**Config:**
+```typescript
+{
+  prefix: 'fortress',           // Key prefix: fortress_sk_...
+  defaultExpirySeconds: null,   // Never expire (revocable)
+  maxKeysPerUser: 10
+}
+```
+
+**Key format:** `{prefix}_sk_{32-byte-hex}` (e.g., `fortress_sk_a1b2c3d4e5...`)
+
+**Models:** `api_key` — `keyHash` (SHA-256), `keyPrefix` (first 8 chars for identification), `scopes` (JSON), `expiresAt`, `lastUsedAt`, `isRevoked`
+
+**Methods:**
+- `createKey(userId, options?)` → `{ key, keyId }` — Key shown once, only hash stored
+- `listKeys(userId)` — Returns metadata (prefix, scopes, expiry, lastUsedAt) — never the raw key
+- `revokeKey(keyId)` — Soft-delete
+- `rotateKey(keyId, options?)` → `{ key, keyId }` — Revoke old + create new atomically
+- `resolveKey(rawKey)` — Hash token, lookup, validate expiry, update `lastUsedAt`
+
+**Scope restriction:** Keys can be scoped to `resource:action` patterns. Permission checks are intersected: the account must have the permission AND the key scope must include it.
+
+#### Social Login
+
+**File:** `src/plugins/social-login/index.ts`
+
+OAuth/OIDC consumer for authenticating via external providers.
+
+**Config:**
+```typescript
+{
+  providers: [
+    { name: 'google', clientId: '...', clientSecret: '...' },
+    { name: 'microsoft', clientId: '...', clientSecret: '...', tenant: '...' },
+    { name: 'github', clientId: '...', clientSecret: '...' },
+    // Custom OIDC: { name: 'corporate-sso', clientId, clientSecret, issuer: 'https://sso.company.com' }
+  ],
+  autoRegister: true,    // JIT user provisioning on first social login
+  linkAccounts: true     // Link social identity to existing user by email match
+}
+```
+
+**Built-in providers** (`src/plugins/social-login/providers/`): Google, Microsoft Entra ID, GitHub, Apple, Discord. Each defines `authorizationUrl`, `tokenUrl`, `userInfoUrl`, `defaultScopes`, and `profileMapper`.
+
+**Generic OIDC:** Any standards-compliant provider via `issuer` URL (uses `.well-known/openid-configuration` discovery).
+
+**Models:** `social_account` — `provider`, `providerAccountId`, `profile` (JSON), `accessTokenEncrypted`, `refreshTokenEncrypted`, `tokenExpiresAt`
+
+**Flow:** `getAuthorizationUrl()` → redirect to provider → `handleCallback()` → exchange code for tokens → resolve user profile → JIT provision or link → issue Fortress tokens
+
+**Security:** PKCE (S256) on all flows, `state` parameter for CSRF, provider tokens encrypted at rest (AES-256-GCM).
+
+**Methods:** `getAuthorizationUrl(provider, redirectUri)`, `handleCallback(provider, code, state, codeVerifier)`, `getLinkedAccounts(userId)`, `unlinkAccount(userId, provider)`, `getProviders()`
+
+#### WebAuthn (Stub)
+
+**File:** `src/plugins/webauthn/index.ts`
+
+Passkeys/WebAuthn — architecture complete, crypto deferred. Currently throws "WebAuthn not yet implemented" on all methods.
+
+**Models:** `webauthn_credential` (credentialId, publicKey, counter, deviceType, backedUp, transports), `webauthn_challenge` (challenge, userId, expiresAt)
+
+**Planned methods:** `generateRegistrationOptions()`, `verifyRegistration()`, `generateAuthenticationOptions()`, `verifyAuthentication()`
+
+### Multi-Tenancy Plugins
+
+#### Tenancy (Schema Isolation)
+
+**File:** `src/plugins/tenancy/index.ts`
+
+Schema-per-tenant isolation — **PostgreSQL only**.
+
+**Config:**
+```typescript
+{
+  headerName: 'X-Tenant-Code',   // HTTP header for tenant identification
+  schemaPrefix: 'tenant_'        // Schema naming: tenant_{taxId}
+}
+```
+
+**Models:** `tenant` (`taxId` unique, `name`, `description`), `tenant_user` (userId, tenantId, `isDefault` flag)
+
+**Capabilities used:**
+- `wrapAdapter` — Returns a wrapped `DatabaseAdapter` that executes `SET LOCAL search_path TO tenant_{code}, public` before each operation
+- `enrichTokenClaims` — Adds `tenantId` and `tenantCode` to JWT
+- `afterLogin` — Resolves user's default tenant
+
+**Methods:** `createTenant(data)`, `addUserToTenant(userId, tenantId)`, `getUserTenants(userId)`, `switchTenant(userId, taxId)`
+
+**Gotcha:** Schema creation requires `rawQuery` — adapters without it can't use this plugin. The Drizzle adapter supports it.
+
+#### Data Isolation (Row-Level)
+
+**File:** `src/plugins/data-isolation/index.ts`
+
+General-purpose row-level scoping. Works on any database.
+
+**Config:**
+```typescript
+{
+  scopes: [
+    {
+      name: 'organization',
+      field: 'organizationId',              // Column name in scoped tables
+      models: ['invoice', 'product'],       // Which tables (['*'] for all)
+      resolveValue: async (userId, ctx) => { /* lookup user's org */ },
+    },
+  ]
+}
+```
+
+**Capability: `scopeRules`** — For each matching model, injects:
+- **Reads:** `WHERE organizationId = <resolved value>` on `findOne`, `findMany`, `count`, `update`, `delete`
+- **Writes:** `data.organizationId = <resolved value>` on `create`
+
+Multiple scopes stack — all applicable filters are AND'd together.
+
+**Bypass methods:**
+- `withoutScope(scopeName, fn)` — Skip named scope within callback
+- `unscoped(fn)` — Skip all scopes within callback
+
+Implementation uses a module-level `bypassedScopes` Set for per-request bypass tracking.
+
+**Models:** `user_scope_assignment` (optional — for storing scope values if not derivable from existing tables)
+
+### Integration Plugins
+
+#### OAuth (Server)
+
+**File:** `src/plugins/oauth/index.ts`
+
+OAuth 2.0 authorization server with PKCE support. Makes Fortress an OAuth/OIDC *provider*.
+
+**Config:**
+```typescript
+{
+  authCodeExpirySeconds: 600,
+  pendingFlowExpirySeconds: 600,
+  accessTokenExpirySeconds: 3600,
+  scopePermissionMap?: Record<string, { resource: string; action: string }[]>,
+  issuerUrl?: string   // For OIDC discovery
+}
+```
+
+**Models:** `oauth_client`, `oauth_authorization_code` (with PKCE challenge), `oauth_access_token`, `oauth_pending_flow`
+
+**Routes:**
+- `POST /oauth/token` — Token exchange (auth code + PKCE, client credentials)
+- `POST /oauth/introspect` — Token introspection (RFC 7662)
+- `POST /oauth/revoke` — Token revocation (RFC 7009)
+- `GET /oauth/userinfo` — OpenID Connect userinfo
+- `GET /oauth/.well-known/openid-configuration` — OIDC discovery
+
+**Methods:** `createClient()`, `createAuthorizationCode()`, `exchangeCode()`, `clientCredentialsGrant()`, `revokeToken()`, `introspectToken()`, `createPendingFlow()`, `resumePendingFlow()`, `getUserInfo()`, `handleTokenRequest()`, `handleIntrospectRequest()`, `handleRevokeRequest()`, `handleUserInfoRequest()`, `handleDiscovery()`, `resolveTokenPermissions()`
+
+**Identity broker pattern:** When an unauthenticated user hits `/oauth/authorize`, the plugin stores OAuth params in `oauth_pending_flow`, redirects to login, then resumes the flow after authentication.
+
+**PKCE:** `src/plugins/oauth/pkce.ts` — S256 challenge generation and verification via `crypto.subtle`.
+
+#### Webhook
+
+**File:** `src/plugins/webhook/index.ts`
+
+Event delivery following the [Standard Webhooks](https://www.standardwebhooks.com/) spec.
+
+**Config:**
+```typescript
+{
+  events?: string[],      // Filter which events to deliver (null = all)
+  maxRetries: 5,
+  deliver?: (url, payload, headers) => Promise<void>  // Custom delivery (e.g., for testing)
+}
+```
+
+**Models:** `webhook_endpoint` (URL, events JSON, secret, isActive), `webhook_delivery` (eventType, payload, status, attempts, nextRetryAt)
+
+**Retry strategy:** Intervals: 5s, 5m, 30m, 2h, 5h
+
+**Signature:** HMAC-SHA256 per Standard Webhooks: `v1,<base64(hmac)>`. Headers: `webhook-id`, `webhook-timestamp`, `webhook-signature`.
+
+**Events delivered:** `LOGIN_SUCCESS`, `LOGIN_FAILURE`, `LOGOUT`, `REGISTER`, `TOKEN_REFRESH`
+
+**Hooks:** Integrated into `afterLogin`, `onLoginFailure`, `beforeLogout`, `afterRegister`, `afterTokenRefresh`.
+
+---
+
+## Framework Adapters
+
+### Request Lifecycle
+
+```
+HTTP Request
+  │
+  ├─ Error Handler (catches FortressError → HTTP response)
+  │
+  ├─ Auth Middleware
+  │   ├─ Extract Bearer token from Authorization header
+  │   ├─ Verify JWT (fortress.auth.verifyToken)
+  │   ├─ Set context: userId, claims
+  │   ├─ Chain wrapAdapter from all plugins (tenancy sets search_path, etc.)
+  │   ├─ Set context: fortressDb (plugin-wrapped adapter)
+  │   └─ Set context: fortressGetScopedDb(model) — lazy scope rule applicator
+  │
+  ├─ RBAC Middleware
+  │   ├─ Map HTTP method+path → resource+action (via routeMap or mapRequest)
+  │   ├─ Skip if path matches skipPaths
+  │   └─ Call fortress.iam.checkPermission(userId, resource, action)
+  │
+  ├─ CSRF Middleware (Hono only)
+  │   ├─ Require X-Fortress-CSRF header on unsafe methods (POST, PUT, DELETE, PATCH)
+  │   └─ Check Sec-Fetch-Site header to reject cross-site requests
+  │
+  ├─ Security Headers Middleware (Hono only)
+  │   └─ Set HSTS, X-Frame-Options, X-Content-Type-Options, CSP, Referrer-Policy
+  │
+  └─ Route Handler
+      ├─ getUserId(c) — authenticated user ID
+      ├─ getClaims(c) — full token claims
+      ├─ getDb(c) — plugin-wrapped DatabaseAdapter (with tenancy scoping)
+      └─ getScopedDb(c, model) — DatabaseAdapter with scope rules applied for model
+```
+
+### Hono Adapter
+
+**Files:** `src/hono/middleware/*.ts`, `src/hono/helpers.ts`, `src/hono/plugin-routes.ts`
+
+```typescript
+import { createHonoMiddleware } from '@bajustone/fortress/hono';
+
+const { authMiddleware, rbacMiddleware, csrfMiddleware, securityHeaders, errorHandler } =
+  createHonoMiddleware(fortress, {
+    routeMap: {
+      'POST /api/users': { resource: 'user', action: 'create' },
+      'GET /api/users/:id': { resource: 'user', action: 'read' },
+    },
+    mapRequest: (method, path) => { /* dynamic mapping */ },
+    skipPaths: ['/health', '/auth/*'],
+  });
+
+app.use('*', errorHandler);
+app.use('*', securityHeaders);
+app.use('/api/*', csrfMiddleware);
+app.use('/api/*', authMiddleware);
+app.use('/api/*', rbacMiddleware);
+mountPluginRoutes(app, fortress);  // Mounts plugin-defined HTTP routes
+```
+
+**Hono context variables** (set by auth middleware, read by helpers):
+- `fortressUserId: number`
+- `fortressClaims: TokenClaims`
+- `fortressDb: DatabaseAdapter` — plugin-wrapped adapter
+- `fortressGetScopedDb: (model: string) => Promise<DatabaseAdapter>` — lazy scope rules
+
+**RBAC route mapping:** Supports both declarative `routeMap` and dynamic `mapRequest()`. Pattern matching for parameterized routes (`:id` → `[^/]+` regex).
+
+**CSRF middleware** (`src/hono/middleware/csrf.ts`): Custom-header strategy — requires `X-Fortress-CSRF` header (any value) on unsafe methods. Also checks `Sec-Fetch-Site` header to reject cross-site requests. Configurable safe methods (default: GET, HEAD, OPTIONS).
+
+**Security headers** (`src/hono/middleware/security-headers.ts`): Sets HSTS, X-Frame-Options (DENY), X-Content-Type-Options (nosniff), Content-Security-Policy, Referrer-Policy (strict-origin-when-cross-origin), X-Permitted-Cross-Domain-Policies (none). All configurable.
+
+**Error handler** (`src/hono/middleware/error-handler.ts`): Transforms `FortressError` to JSON `{ code, message, statusCode }`. Sets `Retry-After` header for `RATE_LIMITED`. Returns generic 500 for unhandled errors.
+
+### Express Adapter
+
+**Files:** `src/express/index.ts`, `src/express/middleware.ts`
+
+Parallel implementation of the Hono adapter for Express.js.
+
+```typescript
+import { createExpressMiddleware, getUserId, getClaims, getDb, getScopedDb } from '@bajustone/fortress/express';
+
+const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress, {
+  routeMap: { 'POST /api/users': { resource: 'user', action: 'create' } },
+  skipPaths: ['/health'],
+});
+
+app.use(errorHandler);
+app.use('/api', authMiddleware);
+app.use('/api', rbacMiddleware);
+```
+
+**Request extension:** Sets properties on `req`:
+- `req.fortressUserId`
+- `req.fortressClaims`
+- `req.fortressDb`
+- `req.fortressGetScopedDb`
+
+**Key difference from Hono:** Uses minimal Express-compatible interface types (caller provides express package). Express is a peer dependency, not bundled.
+
+### How to Add a New Framework Adapter
+
+1. Create `src/<framework>/index.ts` and `src/<framework>/middleware.ts`
+2. Implement auth middleware: extract Bearer token → `fortress.auth.verifyToken()` → set context
+3. Implement RBAC middleware: map request → `fortress.iam.checkPermission()`
+4. Implement error handler: catch `FortressError` → framework response
+5. Export context helpers: `getUserId()`, `getClaims()`, `getDb()`, `getScopedDb()`
+6. Chain `wrapAdapter` from plugins in auth middleware (see Hono auth.ts for reference)
+7. Implement `mountPluginRoutes()` to mount plugin-defined HTTP routes
+8. Add JSR export in `jsr.json`
 
 ---
 
 ## Fortress Instance
 
-```typescript
-interface Fortress<TPlugins extends FortressPlugin[] = FortressPlugin[]> {
-  auth: {
-    login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResponse>;
-    refresh(refreshToken: string, meta?: RequestMeta): Promise<AuthTokenPair>;
-    logout(refreshToken: string): Promise<void>;
-    me(userId: number): Promise<FortressUser>;
-    createUser(data: CreateUserInput): Promise<FortressUser>;
-    verifyToken(token: string): Promise<TokenClaims>;
-    signToken(claims: Omit<TokenClaims, 'iat' | 'exp'>): Promise<string>;
-    addLoginIdentifier(userId: number, type: 'email' | 'phone' | 'username', value: string): Promise<void>;
-    removeLoginIdentifier(userId: number, type: string, value: string): Promise<void>;
-    getLoginIdentifiers(userId: number): Promise<LoginIdentifier[]>;
-  };
-  iam: {
-    checkPermission(userId: number, resource: string, action: string, context?: PermissionContext): Promise<boolean>;
-    getUserPermissions(userId: number): Promise<Permission[]>;
-    createRole(name: string, permissions: PermissionInput[]): Promise<Role>;
-    bindRole(subjectType: SubjectType, subjectId: number, roleId: number): Promise<void>;
-    bindRoleToUser(userId: number, roleId: number): Promise<void>;
-    bindRoleToGroup(groupId: number, roleId: number): Promise<void>;
-    unbindRole(subjectType: SubjectType, subjectId: number, roleId: number): Promise<void>;
-    createGroup(name: string, description?: string): Promise<Group>;
-    addUserToGroup(groupId: number, userId: number): Promise<void>;
-    removeUserFromGroup(groupId: number, userId: number): Promise<void>;
-    syncResources(direction: 'push' | 'pull', filePath?: string): Promise<void>;
-  };
-  plugins: InferPlugins<TPlugins>;
-  config: Readonly<FortressConfig>;
-}
-```
-
-**Type-safe plugin access:**
-
-Plugins are typed via inference from the `plugins` array — no `Record<string, Record<string, Function>>`. Each plugin factory declares its method types, and `createFortress` infers them:
+**File:** `src/core/fortress.ts`
 
 ```typescript
-// Plugin factories declare their return types:
-function twoFactor(config: TwoFactorConfig): FortressPlugin & {
-  _methods: {
-    enable(userId: number): Promise<TwoFactorSetup>;
-    verify(userId: number, code: string, meta?: RequestMeta): Promise<AuthTokenPair>;
-    disable(userId: number): Promise<void>;
-  };
-};
-
-function tenancy(config: TenancyConfig): FortressPlugin & {
-  _methods: {
-    createTenant(data: CreateTenantInput): Promise<Tenant>;
-    addUserToTenant(userId: number, tenantId: number): Promise<void>;
-    getUserTenants(userId: number): Promise<Tenant[]>;
-    switchTenant(userId: number, taxId: string): Promise<void>;
-  };
-};
-
-// InferPlugins extracts _methods from each plugin and maps by plugin name:
-type InferPlugins<T extends FortressPlugin[]> = {
-  [P in T[number] as P['name']]: P extends { _methods: infer M } ? M : Record<string, Function>;
-};
-
-// Result — full autocomplete and type checking:
 const fortress = createFortress({
-  database: createDrizzleAdapter(db),
   jwt: { secret: env.JWT_SECRET },
-  plugins: [
-    twoFactor({ totp: { issuer: 'MyApp' } }),
-    tenancy({ schemaPrefix: 'tenant_' }),
-  ],
+  database: createDrizzleAdapter(db),
+  plugins: [twoFactor({ ... }), tenancy({ ... })],
 });
 
-fortress.plugins['two-factor'].enable(userId);      // ✅ typed: Promise<TwoFactorSetup>
-fortress.plugins['two-factor'].verify(userId, code); // ✅ typed: Promise<AuthTokenPair>
-fortress.plugins.tenancy.createTenant({ ... });      // ✅ typed: Promise<Tenant>
-fortress.plugins.tenancy.foo();                      // ❌ TypeScript error: 'foo' does not exist
-fortress.plugins['nonexistent'].bar();               // ❌ TypeScript error
+// fortress.auth   — AuthService (login, refresh, logout, sessions, impersonation)
+// fortress.iam    — IamService (permissions, roles, groups)
+// fortress.plugins — Type-safe plugin methods (InferPlugins<T>)
+// fortress.config — Readonly<FortressConfig>
 ```
 
-## Configuration
+**Initialization** (`fortress.ts:46`):
+1. Validates JWT secret strength (minimum 32 bytes for HS256)
+2. Checks plugin name uniqueness
+3. Processes plugins via `processPlugins()` — creates methods map
+4. Creates `InternalAdapter` wrapping the provided `DatabaseAdapter`
+5. Creates `AuthService` with plugin hooks wired in
+6. Creates `IamService` with permission cache
+7. Wires IAM events → audit-log plugin (if registered)
+8. Returns frozen `Fortress` instance
+
+**`getPluginMethods<T>(fortress, pluginName)`** (`fortress.ts:36`): Type-safe extraction of plugin methods. Used when you need plugin methods in a context where the generic type isn't available.
+
+**Type-safe plugin access** via `InferPlugins<T>` (`src/core/plugin-methods-map.ts`):
+
+```typescript
+// Pre-defined plugin method interfaces:
+'api-key' → ApiKeyMethods
+'audit-log' → AuditLogMethods
+'data-isolation' → DataIsolationMethods
+'email-verification' → EmailVerificationMethods
+'oauth' → OAuthMethods
+'social-login' → SocialLoginMethods
+'tenancy' → TenancyMethods
+'two-factor' → TwoFactorMethods
+'webauthn' → WebAuthnMethods
+// ... custom plugins fall back to Record<string, Function>
+```
+
+---
+
+## Configuration Reference
 
 ```typescript
 interface FortressConfig {
   jwt: {
-    secret: string | string[];             // string[] for rotation: first signs, all verify
-    issuer?: string;                       // default: 'fortress'
-    accessTokenExpirySeconds?: number;     // default: 900
-    refreshTokenExpirySeconds?: number;    // default: 604800
+    secret: string | string[];                    // Required. string[] for rotation: first signs, all verify. Min 32 bytes.
+    issuer?: string;                              // Default: 'fortress'
+    accessTokenExpirySeconds?: number;            // Default: 900 (15 min)
+    refreshTokenExpirySeconds?: number;           // Default: 604800 (7 days)
+    validateRefreshFingerprint?: boolean | 'warn'; // Optional fingerprint validation on refresh
   };
   rbac?: {
-    evaluationMode?: 'allow-only' | 'deny-overrides';  // default: 'allow-only'
-    resourceFile?: string;                              // default: './fortress.resources.json'
+    evaluationMode?: 'allow-only' | 'deny-overrides';  // Default: 'allow-only'
+    resourceFile?: string;                              // Default: './fortress.resources.json'
+    cache?: {
+      ttlSeconds?: number;       // Cache TTL
+      maxEntries?: number;       // LRU max size
+    };
   };
-  database: DatabaseAdapter;
-  passwordHasher?: PasswordHasher;         // default: WASM Argon2id
-  plugins?: FortressPlugin[];              // optional plugins
+  database: DatabaseAdapter;                      // Required
+  passwordHasher?: PasswordHasher;                // Default: WASM Argon2id
+  passwordPolicy?: PasswordPolicyConfig;          // Optional NIST + HIBP checking
+  plugins?: readonly FortressPlugin[];            // Optional
 }
 ```
 
-**Minimal setup — only `secret` and `database` are required:**
+**Minimal setup — only `secret` and `database` required:**
 
 ```typescript
 const fortress = createFortress({
@@ -1450,6 +1296,8 @@ const fortress = createFortress({
   database: createDrizzleAdapter(db),
 });
 ```
+
+---
 
 ## Domain Types
 
@@ -1465,15 +1313,24 @@ interface FortressUser {
   updatedAt: Date;
 }
 
+interface LoginIdentifier {
+  id: number;
+  userId: number;
+  type: 'email' | 'phone' | 'username';
+  value: string;
+  tenantId?: number;
+}
+
 // --- Auth ---
 interface TokenClaims {
-  sub: number;
+  sub: number;                                 // User ID
   name: string;
   groups: string[];
-  iss: string;
-  iat: number;
-  exp: number;
-  customClaims?: Record<string, unknown>;  // plugin-injected claims (tenantId, etc.)
+  iss: string;                                 // Issuer
+  iat: number;                                 // Issued at
+  exp: number;                                 // Expiration
+  act?: { sub: number };                       // RFC 8693 actor claim (impersonation)
+  customClaims?: Record<string, unknown>;      // Plugin-injected claims
 }
 
 interface AuthTokenPair {
@@ -1495,37 +1352,32 @@ interface AuthResponseSuccess {
 interface AuthResponseImpersonation {
   status: 'impersonation';
   user: FortressUser;
-  accessToken: string;
-  refreshToken: null;
+  accessToken: string;                         // Non-renewable, short-lived
+  refreshToken: null;                          // Never issued for impersonation
   pluginData?: Record<string, unknown>;
 }
 
 interface AuthResponsePending {
-  status: 'pending';           // e.g., 2FA required
+  status: 'pending';                           // e.g., 2FA required
   user: FortressUser;
   accessToken: null;
   refreshToken: null;
-  pluginData?: Record<string, unknown>;
+  pluginData?: Record<string, unknown>;        // e.g., { requires2FA: true }
 }
 
 interface RequestMeta {
   ipAddress?: string;
   userAgent?: string;
+  deviceName?: string;
 }
 
-interface LoginIdentifier {
+interface SessionInfo {
   id: number;
-  userId: number;
-  type: 'email' | 'phone' | 'username';
-  value: string;
-}
-
-// --- IAM ---
-interface PermissionInput {
-  resource: string;
-  action: string;
-  effect?: 'ALLOW' | 'DENY';     // default: 'ALLOW'
-  conditions?: PermissionCondition[];
+  ipAddress?: string;
+  userAgent?: string;
+  deviceName?: string;
+  lastActiveAt: Date;
+  createdAt: Date;
 }
 
 // --- IAM ---
@@ -1540,25 +1392,27 @@ interface Permission {
   description?: string;
 }
 
-interface ConditionRef { ref: string; }
-type ConditionValue = string | string[] | ConditionRef | ConditionRef[];
-
 interface PermissionCondition {
-  field: string;
+  field: string;                               // "resource.ownerId", "request.ip", "user.department"
   operator: 'eq' | 'neq' | 'in' | 'startsWith';
-  value: ConditionValue;  // string templates like "${user.id}" still work; ConditionRef is the typed alternative
+  value: ConditionValue;
 }
 
+type ConditionValue = string | string[] | ConditionRef | ConditionRef[];
+interface ConditionRef { ref: string; }        // Typed alternative to "${user.id}" templates
+
 interface PermissionContext {
-  resource?: Record<string, unknown>;
-  request?: Record<string, unknown>;
-  user?: Record<string, unknown>;
+  resource?: Record<string, unknown>;          // Resource instance attributes
+  request?: Record<string, unknown>;           // Request metadata
+  user?: Record<string, unknown>;              // Extra user attributes
+  tenantId?: number;                           // Tenant scoping
 }
 
 interface Role {
   id: number;
   name: string;
   description?: string;
+  isSystem?: boolean;
 }
 
 interface RoleBinding {
@@ -1566,6 +1420,7 @@ interface RoleBinding {
   roleId: number;
   subjectType: SubjectType;
   subjectId: number;
+  tenantId?: number;
 }
 
 interface Group {
@@ -1575,125 +1430,66 @@ interface Group {
 }
 ```
 
-## Error Hierarchy
+---
 
-Single `FortressError` class discriminated by `code` — no subclass hierarchy. Factory functions are the public API.
+## Error Handling
+
+**File:** `src/core/errors.ts`
+
+Single `FortressError` class discriminated by `code` — no subclass hierarchy.
 
 ```typescript
-type FortressErrorCode =
-  | 'UNAUTHORIZED'
-  | 'TOKEN_REUSE'
-  | 'FORBIDDEN'
-  | 'BAD_REQUEST'
-  | 'NOT_FOUND'
-  | 'CONFLICT'
-  | 'RATE_LIMITED'
-  | 'DATABASE_ERROR';
-
 class FortressError extends Error {
   readonly code: FortressErrorCode;
   readonly statusCode: number;
   readonly retryAfter?: number;
-
-  constructor(
-    code: FortressErrorCode,
-    message: string,
-    statusCode: number,
-    options?: { cause?: unknown; retryAfter?: number },
-  ) {
-    super(message, { cause: options?.cause });
-    this.code = code;
-    this.statusCode = statusCode;
-    this.retryAfter = options?.retryAfter;
-  }
-
-  toJSON(): { code: FortressErrorCode; message: string; statusCode: number } {
-    return { code: this.code, message: this.message, statusCode: this.statusCode };
-  }
 }
 
-// Factory functions (preferred public API):
+type FortressErrorCode =
+  | 'UNAUTHORIZED'      // 401
+  | 'TOKEN_REUSE'       // 401 — consumer should force-logout all devices
+  | 'FORBIDDEN'         // 403
+  | 'BAD_REQUEST'       // 400
+  | 'NOT_FOUND'         // 404
+  | 'CONFLICT'          // 409
+  | 'RATE_LIMITED'      // 429 — includes retryAfter
+  | 'DATABASE_ERROR';   // 500
+
+// Factory functions (preferred API):
 const Errors = {
-  unauthorized: (message = 'Unauthorized') =>
-    new FortressError('UNAUTHORIZED', message, 401),
-  tokenReuse: () =>
-    new FortressError('TOKEN_REUSE', 'Token reuse detected', 401),
-  forbidden: (message = 'Forbidden') =>
-    new FortressError('FORBIDDEN', message, 403),
-  badRequest: (message = 'Bad request') =>
-    new FortressError('BAD_REQUEST', message, 400),
-  notFound: (message = 'Not found') =>
-    new FortressError('NOT_FOUND', message, 404),
-  conflict: (message = 'Conflict') =>
-    new FortressError('CONFLICT', message, 409),
-  rateLimited: (retryAfter: number) =>
-    new FortressError('RATE_LIMITED', 'Too many requests', 429, { retryAfter }),
-  database: (message = 'Database error', cause?: unknown) =>
-    new FortressError('DATABASE_ERROR', message, 500, { cause }),
-} as const;
+  unauthorized: (message?) => new FortressError('UNAUTHORIZED', message, 401),
+  tokenReuse: () => new FortressError('TOKEN_REUSE', 'Token reuse detected', 401),
+  forbidden: (message?) => new FortressError('FORBIDDEN', message, 403),
+  badRequest: (message?) => new FortressError('BAD_REQUEST', message, 400),
+  notFound: (message?) => new FortressError('NOT_FOUND', message, 404),
+  conflict: (message?) => new FortressError('CONFLICT', message, 409),
+  rateLimited: (retryAfter) => new FortressError('RATE_LIMITED', 'Too many requests', 429, { retryAfter }),
+  database: (message?, cause?) => new FortressError('DATABASE_ERROR', message, 500, { cause }),
+};
 ```
 
-**Why this design:**
-- **One class, no inheritance** — `instanceof FortressError` works reliably across package boundaries (subclass `instanceof` breaks with duplicate dependency versions)
-- **Factory functions** — tree-shakeable, clean API (`throw Errors.forbidden()`)
-- **Discriminated by `code`** — exhaustive `switch(error.code)` works in TypeScript
-- **Throwable** — real `Error` with stack traces and `cause` chaining
-- **Serializable** — `toJSON()` built in for logging and API responses
+**Design rationale:**
+- One class, no inheritance — `instanceof FortressError` works reliably across package boundaries
+- Factory functions — tree-shakeable, clean API (`throw Errors.forbidden()`)
+- Discriminated by `code` — exhaustive `switch(error.code)` in TypeScript
+- `toJSON()` built in for logging and API responses
 
-**Usage:**
+---
 
-```typescript
-// Throwing errors:
-throw Errors.unauthorized('Invalid token');
-throw Errors.rateLimited(60);
-throw Errors.database('Connection failed', originalError);
+## Entry Points
 
-// Handling errors (exhaustive switch):
-if (error instanceof FortressError) {
-  switch (error.code) {
-    case 'UNAUTHORIZED':   // 401
-    case 'TOKEN_REUSE':    // 401 — consumer can force-logout all devices
-    case 'FORBIDDEN':      // 403
-    case 'BAD_REQUEST':    // 400
-    case 'NOT_FOUND':      // 404
-    case 'RATE_LIMITED':   // 429 — set Retry-After header from error.retryAfter
-    case 'DATABASE_ERROR': // 500 — log error.cause
-  }
-}
-```
-
-The Hono error handler maps `FortressError` to HTTP responses, adding `Retry-After` header for `RATE_LIMITED`.
-
-## JSR Entry Points
-
-```jsonc
-{
-  "exports": {
-    ".": "./src/index.ts",
-    "./crypto": "./src/core/auth/password.ts",
-    "./jwt": "./src/core/auth/jwt.ts",
-    "./testing": "./src/testing/index.ts",
-    "./drizzle": "./src/drizzle/index.ts",
-    "./hono": "./src/hono/index.ts",
-    "./plugins/tenancy": "./src/plugins/tenancy/index.ts",
-    "./plugins/oauth": "./src/plugins/oauth/index.ts",
-    "./plugins/two-factor": "./src/plugins/two-factor/index.ts",
-    "./plugins/email-verification": "./src/plugins/email-verification/index.ts",
-    "./plugins/api-key": "./src/plugins/api-key/index.ts",
-    "./plugins/data-isolation": "./src/plugins/data-isolation/index.ts",
-    "./plugins/social-login": "./src/plugins/social-login/index.ts"
-  }
-}
-```
+### JSR Exports (`jsr.json`)
 
 | Import | Contains |
 |--------|----------|
-| `@bajustone/fortress` | `createFortress()`, types, errors, `DatabaseAdapter` interface, `FortressPlugin` interface |
+| `@bajustone/fortress` | `createFortress()`, all types, errors, `DatabaseAdapter` interface, `FortressPlugin` interface |
 | `@bajustone/fortress/crypto` | `PasswordHasher` interface, default WASM hasher |
 | `@bajustone/fortress/jwt` | `signToken()`, `verifyToken()` standalone utilities |
-| `@bajustone/fortress/testing` | `createTestAdapter()` — in-memory SQLite via bun:sqlite + Drizzle |
-| `@bajustone/fortress/drizzle` | `createDrizzleAdapter()`, reference schema tables (PostgreSQL, MySQL, SQLite) |
+| `@bajustone/fortress/testing` | `createTestAdapter()` — in-memory SQLite |
+| `@bajustone/fortress/drizzle` | `createDrizzleAdapter()`, SQLite reference schema |
+| `@bajustone/fortress/drizzle/pg` | PostgreSQL reference schema |
 | `@bajustone/fortress/hono` | `createHonoMiddleware()`, context helpers |
+| `@bajustone/fortress/express` | `createExpressMiddleware()`, request helpers |
 | `@bajustone/fortress/plugins/tenancy` | `tenancy()` plugin factory |
 | `@bajustone/fortress/plugins/oauth` | `oauth()` plugin factory |
 | `@bajustone/fortress/plugins/two-factor` | `twoFactor()` plugin factory |
@@ -1701,230 +1497,85 @@ The Hono error handler maps `FortressError` to HTTP responses, adding `Retry-Aft
 | `@bajustone/fortress/plugins/api-key` | `apiKey()` plugin factory |
 | `@bajustone/fortress/plugins/data-isolation` | `dataIsolation()` plugin factory |
 | `@bajustone/fortress/plugins/social-login` | `socialLogin()` plugin factory, built-in providers |
+| `@bajustone/fortress/plugins/rate-limit` | `rateLimit()` plugin factory |
+| `@bajustone/fortress/plugins/audit-log` | `auditLog()` plugin factory |
+| `@bajustone/fortress/plugins/account-lockout` | `accountLockout()` plugin factory |
+| `@bajustone/fortress/plugins/webauthn` | `webauthn()` plugin factory (stub) |
+| `@bajustone/fortress/plugins/magic-link` | `magicLink()` plugin factory |
+| `@bajustone/fortress/plugins/webhook` | `webhook()` plugin factory |
 
-## Consumer Usage
+### npm Exports (`package.json`)
 
-### Full setup with plugins
+npm exports use conditional imports (ESM + CJS) for the 6 main entry points only: `index`, `hono`, `drizzle`, `testing`, `crypto`, `jwt`. Plugin sub-paths are JSR-only.
 
-```typescript
-import { createFortress } from '@bajustone/fortress';
-import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
-import { createHonoMiddleware } from '@bajustone/fortress/hono';
-import { tenancy } from '@bajustone/fortress/plugins/tenancy';
-import { oauth } from '@bajustone/fortress/plugins/oauth';
-import { twoFactor } from '@bajustone/fortress/plugins/two-factor';
-import { emailVerification } from '@bajustone/fortress/plugins/email-verification';
+---
 
-const fortress = createFortress({
-  jwt: { secret: env.JWT_SECRET, issuer: 'my-app' },
-  database: createDrizzleAdapter(db),
-  rbac: { evaluationMode: 'deny-overrides' },
-  plugins: [
-    tenancy({ headerName: 'X-Tenant-Code', schemaPrefix: 'tenant_' }),
-    oauth({ authCodeExpirySeconds: 600 }),
-    twoFactor({
-      totp: { issuer: 'MyApp' },
-      sendOTP: async (user, code) => { /* ... */ },
-    }),
-    emailVerification({
-      requireBeforeLogin: true,
-      sendEmail: async (user, token, url) => { /* ... */ },
-    }),
-  ],
-});
+## CLI Tool
 
-const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fortress, {
-  routeMap: {
-    'POST /api/users': { resource: 'user', action: 'create' },
-    'GET /api/users': { resource: 'user', action: 'list' },
-    'GET /api/users/:id': { resource: 'user', action: 'read' },
-    'PUT /api/users/:id': { resource: 'user', action: 'update' },
-    'DELETE /api/users/:id': { resource: 'user', action: 'delete' },
-    'POST /api/posts': { resource: 'post', action: 'create' },
-    'POST /api/posts/:id/publish': { resource: 'post', action: 'publish' },
-  },
-  skipPaths: ['/health', '/docs', '/auth/*'],
-});
-
-app.use('*', errorHandler);
-app.use('/api/*', authMiddleware);
-app.use('/api/*', rbacMiddleware);
-
-app.post('/auth/login', async (c) => {
-  const { identifier, password } = await c.req.json();
-  const result = await fortress.auth.login(identifier, password);
-
-  if (result.accessToken === null) {
-    // 2FA required — plugin set pluginData.requires2FA
-    return c.json({ data: result });
-  }
-  return c.json({ data: result });
-});
-
-// Fine-grained check in route handler
-app.put('/api/posts/:id', async (c) => {
-  const post = await getPost(c.req.param('id'));
-  const allowed = await fortress.iam.checkPermission(userId, 'post', 'update', {
-    resource: { ownerId: post.authorId },
-  });
-  if (!allowed) throw Errors.forbidden();
-  // ...
-});
-
-// Type-safe plugin access — full autocomplete
-const setup = await fortress.plugins['two-factor'].enable(userId);
-// setup is typed as TwoFactorSetup: { secret, qrCodeUrl, backupCodes }
-
-await fortress.plugins.tenancy.createTenant({ name: 'Acme', taxId: 'acme-001' });
-// fully typed — TypeScript knows tenancy plugin methods
-
-// Convenience methods for common operations
-await fortress.iam.bindRoleToUser(userId, editorRoleId);
-await fortress.iam.bindRoleToGroup(groupId, viewerRoleId);
-```
-
-### Minimal setup (no plugins)
-
-```typescript
-import { createFortress } from '@bajustone/fortress';
-import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
-
-// Only secret and database are required — everything else has sensible defaults
-const fortress = createFortress({
-  jwt: { secret: env.JWT_SECRET },
-  database: createDrizzleAdapter(db),
-});
-```
-
-### Just JWT utilities
-
-```typescript
-import { signToken, verifyToken } from '@bajustone/fortress/jwt';
-
-const token = await signToken(claims, secret, 900);
-const decoded = await verifyToken(token, secret);
-```
-
-### Resource sync workflow
+**File:** `bin/fortress.ts`
 
 ```bash
-# 1. Define resources in fortress.resources.json
-# 2. Seed DB on deploy
-bun run fortress sync:push
-
-# 3. Admin adds new resource via UI at runtime
-# 4. Export changes back to file
-bun run fortress sync:pull
-
-# 5. Optionally generate TypeScript types
-bun run fortress sync:types
-
-# 6. Commit updated file + types
-git add fortress.resources.json fortress.resources.d.ts
-git commit -m "feat: add invoice resource"
+fortress init              # Scaffold fortress.resources.json and config
+fortress sync:push         # JSON → DB: seed/update resources on deploy
+fortress sync:pull         # DB → JSON: export after runtime changes
+fortress sync:types        # Generate TypeScript types from resource file
+fortress generate-secret   # Generate a cryptographically secure JWT secret (32+ bytes)
 ```
 
-## Implementation Sequence
+---
 
-### Phase 1a: Foundation
-1. `core/types.ts` — all domain types (Permission, Role, RoleBinding with subjectType)
-2. `core/config.ts` — configuration with defaults (evaluationMode, resourceFile)
-3. `core/errors.ts` — error hierarchy
-4. `adapters/database/index.ts` — generic CRUD DatabaseAdapter interface
+## Build & Publish
 
-### Phase 1b: Core Auth
-5. `core/auth/password.ts` — PasswordHasher interface + WASM default
-6. `core/auth/jwt.ts` — JWT sign/verify with jose
-7. `core/auth/refresh-token.ts` — token generation, hashing, rotation
-8. `core/auth/auth-service.ts` — login, refresh, logout orchestration
-
-### Phase 1c: IAM
-9. `core/iam/permission-evaluator.ts` — resource+action evaluation, conditions, deny-overrides
-10. `core/iam/iam-service.ts` — group/role/permission CRUD, checkPermission
-11. `core/iam/resource-sync.ts` — load/export fortress.resources.json, DB sync
-
-### Phase 1d: Plugin System
-12. `core/plugin.ts` — FortressPlugin interface, hook runner, plugin registry
-
-### Phase 1e: Drizzle Adapter
-13. `drizzle/schema.ts` — reference schema for core models (updated: no principal table, permission has resource+action+effect+conditions)
-14. ~~`drizzle/internal-adapter.ts`~~ → `core/internal-adapter.ts` — entity-specific queries on top of generic CRUD (moved to core/ since auth-service and iam-service consume it)
-15. `drizzle/adapter.ts` — generic CRUD implementation for Drizzle (PostgreSQL, MySQL, SQLite)
-
-### Phase 1f: Hono Adapter
-16. `hono/middleware/*.ts` — auth, rbac with routeMap, error-handler, plugin mounting
-17. `hono/helpers.ts` — context helpers
-
-### Phase 1g: Wiring
-18. `src/index.ts` — createFortress() factory with plugin processing
-
-### Phase 2a: Tenancy Plugin
-19. `plugins/tenancy/index.ts` — tenant CRUD, schema isolation, middleware, adapter wrapping
-
-### Phase 2b: OAuth Plugin
-20. `plugins/oauth/index.ts` — auth code + PKCE, client credentials, revoke, userinfo
-21. `plugins/oauth/pkce.ts` — S256 challenge/verify
-
-### Phase 2c: Two-Factor Plugin
-22. `plugins/two-factor/index.ts` — TOTP, backup codes, trusted devices
-
-### Phase 2d: Email Verification Plugin
-23. `plugins/email-verification/index.ts` — token generation, verification flow
-
-### Phase 2e: API Key Plugin
-24. `plugins/api-key/index.ts` — key generation, hash storage, scope restriction, rotation, auth middleware extension
-
-### Phase 2f: Data Isolation Plugin
-25. `plugins/data-isolation/index.ts` — scope config, scopeRules implementation (read filters + write defaults), bypass control, adapter wrapping
-
-### Phase 2g: Social Login Plugin
-26. `plugins/social-login/index.ts` — social login config, OAuth/OIDC consumer flow, account linking
-27. `plugins/social-login/providers/*.ts` — built-in provider configs (Microsoft, Google, GitHub, Apple, Discord, generic OIDC)
-
-## Hono Adapter and Plugin Integration
-
-`createHonoMiddleware(fortress)` auto-discovers plugin routes, middleware, and mounts them:
+### Build (`tsup.config.ts`)
 
 ```typescript
-function createHonoMiddleware(fortress: Fortress, options?: HonoAdapterOptions) {
-  const plugins = fortress.config.plugins ?? [];
-
-  return {
-    authMiddleware: createAuthMiddleware(fortress),
-    rbacMiddleware: createRbacMiddleware(fortress, options?.routeMap, options?.skipPaths),
-    errorHandler: createErrorHandler(),
-
-    // Mounts all plugin routes and middleware onto a Hono app
-    mountPlugins(app: HonoApp): void {
-      for (const plugin of plugins) {
-        if (plugin.middleware) {
-          for (const mw of plugin.middleware) {
-            app.use(mw.path, /* wrap mw.handler */);
-          }
-        }
-        if (plugin.routes) {
-          for (const route of plugin.routes) {
-            const handler = fortress.plugins[plugin.name][route.handler];
-            app[route.method.toLowerCase()](route.path, /* wrap handler */);
-          }
-        }
-      }
-    },
-  };
+entry: {
+  index: 'src/index.ts',
+  hono: 'src/hono/index.ts',
+  drizzle: 'src/drizzle/index.ts',
+  testing: 'src/testing/index.ts',
+  crypto: 'src/core/auth/password.ts',
+  jwt: 'src/core/auth/jwt.ts',
 }
-
-interface HonoAdapterOptions {
-  routeMap?: Record<string, { resource: string; action: string }>;
-  mapRequest?: (method: string, path: string) => { resource: string; action: string } | null;
-  skipPaths?: string[];
-}
+format: ['esm', 'cjs']          // Dual format
+dts: true                        // Generate .d.ts and .d.cts
+splitting: false                 // Single bundle per entry
+external: ['drizzle-orm', 'hono', 'better-sqlite3', 'bun:sqlite']
 ```
 
-## JSR Publishing Notes
+Output: `dist/{name}.js`, `dist/{name}.cjs`, `dist/{name}.d.ts`, `dist/{name}.d.cts`
 
+### JSR Publishing
+
+- JSR exports point to **source** (`src/` files), not `dist/`
 - All exported functions must have **explicit return type annotations** (JSR "slow types" requirement)
 - Use `npm:` prefix for npm dependencies in import map
-- Sub-path exports isolate optional deps (Drizzle, Hono) — consumers only install what they import
-- Run `deno publish --dry-run` in CI to catch issues before merging
-- Use Web Standard APIs (crypto.subtle, Request/Response) where possible for cross-runtime compat
-- Test under both `bun test` and `deno test`
+- Validate: `bun run publish:dry`
+
+### npm Publishing
+
+- `prepublishOnly` runs `tsup` → builds to `dist/`
+- `package.json` exports point to built files with conditional `import`/`require`
+
+---
+
+## Testing
+
+### Unit Tests
+
+- **Runner:** Vitest (`vitest.config.ts`)
+- **Database:** In-memory SQLite via `createTestAdapter()`
+- **Files:** `*.test.ts` alongside source files
+- **Run:** `bun run test`
+
+### Integration Tests
+
+- **Config:** `vitest.integration.config.ts` (30s timeout)
+- **Database:** PostgreSQL via `testcontainers`
+- **Files:** `*.integration-test.ts`
+- **Run:** `bun run test:integration`
+- **Covers:** Drizzle adapter against real PostgreSQL, tenancy plugin schema operations
+
+### Adapter Conformance
+
+`src/testing/adapter-conformance.test.ts` exports `runAdapterTests(adapterFactory)` — a shared test suite any `DatabaseAdapter` implementation should pass. Tests all 7 CRUD methods, transactions, and edge cases.
