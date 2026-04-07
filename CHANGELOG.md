@@ -3,6 +3,11 @@
 ## [0.0.20] - 2026-04-07
 
 ### Added
+- feat: complete admin plugin with all IAM endpoints, type safety, and bug fixes
+
+## [0.0.20] - 2026-04-07
+
+### Added
 - Admin plugin now mounts all 16 core IAM endpoints (roles CRUD, role/group bindings, permission bindings, getUserPermissions, checkPermission)
 - `POST /auth/users` — admin-initiated user creation with `fortress:manageUsers` permission
 - `POST /iam/sync` — push/pull resource sync endpoint
