@@ -672,7 +672,7 @@ interface EndpointDefinition {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   path: string;
   handler: string;
-  meta?: { summary, description, tags, security, deprecated };
+  meta?: { summary, description, tags, security, deprecated, permission? };
   input?: { body?: JSONSchema, query?: JSONSchema, params?: JSONSchema };
   responses?: Record<number, { description: string, schema?: JSONSchema }>;
 }
@@ -680,16 +680,19 @@ interface EndpointDefinition {
 
 `fortress.endpoints` exposes all endpoint definitions (auth + IAM + plugins).
 
+**`meta.permission`** — Optional `{ resource, action }` declaration. When set, the RBAC middleware automatically enforces this IAM permission on the route. The admin plugin's bootstrap auto-discovers all declared permissions and registers them. IAM endpoints declare `permission: { resource: 'fortress', action: '...' }`.
+
 ### Builder Helpers
 
 Fluent API for ergonomic JSON Schema authoring:
 
 ```ts
-endpoint('POST', '/auth/login')
-  .summary('Login').tags('Auth').security('none')
-  .body(obj({ identifier: str(), password: str() }, 'identifier', 'password'))
-  .response(200, 'Success', ref('AuthResponse'))
-  .handler('login').build()
+endpoint('POST', '/iam/roles')
+  .summary('Create a role').tags('IAM').security('bearer')
+  .permission('fortress', 'createRole')
+  .body(obj({ name: str(), permissions: arr(ref('PermissionInput')) }, 'name', 'permissions'))
+  .response(201, 'Role created', ref('Role'))
+  .handler('createRole').build()
 ```
 
 ### OpenAPI Plugin

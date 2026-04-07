@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from 'hono';
+import type { EndpointDefinition } from '../../core/endpoint';
 import type { Fortress } from '../../core/fortress';
 import type { FortressEnv } from './auth';
 import { FortressError } from '../../core/errors';
@@ -109,9 +110,42 @@ export function createRbacMiddleware(
       mapping = options.mapRequest(method, path);
     }
 
-    // No mapping found — default deny for fortress-owned paths
+    // No mapping found — smart default deny for fortress-owned paths
     if (!mapping) {
       if (!options?.allowUnmappedFortressPaths && isFortressPath(path, pluginPathPrefixes)) {
+        const ep = findEndpoint(fortress.endpoints, method, path);
+
+        // Public or self-authenticated routes pass through
+        if (ep?.meta?.security?.includes('none') || ep?.meta?.security?.includes('basic')) {
+          await next();
+          return;
+        }
+
+        // Routes with declared permissions — enforce via IAM
+        if (ep?.meta?.permission) {
+          const userId = c.get('fortressUserId');
+          if (!userId) {
+            throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
+          }
+          const allowed = await fortress.iam.checkPermission(userId, ep.meta.permission.resource, ep.meta.permission.action);
+          if (!allowed) {
+            throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403);
+          }
+          await next();
+          return;
+        }
+
+        // Bearer-only routes without permission — require auth but no IAM check
+        if (ep?.meta?.security?.includes('bearer')) {
+          const userId = c.get('fortressUserId');
+          if (!userId) {
+            throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
+          }
+          await next();
+          return;
+        }
+
+        // Unknown / no security metadata — deny
         throw new FortressError('FORBIDDEN', 'No permission mapping for this route', 403);
       }
       await next();
@@ -160,4 +194,20 @@ function pathToRegex(pattern: string): RegExp {
     .replace(/\*/g, '.*')
     .replace(/\//g, '\\/');
   return new RegExp(`^${regexStr}$`);
+}
+
+/**
+ * Find an endpoint definition matching the given method and path.
+ * Handles parameterized paths (e.g., /iam/roles/:id matches /iam/roles/5).
+ */
+function findEndpoint(endpoints: EndpointDefinition[], method: string, path: string): EndpointDefinition | undefined {
+  return endpoints.find((ep) => {
+    if (ep.method !== method)
+      return false;
+    // Exact match
+    if (ep.path === path)
+      return true;
+    // Parameterized match
+    return pathToRegex(ep.path).test(path);
+  });
 }

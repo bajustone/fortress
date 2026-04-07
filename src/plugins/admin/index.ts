@@ -1,7 +1,10 @@
+import type { EndpointDefinition, EndpointPermission } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
-import type { PermissionInput, Role } from '../../core/types';
+import type { Role } from '../../core/types';
+import { authEndpoints } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
+import { iamEndpoints } from '../../core/iam/iam-endpoints';
 import { pullResources } from '../../core/iam/resource-sync';
 
 export interface AdminPluginOptions {
@@ -11,36 +14,34 @@ export interface AdminPluginOptions {
   resource?: string;
 }
 
-/** Actions that map to IAM endpoint handlers */
-const FORTRESS_ACTIONS: Record<string, string> = {
-  getResources: 'viewResources',
-  getRoles: 'viewRoles',
-  createRole: 'createRole',
-  deleteRole: 'deleteRole',
-  bindRoleToUser: 'bindRole',
-  bindRoleToGroup: 'bindRole',
-  unbindRole: 'unbindRole',
-  createGroup: 'createGroup',
-  addUserToGroup: 'manageGroup',
-  removeUserFromGroup: 'manageGroup',
-  getUserPermissions: 'viewPermissions',
-  checkPermission: 'viewPermissions',
-  bindPermissionToUser: 'managePermissions',
-  bindPermissionToGroup: 'managePermissions',
-  unbindPermissionFromUser: 'managePermissions',
-  unbindPermissionFromGroup: 'managePermissions',
-  bootstrap: 'bootstrap',
-};
+/**
+ * Collect all unique permission declarations from endpoint definitions.
+ */
+function collectPermissions(endpoints: EndpointDefinition[]): EndpointPermission[] {
+  const seen = new Set<string>();
+  const result: EndpointPermission[] = [];
 
-/** All unique fortress admin actions */
-const ALL_ACTIONS = [...new Set(Object.values(FORTRESS_ACTIONS))];
+  for (const ep of endpoints) {
+    const perm = ep.meta?.permission;
+    if (!perm)
+      continue;
+    const key = `${perm.resource}:${perm.action}`;
+    if (seen.has(key))
+      continue;
+    seen.add(key);
+    result.push(perm);
+  }
+
+  return result;
+}
 
 /**
  * Admin plugin — protects fortress IAM routes and provides admin management endpoints.
  *
- * Injects `after-auth` middleware on `/iam/*` paths that enforces permission checks
- * using the `fortress` resource. Provides bootstrap functionality to assign admin
- * permissions to the first user.
+ * Works with the RBAC middleware's security-aware default deny:
+ * - IAM endpoints declare `permission: { resource: 'fortress', action: '...' }`
+ * - RBAC middleware enforces these automatically
+ * - Admin plugin adds superadmin bypass and bootstrap functionality
  *
  * @example
  * ```ts
@@ -55,84 +56,28 @@ const ALL_ACTIONS = [...new Set(Object.values(FORTRESS_ACTIONS))];
  */
 export function admin(options: AdminPluginOptions = {}): FortressPlugin {
   const adminUserIds = new Set(options.adminUserIds ?? []);
-  const resourceName = options.resource ?? 'fortress';
 
   return {
     name: 'admin',
 
-    models: [
-      // No additional models needed — uses existing resource/permission/role tables
-    ],
-
-    middleware: [
-      {
-        path: '/iam/*',
-        position: 'after-auth',
-        handler: async (ctx: PluginContext, request: unknown, next: () => Promise<void>): Promise<void> => {
-          // Extract userId from the request context
-          // Hono: request is a Hono Context with .get('fortressUserId')
-          // Express: request is an ExpressRequest with .fortressUserId
-          const userId = extractUserId(request);
-
-          if (!userId) {
-            throw Errors.unauthorized('Authentication required for IAM operations');
-          }
-
-          // Superadmin bypass
-          if (adminUserIds.has(userId)) {
-            await next();
-            return;
-          }
-
-          // Derive the action from the request path + method
-          const action = deriveAction(request);
-
-          // Bootstrap endpoint: allow if no fortress-admin role exists yet (first-time setup)
-          if (action === 'bootstrap') {
-            const existingRole = await ctx.db.findOne<{ id: number }>({
-              model: 'role',
-              where: [{ field: 'name', operator: '=', value: 'fortress-admin' }],
-            });
-            if (!existingRole) {
-              // First-time bootstrap — allow any authenticated user
+    middleware: adminUserIds.size > 0
+      ? [
+          {
+            path: '/iam/*',
+            position: 'after-auth' as const,
+            handler: async (_ctx: PluginContext, request: unknown, next: () => Promise<void>): Promise<void> => {
+              const userId = extractUserId(request);
+              // Superadmin bypass — skip all permission checks
+              if (userId && adminUserIds.has(userId)) {
+                await next();
+                return;
+              }
+              // Non-superadmins: let RBAC middleware handle permission enforcement
               await next();
-              return;
-            }
-            // Role exists — only superadmins can re-bootstrap (already handled above)
-            throw Errors.forbidden('Admin already bootstrapped. Only superadmins can re-bootstrap.');
-          }
-
-          if (!action) {
-            // Unknown IAM endpoint — deny by default
-            throw Errors.forbidden('Insufficient permissions for this IAM operation');
-          }
-
-          // Check fortress:action permission
-          const db = ctx.db;
-          // We need to check permissions directly since we don't have access to the IAM service here
-          // Use the same approach as the internal adapter
-          const permission = await db.findOne<{ id: number }>({
-            model: 'permission',
-            where: [
-              { field: 'resource', operator: '=', value: resourceName },
-              { field: 'action', operator: '=', value: action },
-            ],
-          });
-
-          if (!permission) {
-            throw Errors.forbidden(`No '${resourceName}:${action}' permission exists. Run bootstrap first.`);
-          }
-
-          // Check if user has this permission (direct or via role)
-          const hasPermission = await checkUserHasPermission(db, userId, permission.id);
-          if (!hasPermission) {
-            throw Errors.forbidden(`Missing '${resourceName}:${action}' permission`);
-          }
-
-          await next();
-        },
-      },
-    ],
+            },
+          },
+        ]
+      : undefined,
 
     routes: [
       {
@@ -179,25 +124,40 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
           throw Errors.notFound('User not found');
         }
 
-        // Ensure the fortress resource exists
-        const existingResource = await db.findOne<{ name: string }>({
-          model: 'resource',
-          where: [{ field: 'name', operator: '=', value: resourceName }],
+        // Check if already bootstrapped — only superadmins can re-bootstrap
+        const existingRole = await db.findOne<Role>({
+          model: 'role',
+          where: [{ field: 'name', operator: '=', value: 'fortress-admin' }],
         });
-        if (!existingResource) {
-          await db.create({ model: 'resource', data: { name: resourceName, description: 'Fortress IAM administration' } });
+        if (existingRole && !adminUserIds.has(userId)) {
+          throw Errors.forbidden('Admin already bootstrapped. Only superadmins can re-bootstrap.');
         }
 
-        // Create all permissions
-        const permissions: PermissionInput[] = ALL_ACTIONS.map(action => ({
-          resource: resourceName,
-          action,
-          effect: 'ALLOW' as const,
-        }));
+        // Auto-discover all permissions from endpoint definitions
+        const plugins = ctx.config.plugins ?? [];
+        const pluginEndpoints: EndpointDefinition[] = [];
+        for (const plugin of plugins) {
+          if (plugin.routes)
+            pluginEndpoints.push(...plugin.routes);
+        }
+        const allEndpoints = [...authEndpoints, ...iamEndpoints, ...pluginEndpoints];
+        const declaredPermissions = collectPermissions(allEndpoints);
+
+        // Ensure each resource exists
+        const resources = new Set(declaredPermissions.map(p => p.resource));
+        for (const resource of resources) {
+          const existing = await db.findOne<{ name: string }>({
+            model: 'resource',
+            where: [{ field: 'name', operator: '=', value: resource }],
+          });
+          if (!existing) {
+            await db.create({ model: 'resource', data: { name: resource, description: `Auto-registered by admin plugin` } });
+          }
+        }
 
         // Find or create each permission
         const permissionIds: number[] = [];
-        for (const perm of permissions) {
+        for (const perm of declaredPermissions) {
           let existing = await db.findOne<{ id: number }>({
             model: 'permission',
             where: [
@@ -211,7 +171,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
               data: {
                 resource: perm.resource,
                 action: perm.action,
-                effect: perm.effect ?? 'ALLOW',
+                effect: 'ALLOW',
                 description: `${perm.action} ${perm.resource}`,
               },
             });
@@ -220,14 +180,11 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         }
 
         // Create or find the fortress-admin role
-        let adminRole = await db.findOne<Role>({
-          model: 'role',
-          where: [{ field: 'name', operator: '=', value: 'fortress-admin' }],
-        });
+        let adminRole = existingRole;
         if (!adminRole) {
           adminRole = await db.create<Role>({
             model: 'role',
-            data: { name: 'fortress-admin', description: 'Full fortress IAM administration', isSystem: true },
+            data: { name: 'fortress-admin', description: 'Full fortress administration', isSystem: true },
           });
         }
 
@@ -288,132 +245,4 @@ function extractUserId(request: unknown): number | undefined {
   }
 
   return undefined;
-}
-
-/**
- * Derive the IAM action from the request path and method.
- * Maps endpoint handler names to fortress admin actions.
- */
-function deriveAction(request: unknown): string | null {
-  if (!request || typeof request !== 'object')
-    return null;
-
-  // Get path and method from request
-  let path: string;
-  let method: string;
-
-  if ('req' in request && typeof (request as any).req === 'object') {
-    // Hono Context
-    path = (request as any).req.path;
-    method = (request as any).req.method;
-  }
-  else if ('path' in request && 'method' in request) {
-    // Express Request
-    path = (request as any).path;
-    method = (request as any).method;
-  }
-  else {
-    return null;
-  }
-
-  // Map path + method to handler name, then to action
-  const handlerName = resolveHandlerName(method, path);
-  return handlerName ? (FORTRESS_ACTIONS[handlerName] ?? null) : null;
-}
-
-/** Core IAM endpoint patterns — module-scoped to avoid regex re-compilation */
-const IAM_ENDPOINT_PATTERNS: Array<{ method: string; pattern: RegExp; handler: string }> = [
-  { method: 'GET', pattern: /^\/iam\/resources$/, handler: 'getResources' },
-  { method: 'GET', pattern: /^\/iam\/roles$/, handler: 'getRoles' },
-  { method: 'POST', pattern: /^\/iam\/roles$/, handler: 'createRole' },
-  { method: 'DELETE', pattern: /^\/iam\/roles\/[^/]+$/, handler: 'deleteRole' },
-  { method: 'POST', pattern: /^\/iam\/roles\/[^/]+\/bind\/user$/, handler: 'bindRoleToUser' },
-  { method: 'POST', pattern: /^\/iam\/roles\/[^/]+\/bind\/group$/, handler: 'bindRoleToGroup' },
-  { method: 'DELETE', pattern: /^\/iam\/roles\/[^/]+\/bind$/, handler: 'unbindRole' },
-  { method: 'POST', pattern: /^\/iam\/groups$/, handler: 'createGroup' },
-  { method: 'POST', pattern: /^\/iam\/groups\/[^/]+\/users$/, handler: 'addUserToGroup' },
-  { method: 'DELETE', pattern: /^\/iam\/groups\/[^/]+\/users\/[^/]+$/, handler: 'removeUserFromGroup' },
-  { method: 'GET', pattern: /^\/iam\/users\/[^/]+\/permissions$/, handler: 'getUserPermissions' },
-  { method: 'POST', pattern: /^\/iam\/check$/, handler: 'checkPermission' },
-  { method: 'POST', pattern: /^\/iam\/permissions\/bind\/user$/, handler: 'bindPermissionToUser' },
-  { method: 'POST', pattern: /^\/iam\/permissions\/bind\/group$/, handler: 'bindPermissionToGroup' },
-  { method: 'DELETE', pattern: /^\/iam\/permissions\/bind\/user$/, handler: 'unbindPermissionFromUser' },
-  { method: 'DELETE', pattern: /^\/iam\/permissions\/bind\/group$/, handler: 'unbindPermissionFromGroup' },
-  { method: 'POST', pattern: /^\/iam\/admin\/bootstrap$/, handler: 'bootstrap' },
-];
-
-/**
- * Resolve a handler name from HTTP method + path.
- */
-function resolveHandlerName(method: string, path: string): string | null {
-  for (const p of IAM_ENDPOINT_PATTERNS) {
-    if (p.method === method && p.pattern.test(path)) {
-      return p.handler;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Check if a user has a specific permission (via role bindings or direct bindings).
- */
-async function checkUserHasPermission(
-  db: PluginContext['db'],
-  userId: number,
-  permissionId: number,
-): Promise<boolean> {
-  // Check direct permission binding
-  const directBinding = await db.findOne<{ id: number }>({
-    model: 'direct_permission_binding',
-    where: [
-      { field: 'permissionId', operator: '=', value: permissionId },
-      { field: 'subjectType', operator: '=', value: 'USER' },
-      { field: 'subjectId', operator: '=', value: userId },
-    ],
-  });
-  if (directBinding)
-    return true;
-
-  // Check role-based permission
-  const roleBindings = await db.findMany<{ roleId: number }>({
-    model: 'role_binding',
-    where: [
-      { field: 'subjectType', operator: '=', value: 'USER' },
-      { field: 'subjectId', operator: '=', value: userId },
-    ],
-  });
-
-  if (roleBindings.length === 0) {
-    // Check group-based role bindings
-    const groupMemberships = await db.findMany<{ groupId: number }>({
-      model: 'group_user',
-      where: [{ field: 'userId', operator: '=', value: userId }],
-    });
-    if (groupMemberships.length > 0) {
-      const groupIds = groupMemberships.map(m => m.groupId);
-      const groupRoleBindings = await db.findMany<{ roleId: number }>({
-        model: 'role_binding',
-        where: [
-          { field: 'subjectType', operator: '=', value: 'GROUP' },
-          { field: 'subjectId', operator: 'in', value: groupIds },
-        ],
-      });
-      roleBindings.push(...groupRoleBindings);
-    }
-  }
-
-  if (roleBindings.length === 0)
-    return false;
-
-  const roleIds = [...new Set(roleBindings.map(b => b.roleId))];
-  const rolePermission = await db.findOne<{ id: number }>({
-    model: 'role_permission',
-    where: [
-      { field: 'roleId', operator: 'in', value: roleIds },
-      { field: 'permissionId', operator: '=', value: permissionId },
-    ],
-  });
-
-  return rolePermission !== null;
 }

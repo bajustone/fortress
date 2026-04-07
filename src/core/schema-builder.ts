@@ -86,6 +86,7 @@ export class EndpointBuilder {
   private _tags: string[] = [];
   private _security: SecurityRequirement[] = [];
   private _deprecated = false;
+  private _permission?: { resource: string; action: string };
   private _body?: JSONSchema;
   private _query?: JSONSchema;
   private _params?: JSONSchema;
@@ -121,6 +122,11 @@ export class EndpointBuilder {
     return this;
   }
 
+  permission(resource: string, action: string): this {
+    this._permission = { resource, action };
+    return this;
+  }
+
   body(schema: JSONSchema): this {
     this._body = schema;
     return this;
@@ -153,13 +159,14 @@ export class EndpointBuilder {
       handler: this._handler,
     };
 
-    if (this._summary || this._tags.length > 0 || this._security.length > 0 || this._description || this._deprecated) {
+    if (this._summary || this._tags.length > 0 || this._security.length > 0 || this._description || this._deprecated || this._permission) {
       def.meta = {
         summary: this._summary,
         ...(this._description && { description: this._description }),
         ...(this._tags.length > 0 && { tags: this._tags }),
         ...(this._security.length > 0 && { security: this._security }),
         ...(this._deprecated && { deprecated: true }),
+        ...(this._permission && { permission: this._permission }),
       };
     }
 

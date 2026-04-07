@@ -4,12 +4,19 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
 export type SecurityRequirement = 'bearer' | 'basic' | 'apiKey' | 'none';
 
+export interface EndpointPermission {
+  resource: string;
+  action: string;
+}
+
 export interface EndpointMeta {
   summary: string;
   description?: string;
   tags?: string[];
   security?: SecurityRequirement[];
   deprecated?: boolean;
+  /** IAM permission required to access this endpoint. Enforced by RBAC middleware. */
+  permission?: EndpointPermission;
 }
 
 export interface EndpointInput {

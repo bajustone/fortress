@@ -11,15 +11,17 @@
 ### Added
 - **Admin plugin** (`@bajustone/fortress/plugins/admin`) — protects IAM routes with `fortress:*` permissions, provides bootstrap endpoint to assign first admin, and lists available resources/roles
 - **Plugin middleware wiring** — `MiddlewareDefinition` from plugins is now executed in the request pipeline via `pluginMiddleware.beforeAuth`, `pluginMiddleware.afterAuth`, and `pluginMiddleware.afterRbac`
+- **Endpoint permission declarations** — `EndpointMeta.permission` field and `.permission(resource, action)` builder method allow endpoints to declare IAM requirements
 - `GET /iam/resources` endpoint — lists all available resources and their actions
 - `GET /iam/roles` endpoint — lists all roles
-- `POST /iam/admin/bootstrap` endpoint — creates fortress-admin role and assigns it to a user
+- `POST /iam/admin/bootstrap` endpoint — auto-discovers all declared permissions from endpoint definitions and creates fortress-admin role
 - `getResources()` and `getRoles()` methods on `IamService`
 - `createPluginMiddleware()` for Hono adapter
 - `createExpressPluginMiddleware()` for Express adapter
 
 ### Changed
-- **Default deny for fortress-owned routes** — RBAC middleware now denies unmapped `/iam/*`, `/auth/impersonate`, and plugin-owned routes by default (opt-out via `allowUnmappedFortressPaths`)
+- **Security-aware default deny** — RBAC middleware respects endpoint security metadata: `security: 'none'/'basic'` routes pass through, `permission`-declared routes are IAM-enforced, bearer-only routes require auth without IAM check, unknown routes are denied
+- **Default deny for fortress-owned routes** — RBAC middleware denies unmapped `/iam/*`, `/auth/impersonate`, and plugin-owned routes by default (opt-out via `allowUnmappedFortressPaths`)
 - Handler dispatch in Hono and Express adapters now checks plugin routes before core IAM routes, allowing plugins to register routes under `/iam/*`
 
 ## [0.0.15] - 2026-04-07

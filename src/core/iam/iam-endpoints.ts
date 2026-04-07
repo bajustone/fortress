@@ -76,6 +76,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('List all available resources')
     .tags('IAM', 'Resources')
     .security('bearer')
+    .permission('fortress', 'viewResources')
     .response(200, 'Available resources with their actions', obj({
       resources: {
         type: 'object',
@@ -96,6 +97,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('List all roles')
     .tags('IAM', 'Roles')
     .security('bearer')
+    .permission('fortress', 'viewRoles')
     .response(200, 'All roles', arr(ref('Role')))
     .response(401, 'Not authenticated', ref('ErrorResponse'))
     .handler('getRoles')
@@ -105,6 +107,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Create a role')
     .tags('IAM', 'Roles')
     .security('bearer')
+    .permission('fortress', 'createRole')
     .body(obj(
       {
         name: str('Role name'),
@@ -123,6 +126,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Delete a role')
     .tags('IAM', 'Roles')
     .security('bearer')
+    .permission('fortress', 'deleteRole')
     .params(obj({ id: int('Role ID') }, 'id'))
     .response(200, 'Role deleted', obj({ ok: bool() }))
     .response(400, 'Cannot delete system role', ref('ErrorResponse'))
@@ -136,6 +140,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Bind role to a user')
     .tags('IAM', 'Roles')
     .security('bearer')
+    .permission('fortress', 'bindRole')
     .params(obj({ id: int('Role ID') }, 'id'))
     .body(obj(
       { userId: int('User ID'), tenantId: str('Tenant ID (optional)') },
@@ -150,6 +155,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Bind role to a group')
     .tags('IAM', 'Roles')
     .security('bearer')
+    .permission('fortress', 'bindRole')
     .params(obj({ id: int('Role ID') }, 'id'))
     .body(obj(
       { groupId: int('Group ID'), tenantId: str('Tenant ID (optional)') },
@@ -164,6 +170,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Unbind a role')
     .tags('IAM', 'Roles')
     .security('bearer')
+    .permission('fortress', 'unbindRole')
     .params(obj({ id: int('Role ID') }, 'id'))
     .body(obj(
       {
@@ -185,6 +192,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Create a group')
     .tags('IAM', 'Groups')
     .security('bearer')
+    .permission('fortress', 'createGroup')
     .body(obj(
       { name: str('Group name'), description: str('Group description') },
       'name',
@@ -198,6 +206,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Add user to group')
     .tags('IAM', 'Groups')
     .security('bearer')
+    .permission('fortress', 'manageGroup')
     .params(obj({ id: int('Group ID') }, 'id'))
     .body(obj({ userId: int('User ID') }, 'userId'))
     .response(200, 'User added to group', obj({ ok: bool() }))
@@ -209,6 +218,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Remove user from group')
     .tags('IAM', 'Groups')
     .security('bearer')
+    .permission('fortress', 'manageGroup')
     .params(obj({ id: int('Group ID'), userId: int('User ID') }, 'id', 'userId'))
     .response(200, 'User removed from group', obj({ ok: bool() }))
     .response(401, 'Not authenticated', ref('ErrorResponse'))
@@ -221,6 +231,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Get user permissions')
     .tags('IAM', 'Permissions')
     .security('bearer')
+    .permission('fortress', 'viewPermissions')
     .params(obj({ id: int('User ID') }, 'id'))
     .query(obj({ tenantId: str('Tenant ID (optional)') }))
     .response(200, 'User permissions', arr(ref('Permission')))
@@ -232,6 +243,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Check if user has permission')
     .tags('IAM', 'Permissions')
     .security('bearer')
+    .permission('fortress', 'viewPermissions')
     .body(obj(
       {
         userId: int('User ID'),
@@ -252,6 +264,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Bind permission directly to a user')
     .tags('IAM', 'Permissions')
     .security('bearer')
+    .permission('fortress', 'managePermissions')
     .body(obj(
       {
         userId: int('User ID'),
@@ -270,6 +283,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Bind permission directly to a group')
     .tags('IAM', 'Permissions')
     .security('bearer')
+    .permission('fortress', 'managePermissions')
     .body(obj(
       {
         groupId: int('Group ID'),
@@ -288,6 +302,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Unbind permission from a user')
     .tags('IAM', 'Permissions')
     .security('bearer')
+    .permission('fortress', 'managePermissions')
     .body(obj(
       {
         userId: int('User ID'),
@@ -306,6 +321,7 @@ export const iamEndpoints: EndpointDefinition[] = [
     .summary('Unbind permission from a group')
     .tags('IAM', 'Permissions')
     .security('bearer')
+    .permission('fortress', 'managePermissions')
     .body(obj(
       {
         groupId: int('Group ID'),

@@ -1,4 +1,5 @@
 import type { DatabaseAdapter } from '../adapters/database';
+import type { EndpointDefinition } from '../core/endpoint';
 import type { Fortress } from '../core/fortress';
 import type { MiddlewareDefinition, PluginContext } from '../core/plugin';
 import type { TokenClaims } from '../core/types';
@@ -160,9 +161,40 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
         mapping = options.mapRequest(method, path);
       }
 
-      // No mapping found — default deny for fortress-owned paths
+      // No mapping found — smart default deny for fortress-owned paths
       if (!mapping) {
         if (!options?.allowUnmappedFortressPaths && isFortressPath(path, pluginPathPrefixes)) {
+          const ep = findEndpoint(fortress.endpoints, method, path);
+
+          // Public or self-authenticated routes pass through
+          if (ep?.meta?.security?.includes('none') || ep?.meta?.security?.includes('basic')) {
+            next();
+            return;
+          }
+
+          // Routes with declared permissions — enforce via IAM
+          if (ep?.meta?.permission) {
+            if (!req.fortressUserId) {
+              throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
+            }
+            const allowed = await fortress.iam.checkPermission(req.fortressUserId, ep.meta.permission.resource, ep.meta.permission.action);
+            if (!allowed) {
+              throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403);
+            }
+            next();
+            return;
+          }
+
+          // Bearer-only routes without permission — require auth but no IAM check
+          if (ep?.meta?.security?.includes('bearer')) {
+            if (!req.fortressUserId) {
+              throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
+            }
+            next();
+            return;
+          }
+
+          // Unknown / no security metadata — deny
           throw new FortressError('FORBIDDEN', 'No permission mapping for this route', 403);
         }
         next();
@@ -301,4 +333,17 @@ function pathToRegex(pattern: string): RegExp {
     .replace(/\*/g, '.*')
     .replace(/\//g, '\\/');
   return new RegExp(`^${regexStr}$`);
+}
+
+/**
+ * Find an endpoint definition matching the given method and path.
+ */
+function findEndpoint(endpoints: EndpointDefinition[], method: string, path: string): EndpointDefinition | undefined {
+  return endpoints.find((ep) => {
+    if (ep.method !== method)
+      return false;
+    if (ep.path === path)
+      return true;
+    return pathToRegex(ep.path).test(path);
+  });
 }
