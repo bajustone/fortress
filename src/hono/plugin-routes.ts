@@ -108,12 +108,13 @@ function createRouteHandler(
         return await handleOAuthRoute(c, handlerName, methods);
       }
 
-      // Generic plugin route: pass parsed body to handler
+      // Generic plugin route: pass parsed body + path params to handler
       const body = c.req.method === 'GET'
         ? Object.fromEntries(new URL(c.req.url).searchParams)
-        : await c.req.json();
+        : await c.req.json().catch(() => ({}));
 
-      const result = await methods[handlerName](body);
+      const params = c.req.param();
+      const result = await methods[handlerName]({ ...body, ...params });
       return c.json(result ?? { ok: true });
     }
     catch (error) {

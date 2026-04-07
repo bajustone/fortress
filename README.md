@@ -38,6 +38,10 @@ Published on [JSR](https://jsr.io/@bajustone/fortress). Runs on Bun, Deno, Node.
   - [Direct Permissions](#direct-permissions)
   - [Conditions and Deny Rules](#conditions-and-deny-rules)
   - [Resource Sync](#resource-sync)
+- [Schema Builder](#schema-builder)
+  - [Standard Schema V1](#standard-schema-v1)
+  - [Type Inference](#type-inference)
+  - [Runtime Validation](#runtime-validation)
 - [Framework Integration](#framework-integration)
   - [Hono](#hono)
   - [Express](#express)
@@ -465,6 +469,113 @@ Resource file format:
 }
 ```
 
+## Schema Builder
+
+Fortress includes a typed schema builder that produces `FortressSchema<T>` objects. Each schema is simultaneously:
+
+- **JSON Schema** -- for OpenAPI 3.1 spec generation
+- **Standard Schema V1** -- for runtime validation via `~standard.validate()`
+- **TypeScript typed** -- for compile-time type inference via `Infer<T>`
+
+```typescript
+import { obj, str, int, bool, arr, enums, nullable, nullType, record, recordOf, ref } from '@bajustone/fortress';
+
+// Primitives
+str('description')           // FortressSchema<string>
+int('description')           // FortressSchema<number>
+num('description')           // FortressSchema<number>
+bool('description')          // FortressSchema<boolean>
+strFormat('email', 'desc')   // FortressSchema<string>
+nullType()                   // FortressSchema<null>
+
+// Objects — required fields listed as rest params
+obj({ name: str(), age: int() }, 'name')
+// FortressSchema<{ name: string; age?: number }>
+
+// Combinators
+arr(str())                   // FortressSchema<string[]>
+enums('admin', 'user')       // FortressSchema<'admin' | 'user'>
+nullable(str())              // FortressSchema<string | null>
+record()                     // FortressSchema<Record<string, unknown>>
+recordOf(str())              // FortressSchema<Record<string, string>>
+ref('User')                  // $ref to component schema
+oneOf(str(), int())          // FortressSchema<string | number>
+```
+
+### Standard Schema V1
+
+Fortress schemas implement the [Standard Schema](https://standardschema.dev) spec. This means any tool that accepts Standard Schema (tRPC, Hono, Remix, etc.) works with fortress schemas out of the box.
+
+```typescript
+const schema = obj({ name: str(), email: str() }, 'name', 'email');
+
+// Runtime validation
+const result = schema['~standard'].validate({ name: 'Alice', email: 'a@b.com' });
+// { value: { name: 'Alice', email: 'a@b.com' } }
+
+const invalid = schema['~standard'].validate({ name: 123 });
+// { issues: [{ message: 'Expected string, got number', path: [{ key: 'name' }] }] }
+```
+
+The `endpoint().body()`, `.query()`, and `.params()` methods also accept external Standard Schema from Zod, Valibot, or ArkType:
+
+```typescript
+import { z } from 'zod';
+import { endpoint, obj, int } from '@bajustone/fortress';
+
+// Mix fortress schemas and Zod in the same endpoint
+endpoint('POST', '/users/:id')
+  .params(obj({ id: int() }, 'id'))                              // fortress
+  .body(z.object({ name: z.string().transform(s => s.trim()) })) // Zod
+  .build();
+```
+
+### Type Inference
+
+Extract TypeScript types from schemas using `Infer` or `StandardSchemaV1.InferOutput`:
+
+```typescript
+import { obj, str, enums, type Infer } from '@bajustone/fortress';
+
+const createUserBody = obj(
+  { name: str(), role: enums('admin', 'user') },
+  'name', 'role',
+);
+
+type CreateUserBody = Infer<typeof createUserBody>;
+// { name: string; role: 'admin' | 'user' }
+```
+
+### Runtime Validation
+
+Use `createValidationMiddleware` to validate incoming requests against endpoint schemas. No external validator needed -- schemas validate themselves via Standard Schema.
+
+```typescript
+import { createValidationMiddleware } from '@bajustone/fortress/hono'; // or /express
+import { endpoint, obj, str } from '@bajustone/fortress';
+
+const endpoints = [
+  endpoint('POST', '/users')
+    .body(obj({ name: str(), email: str() }, 'name', 'email'))
+    .handler('createUser')
+    .build(),
+];
+
+app.use('/api/*', createValidationMiddleware(endpoints));
+// Returns 422 with structured errors on validation failure
+```
+
+The `.permission()` method on endpoints declares IAM permissions for RBAC enforcement:
+
+```typescript
+endpoint('DELETE', '/iam/roles/:id')
+  .permission('fortress', 'deleteRole')  // requires this IAM permission
+  .handler('deleteRole')
+  .build();
+```
+
+---
+
 ## Framework Integration
 
 ### Hono
@@ -475,7 +586,7 @@ import { createHonoMiddleware, getUserId, getClaims, mountPluginRoutes } from '@
 
 const app = new Hono();
 
-const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fortress, {
+const { authMiddleware, rbacMiddleware, errorHandler, pluginMiddleware } = createHonoMiddleware(fortress, {
   // Map HTTP requests to resource+action permissions
   routeMap: {
     'GET /api/posts': { resource: 'post', action: 'list' },
@@ -487,8 +598,11 @@ const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fo
 });
 
 app.onError(errorHandler);
+app.use('/api/*', pluginMiddleware.beforeAuth);  // rate-limit, etc.
 app.use('/api/*', authMiddleware);
+app.use('/api/*', pluginMiddleware.afterAuth);   // account lockout checks, etc.
 app.use('/api/*', rbacMiddleware);
+app.use('/api/*', pluginMiddleware.afterRbac);   // audit logging, etc.
 
 app.get('/api/posts', (c) => {
   const userId = getUserId(c);
@@ -1499,7 +1613,8 @@ try {
     err.statusCode;  // 401
     err.message;     // 'Invalid credentials'
     err.retryAfter;  // number (seconds) -- only for RATE_LIMITED
-    err.toJSON();    // { code, message, statusCode }
+    err.details;     // unknown -- structured data for VALIDATION_ERROR
+    err.toJSON();    // { code, message, statusCode, details? }
   }
 }
 ```
@@ -1515,6 +1630,7 @@ try {
 | `NOT_FOUND` | 404 | Resource not found |
 | `CONFLICT` | 409 | Duplicate resource (e.g., email already registered) |
 | `RATE_LIMITED` | 429 | Too many requests (includes `retryAfter`) |
+| `VALIDATION_ERROR` | 422 | Request validation failed (includes `details` with issues) |
 | `DATABASE_ERROR` | 500 | Database operation failed |
 
 **Error factory** for creating errors in custom code:
@@ -1529,6 +1645,7 @@ throw Errors.notFound('User not found');
 throw Errors.conflict('Email already registered');
 throw Errors.rateLimited(60);  // retry after 60 seconds
 throw Errors.database('Connection failed', originalError);
+throw Errors.validationError([{ message: 'Name is required', path: [{ key: 'name' }] }]);
 ```
 
 The `errorHandler` middleware (Hono and Express) automatically converts `FortressError` instances to HTTP responses with the correct status code and JSON body.
@@ -1582,6 +1699,7 @@ The test adapter auto-detects the runtime: Bun uses `bun:sqlite`, Node/Vitest us
 - [Architecture](docs/architecture.md) -- full technical design
 - [Security](docs/security.md) -- JWT, password hashing, token storage, CSRF, audit logging
 - [Watch-outs](docs/watch-outs.md) -- known gaps and design decisions
+- Plugin guides: [Admin](docs/plugins/admin.md), [Rate Limit](docs/plugins/rate-limit.md), [Account Lockout](docs/plugins/account-lockout.md), [Email Verification](docs/plugins/email-verification.md), [Two-Factor](docs/plugins/two-factor.md), [Magic Link](docs/plugins/magic-link.md), [API Key](docs/plugins/api-key.md), [Social Login](docs/plugins/social-login.md), [Tenancy](docs/plugins/tenancy.md), [Data Isolation](docs/plugins/data-isolation.md), [Audit Log](docs/plugins/audit-log.md), [Webhook](docs/plugins/webhook.md), [OAuth](docs/plugins/oauth.md), [WebAuthn](docs/plugins/webauthn.md), [OpenAPI](docs/plugins/openapi.md)
 
 ## License
 

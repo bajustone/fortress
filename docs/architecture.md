@@ -732,6 +732,18 @@ endpoint('POST', '/iam/roles')
   .handler('createRole').build()
 ```
 
+**Additional helpers:**
+
+```ts
+nullType()             // FortressSchema<null>
+record('desc')         // FortressSchema<Record<string, unknown>> — { type: 'object', additionalProperties: true }
+recordOf(str(), 'desc') // FortressSchema<Record<string, string>> — typed values
+enums('a', 'b')        // FortressSchema<'a' | 'b'>
+nullable(str())        // FortressSchema<string | null>
+```
+
+**Detection utilities:** `isStandardSchema(value)`, `isFortressSchema(value)`, `extractJsonSchema(schema)`.
+
 Schemas can also be external Standard Schema (Zod, Valibot, ArkType):
 
 ```ts
@@ -1640,6 +1652,7 @@ class FortressError extends Error {
   readonly code: FortressErrorCode;
   readonly statusCode: number;
   readonly retryAfter?: number;
+  readonly details?: unknown;     // structured data (e.g., validation issues)
 }
 
 type FortressErrorCode =
@@ -1650,6 +1663,7 @@ type FortressErrorCode =
   | 'NOT_FOUND'         // 404
   | 'CONFLICT'          // 409
   | 'RATE_LIMITED'      // 429 — includes retryAfter
+  | 'VALIDATION_ERROR'  // 422 — includes details with issues array
   | 'DATABASE_ERROR';   // 500
 
 // Factory functions (preferred API):
@@ -1661,6 +1675,7 @@ const Errors = {
   notFound: (message?) => new FortressError('NOT_FOUND', message, 404),
   conflict: (message?) => new FortressError('CONFLICT', message, 409),
   rateLimited: (retryAfter) => new FortressError('RATE_LIMITED', 'Too many requests', 429, { retryAfter }),
+  validationError: (issues) => new FortressError('VALIDATION_ERROR', 'Validation failed', 422, { details: issues }),
   database: (message?, cause?) => new FortressError('DATABASE_ERROR', message, 500, { cause }),
 };
 ```
