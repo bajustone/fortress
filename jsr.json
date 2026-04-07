@@ -23,6 +23,7 @@
     "./plugins/account-lockout": "./src/plugins/account-lockout/index.ts",
     "./plugins/webauthn": "./src/plugins/webauthn/index.ts",
     "./plugins/magic-link": "./src/plugins/magic-link/index.ts",
-    "./plugins/webhook": "./src/plugins/webhook/index.ts"
+    "./plugins/webhook": "./src/plugins/webhook/index.ts",
+    "./plugins/openapi": "./src/plugins/openapi/index.ts"
   }
 }

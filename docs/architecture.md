@@ -32,11 +32,17 @@ src/
       password-policy.ts                # NIST 800-63B policy + HIBP k-anonymity breach check
       refresh-token.ts                  # Token generation, SHA-256 hashing, family rotation
       auth-service.ts                   # Login, refresh, logout, sessions, impersonation
+      auth-endpoints.ts                 # EndpointDefinition[] for all auth routes + component schemas
 
     iam/
       permission-evaluator.ts           # Resource+action evaluation, conditions, deny-overrides
       iam-service.ts                    # Groups, roles, permissions CRUD, checkPermission
+      iam-endpoints.ts                  # EndpointDefinition[] for all IAM routes + component schemas
       resource-sync.ts                  # Load/export fortress.resources.json, DB sync, type generation
+
+    json-schema.ts                      # JSON Schema type definitions (draft 2020-12 subset)
+    endpoint.ts                         # EndpointDefinition interface
+    schema-builder.ts                   # Fluent builder helpers: str(), obj(), endpoint(), etc.
       permission-cache.ts               # LRU cache with TTL and invalidation
 
   adapters/
@@ -645,6 +651,84 @@ const adapter = createTestAdapter(); // zero-setup, in-memory
 ```
 
 **Conformance suite:** `src/testing/adapter-conformance.test.ts` exports `runAdapterTests()` — a shared test suite that any adapter implementation can run to verify it meets the `DatabaseAdapter` contract.
+
+---
+
+## OpenAPI & Endpoint Definitions
+
+### JSON Schema-First Architecture
+
+Fortress uses JSON Schema (draft 2020-12) as the universal format for endpoint definitions. Every auth method, IAM method, and plugin route carries an `EndpointDefinition` with JSON Schema metadata describing its inputs and outputs.
+
+Since OpenAPI 3.1 uses JSON Schema natively, spec generation is trivial (just wrapping). Consumers can convert to Zod, Valibot, TypeBox, or any schema library.
+
+### EndpointDefinition
+
+Replaces the old `RouteDefinition`. Backward-compatible — new fields are optional.
+
+```ts
+interface EndpointDefinition {
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  path: string;
+  handler: string;
+  meta?: { summary, description, tags, security, deprecated };
+  input?: { body?: JSONSchema, query?: JSONSchema, params?: JSONSchema };
+  responses?: Record<number, { description: string, schema?: JSONSchema }>;
+}
+```
+
+`fortress.endpoints` exposes all endpoint definitions (auth + IAM + plugins).
+
+### Builder Helpers
+
+Fluent API for ergonomic JSON Schema authoring:
+
+```ts
+endpoint('POST', '/auth/login')
+  .summary('Login').tags('Auth').security('none')
+  .body(obj({ identifier: str(), password: str() }, 'identifier', 'password'))
+  .response(200, 'Success', ref('AuthResponse'))
+  .handler('login').build()
+```
+
+### OpenAPI Plugin
+
+`openapi()` plugin generates OpenAPI 3.1 spec and serves Scalar UI:
+
+```ts
+const fortress = createFortress({ plugins: [openapi({ title: 'My API' })] });
+// GET /openapi.json — spec, GET /openapi — Scalar UI
+// fortress.plugins.openapi.generateSpec() — programmatic access
+```
+
+### Schema-Library Agnostic Hono Adapter
+
+`mountFortressOpenAPI()` accepts a user-provided `SchemaConverter` — Fortress has zero dependency on any schema library. Users pass their library's own JSON Schema converter:
+
+```ts
+import { mountFortressOpenAPI } from '@bajustone/fortress/hono';
+import { z } from 'zod';                 // Zod v4 has built-in JSON Schema support
+import { createRoute } from '@hono/zod-openapi';
+
+mountFortressOpenAPI(app, fortress, {
+  schemaConverter: z.fromJSONSchema,       // or TypeBox, ArkType, Valibot converter
+  createRoute,
+});
+```
+
+Supported schema libraries (via their own JSON Schema support):
+- **Zod v4**: `z.fromJSONSchema()` (built-in)
+- **TypeBox**: schemas ARE JSON Schema natively
+- **ArkType**: `@ark/jsonschema`
+- **Valibot**: `json-schema-to-valibot` (ecosystem package)
+
+### CLI Codegen
+
+```bash
+fortress openapi --out openapi.json          # Generate OpenAPI spec
+fortress schemas --format zod --out schemas.ts  # Generate Zod schemas
+fortress schemas --format json-schema --out schemas.json
+```
 
 ---
 

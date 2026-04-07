@@ -1,10 +1,13 @@
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
+import type { EndpointDefinition } from './endpoint';
 import type { IamService } from './iam/iam-service';
 import type { FortressPlugin } from './plugin';
 import type { InferPlugins } from './plugin-methods-map';
+import { authEndpoints } from './auth/auth-endpoints';
 import { createAuthService } from './auth/auth-service';
 import { Errors } from './errors';
+import { iamEndpoints } from './iam/iam-endpoints';
 import { createIamService } from './iam/iam-service';
 import { processPlugins } from './plugin-runner';
 
@@ -14,6 +17,8 @@ export interface Fortress<TPlugins = Record<string, Record<string, Function>>> {
   iam: IamService;
   plugins: TPlugins;
   config: Readonly<FortressConfig>;
+  /** All endpoint definitions (auth + IAM + plugins) with JSON Schema metadata. */
+  endpoints: EndpointDefinition[];
 }
 
 /**
@@ -79,10 +84,20 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     iam.setIamObserver(event => logCustomEvent(event));
   }
 
+  // Assemble all endpoint definitions: core auth + IAM + plugin routes
+  const pluginEndpoints: EndpointDefinition[] = [];
+  for (const plugin of plugins) {
+    if (plugin.routes) {
+      pluginEndpoints.push(...plugin.routes);
+    }
+  }
+  const endpoints: EndpointDefinition[] = [...authEndpoints, ...iamEndpoints, ...pluginEndpoints];
+
   return {
     auth,
     iam,
     plugins: pluginMethods as InferPlugins<T>,
     config,
+    endpoints,
   };
 }

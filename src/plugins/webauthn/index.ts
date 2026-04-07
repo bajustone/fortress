@@ -39,10 +39,35 @@ export function webauthn(): FortressPlugin & { readonly name: 'webauthn' } {
     ],
 
     routes: [
-      { method: 'POST', path: '/webauthn/register/options', handler: 'generateRegistrationOptions' },
-      { method: 'POST', path: '/webauthn/register/verify', handler: 'verifyRegistration' },
-      { method: 'POST', path: '/webauthn/authenticate/options', handler: 'generateAuthenticationOptions' },
-      { method: 'POST', path: '/webauthn/authenticate/verify', handler: 'verifyAuthentication' },
+      {
+        method: 'POST',
+        path: '/webauthn/register/options',
+        handler: 'generateRegistrationOptions',
+        meta: { summary: 'Generate WebAuthn registration options', tags: ['WebAuthn'], security: ['bearer'] },
+        input: { body: { type: 'object', properties: { userId: { type: 'integer' } }, required: ['userId'] } },
+        responses: { 200: { description: 'Registration options' }, 400: { description: 'Not yet implemented' } },
+      },
+      {
+        method: 'POST',
+        path: '/webauthn/register/verify',
+        handler: 'verifyRegistration',
+        meta: { summary: 'Verify WebAuthn registration', tags: ['WebAuthn'], security: ['bearer'] },
+        responses: { 200: { description: 'Registration verified' }, 400: { description: 'Not yet implemented' } },
+      },
+      {
+        method: 'POST',
+        path: '/webauthn/authenticate/options',
+        handler: 'generateAuthenticationOptions',
+        meta: { summary: 'Generate WebAuthn authentication options', tags: ['WebAuthn'], security: ['none'] },
+        responses: { 200: { description: 'Authentication options' }, 400: { description: 'Not yet implemented' } },
+      },
+      {
+        method: 'POST',
+        path: '/webauthn/authenticate/verify',
+        handler: 'verifyAuthentication',
+        meta: { summary: 'Verify WebAuthn authentication', tags: ['WebAuthn'], security: ['none'] },
+        responses: { 200: { description: 'Authentication verified' }, 400: { description: 'Not yet implemented' } },
+      },
     ],
 
     methods: _ctx => ({

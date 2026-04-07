@@ -636,11 +636,68 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
     }),
 
     routes: [
-      { method: 'POST', path: '/oauth/token', handler: 'handleTokenRequest' },
-      { method: 'POST', path: '/oauth/introspect', handler: 'handleIntrospectRequest' },
-      { method: 'POST', path: '/oauth/revoke', handler: 'handleRevokeRequest' },
-      { method: 'GET', path: '/oauth/userinfo', handler: 'handleUserInfoRequest' },
-      { method: 'GET', path: '/oauth/.well-known/openid-configuration', handler: 'handleDiscovery' },
+      {
+        method: 'POST',
+        path: '/oauth/token',
+        handler: 'handleTokenRequest',
+        meta: { summary: 'Exchange credentials for tokens', tags: ['OAuth'], security: ['basic'] },
+        input: {
+          body: {
+            type: 'object',
+            properties: {
+              grant_type: { type: 'string', enum: ['authorization_code', 'client_credentials'], description: 'OAuth grant type' },
+              code: { type: 'string', description: 'Authorization code' },
+              redirect_uri: { type: 'string', format: 'uri', description: 'Redirect URI used in authorize' },
+              client_id: { type: 'string', description: 'Client ID (if not using Basic auth)' },
+              client_secret: { type: 'string', description: 'Client secret (if not using Basic auth)' },
+              code_verifier: { type: 'string', description: 'PKCE code verifier' },
+              scope: { type: 'string', description: 'Space-separated scopes' },
+            },
+            required: ['grant_type'],
+          },
+        },
+        responses: {
+          200: { description: 'Token issued', schema: { type: 'object', properties: { access_token: { type: 'string' }, token_type: { type: 'string' }, expires_in: { type: 'number' }, scope: { type: 'string' } } } },
+          400: { description: 'Invalid request' },
+          401: { description: 'Invalid client credentials' },
+        },
+      },
+      {
+        method: 'POST',
+        path: '/oauth/introspect',
+        handler: 'handleIntrospectRequest',
+        meta: { summary: 'Introspect a token (RFC 7662)', tags: ['OAuth'], security: ['basic'] },
+        input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
+        responses: {
+          200: { description: 'Token info', schema: { type: 'object', properties: { active: { type: 'boolean' }, sub: { type: 'string' }, scope: { type: 'string' }, exp: { type: 'number' } } } },
+          401: { description: 'Client authentication required' },
+        },
+      },
+      {
+        method: 'POST',
+        path: '/oauth/revoke',
+        handler: 'handleRevokeRequest',
+        meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['none'] },
+        input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
+        responses: { 200: { description: 'Token revoked' } },
+      },
+      {
+        method: 'GET',
+        path: '/oauth/userinfo',
+        handler: 'handleUserInfoRequest',
+        meta: { summary: 'Get user info (OIDC)', tags: ['OAuth'], security: ['bearer'] },
+        responses: {
+          200: { description: 'User info', schema: { type: 'object', properties: { sub: { type: 'string' }, email: { type: 'string' }, name: { type: 'string' } } } },
+          401: { description: 'Invalid bearer token' },
+        },
+      },
+      {
+        method: 'GET',
+        path: '/oauth/.well-known/openid-configuration',
+        handler: 'handleDiscovery',
+        meta: { summary: 'OIDC discovery document', tags: ['OAuth'], security: ['none'] },
+        responses: { 200: { description: 'OIDC configuration', schema: { type: 'object', additionalProperties: true } } },
+      },
     ],
   };
 }

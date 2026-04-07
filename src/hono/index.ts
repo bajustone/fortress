@@ -11,6 +11,8 @@ export type { CsrfConfig } from './middleware/csrf';
 export type { RbacOptions, RouteMapping } from './middleware/rbac';
 export { createSecurityHeadersMiddleware } from './middleware/security-headers';
 export type { SecurityHeadersConfig } from './middleware/security-headers';
+export { buildRouteDefinition, getFortressRoutes, mountFortressOpenAPI } from './openapi';
+export type { SchemaConverter } from './openapi';
 export { mountPluginRoutes } from './plugin-routes';
 
 export interface HonoAdapterOptions extends RbacOptions {}

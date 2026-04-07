@@ -3,17 +3,32 @@ export type { DatabaseAdapter } from './adapters/database';
 
 export type { CoreOperator, ScopeRule, WhereClause } from './adapters/database/types';
 
+// Pre-built endpoint definitions & component schemas
+export { authComponentSchemas, authEndpoints } from './core/auth/auth-endpoints';
 // Config
 export type { FortressConfig, PasswordHasher } from './core/config';
+
+// Endpoint definitions & schema builders
+export type {
+  ComponentSchemas,
+  EndpointDefinition,
+  EndpointInput,
+  EndpointMeta,
+  EndpointResponse,
+  HttpMethod,
+  SecurityRequirement,
+} from './core/endpoint';
 // Errors
 export { Errors, FortressError } from './core/errors';
 
 export type { FortressErrorCode } from './core/errors';
+
 // Fortress factory
 export { createFortress, getPluginMethods } from './core/fortress';
-
 export type { Fortress } from './core/fortress';
+export { iamComponentSchemas, iamEndpoints } from './core/iam/iam-endpoints';
 
+export type { JSONSchema } from './core/json-schema';
 // Plugin system
 export type {
   AfterHookContext,
@@ -29,6 +44,23 @@ export type {
   RouteDefinition,
 } from './core/plugin';
 export type { InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
+
+export {
+  anyOf,
+  arr,
+  bool,
+  endpoint,
+  EndpointBuilder,
+  enums,
+  int,
+  nullable,
+  num,
+  obj,
+  oneOf,
+  ref,
+  str,
+  strFormat,
+} from './core/schema-builder';
 // Core types
 export type {
   AuthResponse,

@@ -105,11 +105,8 @@ export interface PluginContext {
   auth?: Record<string, Function>;
 }
 
-export interface RouteDefinition {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  path: string;
-  handler: string;
-}
+/** @deprecated Use EndpointDefinition from './endpoint' instead. Kept as alias for backward compatibility. */
+export type RouteDefinition = import('./endpoint').EndpointDefinition;
 
 export interface MiddlewareDefinition {
   path: string;
