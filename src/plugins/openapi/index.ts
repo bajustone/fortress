@@ -36,6 +36,20 @@ export interface OpenAPIMethods {
   getUI: () => string;
 }
 
+function computeRelativeUrl(fromPath: string, toPath: string): string {
+  const fromParts = fromPath.split('/').slice(0, -1);
+  const toParts = toPath.split('/');
+  let common = 0;
+  while (common < fromParts.length && common < toParts.length && fromParts[common] === toParts[common]) {
+    common++;
+  }
+  const ups = fromParts.length - common;
+  const rest = toParts.slice(common).join('/');
+  if (ups === 0)
+    return `./${rest}`;
+  return '../'.repeat(ups) + rest;
+}
+
 function buildScalarHTML(specPath: string, title: string): string {
   return `<!DOCTYPE html>
 <html>
@@ -140,7 +154,7 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
         },
 
         getUI(): string {
-          return buildScalarHTML(specPath, title);
+          return buildScalarHTML(computeRelativeUrl(uiPath, specPath), title);
         },
       };
     },

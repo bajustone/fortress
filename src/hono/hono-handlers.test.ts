@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { FortressError } from '../core/errors';
 import { createFortress } from '../core/fortress';
 import { oauth } from '../plugins/oauth';
+import { openapi } from '../plugins/openapi';
 import { createTestAdapter } from '../testing';
 import { getClaims, getDb, getUserId } from './helpers';
 import { createHonoMiddleware } from './index';
@@ -708,6 +709,54 @@ describe('plugin route mounting: OAuth', () => {
     expect(body.sub).toBe(String(user.id));
     expect(body.email).toBe('oauth-user@test.com');
     expect(body.name).toBe('OAuth User');
+  });
+});
+
+// =====================
+// Plugin Route Mounting: OpenAPI with prefix
+// =====================
+
+describe('plugin route mounting: OpenAPI with prefix', () => {
+  it('scalar UI data-url resolves to prefixed spec path', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      plugins: [openapi()],
+    });
+
+    const app = new Hono<FortressEnv>();
+    const { errorHandler } = createHonoMiddleware(fortress);
+    app.onError(errorHandler);
+
+    mountPluginRoutes(app, fortress, { prefix: '/api/v1' });
+
+    // Spec should be served at the prefixed path
+    const specRes = await app.request('/api/v1/openapi.json');
+    expect(specRes.status).toBe(200);
+    const spec = await specRes.json() as any;
+    expect(spec.openapi).toBe('3.1.0');
+
+    // UI should be served at the prefixed path
+    const uiRes = await app.request('/api/v1/openapi');
+    expect(uiRes.status).toBe(200);
+    const html = await uiRes.text();
+    expect(html).toContain('data-url="./openapi.json"');
+    // Must NOT contain the absolute unprefixed path
+    expect(html).not.toContain('data-url="/openapi.json"');
+  });
+
+  it('unprefixed spec path returns 404', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      plugins: [openapi()],
+    });
+
+    const app = new Hono<FortressEnv>();
+    mountPluginRoutes(app, fortress, { prefix: '/api/v1' });
+
+    const res = await app.request('/openapi.json');
+    expect(res.status).toBe(404);
   });
 });
 

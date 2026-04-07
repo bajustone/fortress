@@ -199,7 +199,29 @@ describe('openapi plugin', () => {
     const html = fortress.plugins.openapi.getUI();
     expect(html).toContain('<!DOCTYPE html>');
     expect(html).toContain('@scalar/api-reference');
-    expect(html).toContain('/openapi.json');
+    expect(html).toContain('./openapi.json');
+  });
+
+  it('getUI uses relative spec URL for prefix compatibility', () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      plugins: [openapi({ specPath: '/docs/api.json', uiPath: '/docs/ui' })],
+    });
+
+    const html = fortress.plugins.openapi.getUI();
+    expect(html).toContain('data-url="./api.json"');
+  });
+
+  it('getUI handles spec in parent directory', () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      plugins: [openapi({ specPath: '/spec.json', uiPath: '/docs/ui' })],
+    });
+
+    const html = fortress.plugins.openapi.getUI();
+    expect(html).toContain('data-url="../spec.json"');
   });
 
   it('fortress.endpoints includes all endpoint definitions', () => {
