@@ -252,11 +252,7 @@ async function invokeHandler(fortress: Fortress, ep: EndpointDefinition, c: any)
     return invokeAuthHandler(fortress, ep.handler, body, params, userId, c);
   }
 
-  if (ep.path.startsWith('/iam/')) {
-    return invokeIamHandler(fortress, ep.handler, body, params);
-  }
-
-  // Plugin handlers
+  // Check plugin routes first (plugins can register routes under /iam/ etc.)
   const plugins = fortress.config.plugins ?? [];
   for (const plugin of plugins) {
     if (!plugin.routes)
@@ -268,6 +264,11 @@ async function invokeHandler(fortress: Fortress, ep: EndpointDefinition, c: any)
         return methods[ep.handler](body);
       }
     }
+  }
+
+  // Core IAM handlers
+  if (ep.path.startsWith('/iam/')) {
+    return invokeIamHandler(fortress, ep.handler, body, params);
   }
 
   return { ok: true };
@@ -331,6 +332,10 @@ async function invokeIamHandler(
   params: Record<string, string>,
 ): Promise<unknown> {
   switch (handler) {
+    case 'getResources':
+      return fortress.iam.getResources();
+    case 'getRoles':
+      return fortress.iam.getRoles();
     case 'createRole':
       return fortress.iam.createRole(body.name, body.permissions, body.description);
     case 'deleteRole':
