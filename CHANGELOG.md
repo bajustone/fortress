@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.15] - 2026-04-07
+
+### Added
+- add version lifecycle script
+
 ## [0.0.14] - 2026-04-07
 
 ### Added
