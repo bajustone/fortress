@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.21] - 2026-04-07
+
+### Added
+- docs: sync documentation with source code
+
 ## [Unreleased]
 
 ### Fixed
