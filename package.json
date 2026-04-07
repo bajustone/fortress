@@ -79,6 +79,7 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
+    "version": "bun scripts/changelog.ts",
     "publish:dry": "npx jsr publish --dry-run --allow-slow-types --allow-dirty",
     "prepublishOnly": "tsup",
     "prepare": "husky"

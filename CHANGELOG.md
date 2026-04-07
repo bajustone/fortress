@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.14] - 2026-04-07
+
+### Added
+- v0.0.14
+- feat: webauthn plugin
+- openapi
+- support openapi via JSONSchema
+- examples
+
+### Changed
+- update doc/architecture.md
+- improve tests
+
+### Fixed
+- fix read me
+
 ## [0.0.13] - 2026-04-07
 
 ### Added
