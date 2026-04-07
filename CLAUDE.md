@@ -23,7 +23,12 @@ See `docs/architecture.md` for the full technical design.
 
 **Core (always included):**
 - `src/core/auth/` — JWT (jose), password hashing (pluggable), refresh tokens (SHA256, family rotation)
+- `src/core/auth/auth-endpoints.ts` — Declarative auth endpoint definitions with OpenAPI metadata
 - `src/core/iam/` — resource+action permissions, conditions, deny rules, groups, roles
+- `src/core/iam/iam-endpoints.ts` — Declarative IAM endpoint definitions with OpenAPI metadata
+- `src/core/iam/permission-cache.ts` — LRU permission cache with TTL and invalidation
+- `src/core/endpoint.ts` — `EndpointDefinition`, `EndpointMeta`, `EndpointInput`, `EndpointResponse`
+- `src/core/json-schema.ts` + `src/core/schema-builder.ts` — JSON Schema types and fluent builder DSL
 - `src/core/errors.ts` — single `FortressError` class + `Errors` factory
 - `src/core/plugin.ts` — `FortressPlugin` interface (8 capabilities)
 - `src/core/config.ts` — `FortressConfig` type
@@ -31,10 +36,11 @@ See `docs/architecture.md` for the full technical design.
 **Adapters:**
 - `src/adapters/database/` — `DatabaseAdapter` interface (7 required + 1 optional method)
 - `src/drizzle/` — Drizzle adapter (PostgreSQL, MySQL, SQLite)
-- `src/hono/` — Hono middleware (auth, RBAC, error handler, plugin mounting)
+- `src/hono/` — Hono middleware (auth, RBAC, error handler, plugin mounting, OpenAPI integration)
+- `src/express/` — Express middleware (auth, RBAC, error handler, route mounting)
 - `src/testing/` — In-memory SQLite test adapter via bun:sqlite
 
-**Plugins (all optional):**
+**Plugins (all optional, 13 total):**
 - `src/plugins/tenancy/` — Schema-per-tenant isolation (PostgreSQL only)
 - `src/plugins/oauth/` — OAuth 2.0 server (auth code + PKCE, client credentials)
 - `src/plugins/two-factor/` — TOTP, backup codes, trusted devices
@@ -42,10 +48,17 @@ See `docs/architecture.md` for the full technical design.
 - `src/plugins/api-key/` — Scoped API keys for service accounts / devices
 - `src/plugins/data-isolation/` — Row-level data isolation (any database)
 - `src/plugins/social-login/` — OAuth/OIDC consumer (Microsoft, Google, GitHub, etc.)
+- `src/plugins/rate-limit/` — Sliding window rate limiting
+- `src/plugins/account-lockout/` — Progressive lockout with escalation
+- `src/plugins/audit-log/` — Append-only event logging with hash chain
+- `src/plugins/webhook/` — Standard Webhooks spec (HMAC-SHA256, retries)
+- `src/plugins/magic-link/` — Passwordless token-based auth
+- `src/plugins/openapi/` — Framework-agnostic OpenAPI 3.1 spec generation + Scalar UI
+- `src/plugins/webauthn/` — Passkeys/WebAuthn (stub)
 
 ## Key Design Decisions
 
-1. **Generic CRUD DatabaseAdapter** — 7 methods, not per-entity. Learned from Lucia's deprecation.
+1. **Generic CRUD DatabaseAdapter** — 7 methods, not per-entity. Adapter doesn't change when new models/plugins are added.
 2. **jose for JWT** — Web Crypto API, works on Bun/Deno/edge. Not jsonwebtoken.
 3. **Pluggable PasswordHasher** — WASM Argon2id default, swappable for native.
 4. **Database-agnostic** — Drizzle adapter works with PostgreSQL, MySQL, SQLite. Only the tenancy plugin is PostgreSQL-specific.
@@ -54,6 +67,7 @@ See `docs/architecture.md` for the full technical design.
 7. **`WhereClause.operator` is an open string** — extensible without breaking adapters.
 8. **Secret rotation** — `jwt.secret` accepts `string | string[]` for zero-downtime rotation.
 9. **`scopeRules`** — handles both reads (WHERE filters) and writes (default values on create).
+10. **Endpoint Definitions** — Declarative `EndpointDefinition` with OpenAPI metadata enables framework-agnostic route mounting and automatic OpenAPI spec generation.
 
 ## Testing
 
@@ -83,6 +97,10 @@ See `docs/architecture.md` for the full technical design.
 1. Implement the `DatabaseAdapter` interface (7 required methods + optional `rawQuery`)
 2. Test against the adapter test suite (TODO: create shared adapter conformance tests)
 3. Export as a sub-path: `"./adapter-name": "./src/adapter-name/index.ts"`
+
+## Keeping Examples in Sync
+
+Every time code changes (APIs, adapters, plugins, config, middleware), update `examples/` to reflect the changes. Examples are living documentation — they must always work with the current code.
 
 ## Reference Docs
 

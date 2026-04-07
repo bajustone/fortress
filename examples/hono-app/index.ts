@@ -36,6 +36,7 @@ import { dataIsolation } from '../../src/plugins/data-isolation';
 import { emailVerification } from '../../src/plugins/email-verification';
 import { magicLink } from '../../src/plugins/magic-link';
 import { oauth } from '../../src/plugins/oauth';
+import { openapi } from '../../src/plugins/openapi';
 import { rateLimit } from '../../src/plugins/rate-limit';
 import { socialLogin } from '../../src/plugins/social-login';
 import { tenancy } from '../../src/plugins/tenancy';
@@ -130,6 +131,9 @@ const fortress = createFortress({
         'read:users': { resource: 'user', action: 'list' },
       },
     }),
+
+    // ── OpenAPI (API docs) ──
+    openapi({ title: 'Fortress Example API', version: '0.0.13' }),
   ],
 });
 
@@ -598,8 +602,9 @@ app.get('/api/documents', async (c) => {
 // 8. Mount OAuth server endpoints
 // ═══════════════════════════════════════════════════════════════════════════
 
-// POST /oauth/token, POST /oauth/introspect, POST /oauth/revoke,
-// GET /oauth/userinfo, GET /oauth/.well-known/openid-configuration
+// OAuth: POST /oauth/token, POST /oauth/introspect, POST /oauth/revoke,
+//        GET /oauth/userinfo, GET /oauth/.well-known/openid-configuration
+// OpenAPI: GET /openapi.json (spec), GET /openapi (Scalar UI)
 mountPluginRoutes(app, fortress);
 
 // ═══════════════════════════════════════════════════════════════════════════

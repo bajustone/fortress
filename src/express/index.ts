@@ -17,3 +17,4 @@ export type {
   RbacOptions,
   RouteMapping,
 } from './middleware';
+export { mountFortressRoutes, mountPluginRoutes } from './routes';
