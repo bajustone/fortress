@@ -16,6 +16,7 @@ const CREATE_TABLES_SQL = `
     name VARCHAR(255) NOT NULL,
     password_hash TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
+    email_verified BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
@@ -323,7 +324,7 @@ beforeAll(async () => {
       POSTGRES_DB: 'fortress_test',
     })
     .withExposedPorts(5432)
-    .withWaitStrategy(Wait.forLogMessage('database system is ready to accept connections'))
+    .withWaitStrategy(Wait.forListeningPorts())
     .start();
 
   const connectionString = `postgres://test:test@${container.getHost()}:${container.getMappedPort(5432)}/fortress_test`;

@@ -9,9 +9,17 @@ import { GenericContainer, Wait } from 'testcontainers';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
+import { accountLockout } from '../../plugins/account-lockout';
 import { apiKey } from '../../plugins/api-key';
 import { auditLog } from '../../plugins/audit-log';
+import { dataIsolation } from '../../plugins/data-isolation';
 import { emailVerification } from '../../plugins/email-verification';
+import { magicLink } from '../../plugins/magic-link';
+import { oauth } from '../../plugins/oauth';
+import { socialLogin } from '../../plugins/social-login';
+import { tenancy } from '../../plugins/tenancy';
+import { generateTOTP, twoFactor } from '../../plugins/two-factor';
+import { webhook } from '../../plugins/webhook';
 import { createDrizzleAdapter } from '../adapter';
 
 const CREATE_TABLES_SQL = `
@@ -21,6 +29,7 @@ const CREATE_TABLES_SQL = `
     name VARCHAR(255) NOT NULL,
     password_hash TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
+    email_verified BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
@@ -90,7 +99,16 @@ const CREATE_TABLES_SQL = `
     id SERIAL PRIMARY KEY,
     role_id INTEGER NOT NULL REFERENCES fortress_role(id) ON DELETE CASCADE,
     subject_type VARCHAR(20) NOT NULL,
-    subject_id INTEGER NOT NULL
+    subject_id INTEGER NOT NULL,
+    tenant_id VARCHAR(100)
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_direct_permission_binding (
+    id SERIAL PRIMARY KEY,
+    permission_id INTEGER NOT NULL REFERENCES fortress_permission(id) ON DELETE CASCADE,
+    subject_type VARCHAR(20) NOT NULL,
+    subject_id INTEGER NOT NULL,
+    tenant_id VARCHAR(100)
   );
 
   CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
@@ -303,6 +321,7 @@ const TRUNCATE_SQL = `
     fortress_api_key,
     fortress_magic_link_token,
     fortress_email_verification_token,
+    fortress_direct_permission_binding,
     fortress_role_binding,
     fortress_role_permission,
     fortress_permission,
@@ -334,7 +353,7 @@ beforeAll(async () => {
       POSTGRES_DB: 'fortress_test',
     })
     .withExposedPorts(5432)
-    .withWaitStrategy(Wait.forLogMessage('database system is ready to accept connections'))
+    .withWaitStrategy(Wait.forListeningPorts())
     .start();
 
   const connectionString = `postgres://test:test@${container.getHost()}:${container.getMappedPort(5432)}/fortress_test`;
@@ -535,6 +554,8 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('refresh@test.com', 'password-123');
+    // Wait 1s so the new JWT has a different iat/exp (JWT timestamps are in seconds)
+    await new Promise(r => setTimeout(r, 1100));
     const refreshed = await fortress.auth.refresh(login.refreshToken as string);
 
     expect(refreshed.accessToken).toBeTruthy();
@@ -595,10 +616,10 @@ describe('pg: auth lifecycle', () => {
       password: 'password-123',
     });
 
-    await fortress.auth.login('sessions@test.com', 'password-123');
+    const login1 = await fortress.auth.login('sessions@test.com', 'password-123');
     await fortress.auth.login('sessions@test.com', 'password-123');
 
-    const sessions = await fortress.auth.listSessions(1);
+    const sessions = await fortress.auth.listSessions(login1.user.id);
     expect(sessions.length).toBeGreaterThanOrEqual(2);
     expect(sessions[0].createdAt).toBeInstanceOf(Date);
   });
@@ -654,7 +675,7 @@ describe('pg: IAM', () => {
 
   it('resolves permissions through group bindings', async () => {
     const group = await fortress.iam.createGroup('admins');
-    await fortress.iam.addUserToGroup(user.id, group.id);
+    await fortress.iam.addUserToGroup(group.id, user.id);
 
     const role = await fortress.iam.createRole('admin', [
       { resource: 'user', action: 'manage' },
@@ -804,5 +825,409 @@ describe('pg: sorting', () => {
 
     expect(descending[0].email).toBe('z@test.com');
     expect(descending[1].email).toBe('a@test.com');
+  });
+});
+
+// --- Tenancy plugin on PG ---
+
+describe('pg: tenancy plugin', () => {
+  it('creates tenants and manages membership with PG dates', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [tenancy()],
+    });
+
+    const user = await fortress.auth.createUser({
+      email: 'tenant@test.com',
+      name: 'Tenant User',
+      password: 'password-123',
+    });
+
+    const tenant = await fortress.plugins.tenancy.createTenant({
+      name: 'Acme Corp',
+      taxId: 'acme',
+    });
+
+    expect(tenant.id).toBeDefined();
+    expect(tenant.name).toBe('Acme Corp');
+    expect(tenant.createdAt).toBeInstanceOf(Date);
+    expect(tenant.updatedAt).toBeInstanceOf(Date);
+
+    await fortress.plugins.tenancy.addUserToTenant(user.id, tenant.id);
+
+    const tenants = await fortress.plugins.tenancy.getUserTenants(user.id);
+    expect(tenants).toHaveLength(1);
+    expect(tenants[0].taxId).toBe('acme');
+    expect(tenants[0].createdAt).toBeInstanceOf(Date);
+  });
+
+  it('enriches JWT claims with tenant info after login', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [tenancy()],
+    });
+
+    const user = await fortress.auth.createUser({
+      email: 'claims@test.com',
+      name: 'Claims User',
+      password: 'password-123',
+    });
+
+    const tenant = await fortress.plugins.tenancy.createTenant({
+      name: 'Beta Inc',
+      taxId: 'beta',
+    });
+    await fortress.plugins.tenancy.addUserToTenant(user.id, tenant.id);
+
+    const login = await fortress.auth.login('claims@test.com', 'password-123');
+    const claims = await fortress.auth.verifyToken(login.accessToken as string);
+
+    expect(claims.customClaims?.tenantId).toBe(tenant.id);
+    expect(claims.customClaims?.tenantCode).toBe('beta');
+  });
+
+  it('switches default tenant', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [tenancy()],
+    });
+
+    const user = await fortress.auth.createUser({
+      email: 'switch@test.com',
+      name: 'Switch User',
+      password: 'password-123',
+    });
+
+    const t1 = await fortress.plugins.tenancy.createTenant({ name: 'T1', taxId: 't1' });
+    const t2 = await fortress.plugins.tenancy.createTenant({ name: 'T2', taxId: 't2' });
+    await fortress.plugins.tenancy.addUserToTenant(user.id, t1.id);
+    await fortress.plugins.tenancy.addUserToTenant(user.id, t2.id);
+
+    await fortress.plugins.tenancy.switchTenant(user.id, 't2');
+
+    const login = await fortress.auth.login('switch@test.com', 'password-123');
+    const claims = await fortress.auth.verifyToken(login.accessToken as string);
+    expect(claims.customClaims?.tenantCode).toBe('t2');
+  });
+});
+
+// --- Two-Factor plugin on PG ---
+
+describe('pg: two-factor plugin', () => {
+  it('enables, verifies, and disables 2FA with PG dates', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [twoFactor({ totp: { issuer: 'PGTest' }, backupCodes: { count: 5 } })],
+    });
+
+    const user = await fortress.auth.createUser({
+      email: '2fa@test.com',
+      name: '2FA User',
+      password: 'password-123',
+    });
+
+    const methods = fortress.plugins['two-factor'] as any;
+    const setup = await methods.enable(user.id);
+
+    expect(setup.secret).toBeTruthy();
+    expect(setup.otpauthUrl).toContain('otpauth://totp/');
+    expect(setup.backupCodes).toHaveLength(5);
+
+    // Verify with a real TOTP code
+    const code = await generateTOTP(setup.secret, 30, 6);
+    const result = await methods.verify(user.id, code);
+    expect(result.verified).toBe(true);
+
+    // Disable 2FA
+    await methods.disable(user.id);
+
+    // Should be able to enable again after disable
+    const setup2 = await methods.enable(user.id);
+    expect(setup2.secret).toBeTruthy();
+  });
+});
+
+// --- Magic Link plugin on PG ---
+
+describe('pg: magic-link plugin', () => {
+  it('sends and verifies magic link with PG timestamps', async () => {
+    let capturedToken = '';
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [magicLink({
+        onSendMagicLink: async (_email, token) => { capturedToken = token; },
+      })],
+    });
+
+    // Create user so magic link can find them
+    await fortress.auth.createUser({
+      email: 'magic@test.com',
+      name: 'Magic User',
+      password: 'password-123',
+    });
+
+    const methods = fortress.plugins['magic-link'] as any;
+    const sendResult = await methods.sendMagicLink('magic@test.com');
+    expect(sendResult.sent).toBe(true);
+    expect(capturedToken).toBeTruthy();
+
+    const verifyResult = await methods.verifyMagicLink(capturedToken);
+    expect(verifyResult.email).toBe('magic@test.com');
+    expect(verifyResult.accessToken).toBeTruthy();
+  });
+});
+
+// --- OAuth plugin on PG ---
+
+describe('pg: oauth plugin', () => {
+  it('creates client, issues auth code, and exchanges for token', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [oauth({ issuerUrl: 'http://localhost:3000' })],
+    });
+
+    const user = await fortress.auth.createUser({
+      email: 'oauth@test.com',
+      name: 'OAuth User',
+      password: 'password-123',
+    });
+
+    const methods = fortress.plugins.oauth as any;
+
+    // Create client
+    const client = await methods.createClient({
+      name: 'Test App',
+      redirectUris: ['http://localhost:3000/callback'],
+      grantTypes: ['authorization_code'],
+    });
+    expect(client.clientId).toBeTruthy();
+    expect(client.clientSecret).toBeTruthy();
+
+    // Create auth code
+    const { code } = await methods.createAuthorizationCode({
+      clientId: client.clientId,
+      userId: user.id,
+      redirectUri: 'http://localhost:3000/callback',
+      scope: 'read:users',
+    });
+    expect(code).toBeTruthy();
+
+    // Exchange code for token
+    const tokenResult = await methods.exchangeCode({
+      code,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      redirectUri: 'http://localhost:3000/callback',
+    });
+    expect(tokenResult.accessToken).toBeTruthy();
+    expect(tokenResult.tokenType).toBe('Bearer');
+    expect(tokenResult.expiresIn).toBeGreaterThan(0);
+
+    // Introspect token
+    const introspection = await methods.introspectToken(tokenResult.accessToken);
+    expect(introspection.active).toBe(true);
+    expect(introspection.clientId).toBe(client.clientId);
+  });
+});
+
+// --- Social Login plugin on PG ---
+
+describe('pg: social-login plugin', () => {
+  it('round-trips JSONB profile data through PG', async () => {
+    const adapter = createPgAdapter();
+
+    const user = await adapter.create<{ id: number }>({
+      model: 'user',
+      data: { email: 'social@test.com', name: 'Social', passwordHash: 'h', isActive: true },
+    });
+
+    // Insert social account with JSONB profile
+    const profile = { displayName: 'Social User', avatar: 'https://example.com/avatar.png', locale: 'en' };
+    await adapter.create({
+      model: 'social_account',
+      data: {
+        userId: user.id,
+        provider: 'google',
+        providerAccountId: 'google-123',
+        email: 'social@test.com',
+        accessToken: 'at',
+        refreshToken: 'rt',
+        tokenExpiresAt: new Date('2099-01-01'),
+        profile: JSON.stringify(profile),
+      },
+    });
+
+    // Read back and verify JSONB round-trip
+    const found = await adapter.findOne<{
+      provider: string;
+      profile: Record<string, unknown>;
+      tokenExpiresAt: Date;
+      createdAt: Date;
+    }>({
+      model: 'social_account',
+      where: [{ field: 'userId', operator: '=', value: user.id }],
+    });
+
+    expect(found).not.toBeNull();
+    expect(found!.provider).toBe('google');
+    expect(found!.tokenExpiresAt).toBeInstanceOf(Date);
+    expect(found!.createdAt).toBeInstanceOf(Date);
+    // PG returns JSONB as a parsed object, not a string
+    expect(found!.profile).toEqual(profile);
+  });
+
+  it('getLinkedAccounts works with PG adapter', async () => {
+    const adapter = createPgAdapter();
+
+    const plugin = socialLogin({
+      providers: [
+        { name: 'google', clientId: 'id', clientSecret: 'secret' },
+      ],
+    });
+
+    const methods = plugin.methods!({
+      db: adapter,
+      config: { jwt: { secret: SECRET }, database: adapter },
+    }) as any;
+
+    const user = await adapter.create<{ id: number }>({
+      model: 'user',
+      data: { email: 'linked@test.com', name: 'Linked', passwordHash: 'h', isActive: true },
+    });
+
+    await adapter.create({
+      model: 'social_account',
+      data: {
+        userId: user.id,
+        provider: 'google',
+        providerAccountId: 'g-456',
+        email: 'linked@test.com',
+        profile: null,
+      },
+    });
+
+    const accounts = await methods.getLinkedAccounts(user.id);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].provider).toBe('google');
+    expect(accounts[0].providerAccountId).toBe('g-456');
+  });
+});
+
+// --- Account Lockout plugin on PG ---
+
+describe('pg: account-lockout plugin', () => {
+  it('locks out after failed attempts and returns PG timestamps', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [accountLockout({ maxFailedAttempts: 2, lockoutDurationSeconds: 60 })],
+    });
+
+    await fortress.auth.createUser({
+      email: 'lockout@test.com',
+      name: 'Lockout',
+      password: 'password-123',
+    });
+
+    // Trigger failed logins
+    await fortress.auth.login('lockout@test.com', 'wrong').catch(() => {});
+    await fortress.auth.login('lockout@test.com', 'wrong').catch(() => {});
+
+    const methods = fortress.plugins['account-lockout'] as any;
+    const status = await methods.getLockoutStatus('lockout@test.com');
+
+    expect(status.isLocked).toBe(true);
+    expect(status.failedAttempts).toBe(2);
+    expect(status.lockedUntil).toBeInstanceOf(Date);
+    expect(status.lastFailedAt).toBeInstanceOf(Date);
+
+    // Login should be blocked
+    await expect(
+      fortress.auth.login('lockout@test.com', 'password-123'),
+    ).rejects.toThrow();
+
+    // Reset lockout
+    await methods.resetLockout('lockout@test.com');
+    const cleared = await methods.getLockoutStatus('lockout@test.com');
+    expect(cleared.isLocked).toBe(false);
+  });
+});
+
+// --- Webhook plugin on PG ---
+
+describe('pg: webhook plugin', () => {
+  it('registers endpoint and records delivery with PG timestamps', async () => {
+    const delivered: string[] = [];
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [webhook({
+        deliver: async (_url, payload) => {
+          delivered.push(payload);
+          return true;
+        },
+      })],
+    });
+
+    const methods = fortress.plugins.webhook as any;
+
+    const endpoint = await methods.registerEndpoint(
+      'https://example.com/hook',
+      ['LOGIN_SUCCESS'],
+      'test-secret',
+    );
+    expect(endpoint.id).toBeDefined();
+    expect(endpoint.createdAt).toBeInstanceOf(Date);
+
+    const endpoints = await methods.listEndpoints();
+    expect(endpoints).toHaveLength(1);
+    expect(endpoints[0].createdAt).toBeInstanceOf(Date);
+
+    // Trigger a webhook delivery via login
+    await fortress.auth.createUser({
+      email: 'wh@test.com',
+      name: 'WH',
+      password: 'password-123',
+    });
+    await fortress.auth.login('wh@test.com', 'password-123');
+
+    expect(delivered.length).toBeGreaterThanOrEqual(1);
+    const payload = JSON.parse(delivered[0]);
+    expect(payload.event).toBe('LOGIN_SUCCESS');
+  });
+});
+
+// --- Data Isolation plugin on PG ---
+
+describe('pg: data-isolation plugin', () => {
+  it('generates scope rules that filter queries on PG', async () => {
+    const adapter = createPgAdapter();
+
+    const plugin = dataIsolation({
+      scopes: [{
+        name: 'active-only',
+        field: 'isActive',
+        models: ['user'],
+        resolveValue: async () => true,
+      }],
+    });
+
+    // Create users with different isActive values
+    await adapter.create({ model: 'user', data: { email: 'active@test.com', name: 'Active', passwordHash: 'h', isActive: true } });
+    await adapter.create({ model: 'user', data: { email: 'inactive@test.com', name: 'Inactive', passwordHash: 'h', isActive: false } });
+
+    // Get scope rules
+    const rules = await plugin.scopeRules!(1, 'user', { db: adapter, config: { jwt: { secret: SECRET }, database: adapter } });
+
+    expect(rules).not.toBeNull();
+    expect(rules!.filters).toHaveLength(1);
+    expect(rules!.filters[0]).toEqual({ field: 'isActive', operator: '=', value: true });
+    expect(rules!.defaults).toEqual({ isActive: true });
   });
 });
