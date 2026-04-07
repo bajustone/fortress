@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.17] - 2026-04-07
+
+### Added
+- feat: security-aware default deny and endpoint permission declarations
+
 ## [0.0.16] - 2026-04-07
 
 ### Added
