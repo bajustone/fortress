@@ -1,7 +1,7 @@
 import type { Infer } from './json-schema';
 import type { StandardSchemaV1 } from './standard-schema';
 import { describe, expect, it } from 'vitest';
-import { anyOf, arr, bool, endpoint, enums, int, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat } from './schema-builder';
+import { anyOf, arr, bool, endpoint, enums, extractJsonSchema, int, isFortressSchema, isStandardSchema, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat } from './schema-builder';
 
 /** Assert validation fails and return issues. */
 function expectIssues(result: StandardSchemaV1.Result<any>): void {
@@ -220,6 +220,58 @@ describe('type inference', () => {
     void (0 as unknown as T satisfies { x: number });
 
     expect(schema.type).toBe('object');
+  });
+});
+
+describe('schema detection (Zod-like Standard Schema)', () => {
+  /** Creates a mock external Standard Schema that has a .type property (like Zod). */
+  function mockZodSchema(): StandardSchemaV1 & { type: string } {
+    const jsonSchema = { type: 'object' as const, properties: { name: { type: 'string' as const } }, required: ['name'] };
+    return {
+      'type': 'ZodObject', // Zod objects have a .type property
+      '~standard': {
+        version: 1,
+        vendor: 'zod',
+        validate: (value: unknown) => ({ value }),
+        jsonSchema: {
+          input: () => jsonSchema,
+        },
+      },
+    } as any;
+  }
+
+  it('does not detect Zod-like schema as FortressSchema', () => {
+    const zod = mockZodSchema();
+    expect(isStandardSchema(zod)).toBe(true);
+    expect(isFortressSchema(zod)).toBe(false);
+  });
+
+  it('extractJsonSchema uses ~standard.jsonSchema for external schemas', () => {
+    const zod = mockZodSchema();
+    const result = extractJsonSchema(zod);
+    expect(result).toEqual({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    });
+  });
+
+  it('extractJsonSchema returns fortress schema as-is', () => {
+    const s = obj({ name: str() }, 'name');
+    const result = extractJsonSchema(s);
+    expect(result).toBe(s); // same reference
+  });
+
+  it('endpoint builder extracts JSON Schema from external Standard Schema', () => {
+    const zod = mockZodSchema();
+    const ep = endpoint('POST', '/test')
+      .body(zod)
+      .handler('test')
+      .build();
+
+    expect(ep.input?.body?.type).toBe('object');
+    expect(ep.input?.body?.properties?.name?.type).toBe('string');
+    expect(ep.input?.bodySchema).toBeDefined();
   });
 });
 

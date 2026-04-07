@@ -145,7 +145,9 @@ export function isStandardSchema(value: unknown): value is StandardSchemaV1 {
 
 /** Check if a value is a FortressSchema (has both JSON Schema fields and Standard Schema). */
 export function isFortressSchema(value: unknown): value is FortressSchema {
-  return isStandardSchema(value) && ('type' in (value as any) || '$ref' in (value as any) || 'oneOf' in (value as any) || 'anyOf' in (value as any));
+  return isStandardSchema(value)
+    && (value as any)['~standard'].vendor === 'fortress'
+    && ('type' in (value as any) || '$ref' in (value as any) || 'oneOf' in (value as any) || 'anyOf' in (value as any));
 }
 
 /**
@@ -154,15 +156,18 @@ export function isFortressSchema(value: unknown): value is FortressSchema {
  * - External Standard Schema: extract via ~standard.jsonSchema if available, otherwise empty object
  */
 export function extractJsonSchema(schema: FortressSchema<any> | StandardSchemaV1<any>): JSONSchema {
+  // Fortress schemas ARE JSON Schema — return directly
   if (isFortressSchema(schema)) {
     return schema;
   }
-  // External Standard Schema — try StandardJSONSchemaV1 interface
-  const std = (schema as any)['~standard'];
-  if (std?.jsonSchema?.input) {
-    return std.jsonSchema.input({ target: 'draft-2020-12' }) as JSONSchema;
+  // External Standard Schema — try ~standard.jsonSchema interface
+  if (isStandardSchema(schema)) {
+    const std = (schema as any)['~standard'];
+    if (std?.jsonSchema?.input) {
+      return std.jsonSchema.input({ target: 'draft-2020-12' }) as JSONSchema;
+    }
   }
-  // Fallback: no JSON Schema available from external schema
+  // Fallback
   return {};
 }
 
