@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.18] - 2026-04-07
+
+### Added
+- feat: Standard Schema V1 support with typed schemas and runtime validation
+- feat: add admin CRUD endpoints for users, roles, groups, and permissions
+
 ## [0.0.17] - 2026-04-07
 
 ### Added
