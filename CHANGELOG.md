@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- docs: sync README, SECURITY.md, docs/security.md, and architecture.md with source code
+  - WebAuthn plugin is fully implemented, not a stub — updated README, CLAUDE.md
+  - Fixed plugin count from 12 to 15 in architecture.md
+  - Fixed `breachedCacheTtlMs` default from 300000 to 86400000 in docs/security.md
+  - Fixed account lockout config names (`maxFailedAttempts`, `lockoutDurationSeconds`, `maxLockoutSeconds`) in docs/security.md
+  - Fixed rate limit config shape (`maxPerIp`, `maxPerAccount`, `windowSeconds`) in docs/security.md
+  - Fixed CSRF middleware import (`createCsrfMiddleware`) in docs/security.md
+  - Fixed supported version from 0.1.x to 0.0.x in SECURITY.md
+  - Synced jsr.json version to 0.0.20
+
 ## [0.0.20] - 2026-04-07
 
 ### Added

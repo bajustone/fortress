@@ -170,7 +170,7 @@ Each framework package (`hono/`, `express/`) exports middleware factories specif
 
 ### 5. Everything Beyond Core Auth + IAM Is a Plugin
 
-12 plugins, all optional. No special `modules` config, no `withX()` wrappers. This keeps the core small (~1500 lines) and makes extensibility uniform. See [Plugin System](#plugin-system) for the full interface.
+15 plugins, all optional. No special `modules` config, no `withX()` wrappers. This keeps the core small (~1500 lines) and makes extensibility uniform. See [Plugin System](#plugin-system) for the full interface.
 
 ### 6. Composable Entry Points
 

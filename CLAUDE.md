@@ -55,7 +55,7 @@ See `docs/architecture.md` for the full technical design.
 - `src/plugins/webhook/` — Standard Webhooks spec (HMAC-SHA256, retries)
 - `src/plugins/magic-link/` — Passwordless token-based auth
 - `src/plugins/openapi/` — Framework-agnostic OpenAPI 3.1 spec generation + Scalar UI
-- `src/plugins/webauthn/` — Passkeys/WebAuthn (stub)
+- `src/plugins/webauthn/` — Passkeys/WebAuthn (registration, passwordless auth, 2FA mode)
 
 ## Key Design Decisions
 

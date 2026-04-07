@@ -867,7 +867,7 @@ await tf.enable(userId);
 | [Audit Log](#audit-log) | Append-only event logging with optional hash chain |
 | [Webhook](#webhook) | Standard Webhooks spec with HMAC-SHA256 signing |
 | [OAuth Server](#oauth-server) | OAuth 2.0 server with auth code + PKCE and client credentials |
-| [WebAuthn](#webauthn) | WebAuthn/Passkey support (stub) |
+| [WebAuthn](#webauthn) | WebAuthn/Passkey support (registration, passwordless auth, 2FA mode) |
 | [OpenAPI](#openapi) | OpenAPI 3.1 spec generation + Scalar UI with unified spec support |
 
 ---
@@ -1522,15 +1522,45 @@ const perms = await fortress.plugins['oauth'].resolveTokenPermissions(accessToke
 
 ### WebAuthn
 
-> **Note:** WebAuthn/Passkey support is currently a stub. Routes and models are defined but all handlers throw "not yet implemented."
+Passkey and WebAuthn support using [@simplewebauthn/server](https://simplewebauthn.dev/). Supports registration, passwordless authentication, and 2FA mode.
 
 ```typescript
 import { webauthn } from '@bajustone/fortress/plugins/webauthn';
 
-webauthn()
+webauthn({
+  rpName: 'My App',
+  rpID: 'example.com',
+  origin: 'https://example.com',
+  supportPasswordless: true,         // default: true (returns JWT on auth)
+  challengeTTLSeconds: 300,          // default: 300 (5 min)
+})
 ```
 
-Planned routes: `/webauthn/register/options`, `/webauthn/register/verify`, `/webauthn/authenticate/options`, `/webauthn/authenticate/verify`.
+**Methods:**
+
+```typescript
+// Registration: generate options for navigator.credentials.create()
+const { options } = await fortress.plugins['webauthn'].generateRegistrationOptions({ userId });
+
+// Verify registration response and store credential
+const result = await fortress.plugins['webauthn'].verifyRegistration({
+  userId,
+  response: registrationResponseFromBrowser,
+});
+
+// Authentication: generate options for navigator.credentials.get()
+const { options: authOpts } = await fortress.plugins['webauthn'].generateAuthenticationOptions({});
+
+// Verify authentication and get tokens (passwordless mode)
+const authResult = await fortress.plugins['webauthn'].verifyAuthentication({
+  response: assertionFromBrowser,
+});
+// authResult.verified, authResult.userId, authResult.accessToken
+```
+
+When `supportPasswordless` is `false`, the plugin acts as a second factor via the `afterLogin` hook instead of issuing tokens directly.
+
+See [WebAuthn plugin docs](docs/plugins/webauthn.md) for the full configuration and API reference.
 
 ---
 

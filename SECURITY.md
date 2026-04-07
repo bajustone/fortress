@@ -20,7 +20,7 @@ We will acknowledge receipt within 48 hours and aim to release a fix within 7 da
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | Yes       |
+| 0.0.x   | Yes       |
 
 ## Security Best Practices
 

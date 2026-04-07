@@ -74,7 +74,7 @@ Configured via `passwordPolicy` in config. Defaults follow NIST 800-63B:
 | `minLength` | 8 | Minimum password length |
 | `maxLength` | 128 | Maximum password length |
 | `checkBreached` | `false` | Check against HIBP breached passwords |
-| `breachedCacheTtlMs` | 300000 | Cache TTL for HIBP results (5 min) |
+| `breachedCacheTtlMs` | 86400000 | Cache TTL for HIBP results (24 hours) |
 
 ### Breach Checking (HIBP)
 
@@ -92,8 +92,8 @@ import { rateLimit } from '@bajustone/fortress/plugins/rate-limit';
 const fortress = createFortress({
   plugins: [
     rateLimit({
-      login: { maxAttempts: 10, windowMs: 900_000 },  // 10 per 15 min
-      register: { maxAttempts: 5, windowMs: 3600_000 }, // 5 per hour
+      login: { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 },  // 15 min window
+      register: { maxPerIp: 3, windowSeconds: 3600 },                  // 1 hour window
     }),
   ],
 });
@@ -119,10 +119,10 @@ The `account-lockout` plugin uses progressive delays with exponential backoff in
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `maxAttempts` | 5 | Attempts before lockout triggers |
-| `lockoutDurationMs` | 900000 | Initial lockout (15 min) |
+| `maxFailedAttempts` | 5 | Attempts before lockout triggers |
+| `lockoutDurationSeconds` | 900 | Initial lockout (15 min) |
 | `escalation` | `true` | Enable exponential backoff |
-| `maxLockoutMs` | 3600000 | Maximum lockout (1 hour) |
+| `maxLockoutSeconds` | 3600 | Maximum lockout (1 hour) |
 
 Lockout is tracked by login identifier (email/username), not userId. This correctly handles attempts against non-existent accounts.
 
@@ -145,10 +145,13 @@ Access tokens are short-lived (default 15 min) and re-issued via the refresh tok
 Fortress provides a custom-header CSRF middleware for Hono:
 
 ```typescript
-import { createHonoMiddleware } from '@bajustone/fortress/hono';
+import { createCsrfMiddleware } from '@bajustone/fortress/hono';
 
-const { csrf } = createHonoMiddleware(fortress);
-app.use('/api/*', csrf());
+app.use('/api/*', createCsrfMiddleware({
+  headerName: 'X-Fortress-CSRF',      // default
+  skipPaths: ['/api/webhooks/*'],
+  safeMethods: ['GET', 'HEAD', 'OPTIONS'],  // default
+}));
 ```
 
 This requires API clients to send `X-Fortress-CSRF: 1` on all mutating requests (POST, PUT, PATCH, DELETE). Browsers will not attach this header on cross-origin requests unless the server explicitly allows it via CORS, which blocks CSRF.
