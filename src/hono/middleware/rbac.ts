@@ -15,11 +15,66 @@ export interface RbacOptions {
   mapRequest?: (method: string, path: string) => RouteMapping | null;
   /** Paths that skip permission checks entirely (supports * wildcards) */
   skipPaths?: string[];
+  /** Disable default-deny for fortress-owned routes (not recommended) */
+  allowUnmappedFortressPaths?: boolean;
+}
+
+/** Known fortress core path prefixes that are always protected */
+const FORTRESS_CORE_PREFIXES = ['/iam/'];
+
+/** Sensitive auth endpoints that require admin protection */
+const FORTRESS_AUTH_PROTECTED = ['/auth/impersonate'];
+
+/**
+ * Check if a path belongs to a fortress-owned route (core or plugin).
+ * Fortress-owned routes are denied by default when no permission mapping exists.
+ */
+function isFortressPath(path: string, pluginPathPrefixes: string[]): boolean {
+  // Core IAM routes
+  if (FORTRESS_CORE_PREFIXES.some(prefix => path.startsWith(prefix)))
+    return true;
+
+  // Sensitive auth routes
+  if (FORTRESS_AUTH_PROTECTED.some(p => path === p || path.startsWith(`${p}/`)))
+    return true;
+
+  // Plugin-owned routes
+  if (pluginPathPrefixes.some(prefix => path.startsWith(prefix)))
+    return true;
+
+  return false;
+}
+
+/** Extracts first path segment: '/oauth/token' → '/oauth/' */
+const PLUGIN_PREFIX_REGEX = /^(\/[^/]+\/)/;
+
+/**
+ * Extract unique path prefixes from plugin routes.
+ * E.g., '/oauth/token' → '/oauth/'
+ */
+function getPluginPathPrefixes(fortress: Fortress): string[] {
+  const plugins = fortress.config.plugins ?? [];
+  const prefixes = new Set<string>();
+
+  for (const plugin of plugins) {
+    if (!plugin.routes)
+      continue;
+    for (const route of plugin.routes) {
+      const match = route.path.match(PLUGIN_PREFIX_REGEX);
+      if (match)
+        prefixes.add(match[1]);
+    }
+  }
+
+  return [...prefixes];
 }
 
 /**
  * Hono middleware that checks permissions via resource+action mapping.
  * Uses routeMap or mapRequest to translate HTTP requests to permission checks.
+ *
+ * Fortress-owned routes (`/iam/*`, plugin routes) are denied by default
+ * when no permission mapping exists, unless `allowUnmappedFortressPaths` is set.
  */
 export function createRbacMiddleware(
   fortress: Fortress,
@@ -28,6 +83,7 @@ export function createRbacMiddleware(
   const routeMap = options?.routeMap ?? {};
   const skipPaths = options?.skipPaths ?? [];
   const skipPatterns = skipPaths.map(p => pathToRegex(p));
+  const pluginPathPrefixes = getPluginPathPrefixes(fortress);
 
   return async (c, next) => {
     const path = c.req.path;
@@ -53,8 +109,11 @@ export function createRbacMiddleware(
       mapping = options.mapRequest(method, path);
     }
 
-    // No mapping found — skip RBAC (allow through)
+    // No mapping found — default deny for fortress-owned paths
     if (!mapping) {
+      if (!options?.allowUnmappedFortressPaths && isFortressPath(path, pluginPathPrefixes)) {
+        throw new FortressError('FORBIDDEN', 'No permission mapping for this route', 403);
+      }
       await next();
       return;
     }

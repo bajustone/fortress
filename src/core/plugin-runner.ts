@@ -2,7 +2,7 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { ScopeRule, WhereClause } from '../adapters/database/types';
 import type { FortressConfig } from './config';
-import type { FortressPlugin, PluginContext } from './plugin';
+import type { FortressPlugin, MiddlewareDefinition, PluginContext } from './plugin';
 
 /**
  * Process registered plugins and return their exposed methods.
@@ -190,4 +190,70 @@ export function collectPluginModels(
   return plugins
     .filter(p => p.models && p.models.length > 0)
     .map(p => ({ pluginName: p.name, models: p.models }));
+}
+
+/**
+ * Convert a middleware path pattern to a regex.
+ * Supports `:param` (single segment) and `*` (wildcard).
+ */
+function middlewarePathToRegex(pattern: string): RegExp {
+  const regexStr = pattern
+    .replace(/:[^/]+/g, '[^/]+')
+    .replace(/\*/g, '.*')
+    .replace(/\//g, '\\/');
+  return new RegExp(`^${regexStr}$`);
+}
+
+/**
+ * Collect all middleware definitions from plugins matching a given position.
+ * Returns them in plugin registration order.
+ */
+export function collectPluginMiddleware(
+  plugins: readonly FortressPlugin[],
+  position: MiddlewareDefinition['position'],
+): { plugin: FortressPlugin; middleware: MiddlewareDefinition }[] {
+  const result: { plugin: FortressPlugin; middleware: MiddlewareDefinition }[] = [];
+  for (const plugin of plugins) {
+    if (!plugin.middleware)
+      continue;
+    for (const mw of plugin.middleware) {
+      if (mw.position === position) {
+        result.push({ plugin, middleware: mw });
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Execute plugin middleware for a given position and request path.
+ *
+ * Iterates through all plugins in registration order, filters by position,
+ * matches the middleware path pattern against the request path, and chains
+ * handlers so each `next()` invokes the next matching middleware.
+ */
+export async function executePluginMiddleware(
+  plugins: readonly FortressPlugin[],
+  position: MiddlewareDefinition['position'],
+  requestPath: string,
+  ctx: PluginContext,
+  request: unknown,
+): Promise<void> {
+  const matching = collectPluginMiddleware(plugins, position)
+    .filter(({ middleware: mw }) => middlewarePathToRegex(mw.path).test(requestPath));
+
+  if (matching.length === 0)
+    return;
+
+  // Build a chain where each handler's `next` calls the next middleware
+  let index = 0;
+
+  async function runNext(): Promise<void> {
+    if (index >= matching.length)
+      return;
+    const current = matching[index++];
+    await current.middleware.handler(ctx, request, runNext);
+  }
+
+  await runNext();
 }

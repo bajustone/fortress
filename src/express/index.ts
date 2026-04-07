@@ -1,7 +1,10 @@
+export { convertRoutes } from '../hono/convert-routes';
+export type { ConvertRoutesOptions, ExternalRoute, ToJSONSchemaConverter } from '../hono/convert-routes';
 export {
   createAuthMiddleware,
   createErrorHandler,
   createExpressMiddleware,
+  createExpressPluginMiddleware,
   createRbacMiddleware,
   getClaims,
   getDb,

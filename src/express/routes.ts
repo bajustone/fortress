@@ -276,11 +276,30 @@ function createAutoHandler(fortress: Fortress, ep: EndpointDefinition): ExpressM
       if (ep.path.startsWith('/auth/')) {
         result = await invokeAuthHandler(fortress, ep.handler, body, params, userId, req);
       }
-      else if (ep.path.startsWith('/iam/')) {
-        result = await invokeIamHandler(fortress, ep.handler, body, params);
-      }
       else {
-        result = { ok: true };
+        // Check plugin routes first (plugins can register routes under /iam/ etc.)
+        let handled = false;
+        const plugins = fortress.config.plugins ?? [];
+        for (const plugin of plugins) {
+          if (!plugin.routes)
+            continue;
+          const match = plugin.routes.find(r => r.path === ep.path && r.method === ep.method);
+          if (match) {
+            const methods = (fortress.plugins as Record<string, Record<string, (...args: any[]) => any>>)[plugin.name];
+            if (methods?.[ep.handler]) {
+              result = await methods[ep.handler](body);
+              handled = true;
+              break;
+            }
+          }
+        }
+
+        if (!handled && ep.path.startsWith('/iam/')) {
+          result = await invokeIamHandler(fortress, ep.handler, body, params);
+        }
+        else if (!handled) {
+          result = { ok: true };
+        }
       }
 
       const statusCodes = ep.responses ? Object.keys(ep.responses).map(Number) : [200];
@@ -359,6 +378,10 @@ async function invokeIamHandler(
   params: Record<string, string>,
 ): Promise<unknown> {
   switch (handler) {
+    case 'getResources':
+      return fortress.iam.getResources();
+    case 'getRoles':
+      return fortress.iam.getRoles();
     case 'createRole':
       return fortress.iam.createRole(body.name, body.permissions, body.description);
     case 'deleteRole':

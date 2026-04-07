@@ -40,7 +40,8 @@ See `docs/architecture.md` for the full technical design.
 - `src/express/` — Express middleware (auth, RBAC, error handler, route mounting)
 - `src/testing/` — In-memory SQLite test adapter via bun:sqlite
 
-**Plugins (all optional, 13 total):**
+**Plugins (all optional, 15 total):**
+- `src/plugins/admin/` — IAM route protection, bootstrap, default deny for fortress routes
 - `src/plugins/tenancy/` — Schema-per-tenant isolation (PostgreSQL only)
 - `src/plugins/oauth/` — OAuth 2.0 server (auth code + PKCE, client credentials)
 - `src/plugins/two-factor/` — TOTP, backup codes, trusted devices

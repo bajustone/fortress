@@ -22,7 +22,7 @@ src/
     errors.ts                           # FortressError class + Errors factory
     fortress.ts                         # createFortress() + getPluginMethods()
     plugin.ts                           # FortressPlugin interface, hook types, model/route definitions
-    plugin-runner.ts                    # processPlugins(), chainAdapterWrappers(), collectScopeRules()
+    plugin-runner.ts                    # processPlugins(), chainAdapterWrappers(), collectScopeRules(), executePluginMiddleware()
     plugin-methods-map.ts               # InferPlugins<T> type utility for type-safe plugin access
     internal-adapter.ts                 # Entity-specific query layer on top of generic CRUD
 
@@ -103,6 +103,7 @@ src/
     webhook/index.ts                    # Standard Webhooks spec (HMAC-SHA256, retries)
     magic-link/index.ts                 # Passwordless token-based auth
     webauthn/index.ts                   # Passkeys/WebAuthn (registration, passwordless auth, 2FA mode)
+    admin/index.ts                      # IAM route protection, bootstrap, resource/role listing
 
 bin/
   fortress.ts                           # CLI tool: init, sync:push, sync:pull, sync:types, generate-secret
@@ -696,8 +697,25 @@ endpoint('POST', '/auth/login')
 `openapi()` plugin generates OpenAPI 3.1 spec and serves Scalar UI:
 
 ```ts
-const fortress = createFortress({ plugins: [openapi({ title: 'My API' })] });
-// GET /openapi.json — spec, GET /openapi — Scalar UI
+import { convertRoutes } from '@bajustone/fortress/hono';
+import { loginRoute, listUsersRoute } from './modules/auth/routes';
+import { z } from 'zod'; // or Valibot, TypeBox, ArkType
+
+const fortress = createFortress({
+  plugins: [
+    openapi({
+      title: 'My API',
+      // convertRoutes turns createRoute-style objects into EndpointDefinitions
+      // using your own schema converter — fortress has zero schema deps
+      additionalEndpoints: convertRoutes(
+        [loginRoute, listUsersRoute],
+        { prefix: '/api/v1', schemaConverter: z.toJSONSchema },
+      ),
+    }),
+  ],
+});
+// GET /openapi.json — unified spec (fortress + app endpoints)
+// GET /openapi — Scalar UI
 // fortress.plugins.openapi.generateSpec() — programmatic access
 ```
 
@@ -1182,6 +1200,41 @@ Event delivery following the [Standard Webhooks](https://www.standardwebhooks.co
 
 **Hooks:** Integrated into `afterLogin`, `onLoginFailure`, `beforeLogout`, `afterRegister`, `afterTokenRefresh`.
 
+### Admin Plugin
+
+**File:** `src/plugins/admin/index.ts`
+
+Protects IAM routes and provides admin management endpoints. Injects `after-auth` middleware on `/iam/*` paths that enforces `fortress:*` permission checks.
+
+**Config:**
+```typescript
+{
+  adminUserIds?: number[],  // User IDs that bypass all permission checks (superadmins)
+  resource?: string,        // Resource name for admin permissions (default: 'fortress')
+}
+```
+
+**Middleware:** `after-auth` on `/iam/*` — checks `fortress:<action>` permission for each IAM operation.
+
+**Routes:**
+- `POST /iam/admin/bootstrap` — Creates `fortress-admin` role with all IAM permissions and assigns it to a user. First call is allowed without existing admin permissions.
+
+**Methods:**
+- `bootstrap({ userId })` — Programmatic bootstrap
+- `getResources()` — List all resources with their actions
+
+**Actions registered:** `viewResources`, `viewRoles`, `createRole`, `deleteRole`, `bindRole`, `unbindRole`, `createGroup`, `manageGroup`, `viewPermissions`, `managePermissions`, `bootstrap`.
+
+**Default deny:** The RBAC middleware now denies unmapped fortress-owned routes (`/iam/*`, plugin routes) by default. The admin plugin provides the permission mapping for IAM routes. Opt-out via `allowUnmappedFortressPaths: true` in `RbacOptions`.
+
+---
+
+### Plugin Middleware
+
+**File:** `src/core/plugin-runner.ts` — `executePluginMiddleware()`
+
+Plugins can now define `middleware[]` with `position: 'before-auth' | 'after-auth' | 'after-rbac'` and a `path` pattern. The middleware is executed in plugin registration order via `pluginMiddleware.beforeAuth`, `pluginMiddleware.afterAuth`, and `pluginMiddleware.afterRbac` from the adapter factories.
+
 ---
 
 ## Framework Adapters
@@ -1585,6 +1638,7 @@ const Errors = {
 | `@bajustone/fortress/plugins/audit-log` | `auditLog()` plugin factory |
 | `@bajustone/fortress/plugins/account-lockout` | `accountLockout()` plugin factory |
 | `@bajustone/fortress/plugins/webauthn` | `webauthn()` plugin factory |
+| `@bajustone/fortress/plugins/admin` | `admin()` plugin factory |
 | `@bajustone/fortress/plugins/magic-link` | `magicLink()` plugin factory |
 | `@bajustone/fortress/plugins/webhook` | `webhook()` plugin factory |
 

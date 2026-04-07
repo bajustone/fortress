@@ -20,6 +20,7 @@
 import { Hono } from 'hono';
 import { createFortress } from '../../src';
 import {
+  convertRoutes,
   createCsrfMiddleware,
   createHonoMiddleware,
   createSecurityHeadersMiddleware,
@@ -30,6 +31,7 @@ import {
   mountPluginRoutes,
 } from '../../src/hono';
 import { accountLockout } from '../../src/plugins/account-lockout';
+import { admin } from '../../src/plugins/admin';
 import { apiKey } from '../../src/plugins/api-key';
 import { auditLog } from '../../src/plugins/audit-log';
 import { dataIsolation } from '../../src/plugins/data-isolation';
@@ -62,6 +64,9 @@ const fortress = createFortress({
 
   // Plugin order matters — hooks run in array order
   plugins: [
+    // ── Admin (IAM route protection + bootstrap) ──
+    admin(),
+
     // ── Gate plugins (reject early) ──
     rateLimit({
       login: { maxPerIp: 100, maxPerAccount: 10, windowSeconds: 60 },
@@ -133,7 +138,35 @@ const fortress = createFortress({
     }),
 
     // ── OpenAPI (API docs) ──
-    openapi({ title: 'Fortress Example API', version: '0.0.13' }),
+    // convertRoutes turns createRoute-style objects into EndpointDefinitions
+    // using your own schema converter (Zod, Valibot, TypeBox, etc.)
+    openapi({
+      title: 'Fortress Example API',
+      version: '0.0.15',
+      additionalEndpoints: convertRoutes(
+        [
+          // These would normally be imported from your route modules, e.g.:
+          // import { loginRoute, listUsersRoute } from './modules/auth/routes';
+          {
+            method: 'get',
+            path: '/health',
+            tags: ['App'],
+            summary: 'Health check',
+            responses: {
+              200: {
+                description: 'OK',
+                content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string' } } } } },
+              },
+            },
+          },
+        ],
+        {
+          // User brings their own converter, e.g. z.toJSONSchema for Zod v4
+          // Here we use identity since schemas are already JSON Schema
+          schemaConverter: s => s as Record<string, unknown>,
+        },
+      ),
+    }),
   ],
 });
 
@@ -143,7 +176,7 @@ const fortress = createFortress({
 
 const app = new Hono();
 
-const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fortress, {
+const { authMiddleware, rbacMiddleware, errorHandler, pluginMiddleware } = createHonoMiddleware(fortress, {
   routeMap: {
     // User management
     'GET /api/users': { resource: 'user', action: 'list' },
@@ -173,6 +206,10 @@ app.use('*', createCsrfMiddleware({
   skipPaths: ['/auth', '/oauth', '/magic-link', '/email', '/social', '/health'],
 }));
 app.onError(errorHandler);
+
+// IAM routes: auth + admin plugin middleware (default deny via admin plugin)
+app.use('/iam/*', authMiddleware);
+app.use('/iam/*', pluginMiddleware.afterAuth);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 3. Public routes
@@ -628,7 +665,10 @@ async function seed(): Promise<void> {
   await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: admin.id }], data: { emailVerified: true } });
   await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: user.id }], data: { emailVerified: true } });
 
-  // Create roles with permissions
+  // Bootstrap admin user — creates fortress-admin role with all IAM permissions
+  await fortress.plugins.admin.bootstrap({ userId: admin.id });
+
+  // Create app-specific roles with permissions
   const adminRole = await fortress.iam.createRole('admin', [
     { resource: 'user', action: 'list' },
     { resource: 'user', action: 'create' },

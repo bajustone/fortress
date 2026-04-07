@@ -26,6 +26,8 @@ export interface OpenAPIConfig {
   includeCoreIam?: boolean;
   /** Additional component schemas to include */
   additionalSchemas?: ComponentSchemas;
+  /** Additional endpoint definitions to include in the spec (for app-specific routes) */
+  additionalEndpoints?: EndpointDefinition[];
 }
 
 export interface OpenAPIMethods {
@@ -106,6 +108,11 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
           if (plugin.name === 'openapi' || !plugin.routes)
             continue;
           allEndpoints.push(...plugin.routes);
+        }
+
+        // Add consumer-provided endpoints
+        if (config.additionalEndpoints) {
+          allEndpoints.push(...config.additionalEndpoints);
         }
 
         // Merge component schemas

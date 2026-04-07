@@ -1,11 +1,12 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { Fortress } from '../core/fortress';
-import type { PluginContext } from '../core/plugin';
+import type { MiddlewareDefinition, PluginContext } from '../core/plugin';
 import type { TokenClaims } from '../core/types';
 import { FortressError } from '../core/errors';
 import {
   chainAdapterWrappers,
   collectScopeRules,
+  executePluginMiddleware,
   wrapAdapterWithScopeRules,
 } from '../core/plugin-runner';
 
@@ -40,6 +41,8 @@ export interface RbacOptions {
   routeMap?: Record<string, RouteMapping>;
   mapRequest?: (method: string, path: string) => RouteMapping | null;
   skipPaths?: string[];
+  /** Disable default-deny for fortress-owned routes (not recommended) */
+  allowUnmappedFortressPaths?: boolean;
 }
 
 // --- Auth middleware ---
@@ -89,10 +92,52 @@ export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
 
 // --- RBAC middleware ---
 
+/** Known fortress core path prefixes that are always protected */
+const FORTRESS_CORE_PREFIXES = ['/iam/'];
+
+/** Sensitive auth endpoints that require admin protection */
+const FORTRESS_AUTH_PROTECTED = ['/auth/impersonate'];
+
+/**
+ * Check if a path belongs to a fortress-owned route (core or plugin).
+ * Fortress-owned routes are denied by default when no permission mapping exists.
+ */
+function isFortressPath(path: string, pluginPathPrefixes: string[]): boolean {
+  if (FORTRESS_CORE_PREFIXES.some(prefix => path.startsWith(prefix)))
+    return true;
+  if (FORTRESS_AUTH_PROTECTED.some(p => path === p || path.startsWith(`${p}/`)))
+    return true;
+  if (pluginPathPrefixes.some(prefix => path.startsWith(prefix)))
+    return true;
+  return false;
+}
+
+/** Extracts first path segment: '/oauth/token' → '/oauth/' */
+const PLUGIN_PREFIX_REGEX = /^(\/[^/]+\/)/;
+
+/**
+ * Extract unique path prefixes from plugin routes.
+ */
+function getPluginPathPrefixes(fortress: Fortress): string[] {
+  const plugins = fortress.config.plugins ?? [];
+  const prefixes = new Set<string>();
+  for (const plugin of plugins) {
+    if (!plugin.routes)
+      continue;
+    for (const route of plugin.routes) {
+      const match = route.path.match(PLUGIN_PREFIX_REGEX);
+      if (match)
+        prefixes.add(match[1]);
+    }
+  }
+  return [...prefixes];
+}
+
 export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions): ExpressMiddleware {
   const routeMap = options?.routeMap ?? {};
   const skipPaths = options?.skipPaths ?? [];
   const skipPatterns = skipPaths.map(p => pathToRegex(p));
+  const pluginPathPrefixes = getPluginPathPrefixes(fortress);
 
   return async (req, _res, next) => {
     try {
@@ -115,7 +160,11 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
         mapping = options.mapRequest(method, path);
       }
 
+      // No mapping found — default deny for fortress-owned paths
       if (!mapping) {
+        if (!options?.allowUnmappedFortressPaths && isFortressPath(path, pluginPathPrefixes)) {
+          throw new FortressError('FORBIDDEN', 'No permission mapping for this route', 403);
+        }
         next();
         return;
       }
@@ -154,6 +203,29 @@ export function createErrorHandler(): (err: unknown, req: ExpressRequest, res: E
   };
 }
 
+// --- Plugin middleware ---
+
+/**
+ * Express middleware that executes plugin-defined middleware for a given position.
+ */
+export function createExpressPluginMiddleware(
+  fortress: Fortress,
+  position: MiddlewareDefinition['position'],
+): ExpressMiddleware {
+  const plugins = fortress.config.plugins ?? [];
+
+  return async (req, _res, next) => {
+    try {
+      const ctx: PluginContext = { db: fortress.config.database, config: fortress.config };
+      await executePluginMiddleware(plugins, position, req.path, ctx, req);
+      next();
+    }
+    catch (err) {
+      next(err);
+    }
+  };
+}
+
 // --- Factory ---
 
 export interface ExpressAdapterOptions extends RbacOptions {}
@@ -162,11 +234,21 @@ export function createExpressMiddleware(fortress: Fortress, options?: ExpressAda
   authMiddleware: ExpressMiddleware;
   rbacMiddleware: ExpressMiddleware;
   errorHandler: ReturnType<typeof createErrorHandler>;
+  pluginMiddleware: {
+    beforeAuth: ExpressMiddleware;
+    afterAuth: ExpressMiddleware;
+    afterRbac: ExpressMiddleware;
+  };
 } {
   return {
     authMiddleware: createAuthMiddleware(fortress),
     rbacMiddleware: createRbacMiddleware(fortress, options),
     errorHandler: createErrorHandler(),
+    pluginMiddleware: {
+      beforeAuth: createExpressPluginMiddleware(fortress, 'before-auth'),
+      afterAuth: createExpressPluginMiddleware(fortress, 'after-auth'),
+      afterRbac: createExpressPluginMiddleware(fortress, 'after-rbac'),
+    },
   };
 }
 

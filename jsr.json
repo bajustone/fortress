@@ -24,6 +24,7 @@
     "./plugins/webauthn": "./src/plugins/webauthn/index.ts",
     "./plugins/magic-link": "./src/plugins/magic-link/index.ts",
     "./plugins/webhook": "./src/plugins/webhook/index.ts",
-    "./plugins/openapi": "./src/plugins/openapi/index.ts"
+    "./plugins/openapi": "./src/plugins/openapi/index.ts",
+    "./plugins/admin": "./src/plugins/admin/index.ts"
   }
 }

@@ -70,7 +70,36 @@ export const iamComponentSchemas: ComponentSchemas = {
 // ── IAM Endpoint Definitions ────────────────────────────────────────
 
 export const iamEndpoints: EndpointDefinition[] = [
+  // ── Resources ──
+
+  endpoint('GET', '/iam/resources')
+    .summary('List all available resources')
+    .tags('IAM', 'Resources')
+    .security('bearer')
+    .response(200, 'Available resources with their actions', obj({
+      resources: {
+        type: 'object',
+        additionalProperties: obj({
+          actions: arr(str('Action name'), 'Available actions'),
+          description: str('Resource description'),
+        }),
+        description: 'Map of resource name to definition',
+      },
+    }, 'resources'))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('getResources')
+    .build(),
+
   // ── Roles ──
+
+  endpoint('GET', '/iam/roles')
+    .summary('List all roles')
+    .tags('IAM', 'Roles')
+    .security('bearer')
+    .response(200, 'All roles', arr(ref('Role')))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('getRoles')
+    .build(),
 
   endpoint('POST', '/iam/roles')
     .summary('Create a role')

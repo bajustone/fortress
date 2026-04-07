@@ -9,6 +9,7 @@ import type {
   SubjectType,
 } from '../types';
 import type { EvaluationMode } from './permission-evaluator';
+import type { ResourceFile } from './resource-sync';
 import { Errors } from '../errors';
 import { createInternalAdapter } from '../internal-adapter';
 import { createPermissionCache } from './permission-cache';
@@ -41,6 +42,8 @@ export interface IamService {
   createGroup: (name: string, description?: string) => Promise<Group>;
   addUserToGroup: (groupId: number, userId: number) => Promise<void>;
   removeUserFromGroup: (groupId: number, userId: number) => Promise<void>;
+  getResources: () => Promise<ResourceFile>;
+  getRoles: () => Promise<Role[]>;
   syncResources: (direction: 'push' | 'pull', filePath?: string) => Promise<void>;
   clearPermissionCache: () => void;
   setIamObserver: (listener: IamEventListener) => void;
@@ -252,6 +255,14 @@ export function createIamService(
       });
       cache?.invalidate(userId);
       emit({ eventType: 'GROUP_MEMBER_REMOVED', actorId: userId, targetId: groupId, targetType: 'group' });
+    },
+
+    async getResources(): Promise<ResourceFile> {
+      return pullResources(db);
+    },
+
+    async getRoles(): Promise<Role[]> {
+      return db.findMany<Role>({ model: 'role' });
     },
 
     clearPermissionCache(): void {

@@ -20,6 +20,7 @@ import type { ExpressNextFunction, ExpressRequest, ExpressResponse } from '../..
  */
 import { createFortress } from '../../src';
 import {
+  convertRoutes,
   createExpressMiddleware,
   getClaims,
   getDb,
@@ -28,6 +29,7 @@ import {
   mountPluginRoutes,
 } from '../../src/express';
 import { accountLockout } from '../../src/plugins/account-lockout';
+import { admin } from '../../src/plugins/admin';
 import { apiKey } from '../../src/plugins/api-key';
 import { auditLog } from '../../src/plugins/audit-log';
 import { dataIsolation } from '../../src/plugins/data-isolation';
@@ -59,6 +61,9 @@ const fortress = createFortress({
 
   // Plugin order matters — hooks run in array order
   plugins: [
+    // ── Admin (IAM route protection + bootstrap) ──
+    admin(),
+
     // ── Gate plugins (reject early) ──
     rateLimit({
       login: { maxPerIp: 100, maxPerAccount: 10, windowSeconds: 60 },
@@ -129,9 +134,29 @@ const fortress = createFortress({
     }),
 
     // ── OpenAPI (API docs) ──
-    // GET /openapi.json → OpenAPI 3.1 spec
-    // GET /openapi     → Scalar interactive UI
-    openapi({ title: 'Fortress Express Example API', version: '0.0.13' }),
+    // convertRoutes turns createRoute-style objects into EndpointDefinitions
+    // using your own schema converter — fortress has zero schema deps
+    openapi({
+      title: 'Fortress Express Example API',
+      version: '0.0.15',
+      additionalEndpoints: convertRoutes(
+        [
+          {
+            method: 'get',
+            path: '/health',
+            tags: ['App'],
+            summary: 'Health check',
+            responses: {
+              200: {
+                description: 'OK',
+                content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string' } } } } },
+              },
+            },
+          },
+        ],
+        { schemaConverter: s => s as Record<string, unknown> },
+      ),
+    }),
   ],
 });
 
@@ -193,7 +218,7 @@ const app = {
 // 3. Fortress middleware
 // ═══════════════════════════════════════════════════════════════════════════
 
-const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress, {
+const { authMiddleware, rbacMiddleware, errorHandler, pluginMiddleware } = createExpressMiddleware(fortress, {
   routeMap: {
     'GET /api/users': { resource: 'user', action: 'list' },
     'POST /api/users': { resource: 'user', action: 'create' },
@@ -205,6 +230,10 @@ const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware
   },
   skipPaths: ['/health', '/auth/*', '/magic-link/*', '/email/*', '/social/*'],
 });
+
+// IAM routes: auth + admin plugin middleware (default deny via admin plugin)
+app.use('/iam', authMiddleware);
+app.use('/iam', pluginMiddleware.afterAuth);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 4. Public routes
@@ -477,6 +506,10 @@ async function seed(): Promise<void> {
   await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: admin.id }], data: { emailVerified: true } });
   await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: user.id }], data: { emailVerified: true } });
 
+  // Bootstrap admin user — creates fortress-admin role with all IAM permissions
+  await fortress.plugins.admin.bootstrap({ userId: admin.id });
+
+  // Create app-specific roles with permissions
   const adminRole = await fortress.iam.createRole('admin', [
     { resource: 'user', action: 'list' },
     { resource: 'user', action: 'create' },

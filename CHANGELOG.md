@@ -1,9 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Admin plugin** (`@bajustone/fortress/plugins/admin`) — protects IAM routes with `fortress:*` permissions, provides bootstrap endpoint to assign first admin, and lists available resources/roles
+- **Plugin middleware wiring** — `MiddlewareDefinition` from plugins is now executed in the request pipeline via `pluginMiddleware.beforeAuth`, `pluginMiddleware.afterAuth`, and `pluginMiddleware.afterRbac`
+- `GET /iam/resources` endpoint — lists all available resources and their actions
+- `GET /iam/roles` endpoint — lists all roles
+- `POST /iam/admin/bootstrap` endpoint — creates fortress-admin role and assigns it to a user
+- `getResources()` and `getRoles()` methods on `IamService`
+- `createPluginMiddleware()` for Hono adapter
+- `createExpressPluginMiddleware()` for Express adapter
+
+### Changed
+- **Default deny for fortress-owned routes** — RBAC middleware now denies unmapped `/iam/*`, `/auth/impersonate`, and plugin-owned routes by default (opt-out via `allowUnmappedFortressPaths`)
+- Handler dispatch in Hono and Express adapters now checks plugin routes before core IAM routes, allowing plugins to register routes under `/iam/*`
+
 ## [0.0.15] - 2026-04-07
 
 ### Added
 - add version lifecycle script
+- `additionalEndpoints` option for OpenAPI plugin — consumers can merge app-specific routes into a single unified spec
+- `convertRoutes` utility in Hono adapter — schema-agnostic converter from `createRoute`-style objects to `EndpointDefinition[]`
 
 ## [0.0.14] - 2026-04-07
 

@@ -61,6 +61,7 @@ Published on [JSR](https://jsr.io/@bajustone/fortress). Runs on Bun, Deno, Node.
   - [Webhook](#webhook)
   - [OAuth Server](#oauth-server)
   - [WebAuthn](#webauthn)
+  - [OpenAPI](#openapi)
 - [Error Handling](#error-handling)
 - [Testing](#testing)
 - [Documentation](#documentation)
@@ -751,6 +752,7 @@ await tf.enable(userId);
 | [Webhook](#webhook) | Standard Webhooks spec with HMAC-SHA256 signing |
 | [OAuth Server](#oauth-server) | OAuth 2.0 server with auth code + PKCE and client credentials |
 | [WebAuthn](#webauthn) | WebAuthn/Passkey support (stub) |
+| [OpenAPI](#openapi) | OpenAPI 3.1 spec generation + Scalar UI with unified spec support |
 
 ---
 
@@ -1366,6 +1368,53 @@ webauthn()
 ```
 
 Planned routes: `/webauthn/register/options`, `/webauthn/register/verify`, `/webauthn/authenticate/options`, `/webauthn/authenticate/verify`.
+
+---
+
+### OpenAPI
+
+Generates an OpenAPI 3.1 spec from all fortress endpoints (auth, IAM, plugins) and serves a Scalar interactive UI. Use `additionalEndpoints` with `convertRoutes` to merge your app's own routes into a single unified spec.
+
+```typescript
+import { openapi } from '@bajustone/fortress/plugins/openapi';
+import { convertRoutes } from '@bajustone/fortress/hono'; // or /express
+import { z } from 'zod'; // or Valibot, TypeBox, ArkType — bring your own
+
+// Import your createRoute-defined routes
+import { loginRoute, listUsersRoute } from './modules/auth/routes';
+import { listSchoolsRoute } from './modules/sdms/routes';
+
+openapi({
+  title: 'My API',
+  version: '1.0.0',
+  description: 'Unified spec: fortress + app endpoints',
+  // convertRoutes is schema-library agnostic — you provide the converter
+  additionalEndpoints: convertRoutes(
+    [loginRoute, listUsersRoute, listSchoolsRoute],
+    { prefix: '/api/v1', schemaConverter: z.toJSONSchema },
+  ),
+})
+```
+
+This gives you:
+- `GET /openapi.json` — unified OpenAPI 3.1 spec (fortress + your endpoints)
+- `GET /openapi` — Scalar interactive UI
+
+Config options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `title` | `'Fortress Auth API'` | API title |
+| `version` | `'1.0.0'` | API version |
+| `description` | — | API description |
+| `servers` | — | Server URL(s) for the spec |
+| `specPath` | `'/openapi.json'` | Path to serve the JSON spec |
+| `uiPath` | `'/openapi'` | Path to serve the Scalar UI |
+| `disableUI` | `false` | Disable Scalar UI |
+| `includeCoreAuth` | `true` | Include core auth endpoints |
+| `includeCoreIam` | `true` | Include core IAM endpoints |
+| `additionalEndpoints` | — | Extra `EndpointDefinition[]` to include |
+| `additionalSchemas` | — | Extra component schemas to include |
 
 ---
 
