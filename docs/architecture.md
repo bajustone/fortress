@@ -31,7 +31,7 @@ src/
       password.ts                       # PasswordHasher interface + WASM Argon2id default
       password-policy.ts                # NIST 800-63B policy + HIBP k-anonymity breach check
       refresh-token.ts                  # Token generation, SHA-256 hashing, family rotation
-      auth-service.ts                   # Login, refresh, logout, sessions, impersonation
+      auth-service.ts                   # Login, refresh, logout, sessions, impersonation, admin user CRUD
       auth-endpoints.ts                 # EndpointDefinition[] for all auth routes + component schemas
 
     iam/
@@ -224,6 +224,12 @@ interface AuthService {
   removeLoginIdentifier(userId: number, type: string, value: string): Promise<void>;
   getLoginIdentifiers(userId: number): Promise<LoginIdentifier[]>;
   impersonate(adminUserId: number, targetUserId: number, options?: { reason?: string; expiresInSeconds?: number }): Promise<AuthResponse>;
+
+  // Admin user management
+  listUsers(options: { limit?, offset?, search?, sortBy?, sortDirection? }): Promise<{ users: FortressUser[]; total: number }>;
+  getUserById(userId: number): Promise<FortressUser>;
+  updateUser(userId: number, data: { name?, email?, isActive? }): Promise<FortressUser>;
+  deleteUser(userId: number): Promise<void>;
 }
 ```
 
@@ -417,6 +423,19 @@ interface IamService {
   syncResources(direction: 'push' | 'pull', filePath?: string): Promise<void>;
   setIamObserver(listener: IamEventListener): void;
   clearPermissionCache(): void;
+
+  // Admin CRUD
+  getRole(roleId: number): Promise<Role & { permissions: Permission[] }>;
+  updateRole(roleId: number, data: { name?, description? }): Promise<Role>;
+  listGroups(options?: { limit?, offset? }): Promise<{ groups: Group[]; total: number }>;
+  getGroup(groupId: number): Promise<Group & { users: FortressUser[] }>;
+  updateGroup(groupId: number, data: { name?, description? }): Promise<Group>;
+  deleteGroup(groupId: number): Promise<void>;
+  getGroupUsers(groupId: number): Promise<FortressUser[]>;
+  listPermissions(options?: { resource? }): Promise<Permission[]>;
+  createPermission(permission: PermissionInput): Promise<Permission>;
+  deletePermission(permissionId: number): Promise<void>;
+  addPermissionToRole(roleId: number, permission: PermissionInput): Promise<void>;
 }
 ```
 
@@ -1217,18 +1236,20 @@ Protects IAM routes and provides admin management endpoints. Injects `after-auth
 }
 ```
 
-**Middleware:** `after-auth` on `/iam/*` — checks `fortress:<action>` permission for each IAM operation.
+**Middleware:** `after-auth` on `/iam/*` and `/auth/users/*` — superadmin bypass for all admin operations.
 
-**Routes:**
-- `POST /iam/admin/bootstrap` — Creates `fortress-admin` role with all IAM permissions and assigns it to a user. First call is allowed without existing admin permissions.
+**Routes (16 total):**
+- `POST /iam/admin/bootstrap` — Creates `fortress-admin` role with all permissions and assigns it to a user
+- **User management:** `GET /auth/users`, `GET /auth/users/:id`, `PUT /auth/users/:id`, `DELETE /auth/users/:id`
+- **Role management:** `GET /iam/roles/:id`, `PUT /iam/roles/:id`, `POST /iam/roles/:id/permissions`
+- **Group management:** `GET /iam/groups`, `GET /iam/groups/:id`, `PUT /iam/groups/:id`, `DELETE /iam/groups/:id`, `GET /iam/groups/:id/users`
+- **Permission management:** `GET /iam/permissions`, `POST /iam/permissions`, `DELETE /iam/permissions/:id`
 
-**Methods:**
-- `bootstrap({ userId })` — Programmatic bootstrap
-- `getResources()` — List all resources with their actions
+**Methods:** Plugin methods delegate to core `AuthService` and `IamService` via `ctx.auth` and `ctx.iam` (the `PluginContext` now exposes both services).
 
-**Actions registered:** `viewResources`, `viewRoles`, `createRole`, `deleteRole`, `bindRole`, `unbindRole`, `createGroup`, `manageGroup`, `viewPermissions`, `managePermissions`, `bootstrap`.
+**Actions registered:** `viewResources`, `viewRoles`, `createRole`, `deleteRole`, `bindRole`, `unbindRole`, `createGroup`, `manageGroup`, `viewPermissions`, `managePermissions`, `viewUsers`, `manageUsers`, `viewGroups`, `manageRoles`.
 
-**Default deny:** The RBAC middleware now denies unmapped fortress-owned routes (`/iam/*`, plugin routes) by default. The admin plugin provides the permission mapping for IAM routes. Opt-out via `allowUnmappedFortressPaths: true` in `RbacOptions`.
+**Default deny:** The RBAC middleware denies unmapped fortress-owned routes (`/iam/*`, `/auth/users`, `/auth/impersonate`, plugin routes) by default. The admin plugin provides the permission mapping. Opt-out via `allowUnmappedFortressPaths: true` in `RbacOptions`.
 
 ---
 

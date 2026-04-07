@@ -24,7 +24,7 @@ export interface RbacOptions {
 const FORTRESS_CORE_PREFIXES = ['/iam/'];
 
 /** Sensitive auth endpoints that require admin protection */
-const FORTRESS_AUTH_PROTECTED = ['/auth/impersonate'];
+const FORTRESS_AUTH_PROTECTED = ['/auth/impersonate', '/auth/users'];
 
 /**
  * Check if a path belongs to a fortress-owned route (core or plugin).

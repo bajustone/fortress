@@ -14,6 +14,22 @@
 ## [Unreleased]
 
 ### Added
+- **Admin CRUD endpoints** — 15 new endpoints in the admin plugin for managing users, roles, groups, and permissions
+  - Auth admin: `GET /auth/users`, `GET /auth/users/:id`, `PUT /auth/users/:id`, `DELETE /auth/users/:id`
+  - IAM admin: `GET /iam/roles/:id`, `PUT /iam/roles/:id`, `GET /iam/groups`, `GET /iam/groups/:id`, `PUT /iam/groups/:id`, `DELETE /iam/groups/:id`, `GET /iam/groups/:id/users`, `GET /iam/permissions`, `POST /iam/permissions`, `DELETE /iam/permissions/:id`, `POST /iam/roles/:id/permissions`
+- **Auth service admin methods** — `listUsers`, `getUserById`, `updateUser`, `deleteUser` on `AuthService`
+- **IAM service admin methods** — `getRole`, `updateRole`, `listGroups`, `getGroup`, `updateGroup`, `deleteGroup`, `getGroupUsers`, `listPermissions`, `createPermission`, `deletePermission`, `addPermissionToRole` on `IamService`
+- `iam` property on `PluginContext` — plugins can now access the IAM service via `ctx.iam`
+- `like` operator support in Drizzle adapter
+- `/auth/users` added to `FORTRESS_AUTH_PROTECTED` for default-deny
+
+### Changed
+- Plugin route dispatch now merges path params into body, enabling plugin routes with `:id` params
+- GET request handlers now receive query params (previously `undefined`) in both Hono and Express adapters
+- Admin plugin superadmin middleware now covers `/auth/users/*` in addition to `/iam/*`
+
+### Previously Released
+
 - **Admin plugin** (`@bajustone/fortress/plugins/admin`) — protects IAM routes with `fortress:*` permissions, provides bootstrap endpoint to assign first admin, and lists available resources/roles
 - **Plugin middleware wiring** — `MiddlewareDefinition` from plugins is now executed in the request pipeline via `pluginMiddleware.beforeAuth`, `pluginMiddleware.afterAuth`, and `pluginMiddleware.afterRbac`
 - **Endpoint permission declarations** — `EndpointMeta.permission` field and `.permission(resource, action)` builder method allow endpoints to declare IAM requirements
@@ -23,11 +39,8 @@
 - `getResources()` and `getRoles()` methods on `IamService`
 - `createPluginMiddleware()` for Hono adapter
 - `createExpressPluginMiddleware()` for Express adapter
-
-### Changed
-- **Security-aware default deny** — RBAC middleware respects endpoint security metadata: `security: 'none'/'basic'` routes pass through, `permission`-declared routes are IAM-enforced, bearer-only routes require auth without IAM check, unknown routes are denied
-- **Default deny for fortress-owned routes** — RBAC middleware denies unmapped `/iam/*`, `/auth/impersonate`, and plugin-owned routes by default (opt-out via `allowUnmappedFortressPaths`)
-- Handler dispatch in Hono and Express adapters now checks plugin routes before core IAM routes, allowing plugins to register routes under `/iam/*`
+- **Security-aware default deny** — RBAC middleware respects endpoint security metadata
+- **Default deny for fortress-owned routes** — RBAC middleware denies unmapped `/iam/*`, `/auth/impersonate`, and plugin-owned routes by default
 
 ## [0.0.15] - 2026-04-07
 

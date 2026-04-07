@@ -103,6 +103,9 @@ export interface PluginContext {
   /** Auth service reference. Optional at init time; available at runtime (enrichTokenClaims, scopeRules). */
   // eslint-disable-next-line ts/no-unsafe-function-type -- avoids circular import with auth-service.ts
   auth?: Record<string, Function>;
+  /** IAM service reference. Optional at init time; available at runtime. */
+  // eslint-disable-next-line ts/no-unsafe-function-type -- avoids circular import with iam-service.ts
+  iam?: Record<string, Function>;
 }
 
 /** @deprecated Use EndpointDefinition from './endpoint' instead. Kept as alias for backward compatibility. */

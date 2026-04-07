@@ -30,16 +30,29 @@ describe('drizzle adapter: buildWhereCondition edge cases', () => {
     await expect(
       db.findOne({
         model: 'user',
-        where: [{ field: 'email', operator: 'like' as any, value: '%test%' }],
+        where: [{ field: 'email', operator: 'regex' as any, value: '.*test.*' }],
       }),
     ).rejects.toThrow(FortressError);
 
     await expect(
       db.findOne({
         model: 'user',
-        where: [{ field: 'email', operator: 'like' as any, value: '%test%' }],
+        where: [{ field: 'email', operator: 'regex' as any, value: '.*test.*' }],
       }),
     ).rejects.toThrow('Unsupported operator');
+  });
+
+  it('supports like operator', async () => {
+    await db.create({ model: 'user', data: { email: 'alice@test.com', name: 'Alice', passwordHash: 'h', isActive: true } });
+    await db.create({ model: 'user', data: { email: 'bob@other.com', name: 'Bob', passwordHash: 'h', isActive: true } });
+
+    const results = await db.findMany<{ email: string }>({
+      model: 'user',
+      where: [{ field: 'email', operator: 'like' as any, value: '%test%' }],
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].email).toBe('alice@test.com');
   });
 
   it('aNDs multiple where conditions together', async () => {

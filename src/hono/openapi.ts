@@ -243,7 +243,7 @@ function createAutoHandler(fortress: Fortress, ep: EndpointDefinition): (c: any)
 async function invokeHandler(fortress: Fortress, ep: EndpointDefinition, c: any): Promise<unknown> {
   const body = ['POST', 'PUT', 'PATCH'].includes(ep.method)
     ? await c.req.json().catch(() => ({}))
-    : undefined;
+    : Object.fromEntries(new URL(c.req.url).searchParams);
 
   const params = c.req.param?.() ?? {};
   const userId = c.get?.('fortressUserId') as number | undefined;
@@ -261,7 +261,7 @@ async function invokeHandler(fortress: Fortress, ep: EndpointDefinition, c: any)
     if (match) {
       const methods = (fortress.plugins as Record<string, Record<string, (...args: any[]) => any>>)[plugin.name];
       if (methods?.[ep.handler]) {
-        return methods[ep.handler](body);
+        return methods[ep.handler]({ ...body, ...params });
       }
     }
   }

@@ -13,8 +13,9 @@ export function processPlugins(
   db: DatabaseAdapter,
   config: FortressConfig,
   auth?: Record<string, Function>,
+  iam?: Record<string, Function>,
 ): Record<string, Record<string, Function>> {
-  const ctx: PluginContext = { db, config, auth };
+  const ctx: PluginContext = { db, config, auth, iam };
   const result: Record<string, Record<string, Function>> = {};
 
   for (const plugin of plugins) {

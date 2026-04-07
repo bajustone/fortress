@@ -12,7 +12,7 @@ Published on [JSR](https://jsr.io/@bajustone/fortress). Runs on Bun, Deno, Node.
 - **Password policy** with configurable rules and optional Have I Been Pwned breach checking
 - **IAM** with resource+action permissions, conditions, deny rules, groups, and roles
 - **Session management** with device tracking, revocation, and admin impersonation
-- **Plugin system** with 13 plugins for 2FA, OAuth, tenancy, audit logging, and more
+- **Plugin system** with 15 plugins for admin CRUD, 2FA, OAuth, tenancy, audit logging, and more
 - **Database-agnostic** via a generic CRUD adapter interface
 - **Framework-agnostic** with first-class Hono and Express middleware
 
@@ -48,6 +48,7 @@ Published on [JSR](https://jsr.io/@bajustone/fortress). Runs on Bun, Deno, Node.
   - [Drizzle Adapter](#drizzle-adapter)
   - [Custom Adapter](#custom-adapter)
 - [Plugins](#plugins)
+  - [Admin](#admin)
   - [Rate Limit](#rate-limit)
   - [Account Lockout](#account-lockout)
   - [Email Verification](#email-verification)
@@ -739,6 +740,7 @@ await tf.enable(userId);
 
 | Plugin | Description |
 |--------|-------------|
+| [Admin](#admin) | Admin CRUD for users, roles, groups, permissions + bootstrap |
 | [Rate Limit](#rate-limit) | Sliding window rate limiting with dual-key support |
 | [Account Lockout](#account-lockout) | Progressive lockout with exponential backoff |
 | [Email Verification](#email-verification) | Token-based email verification with login gating |
@@ -753,6 +755,70 @@ await tf.enable(userId);
 | [OAuth Server](#oauth-server) | OAuth 2.0 server with auth code + PKCE and client credentials |
 | [WebAuthn](#webauthn) | WebAuthn/Passkey support (stub) |
 | [OpenAPI](#openapi) | OpenAPI 3.1 spec generation + Scalar UI with unified spec support |
+
+---
+
+### Admin
+
+Admin CRUD for users, roles, groups, and permissions. Provides 15 endpoints + bootstrap for first admin setup. All endpoints are protected by `fortress:*` permissions and require bootstrap before use.
+
+```typescript
+import { admin } from '@bajustone/fortress/plugins/admin';
+
+const fortress = createFortress({
+  jwt: { secret: 'your-secret-at-least-32-bytes!!' },
+  database: adapter,
+  plugins: [
+    admin({ adminUserIds: [1] }), // superadmin bypass for user ID 1
+  ],
+});
+
+// Bootstrap: assign all admin permissions to a user
+await fortress.plugins.admin.bootstrap({ userId: 1 });
+
+// User management
+const { users, total } = await fortress.auth.listUsers({ limit: 20, search: 'alice' });
+const user = await fortress.auth.getUserById(userId);
+await fortress.auth.updateUser(userId, { name: 'New Name', isActive: false });
+await fortress.auth.deleteUser(userId);
+
+// Role management
+const role = await fortress.iam.getRole(roleId);      // includes permissions
+await fortress.iam.updateRole(roleId, { name: 'editor' });
+await fortress.iam.addPermissionToRole(roleId, { resource: 'post', action: 'publish' });
+
+// Group management
+const { groups, total } = await fortress.iam.listGroups({ limit: 20 });
+const group = await fortress.iam.getGroup(groupId);   // includes users
+await fortress.iam.updateGroup(groupId, { name: 'devs' });
+await fortress.iam.deleteGroup(groupId);
+const members = await fortress.iam.getGroupUsers(groupId);
+
+// Permission management
+const perms = await fortress.iam.listPermissions({ resource: 'post' });
+const perm = await fortress.iam.createPermission({ resource: 'invoice', action: 'create' });
+await fortress.iam.deletePermission(permId);
+```
+
+**Endpoints (all require bearer auth + fortress:* permissions):**
+
+| Method | Path | Permission |
+|--------|------|------------|
+| GET | /auth/users | fortress:viewUsers |
+| GET | /auth/users/:id | fortress:viewUsers |
+| PUT | /auth/users/:id | fortress:manageUsers |
+| DELETE | /auth/users/:id | fortress:manageUsers |
+| GET | /iam/roles/:id | fortress:viewRoles |
+| PUT | /iam/roles/:id | fortress:manageRoles |
+| POST | /iam/roles/:id/permissions | fortress:manageRoles |
+| GET | /iam/groups | fortress:viewGroups |
+| GET | /iam/groups/:id | fortress:viewGroups |
+| PUT | /iam/groups/:id | fortress:manageGroup |
+| DELETE | /iam/groups/:id | fortress:manageGroup |
+| GET | /iam/groups/:id/users | fortress:viewGroups |
+| GET | /iam/permissions | fortress:viewPermissions |
+| POST | /iam/permissions | fortress:managePermissions |
+| DELETE | /iam/permissions/:id | fortress:managePermissions |
 
 ---
 

@@ -267,7 +267,9 @@ function findPluginHandler(fortress: Fortress, ep: EndpointDefinition): ExpressM
 function createAutoHandler(fortress: Fortress, ep: EndpointDefinition): ExpressMiddleware {
   return async (req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => {
     try {
-      const body = (req as any).body;
+      const body = req.method === 'GET'
+        ? (req as any).query ?? {}
+        : (req as any).body ?? {};
       const params = (req as any).params ?? {};
       const userId = req.fortressUserId;
 
@@ -287,7 +289,7 @@ function createAutoHandler(fortress: Fortress, ep: EndpointDefinition): ExpressM
           if (match) {
             const methods = (fortress.plugins as Record<string, Record<string, (...args: any[]) => any>>)[plugin.name];
             if (methods?.[ep.handler]) {
-              result = await methods[ep.handler](body);
+              result = await methods[ep.handler]({ ...body, ...params });
               handled = true;
               break;
             }

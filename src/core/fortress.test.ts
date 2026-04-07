@@ -38,6 +38,25 @@ describe('createFortress', () => {
     expect(fortress.iam.bindRoleToGroup).toBeTypeOf('function');
     expect(fortress.iam.createGroup).toBeTypeOf('function');
     expect(fortress.iam.syncResources).toBeTypeOf('function');
+
+    // Admin CRUD methods — auth
+    expect(fortress.auth.listUsers).toBeTypeOf('function');
+    expect(fortress.auth.getUserById).toBeTypeOf('function');
+    expect(fortress.auth.updateUser).toBeTypeOf('function');
+    expect(fortress.auth.deleteUser).toBeTypeOf('function');
+
+    // Admin CRUD methods — IAM
+    expect(fortress.iam.getRole).toBeTypeOf('function');
+    expect(fortress.iam.updateRole).toBeTypeOf('function');
+    expect(fortress.iam.listGroups).toBeTypeOf('function');
+    expect(fortress.iam.getGroup).toBeTypeOf('function');
+    expect(fortress.iam.updateGroup).toBeTypeOf('function');
+    expect(fortress.iam.deleteGroup).toBeTypeOf('function');
+    expect(fortress.iam.getGroupUsers).toBeTypeOf('function');
+    expect(fortress.iam.listPermissions).toBeTypeOf('function');
+    expect(fortress.iam.createPermission).toBeTypeOf('function');
+    expect(fortress.iam.deletePermission).toBeTypeOf('function');
+    expect(fortress.iam.addPermissionToRole).toBeTypeOf('function');
   });
 
   it('exposes config as readonly', () => {

@@ -75,8 +75,8 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
 
   const auth = createAuthService(db, config, plugins);
   const iam = createIamService(db, config);
-  // eslint-disable-next-line ts/no-unsafe-function-type -- auth service cast for plugin context
-  const pluginMethods = processPlugins(plugins, db, config, auth as unknown as Record<string, Function>);
+  // eslint-disable-next-line ts/no-unsafe-function-type -- service casts for plugin context
+  const pluginMethods = processPlugins(plugins, db, config, auth as unknown as Record<string, Function>, iam as unknown as Record<string, Function>);
 
   // Wire IAM events → audit log if the plugin is registered
   if (pluginMethods['audit-log']?.logCustomEvent) {

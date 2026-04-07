@@ -2,7 +2,7 @@ import type { Column, SQL, Table } from 'drizzle-orm';
 import type { DatabaseAdapter } from '../adapters/database';
 import type { WhereClause } from '../adapters/database/types';
 
-import { and, eq, getTableColumns, gt, gte, inArray, lt, lte, ne, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, gt, gte, inArray, like, lt, lte, ne, sql } from 'drizzle-orm';
 import { Errors } from '../core/errors';
 import { fortressPgSchema } from './pg/schema';
 import { fortressSchema } from './schema';
@@ -88,6 +88,8 @@ function buildWhereCondition(table: Table, where: WhereClause[]): SQL | undefine
         return gte(column, clause.value as any);
       case 'lte':
         return lte(column, clause.value as any);
+      case 'like':
+        return like(column, clause.value as string);
       default:
         throw Errors.badRequest(`Unsupported operator: ${clause.operator}`);
     }

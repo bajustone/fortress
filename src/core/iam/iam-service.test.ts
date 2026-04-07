@@ -224,3 +224,264 @@ describe('tenant-scoped IAM', () => {
     expect(permsB[0].action).toBe('read');
   });
 });
+
+// ── Admin CRUD ────────────────────────────────────────────────────
+
+describe('iam-service: admin CRUD', () => {
+  let fortress: Fortress;
+
+  beforeEach(() => {
+    fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+    });
+  });
+
+  // ── getRole ──────────────────────────────────────────────────
+
+  describe('getRole', () => {
+    it('returns role with permissions', async () => {
+      const role = await fortress.iam.createRole('editor', [
+        { resource: 'post', action: 'read' },
+        { resource: 'post', action: 'update' },
+      ]);
+
+      const result = await fortress.iam.getRole(role.id);
+
+      expect(result.name).toBe('editor');
+      expect(result.permissions).toHaveLength(2);
+      expect(result.permissions.map(p => p.action).sort()).toEqual(['read', 'update']);
+    });
+
+    it('throws NOT_FOUND for missing role', async () => {
+      await expect(fortress.iam.getRole(99999)).rejects.toThrow('Role not found');
+    });
+  });
+
+  // ── updateRole ───────────────────────────────────────────────
+
+  describe('updateRole', () => {
+    it('updates role name', async () => {
+      const role = await fortress.iam.createRole('old-name', []);
+
+      const updated = await fortress.iam.updateRole(role.id, { name: 'new-name' });
+
+      expect(updated.name).toBe('new-name');
+    });
+
+    it('throws for system roles', async () => {
+      const role = await fortress.iam.createRole('sys-role', []);
+      await fortress.config.database.update({
+        model: 'role',
+        where: [{ field: 'id', operator: '=', value: role.id }],
+        data: { isSystem: true },
+      });
+
+      await expect(fortress.iam.updateRole(role.id, { name: 'hacked' })).rejects.toThrow(
+        'Cannot update a system role',
+      );
+    });
+
+    it('throws NOT_FOUND for missing role', async () => {
+      await expect(fortress.iam.updateRole(99999, { name: 'x' })).rejects.toThrow('Role not found');
+    });
+  });
+
+  // ── listGroups ───────────────────────────────────────────────
+
+  describe('listGroups', () => {
+    it('returns paginated groups with total', async () => {
+      await fortress.iam.createGroup('group-a');
+      await fortress.iam.createGroup('group-b');
+      await fortress.iam.createGroup('group-c');
+
+      const result = await fortress.iam.listGroups({ limit: 2, offset: 0 });
+
+      expect(result.groups).toHaveLength(2);
+      expect(result.total).toBe(3);
+    });
+
+    it('returns empty when no groups', async () => {
+      const result = await fortress.iam.listGroups();
+
+      expect(result.groups).toEqual([]);
+      expect(result.total).toBe(0);
+    });
+  });
+
+  // ── getGroup ─────────────────────────────────────────────────
+
+  describe('getGroup', () => {
+    it('returns group with users', async () => {
+      const group = await fortress.iam.createGroup('devs');
+      const user = await fortress.auth.createUser({
+        email: 'dev@test.com',
+        name: 'Dev',
+        password: 'password-123',
+      });
+      await fortress.iam.addUserToGroup(group.id, user.id);
+
+      const result = await fortress.iam.getGroup(group.id);
+
+      expect(result.name).toBe('devs');
+      expect(result.users).toHaveLength(1);
+      expect(result.users[0].email).toBe('dev@test.com');
+      expect(result.users[0]).not.toHaveProperty('passwordHash');
+    });
+
+    it('throws NOT_FOUND for missing group', async () => {
+      await expect(fortress.iam.getGroup(99999)).rejects.toThrow('Group not found');
+    });
+  });
+
+  // ── updateGroup ──────────────────────────────────────────────
+
+  describe('updateGroup', () => {
+    it('updates group name', async () => {
+      const group = await fortress.iam.createGroup('old-name');
+
+      const updated = await fortress.iam.updateGroup(group.id, { name: 'new-name' });
+
+      expect(updated.name).toBe('new-name');
+    });
+
+    it('throws NOT_FOUND for missing group', async () => {
+      await expect(fortress.iam.updateGroup(99999, { name: 'x' })).rejects.toThrow('Group not found');
+    });
+  });
+
+  // ── deleteGroup ──────────────────────────────────────────────
+
+  describe('deleteGroup', () => {
+    it('deletes group', async () => {
+      const group = await fortress.iam.createGroup('temp');
+
+      await fortress.iam.deleteGroup(group.id);
+
+      const result = await fortress.iam.listGroups();
+      expect(result.total).toBe(0);
+    });
+
+    it('throws NOT_FOUND for missing group', async () => {
+      await expect(fortress.iam.deleteGroup(99999)).rejects.toThrow('Group not found');
+    });
+  });
+
+  // ── getGroupUsers ────────────────────────────────────────────
+
+  describe('getGroupUsers', () => {
+    it('returns group members without passwordHash', async () => {
+      const group = await fortress.iam.createGroup('team');
+      const user = await fortress.auth.createUser({
+        email: 'member@test.com',
+        name: 'Member',
+        password: 'password-123',
+      });
+      await fortress.iam.addUserToGroup(group.id, user.id);
+
+      const users = await fortress.iam.getGroupUsers(group.id);
+
+      expect(users).toHaveLength(1);
+      expect(users[0].email).toBe('member@test.com');
+      expect(users[0]).not.toHaveProperty('passwordHash');
+    });
+
+    it('returns empty for group with no members', async () => {
+      const group = await fortress.iam.createGroup('empty');
+
+      const users = await fortress.iam.getGroupUsers(group.id);
+
+      expect(users).toEqual([]);
+    });
+  });
+
+  // ── listPermissions ──────────────────────────────────────────
+
+  describe('listPermissions', () => {
+    it('lists all permissions', async () => {
+      await fortress.iam.createRole('role1', [
+        { resource: 'post', action: 'read' },
+        { resource: 'comment', action: 'write' },
+      ]);
+
+      const perms = await fortress.iam.listPermissions();
+
+      expect(perms.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('filters by resource', async () => {
+      await fortress.iam.createRole('role2', [
+        { resource: 'post', action: 'read' },
+        { resource: 'comment', action: 'write' },
+      ]);
+
+      const perms = await fortress.iam.listPermissions({ resource: 'post' });
+
+      expect(perms.every(p => p.resource === 'post')).toBe(true);
+    });
+  });
+
+  // ── createPermission ─────────────────────────────────────────
+
+  describe('createPermission', () => {
+    it('creates a permission', async () => {
+      const perm = await fortress.iam.createPermission({
+        resource: 'invoice',
+        action: 'create',
+      });
+
+      expect(perm.id).toBeDefined();
+      expect(perm.resource).toBe('invoice');
+      expect(perm.action).toBe('create');
+    });
+  });
+
+  // ── deletePermission ─────────────────────────────────────────
+
+  describe('deletePermission', () => {
+    it('deletes a permission', async () => {
+      const perm = await fortress.iam.createPermission({
+        resource: 'invoice',
+        action: 'delete',
+      });
+
+      await fortress.iam.deletePermission(perm.id);
+
+      const remaining = await fortress.iam.listPermissions({ resource: 'invoice' });
+      expect(remaining.find(p => p.action === 'delete')).toBeUndefined();
+    });
+
+    it('throws NOT_FOUND for missing permission', async () => {
+      await expect(fortress.iam.deletePermission(99999)).rejects.toThrow('Permission not found');
+    });
+  });
+
+  // ── addPermissionToRole ──────────────────────────────────────
+
+  describe('addPermissionToRole', () => {
+    it('adds permission to existing role', async () => {
+      const role = await fortress.iam.createRole('base', [{ resource: 'post', action: 'read' }]);
+
+      await fortress.iam.addPermissionToRole(role.id, { resource: 'post', action: 'write' });
+
+      const detail = await fortress.iam.getRole(role.id);
+      expect(detail.permissions).toHaveLength(2);
+      expect(detail.permissions.map(p => p.action).sort()).toEqual(['read', 'write']);
+    });
+
+    it('is idempotent (adding same permission twice)', async () => {
+      const role = await fortress.iam.createRole('idem', [{ resource: 'post', action: 'read' }]);
+
+      await fortress.iam.addPermissionToRole(role.id, { resource: 'post', action: 'read' });
+
+      const detail = await fortress.iam.getRole(role.id);
+      expect(detail.permissions).toHaveLength(1);
+    });
+
+    it('throws NOT_FOUND for missing role', async () => {
+      await expect(
+        fortress.iam.addPermissionToRole(99999, { resource: 'x', action: 'y' }),
+      ).rejects.toThrow('Role not found');
+    });
+  });
+});

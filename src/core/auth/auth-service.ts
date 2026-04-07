@@ -61,6 +61,12 @@ export interface AuthService {
    * **Caller must verify the admin has the `fortress:impersonate` permission before calling this method.**
    */
   impersonate: (adminUserId: number, targetUserId: number, options?: { reason?: string; expirySeconds?: number }) => Promise<AuthResponse>;
+
+  // ── Admin user management ──────────────────────────────────────────
+  listUsers: (options: { limit?: number; offset?: number; search?: string; sortBy?: string; sortDirection?: 'asc' | 'desc' }) => Promise<{ users: FortressUser[]; total: number }>;
+  getUserById: (userId: number) => Promise<FortressUser>;
+  updateUser: (userId: number, data: { name?: string; email?: string; isActive?: boolean }) => Promise<FortressUser>;
+  deleteUser: (userId: number) => Promise<void>;
 }
 
 export function createAuthService(
@@ -582,6 +588,131 @@ export function createAuthService(
           },
         },
       };
+    },
+
+    // ── Admin user management ──────────────────────────────────────
+
+    async listUsers(options: {
+      limit?: number;
+      offset?: number;
+      search?: string;
+      sortBy?: string;
+      sortDirection?: 'asc' | 'desc';
+    }): Promise<{ users: FortressUser[]; total: number }> {
+      const where: { field: string; operator: string; value: unknown }[] = [];
+
+      if (options.search) {
+        where.push({ field: 'email', operator: 'like', value: `%${options.search}%` });
+      }
+
+      const [users, total] = await Promise.all([
+        db.findMany<FortressUser & { passwordHash?: string }>({
+          model: 'user',
+          where: where.length > 0 ? where : undefined,
+          limit: options.limit ?? 50,
+          offset: options.offset ?? 0,
+          sortBy: options.sortBy
+            ? { field: options.sortBy, direction: options.sortDirection ?? 'asc' }
+            : { field: 'id', direction: 'asc' },
+        }),
+        db.count({
+          model: 'user',
+          where: where.length > 0 ? where : undefined,
+        }),
+      ]);
+
+      return {
+        users: users.map(({ passwordHash: _, ...u }) => u),
+        total,
+      };
+    },
+
+    async getUserById(userId: number): Promise<FortressUser> {
+      const user = await db.findOne<FortressUser & { passwordHash?: string }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: userId }],
+      });
+
+      if (!user) {
+        throw Errors.notFound('User not found');
+      }
+
+      const { passwordHash: _, ...safeUser } = user;
+      return safeUser;
+    },
+
+    async updateUser(
+      userId: number,
+      data: { name?: string; email?: string; isActive?: boolean },
+    ): Promise<FortressUser> {
+      // Verify user exists
+      const existing = await db.findOne<FortressUser>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: userId }],
+      });
+      if (!existing) {
+        throw Errors.notFound('User not found');
+      }
+
+      // Check email uniqueness if changing email
+      if (data.email && data.email !== existing.email) {
+        const duplicate = await db.findOne<{ id: number }>({
+          model: 'user',
+          where: [{ field: 'email', operator: '=', value: data.email }],
+        });
+        if (duplicate) {
+          throw Errors.conflict('A user with this email already exists');
+        }
+      }
+
+      const updateData: Record<string, unknown> = {};
+      if (data.name !== undefined)
+        updateData.name = data.name;
+      if (data.email !== undefined)
+        updateData.email = data.email;
+      if (data.isActive !== undefined)
+        updateData.isActive = data.isActive;
+
+      const updated = await db.update<FortressUser & { passwordHash?: string }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: userId }],
+        data: updateData,
+      });
+
+      if (!updated) {
+        throw Errors.notFound('User not found');
+      }
+
+      // Update login identifier if email changed
+      if (data.email && data.email !== existing.email) {
+        await db.update({
+          model: 'login_identifier',
+          where: [
+            { field: 'userId', operator: '=', value: userId },
+            { field: 'type', operator: '=', value: 'email' },
+            { field: 'value', operator: '=', value: existing.email },
+          ],
+          data: { value: data.email },
+        });
+      }
+
+      const { passwordHash: _, ...safeUser } = updated;
+      return safeUser;
+    },
+
+    async deleteUser(userId: number): Promise<void> {
+      const existing = await db.findOne<{ id: number }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: userId }],
+      });
+      if (!existing) {
+        throw Errors.notFound('User not found');
+      }
+
+      await db.delete({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: userId }],
+      });
     },
   };
 }
