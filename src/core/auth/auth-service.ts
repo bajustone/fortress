@@ -65,7 +65,7 @@ export interface AuthService {
   // ── Admin user management ──────────────────────────────────────────
   listUsers: (options: { limit?: number; offset?: number; search?: string; sortBy?: string; sortDirection?: 'asc' | 'desc' }) => Promise<{ users: FortressUser[]; total: number }>;
   getUserById: (userId: number) => Promise<FortressUser>;
-  updateUser: (userId: number, data: { name?: string; email?: string; isActive?: boolean }) => Promise<FortressUser>;
+  updateUser: (userId: number, data: { name?: string; email?: string; isActive?: boolean; password?: string }) => Promise<FortressUser>;
   deleteUser: (userId: number) => Promise<void>;
 }
 
@@ -643,7 +643,7 @@ export function createAuthService(
 
     async updateUser(
       userId: number,
-      data: { name?: string; email?: string; isActive?: boolean },
+      data: { name?: string; email?: string; isActive?: boolean; password?: string },
     ): Promise<FortressUser> {
       // Verify user exists
       const existing = await db.findOne<FortressUser>({
@@ -672,6 +672,11 @@ export function createAuthService(
         updateData.email = data.email;
       if (data.isActive !== undefined)
         updateData.isActive = data.isActive;
+      if (data.password !== undefined) {
+        if (config.passwordPolicy)
+          validatePassword(data.password, config.passwordPolicy);
+        updateData.passwordHash = await hasher.hash(data.password);
+      }
 
       const updated = await db.update<FortressUser & { passwordHash?: string }>({
         model: 'user',

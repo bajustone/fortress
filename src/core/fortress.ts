@@ -75,8 +75,7 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
 
   const auth = createAuthService(db, config, plugins);
   const iam = createIamService(db, config);
-  // eslint-disable-next-line ts/no-unsafe-function-type -- service casts for plugin context
-  const pluginMethods = processPlugins(plugins, db, config, auth as unknown as Record<string, Function>, iam as unknown as Record<string, Function>);
+  const pluginMethods = processPlugins(plugins, db, config, auth, iam);
 
   // Wire IAM events → audit log if the plugin is registered
   if (pluginMethods['audit-log']?.logCustomEvent) {
@@ -85,13 +84,18 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   }
 
   // Assemble all endpoint definitions: core auth + IAM + plugin routes
+  // Deduplicate by method+path — plugin routes take priority over core definitions
   const pluginEndpoints: EndpointDefinition[] = [];
   for (const plugin of plugins) {
     if (plugin.routes) {
       pluginEndpoints.push(...plugin.routes);
     }
   }
-  const endpoints: EndpointDefinition[] = [...authEndpoints, ...iamEndpoints, ...pluginEndpoints];
+  const endpointMap = new Map<string, EndpointDefinition>();
+  for (const ep of [...authEndpoints, ...iamEndpoints, ...pluginEndpoints]) {
+    endpointMap.set(`${ep.method} ${ep.path}`, ep);
+  }
+  const endpoints = Array.from(endpointMap.values());
 
   return {
     auth,

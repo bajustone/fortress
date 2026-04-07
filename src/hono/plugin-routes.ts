@@ -115,6 +115,9 @@ function createRouteHandler(
 
       const params = c.req.param();
       const result = await methods[handlerName]({ ...body, ...params });
+      if (typeof result === 'string' && result.trimStart().startsWith('<!')) {
+        return c.html(result);
+      }
       return c.json(result ?? { ok: true });
     }
     catch (error) {

@@ -106,4 +106,3 @@ Every time code changes (APIs, adapters, plugins, config, middleware), update `e
 ## Reference Docs
 
 - `docs/architecture.md` — Full technical design
-- `docs/watch-outs.md` — Known issues and gaps vs. industry standards

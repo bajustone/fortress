@@ -103,7 +103,7 @@ src/
     webhook/index.ts                    # Standard Webhooks spec (HMAC-SHA256, retries)
     magic-link/index.ts                 # Passwordless token-based auth
     webauthn/index.ts                   # Passkeys/WebAuthn (registration, passwordless auth, 2FA mode)
-    admin/index.ts                      # IAM route protection, bootstrap, resource/role listing
+    admin/index.ts                      # Full IAM admin: 35 endpoints, bootstrap, superadmin bypass
 
 bin/
   fortress.ts                           # CLI tool: init, sync:push, sync:pull, sync:types, generate-secret
@@ -1274,7 +1274,7 @@ Event delivery following the [Standard Webhooks](https://www.standardwebhooks.co
 
 **File:** `src/plugins/admin/index.ts`
 
-Protects IAM routes and provides admin management endpoints. Injects `after-auth` middleware on `/iam/*` paths that enforces `fortress:*` permission checks.
+Protects IAM routes and provides full admin management endpoints. Mounts all core IAM endpoints as HTTP handlers plus admin-specific CRUD. Injects `after-auth` middleware on `/iam/*` paths that enforces `fortress:*` permission checks.
 
 **Config:**
 ```typescript
@@ -1286,14 +1286,18 @@ Protects IAM routes and provides admin management endpoints. Injects `after-auth
 
 **Middleware:** `after-auth` on `/iam/*` and `/auth/users/*` — superadmin bypass for all admin operations.
 
-**Routes (16 total):**
+**Routes (35 total):**
 - `POST /iam/admin/bootstrap` — Creates `fortress-admin` role with all permissions and assigns it to a user
-- **User management:** `GET /auth/users`, `GET /auth/users/:id`, `PUT /auth/users/:id`, `DELETE /auth/users/:id`
-- **Role management:** `GET /iam/roles/:id`, `PUT /iam/roles/:id`, `POST /iam/roles/:id/permissions`
-- **Group management:** `GET /iam/groups`, `GET /iam/groups/:id`, `PUT /iam/groups/:id`, `DELETE /iam/groups/:id`, `GET /iam/groups/:id/users`
-- **Permission management:** `GET /iam/permissions`, `POST /iam/permissions`, `DELETE /iam/permissions/:id`
+- `POST /iam/sync` — Push/pull resource definitions
+- **User management:** `GET /auth/users`, `GET /auth/users/:id`, `POST /auth/users`, `PUT /auth/users/:id`, `DELETE /auth/users/:id`
+- **Role management:** `GET /iam/roles`, `GET /iam/roles/:id`, `POST /iam/roles`, `PUT /iam/roles/:id`, `DELETE /iam/roles/:id`, `POST /iam/roles/:id/permissions`
+- **Role bindings:** `POST /iam/roles/:id/bind/user`, `POST /iam/roles/:id/bind/group`, `DELETE /iam/roles/:id/bind`
+- **Group management:** `GET /iam/groups`, `GET /iam/groups/:id`, `POST /iam/groups`, `PUT /iam/groups/:id`, `DELETE /iam/groups/:id`, `GET /iam/groups/:id/users`, `POST /iam/groups/:id/users`, `DELETE /iam/groups/:id/users/:userId`
+- **Permission management:** `GET /iam/permissions`, `POST /iam/permissions`, `DELETE /iam/permissions/:id`, `GET /iam/users/:id/permissions`, `POST /iam/check`
+- **Permission bindings:** `POST /iam/permissions/bind/user`, `POST /iam/permissions/bind/group`, `DELETE /iam/permissions/bind/user`, `DELETE /iam/permissions/bind/group`
+- **Resources:** `GET /iam/resources`
 
-**Methods:** Plugin methods delegate to core `AuthService` and `IamService` via `ctx.auth` and `ctx.iam` (the `PluginContext` now exposes both services).
+**Methods:** Plugin methods delegate to core `AuthService` and `IamService` via typed `ctx.auth` and `ctx.iam` references (the `PluginContext` exposes both services with full type safety).
 
 **Actions registered:** `viewResources`, `viewRoles`, `createRole`, `deleteRole`, `bindRole`, `unbindRole`, `createGroup`, `manageGroup`, `viewPermissions`, `managePermissions`, `viewUsers`, `manageUsers`, `viewGroups`, `manageRoles`.
 

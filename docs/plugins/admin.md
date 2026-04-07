@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `admin` plugin provides a complete set of CRUD endpoints for managing Fortress's own resources: users, roles, groups, and permissions. It ships 15 endpoints plus a bootstrap endpoint for first-time admin setup.
+The `admin` plugin provides a complete set of endpoints for managing Fortress's own resources: users, roles, groups, permissions, role bindings, permission bindings, and resource sync. It ships 35 endpoints plus a bootstrap endpoint for first-time admin setup.
 
 All admin endpoints are protected by `fortress:*` permissions enforced through the RBAC middleware. Until a user has been bootstrapped with the `fortress-admin` role, no one can access these routes. Optionally, a set of `adminUserIds` can be designated as superadmins who bypass all permission checks entirely.
 
@@ -84,23 +84,52 @@ await fortress.plugins.admin.updateUser({ id: '42', name: 'New Name', isActive: 
 
 // Delete a user
 await fortress.plugins.admin.deleteUser({ id: '42' });
+
+// Create a user (admin-initiated, requires fortress:manageUsers)
+const newUser = await fortress.plugins.admin.createUser({
+  email: 'alice@example.com',
+  name: 'Alice',
+  password: 'SecurePass123!',
+});
 ```
 
 ### Role management
 
 ```ts
+// List all roles
+const roles = await fortress.plugins.admin.getRoles();
+
 // Get role with its permissions
 const role = await fortress.plugins.admin.getRole({ id: '1' });
 // role.permissions => Permission[]
 
+// Create a role
+const newRole = await fortress.plugins.admin.createRole({
+  name: 'editor',
+  permissions: [{ resource: 'post', action: 'publish' }],
+  description: 'Content editors',
+});
+
 // Update role name/description
 await fortress.plugins.admin.updateRole({ id: '1', name: 'editor', description: 'Content editors' });
 
+// Delete a role
+await fortress.plugins.admin.deleteRole({ id: '1' });
+
 // Add a permission to a role
 await fortress.plugins.admin.addPermissionToRole({ id: '1', resource: 'post', action: 'publish' });
+
+// Bind a role to a user
+await fortress.plugins.admin.bindRoleToUser({ id: '1', userId: 42 });
+
+// Bind a role to a group
+await fortress.plugins.admin.bindRoleToGroup({ id: '1', groupId: 5 });
+
+// Unbind a role
+await fortress.plugins.admin.unbindRole({ id: '1', subjectType: 'USER', subjectId: 42 });
 ```
 
-System roles (like `fortress-admin`) cannot be updated through the update endpoint.
+System roles (like `fortress-admin`) cannot be updated or deleted through the admin endpoints.
 
 ### Group management
 
@@ -108,9 +137,12 @@ System roles (like `fortress-admin`) cannot be updated through the update endpoi
 // List groups
 const { groups, total } = await fortress.plugins.admin.listGroups({ limit: 20 });
 
+// Create a group
+const group = await fortress.plugins.admin.createGroup({ name: 'devs', description: 'Developer team' });
+
 // Get group with members
-const group = await fortress.plugins.admin.getGroup({ id: '5' });
-// group.users => FortressUser[]
+const detail = await fortress.plugins.admin.getGroup({ id: '5' });
+// detail.users => FortressUser[]
 
 // Update group
 await fortress.plugins.admin.updateGroup({ id: '5', name: 'devs', description: 'Developer team' });
@@ -120,6 +152,10 @@ await fortress.plugins.admin.deleteGroup({ id: '5' });
 
 // List group members separately
 const members = await fortress.plugins.admin.getGroupUsers({ id: '5' });
+
+// Add/remove users from groups
+await fortress.plugins.admin.addUserToGroup({ id: '5', userId: 42 });
+await fortress.plugins.admin.removeUserFromGroup({ id: '5', userId: 42 });
 ```
 
 ### Permission management
@@ -138,6 +174,30 @@ const perm = await fortress.plugins.admin.createPermission({
 
 // Delete a permission
 await fortress.plugins.admin.deletePermission({ id: '99' });
+
+// Get user permissions
+const userPerms = await fortress.plugins.admin.getUserPermissions({ id: '42' });
+
+// Check a specific permission
+const { allowed } = await fortress.plugins.admin.checkPermission({
+  userId: 42, resource: 'post', action: 'publish',
+});
+
+// Bind/unbind permissions directly to users or groups
+await fortress.plugins.admin.bindPermissionToUser({ userId: 42, permission: { resource: 'post', action: 'publish' } });
+await fortress.plugins.admin.bindPermissionToGroup({ groupId: 5, permission: { resource: 'post', action: 'publish' } });
+await fortress.plugins.admin.unbindPermissionFromUser({ userId: 42, permissionId: 99 });
+await fortress.plugins.admin.unbindPermissionFromGroup({ groupId: 5, permissionId: 99 });
+```
+
+### Resource sync
+
+```ts
+// Pull resources from database into file
+await fortress.plugins.admin.syncResources({ direction: 'pull' });
+
+// Push resources from file into database
+await fortress.plugins.admin.syncResources({ direction: 'push', filePath: './custom-resources.json' });
 ```
 
 ## Endpoints
@@ -156,6 +216,7 @@ All endpoints require bearer authentication and the corresponding `fortress:*` p
 |---|---|---|
 | GET | `/auth/users` | `fortress:viewUsers` |
 | GET | `/auth/users/:id` | `fortress:viewUsers` |
+| POST | `/auth/users` | `fortress:manageUsers` |
 | PUT | `/auth/users/:id` | `fortress:manageUsers` |
 | DELETE | `/auth/users/:id` | `fortress:manageUsers` |
 
@@ -163,9 +224,15 @@ All endpoints require bearer authentication and the corresponding `fortress:*` p
 
 | Method | Path | Permission |
 |---|---|---|
+| GET | `/iam/roles` | `fortress:viewRoles` |
 | GET | `/iam/roles/:id` | `fortress:viewRoles` |
+| POST | `/iam/roles` | `fortress:createRole` |
 | PUT | `/iam/roles/:id` | `fortress:manageRoles` |
+| DELETE | `/iam/roles/:id` | `fortress:deleteRole` |
 | POST | `/iam/roles/:id/permissions` | `fortress:manageRoles` |
+| POST | `/iam/roles/:id/bind/user` | `fortress:bindRole` |
+| POST | `/iam/roles/:id/bind/group` | `fortress:bindRole` |
+| DELETE | `/iam/roles/:id/bind` | `fortress:unbindRole` |
 
 ### Group endpoints
 
@@ -173,9 +240,12 @@ All endpoints require bearer authentication and the corresponding `fortress:*` p
 |---|---|---|
 | GET | `/iam/groups` | `fortress:viewGroups` |
 | GET | `/iam/groups/:id` | `fortress:viewGroups` |
+| POST | `/iam/groups` | `fortress:createGroup` |
 | PUT | `/iam/groups/:id` | `fortress:manageGroup` |
 | DELETE | `/iam/groups/:id` | `fortress:manageGroup` |
 | GET | `/iam/groups/:id/users` | `fortress:viewGroups` |
+| POST | `/iam/groups/:id/users` | `fortress:manageGroup` |
+| DELETE | `/iam/groups/:id/users/:userId` | `fortress:manageGroup` |
 
 ### Permission endpoints
 
@@ -184,6 +254,19 @@ All endpoints require bearer authentication and the corresponding `fortress:*` p
 | GET | `/iam/permissions` | `fortress:viewPermissions` |
 | POST | `/iam/permissions` | `fortress:managePermissions` |
 | DELETE | `/iam/permissions/:id` | `fortress:managePermissions` |
+| GET | `/iam/users/:id/permissions` | `fortress:viewPermissions` |
+| POST | `/iam/check` | `fortress:viewPermissions` |
+| POST | `/iam/permissions/bind/user` | `fortress:managePermissions` |
+| POST | `/iam/permissions/bind/group` | `fortress:managePermissions` |
+| DELETE | `/iam/permissions/bind/user` | `fortress:managePermissions` |
+| DELETE | `/iam/permissions/bind/group` | `fortress:managePermissions` |
+
+### Resource endpoints
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/iam/resources` | `fortress:viewResources` |
+| POST | `/iam/sync` | `fortress:managePermissions` |
 
 ## Superadmin Bypass
 
@@ -199,18 +282,24 @@ The superadmin bypass is framework-agnostic. It extracts the user ID from Hono's
 
 ## Permissions Reference
 
-The admin plugin declares eight distinct permissions, all on the `fortress` resource:
+The admin plugin uses all fortress permissions declared across admin and core IAM endpoints:
 
 | Permission | Used by |
 |---|---|
 | `fortress:viewUsers` | List users, get user by ID |
-| `fortress:manageUsers` | Update user, delete user |
-| `fortress:viewRoles` | Get role with permissions |
+| `fortress:manageUsers` | Create user, update user, delete user |
+| `fortress:viewRoles` | List roles, get role with permissions |
+| `fortress:createRole` | Create role |
+| `fortress:deleteRole` | Delete role |
 | `fortress:manageRoles` | Update role, add permission to role |
+| `fortress:bindRole` | Bind role to user or group |
+| `fortress:unbindRole` | Unbind role |
 | `fortress:viewGroups` | List groups, get group, list group members |
-| `fortress:manageGroup` | Update group, delete group |
-| `fortress:viewPermissions` | List permissions |
-| `fortress:managePermissions` | Create permission, delete permission |
+| `fortress:createGroup` | Create group |
+| `fortress:manageGroup` | Update group, delete group, add/remove group members |
+| `fortress:viewPermissions` | List permissions, get user permissions, check permission |
+| `fortress:managePermissions` | Create/delete permissions, bind/unbind permissions, resource sync |
+| `fortress:viewResources` | List available resources |
 
 ## How It Works
 

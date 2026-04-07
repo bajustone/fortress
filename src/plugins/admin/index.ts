@@ -1,7 +1,7 @@
 import type { EndpointDefinition, EndpointPermission } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
-import type { FortressUser, Group, Permission, PermissionInput, Role } from '../../core/types';
+import type { FortressUser, Group, Permission, PermissionInput, Role, SubjectType } from '../../core/types';
 import { authEndpoints } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
 import { iamEndpoints } from '../../core/iam/iam-endpoints';
@@ -52,6 +52,22 @@ function strSchema(desc: string): { type: 'string'; description: string } {
 
 function boolSchema(desc: string): { type: 'boolean'; description: string } {
   return { type: 'boolean', description: desc };
+}
+
+/** Parse a value to a positive integer, or return undefined. */
+function safeInt(v: unknown): number | undefined {
+  if (v === undefined || v === null || v === '')
+    return undefined;
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/** Parse a value to a required positive integer, or throw. */
+function requireInt(v: unknown, name: string): number {
+  const n = safeInt(v);
+  if (n === undefined)
+    throw Errors.badRequest(`${name} must be a positive integer`);
+  return n;
 }
 
 // ── Admin endpoint definitions ────────────────────────────────────
@@ -147,6 +163,7 @@ const adminAuthEndpoints: EndpointDefinition[] = [
           name: strSchema('Display name'),
           email: { type: 'string', format: 'email', description: 'User email' },
           isActive: boolSchema('Account active status'),
+          password: strSchema('New password (will be hashed)'),
         },
       },
     },
@@ -182,6 +199,38 @@ const adminAuthEndpoints: EndpointDefinition[] = [
       401: { description: 'Not authenticated' },
       403: { description: 'Insufficient permissions' },
       404: { description: 'User not found', schema: errorRef },
+    },
+  },
+
+  // POST /auth/users — admin-initiated user creation
+  {
+    method: 'POST',
+    path: '/auth/users',
+    handler: 'createUser',
+    meta: {
+      summary: 'Create a user (admin)',
+      description: 'Admin-initiated user creation. Unlike /auth/register, requires authentication and manageUsers permission.',
+      tags: ['Auth', 'Admin'],
+      security: ['bearer'],
+      permission: { resource: 'fortress', action: 'manageUsers' },
+    },
+    input: {
+      body: {
+        type: 'object',
+        properties: {
+          email: { type: 'string', format: 'email', description: 'User email' },
+          name: strSchema('Display name'),
+          password: strSchema('User password'),
+          isActive: boolSchema('Set active status (default true)'),
+        },
+        required: ['email', 'name'],
+      },
+    },
+    responses: {
+      201: { description: 'User created', schema: userRef },
+      401: { description: 'Not authenticated' },
+      403: { description: 'Insufficient permissions' },
+      409: { description: 'Email already exists', schema: errorRef },
     },
   },
 ];
@@ -504,6 +553,36 @@ const adminIamEndpoints: EndpointDefinition[] = [
   },
 ];
 
+// ── Sync endpoint ────────────────────────────────────────────────
+
+const syncEndpoint: EndpointDefinition = {
+  method: 'POST',
+  path: '/iam/sync',
+  handler: 'syncResources',
+  meta: {
+    summary: 'Sync IAM resources',
+    description: 'Push or pull resource definitions to/from the resource file',
+    tags: ['IAM', 'Admin'],
+    security: ['bearer'],
+    permission: { resource: 'fortress', action: 'managePermissions' },
+  },
+  input: {
+    body: {
+      type: 'object',
+      properties: {
+        direction: { type: 'string', enum: ['push', 'pull'], description: 'Sync direction' },
+        filePath: strSchema('Resource file path (optional)'),
+      },
+      required: ['direction'],
+    },
+  },
+  responses: {
+    200: { description: 'Sync complete', schema: { type: 'object', properties: { ok: boolSchema('Success') } } },
+    401: { description: 'Not authenticated' },
+    403: { description: 'Insufficient permissions' },
+  },
+};
+
 // ── Bootstrap endpoint ────────────────────────────────────────────
 
 const bootstrapEndpoint: EndpointDefinition = {
@@ -587,8 +666,10 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
 
     routes: [
       bootstrapEndpoint,
+      syncEndpoint,
       ...adminAuthEndpoints,
       ...adminIamEndpoints,
+      ...iamEndpoints,
     ],
 
     methods: (ctx: PluginContext) => ({
@@ -709,7 +790,9 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       // ── Auth admin — delegates to core auth service ──────────
 
       async listUsers(body: Record<string, string>): Promise<{ users: FortressUser[]; total: number }> {
-        return (ctx.auth as any).listUsers({
+        if (!ctx.auth)
+          throw Errors.database('Auth service not available');
+        return ctx.auth.listUsers({
           limit: body.limit ? Number(body.limit) : undefined,
           offset: body.offset ? Number(body.offset) : undefined,
           search: body.search,
@@ -719,73 +802,277 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       },
 
       async getUserById(body: Record<string, string>): Promise<FortressUser> {
-        return (ctx.auth as any).getUserById(Number(body.id));
+        if (!ctx.auth)
+          throw Errors.database('Auth service not available');
+        return ctx.auth.getUserById(requireInt(body.id, 'id'));
+      },
+
+      async createUser(body: Record<string, unknown>): Promise<FortressUser> {
+        if (!ctx.auth)
+          throw Errors.database('Auth service not available');
+        return ctx.auth.createUser({
+          email: body.email as string,
+          name: body.name as string,
+          password: body.password as string | undefined,
+          isActive: body.isActive as boolean | undefined,
+        });
       },
 
       async updateUser(body: Record<string, unknown>): Promise<FortressUser> {
+        if (!ctx.auth)
+          throw Errors.database('Auth service not available');
         const { id, ...data } = body;
-        return (ctx.auth as any).updateUser(Number(id), data);
+        return ctx.auth.updateUser(requireInt(id, 'id'), data as { name?: string; email?: string; isActive?: boolean; password?: string });
       },
 
       async deleteUser(body: Record<string, string>): Promise<{ ok: boolean }> {
-        await (ctx.auth as any).deleteUser(Number(body.id));
+        if (!ctx.auth)
+          throw Errors.database('Auth service not available');
+        await ctx.auth.deleteUser(requireInt(body.id, 'id'));
         return { ok: true };
       },
 
       // ── IAM admin — delegates to core IAM service ────────────
 
       async getRole(body: Record<string, string>): Promise<Role & { permissions: Permission[] }> {
-        return (ctx.iam as any).getRole(Number(body.id));
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.getRole(requireInt(body.id, 'id'));
       },
 
       async updateRole(body: Record<string, unknown>): Promise<Role> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
         const { id, ...data } = body;
-        return (ctx.iam as any).updateRole(Number(id), data);
+        return ctx.iam.updateRole(requireInt(id, 'id'), data as { name?: string; description?: string });
       },
 
       async listGroups(body: Record<string, string>): Promise<{ groups: Group[]; total: number }> {
-        return (ctx.iam as any).listGroups({
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.listGroups({
           limit: body.limit ? Number(body.limit) : undefined,
           offset: body.offset ? Number(body.offset) : undefined,
         });
       },
 
       async getGroup(body: Record<string, string>): Promise<Group & { users: FortressUser[] }> {
-        return (ctx.iam as any).getGroup(Number(body.id));
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.getGroup(requireInt(body.id, 'id'));
       },
 
       async updateGroup(body: Record<string, unknown>): Promise<Group> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
         const { id, ...data } = body;
-        return (ctx.iam as any).updateGroup(Number(id), data);
+        return ctx.iam.updateGroup(requireInt(id, 'id'), data as { name?: string; description?: string });
       },
 
       async deleteGroup(body: Record<string, string>): Promise<{ ok: boolean }> {
-        await (ctx.iam as any).deleteGroup(Number(body.id));
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.deleteGroup(requireInt(body.id, 'id'));
         return { ok: true };
       },
 
       async getGroupUsers(body: Record<string, string>): Promise<FortressUser[]> {
-        return (ctx.iam as any).getGroupUsers(Number(body.id));
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.getGroupUsers(requireInt(body.id, 'id'));
       },
 
       async listPermissions(body: Record<string, string>): Promise<Permission[]> {
-        return (ctx.iam as any).listPermissions({
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.listPermissions({
           resource: body.resource || undefined,
         });
       },
 
       async createPermission(body: PermissionInput): Promise<Permission> {
-        return (ctx.iam as any).createPermission(body);
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.createPermission(body);
       },
 
       async deletePermission(body: Record<string, string>): Promise<{ ok: boolean }> {
-        await (ctx.iam as any).deletePermission(Number(body.id));
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.deletePermission(requireInt(body.id, 'id'));
         return { ok: true };
       },
 
       async addPermissionToRole(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
         const { id, ...permission } = body;
-        await (ctx.iam as any).addPermissionToRole(Number(id), permission);
+        await ctx.iam.addPermissionToRole(requireInt(id, 'id'), permission as unknown as PermissionInput);
+        return { ok: true };
+      },
+
+      // ── Core IAM operations — previously spec-only ─────────────
+
+      async getRoles(): Promise<Role[]> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.getRoles();
+      },
+
+      async createRole(body: Record<string, unknown>): Promise<Role> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.createRole(
+          body.name as string,
+          (body.permissions ?? []) as PermissionInput[],
+          body.description as string | undefined,
+        );
+      },
+
+      async deleteRole(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.deleteRole(requireInt(body.id, 'id'));
+        return { ok: true };
+      },
+
+      async bindRoleToUser(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.bindRoleToUser(
+          requireInt(body.userId, 'userId'),
+          requireInt(body.id, 'id'),
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async bindRoleToGroup(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.bindRoleToGroup(
+          requireInt(body.groupId, 'groupId'),
+          requireInt(body.id, 'id'),
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async unbindRole(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.unbindRole(
+          body.subjectType as SubjectType,
+          requireInt(body.subjectId, 'subjectId'),
+          requireInt(body.id, 'id'),
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async createGroup(body: Record<string, unknown>): Promise<Group> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.createGroup(
+          body.name as string,
+          body.description as string | undefined,
+        );
+      },
+
+      async addUserToGroup(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.addUserToGroup(
+          requireInt(body.id, 'id'),
+          requireInt(body.userId, 'userId'),
+        );
+        return { ok: true };
+      },
+
+      async removeUserFromGroup(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.removeUserFromGroup(
+          requireInt(body.id, 'id'),
+          requireInt(body.userId, 'userId'),
+        );
+        return { ok: true };
+      },
+
+      async getUserPermissions(body: Record<string, unknown>): Promise<Permission[]> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.getUserPermissions(
+          requireInt(body.id, 'id'),
+          body.tenantId as string | undefined,
+        );
+      },
+
+      async checkPermission(body: Record<string, unknown>): Promise<{ allowed: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        const allowed = await ctx.iam.checkPermission(
+          requireInt(body.userId, 'userId'),
+          body.resource as string,
+          body.action as string,
+          body.context as Record<string, unknown> | undefined,
+        );
+        return { allowed };
+      },
+
+      async bindPermissionToUser(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.bindPermissionToUser(
+          requireInt(body.userId, 'userId'),
+          body.permission as PermissionInput,
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async bindPermissionToGroup(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.bindPermissionToGroup(
+          requireInt(body.groupId, 'groupId'),
+          body.permission as PermissionInput,
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async unbindPermissionFromUser(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.unbindPermissionFromUser(
+          requireInt(body.userId, 'userId'),
+          requireInt(body.permissionId, 'permissionId'),
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async unbindPermissionFromGroup(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.unbindPermissionFromGroup(
+          requireInt(body.groupId, 'groupId'),
+          requireInt(body.permissionId, 'permissionId'),
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      // ── Resource sync ──────────────────────────────────────────
+
+      async syncResources(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.syncResources(
+          body.direction as 'push' | 'pull',
+          body.filePath as string | undefined,
+        );
         return { ok: true };
       },
     }),

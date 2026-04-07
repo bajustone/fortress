@@ -1,9 +1,28 @@
 # Changelog
 
+## [0.0.20] - 2026-04-07
+
+### Added
+- Admin plugin now mounts all 16 core IAM endpoints (roles CRUD, role/group bindings, permission bindings, getUserPermissions, checkPermission)
+- `POST /auth/users` — admin-initiated user creation with `fortress:manageUsers` permission
+- `POST /iam/sync` — push/pull resource sync endpoint
+- `safeInt()` / `requireInt()` helpers for safe numeric input coercion in admin plugin
+- `updateUser` now supports `password` field — hashed via configured `PasswordHasher` with password policy validation
+
+### Changed
+- `PluginContext.auth` and `.iam` now typed as `AuthService` and `IamService` (was `Record<string, Function>`)
+- Removed `as any` casts throughout admin plugin — all service calls are now type-checked
+- All `Number(body.id)` calls replaced with `requireInt()` to prevent NaN propagation to database queries
+- Endpoint deduplication in `fortress.ts` — plugin routes take priority over core definitions by `method+path`
+
+### Fixed
+- `mountPluginRoutes` now returns HTML with `c.html()` instead of `c.json()` for plugin methods returning HTML strings (fixes broken Scalar UI)
+- CHANGELOG formatting errors in v0.0.19 and v0.0.16 entries
+
 ## [0.0.19] - 2026-04-07
 
 ### Added
-- This is a bug fix — mountPluginRoutes was sfix: pass path params to plugin route handlers in Hono adapter
+- fix: pass path params to plugin route handlers in Hono adapter
 
 ## [0.0.18] - 2026-04-07
 
@@ -19,7 +38,7 @@
 ## [0.0.16] - 2026-04-07
 
 ### Added
-- feat: add admin plugin, plugin middleware wiring, and default deny for fortress routesfeafeat: add admin plugin, plugin middleware wiring, and default deny for fortress routes
+- feat: add admin plugin, plugin middleware wiring, and default deny for fortress routes
 - feat(openapi): add additionalEndpoints and convertRoutes for unified spec generation
 
 ## [Unreleased]

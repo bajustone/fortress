@@ -1,7 +1,8 @@
-/* eslint-disable ts/no-unsafe-function-type -- plugin methods are dynamically typed */
 import type { DatabaseAdapter } from '../adapters/database';
 import type { ScopeRule, WhereClause } from '../adapters/database/types';
+import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
+import type { IamService } from './iam/iam-service';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext } from './plugin';
 
 /**
@@ -12,10 +13,12 @@ export function processPlugins(
   plugins: readonly FortressPlugin[],
   db: DatabaseAdapter,
   config: FortressConfig,
-  auth?: Record<string, Function>,
-  iam?: Record<string, Function>,
+  auth?: AuthService,
+  iam?: IamService,
+  // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
 ): Record<string, Record<string, Function>> {
   const ctx: PluginContext = { db, config, auth, iam };
+  // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
   const result: Record<string, Record<string, Function>> = {};
 
   for (const plugin of plugins) {

@@ -874,7 +874,7 @@ await tf.enable(userId);
 
 ### Admin
 
-Admin CRUD for users, roles, groups, and permissions. Provides 15 endpoints + bootstrap for first admin setup. All endpoints are protected by `fortress:*` permissions and require bootstrap before use.
+Full IAM administration: users, roles, groups, permissions, role/permission bindings, and resource sync. Provides 35 endpoints + bootstrap for first admin setup. All endpoints are protected by `fortress:*` permissions and auto-mounted via `mountPluginRoutes`.
 
 ```typescript
 import { admin } from '@bajustone/fortress/plugins/admin';
@@ -891,48 +891,31 @@ const fortress = createFortress({
 await fortress.plugins.admin.bootstrap({ userId: 1 });
 
 // User management
-const { users, total } = await fortress.auth.listUsers({ limit: 20, search: 'alice' });
-const user = await fortress.auth.getUserById(userId);
-await fortress.auth.updateUser(userId, { name: 'New Name', isActive: false });
-await fortress.auth.deleteUser(userId);
+const { users, total } = await fortress.plugins.admin.listUsers({ limit: '20', search: 'alice' });
+const user = await fortress.plugins.admin.getUserById({ id: '42' });
+const newUser = await fortress.plugins.admin.createUser({ email: 'alice@co.com', name: 'Alice' });
+await fortress.plugins.admin.updateUser({ id: '42', name: 'New Name', isActive: false });
+await fortress.plugins.admin.deleteUser({ id: '42' });
 
 // Role management
-const role = await fortress.iam.getRole(roleId);      // includes permissions
-await fortress.iam.updateRole(roleId, { name: 'editor' });
-await fortress.iam.addPermissionToRole(roleId, { resource: 'post', action: 'publish' });
+const roles = await fortress.plugins.admin.getRoles();
+const role = await fortress.plugins.admin.getRole({ id: '1' });      // includes permissions
+const newRole = await fortress.plugins.admin.createRole({ name: 'editor', permissions: [] });
+await fortress.plugins.admin.bindRoleToUser({ id: '1', userId: 42 });
+await fortress.plugins.admin.unbindRole({ id: '1', subjectType: 'USER', subjectId: 42 });
 
 // Group management
-const { groups, total } = await fortress.iam.listGroups({ limit: 20 });
-const group = await fortress.iam.getGroup(groupId);   // includes users
-await fortress.iam.updateGroup(groupId, { name: 'devs' });
-await fortress.iam.deleteGroup(groupId);
-const members = await fortress.iam.getGroupUsers(groupId);
+const { groups } = await fortress.plugins.admin.listGroups({ limit: '20' });
+const group = await fortress.plugins.admin.createGroup({ name: 'devs' });
+await fortress.plugins.admin.addUserToGroup({ id: '5', userId: 42 });
 
-// Permission management
-const perms = await fortress.iam.listPermissions({ resource: 'post' });
-const perm = await fortress.iam.createPermission({ resource: 'invoice', action: 'create' });
-await fortress.iam.deletePermission(permId);
+// Permission checks
+const { allowed } = await fortress.plugins.admin.checkPermission({
+  userId: 42, resource: 'post', action: 'publish',
+});
 ```
 
-**Endpoints (all require bearer auth + fortress:* permissions):**
-
-| Method | Path | Permission |
-|--------|------|------------|
-| GET | /auth/users | fortress:viewUsers |
-| GET | /auth/users/:id | fortress:viewUsers |
-| PUT | /auth/users/:id | fortress:manageUsers |
-| DELETE | /auth/users/:id | fortress:manageUsers |
-| GET | /iam/roles/:id | fortress:viewRoles |
-| PUT | /iam/roles/:id | fortress:manageRoles |
-| POST | /iam/roles/:id/permissions | fortress:manageRoles |
-| GET | /iam/groups | fortress:viewGroups |
-| GET | /iam/groups/:id | fortress:viewGroups |
-| PUT | /iam/groups/:id | fortress:manageGroup |
-| DELETE | /iam/groups/:id | fortress:manageGroup |
-| GET | /iam/groups/:id/users | fortress:viewGroups |
-| GET | /iam/permissions | fortress:viewPermissions |
-| POST | /iam/permissions | fortress:managePermissions |
-| DELETE | /iam/permissions/:id | fortress:managePermissions |
+See [Admin plugin docs](docs/plugins/admin.md) for the full endpoint list and permissions reference.
 
 ---
 
@@ -1698,7 +1681,6 @@ The test adapter auto-detects the runtime: Bun uses `bun:sqlite`, Node/Vitest us
 
 - [Architecture](docs/architecture.md) -- full technical design
 - [Security](docs/security.md) -- JWT, password hashing, token storage, CSRF, audit logging
-- [Watch-outs](docs/watch-outs.md) -- known gaps and design decisions
 - Plugin guides: [Admin](docs/plugins/admin.md), [Rate Limit](docs/plugins/rate-limit.md), [Account Lockout](docs/plugins/account-lockout.md), [Email Verification](docs/plugins/email-verification.md), [Two-Factor](docs/plugins/two-factor.md), [Magic Link](docs/plugins/magic-link.md), [API Key](docs/plugins/api-key.md), [Social Login](docs/plugins/social-login.md), [Tenancy](docs/plugins/tenancy.md), [Data Isolation](docs/plugins/data-isolation.md), [Audit Log](docs/plugins/audit-log.md), [Webhook](docs/plugins/webhook.md), [OAuth](docs/plugins/oauth.md), [WebAuthn](docs/plugins/webauthn.md), [OpenAPI](docs/plugins/openapi.md)
 
 ## License

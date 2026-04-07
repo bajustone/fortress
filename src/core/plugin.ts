@@ -1,6 +1,8 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { ScopeRule } from '../adapters/database/types';
+import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
+import type { IamService } from './iam/iam-service';
 import type {
   AuthResponse,
   AuthTokenPair,
@@ -101,11 +103,9 @@ export interface PluginContext {
   db: DatabaseAdapter;
   config: FortressConfig;
   /** Auth service reference. Optional at init time; available at runtime (enrichTokenClaims, scopeRules). */
-  // eslint-disable-next-line ts/no-unsafe-function-type -- avoids circular import with auth-service.ts
-  auth?: Record<string, Function>;
+  auth?: AuthService;
   /** IAM service reference. Optional at init time; available at runtime. */
-  // eslint-disable-next-line ts/no-unsafe-function-type -- avoids circular import with iam-service.ts
-  iam?: Record<string, Function>;
+  iam?: IamService;
 }
 
 /** @deprecated Use EndpointDefinition from './endpoint' instead. Kept as alias for backward compatibility. */
