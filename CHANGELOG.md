@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.19] - 2026-04-07
+
+### Added
+- This is a bug fix — mountPluginRoutes was sfix: pass path params to plugin route handlers in Hono adapter
+
 ## [0.0.18] - 2026-04-07
 
 ### Added
