@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.16] - 2026-04-07
+
+### Added
+- feat: add admin plugin, plugin middleware wiring, and default deny for fortress routesfeafeat: add admin plugin, plugin middleware wiring, and default deny for fortress routes
+- feat(openapi): add additionalEndpoints and convertRoutes for unified spec generation
+
 ## [Unreleased]
 
 ### Added
