@@ -12,6 +12,11 @@ import type { EndpointDefinition } from '../core/endpoint';
 import { FortressError } from '../core/errors';
 import { validateRequest } from '../core/validation';
 
+export interface ValidationMiddlewareOptions {
+  /** Log a warning when a request doesn't match any endpoint definition. Default: true in non-production. */
+  warnOnUnmatched?: boolean;
+}
+
 /**
  * Create Hono middleware that validates requests against endpoint definitions.
  *
@@ -28,9 +33,12 @@ import { validateRequest } from '../core/validation';
  */
 export function createValidationMiddleware(
   endpoints: EndpointDefinition[],
+  options?: ValidationMiddlewareOptions,
 ): (c: Context, next: Next) => Promise<void | Response> {
   // Pre-build a lookup for fast matching
   const routeMap = buildRouteMap(endpoints);
+  const shouldWarn = options?.warnOnUnmatched ?? (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production');
+  const warned = new Set<string>();
 
   return async (c: Context, next: Next): Promise<void | Response> => {
     const method = c.req.method.toUpperCase();
@@ -38,6 +46,13 @@ export function createValidationMiddleware(
 
     const match = matchEndpoint(routeMap, method, path);
     if (!match) {
+      if (shouldWarn) {
+        const key = `${method} ${path}`;
+        if (!warned.has(key)) {
+          warned.add(key);
+          console.warn(`[fortress] No endpoint definition matches ${method} ${path} — request will not be validated`);
+        }
+      }
       await next();
       return;
     }

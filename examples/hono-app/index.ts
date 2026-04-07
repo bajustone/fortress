@@ -18,7 +18,7 @@
  * Or:   bun run examples/hono-app/index.ts
  */
 import { Hono } from 'hono';
-import { createFortress } from '../../src';
+import { createFortress, obj, str } from '../../src';
 import {
   convertRoutes,
   createCsrfMiddleware,
@@ -29,6 +29,7 @@ import {
   getScopedDb,
   getUserId,
   mountPluginRoutes,
+  vBody,
 } from '../../src/hono';
 import { accountLockout } from '../../src/plugins/account-lockout';
 import { admin } from '../../src/plugins/admin';
@@ -218,10 +219,18 @@ app.use('/iam/*', pluginMiddleware.afterAuth);
 // curl http://localhost:3000/health
 app.get('/health', c => c.json({ status: 'ok' }));
 
+// ── Validated Request Helpers (vBody) ──
+// vBody/vParam/vQuery provide type-safe request extraction with zero runtime cost.
+// The schema is used only for TypeScript inference — fortress validation middleware
+// validates the request before the handler runs.
+
+const RegisterBody = obj({ email: str(), password: str(), name: str() }, 'email', 'password');
+const LoginBody = obj({ identifier: str(), password: str() }, 'identifier', 'password');
+
 // curl -X POST http://localhost:3000/auth/register -H 'Content-Type: application/json' \
 //   -d '{"email":"new@example.com","password":"MyPassword123!","name":"New User"}'
 app.post('/auth/register', async (c) => {
-  const { email, password, name } = await c.req.json();
+  const { email, password, name } = await vBody(c, RegisterBody);
   const user = await fortress.auth.createUser({ email, password, name });
   return c.json({ data: user }, 201);
 });
@@ -229,7 +238,7 @@ app.post('/auth/register', async (c) => {
 // curl -X POST http://localhost:3000/auth/login -H 'Content-Type: application/json' \
 //   -d '{"identifier":"admin@example.com","password":"Password123!"}'
 app.post('/auth/login', async (c) => {
-  const { identifier, password } = await c.req.json();
+  const { identifier, password } = await vBody(c, LoginBody);
   const result = await fortress.auth.login(identifier, password, {
     ipAddress: c.req.header('x-forwarded-for'),
     userAgent: c.req.header('user-agent'),

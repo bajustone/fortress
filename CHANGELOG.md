@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.23] - 2026-04-08
+
+### Added
+- feat: add typed validation helpers (`vBody`, `vParam`, `vQuery`) to Hono adapter — zero-cost type-safe request extraction using Standard Schema V1 inference, works with Zod, Valibot, ArkType, or fortress built-in schemas
+- feat: export `InferOutput` utility type from `@bajustone/fortress/hono`
+
 ## [0.0.22] - 2026-04-07
 
 ### Fixed

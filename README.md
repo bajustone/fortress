@@ -640,6 +640,42 @@ app.get('/api/posts', async (c) => {
 });
 ```
 
+#### Validated Request Helpers
+
+Type-safe request extraction for Hono handlers. Zero runtime cost — fortress's `createValidationMiddleware` validates requests before handlers run. The schema parameter is used only for TypeScript type inference.
+
+Works with any Standard Schema V1 library (Zod, Valibot, ArkType, or fortress's built-in schemas).
+
+```typescript
+import { vBody, vParam, vQuery, createValidationMiddleware } from '@bajustone/fortress/hono';
+import { endpoint, obj, str } from '@bajustone/fortress';
+
+// Define schemas once
+const CreatePostBody = obj({ title: str(), content: str() }, 'title', 'content');
+const IdParam = obj({ id: str('Post ID') }, 'id');
+const SearchQuery = obj({ q: str('Search term'), page: str() }, 'q');
+
+// Register validation middleware (validates against endpoint definitions)
+app.use('/*', createValidationMiddleware(endpoints));
+
+// Handlers get full type inference
+app.post('/posts', async (c) => {
+  const { title, content } = await vBody(c, CreatePostBody);  // typed
+  const userId = getUserId(c);
+  // ...
+});
+
+app.get('/posts/:id', (c) => {
+  const { id } = vParam(c, IdParam);  // typed
+  // ...
+});
+
+app.get('/search', (c) => {
+  const { q, page } = vQuery(c, SearchQuery);  // typed
+  // ...
+});
+```
+
 ### Express
 
 ```typescript

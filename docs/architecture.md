@@ -1388,6 +1388,8 @@ mountPluginRoutes(app, fortress);  // Mounts plugin-defined HTTP routes
 
 **Error handler** (`src/hono/middleware/error-handler.ts`): Transforms `FortressError` to JSON `{ code, message, statusCode }`. Sets `Retry-After` header for `RATE_LIMITED`. Returns generic 500 for unhandled errors.
 
+**Validated request helpers** (`src/hono/validated.ts`): `vBody(c, schema)`, `vParam(c, schema)`, `vQuery(c, schema)` — type-safe request extraction with zero runtime cost. The schema parameter (any Standard Schema V1 — Zod, Valibot, ArkType, fortress built-in) is used only for TypeScript type inference. Requires `createValidationMiddleware(endpoints)` registered upstream, which validates requests against `EndpointDefinition` schemas before handlers run. Exports `InferOutput<T>` utility type.
+
 ### Express Adapter
 
 **Files:** `src/express/index.ts`, `src/express/middleware.ts`

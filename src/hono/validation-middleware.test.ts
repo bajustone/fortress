@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { endpoint, int, obj, str } from '../core/schema-builder';
 import { createValidationMiddleware } from './validation-middleware';
 
@@ -89,5 +89,45 @@ describe('createValidationMiddleware', () => {
     const app = createApp();
     const res = await app.request('/search?q=hello');
     expect(res.status).toBe(200);
+  });
+});
+
+describe('warnOnUnmatched', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('warns on unmatched route when enabled', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = new Hono();
+    app.use('/*', createValidationMiddleware(endpoints, { warnOnUnmatched: true }));
+    app.get('/unknown', c => c.json({ ok: true }));
+
+    await app.request('/unknown');
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining('No endpoint definition matches GET /unknown'),
+    );
+  });
+
+  it('does not warn when disabled', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = new Hono();
+    app.use('/*', createValidationMiddleware(endpoints, { warnOnUnmatched: false }));
+    app.get('/unknown', c => c.json({ ok: true }));
+
+    await app.request('/unknown');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('warns only once per unique method+path', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = new Hono();
+    app.use('/*', createValidationMiddleware(endpoints, { warnOnUnmatched: true }));
+    app.get('/unknown', c => c.json({ ok: true }));
+
+    await app.request('/unknown');
+    await app.request('/unknown');
+    await app.request('/unknown');
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
