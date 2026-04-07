@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.24] - 2026-04-07
+
+### Fixed
+- fix: prevent Zod schemas from being misidentified as FortressSchema
+
 ## [0.0.23] - 2026-04-07
 
 ### Added
