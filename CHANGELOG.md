@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.22] - 2026-04-07
+
+### Fixed
+- fix: use relative URL in openapi plugin Scalar UI for prefix compatibility
+
 ## [0.0.21] - 2026-04-07
 
 ### Added
