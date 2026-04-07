@@ -28,7 +28,7 @@ export { createFortress, getPluginMethods } from './core/fortress';
 export type { Fortress } from './core/fortress';
 export { iamComponentSchemas, iamEndpoints } from './core/iam/iam-endpoints';
 
-export type { JSONSchema } from './core/json-schema';
+export type { FortressSchema, Infer, JSONSchema, Simplify } from './core/json-schema';
 // Plugin system
 export type {
   AfterHookContext,
@@ -44,7 +44,6 @@ export type {
   RouteDefinition,
 } from './core/plugin';
 export type { InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
-
 export {
   anyOf,
   arr,
@@ -52,15 +51,24 @@ export {
   endpoint,
   EndpointBuilder,
   enums,
+  extractJsonSchema,
   int,
+  isFortressSchema,
+  isStandardSchema,
   nullable,
+  nullType,
   num,
   obj,
   oneOf,
+  record,
+  recordOf,
   ref,
   str,
   strFormat,
 } from './core/schema-builder';
+
+export type { SchemaInput } from './core/schema-builder';
+export type { StandardSchemaV1 } from './core/standard-schema';
 // Core types
 export type {
   AuthResponse,

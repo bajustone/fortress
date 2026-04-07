@@ -6,27 +6,35 @@ export type FortressErrorCode
     | 'NOT_FOUND'
     | 'CONFLICT'
     | 'RATE_LIMITED'
-    | 'DATABASE_ERROR';
+    | 'DATABASE_ERROR'
+    | 'VALIDATION_ERROR';
 
 export class FortressError extends Error {
   readonly code: FortressErrorCode;
   readonly statusCode: number;
   readonly retryAfter?: number;
+  readonly details?: unknown;
 
   constructor(
     code: FortressErrorCode,
     message: string,
     statusCode: number,
-    options?: { cause?: unknown; retryAfter?: number },
+    options?: { cause?: unknown; retryAfter?: number; details?: unknown },
   ) {
     super(message, { cause: options?.cause });
     this.code = code;
     this.statusCode = statusCode;
     this.retryAfter = options?.retryAfter;
+    this.details = options?.details;
   }
 
-  toJSON(): { code: FortressErrorCode; message: string; statusCode: number } {
-    return { code: this.code, message: this.message, statusCode: this.statusCode };
+  toJSON(): { code: FortressErrorCode; message: string; statusCode: number; details?: unknown } {
+    return {
+      code: this.code,
+      message: this.message,
+      statusCode: this.statusCode,
+      ...(this.details !== undefined && { details: this.details }),
+    };
   }
 }
 
@@ -47,4 +55,6 @@ export const Errors = {
     new FortressError('RATE_LIMITED', 'Too many requests', 429, { retryAfter }),
   database: (message = 'Database error', cause?: unknown): FortressError =>
     new FortressError('DATABASE_ERROR', message, 500, { cause }),
+  validationError: (issues: Array<{ path?: unknown; message: string }>): FortressError =>
+    new FortressError('VALIDATION_ERROR', 'Validation failed', 422, { details: issues }),
 } as const;

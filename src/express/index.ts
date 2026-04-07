@@ -21,3 +21,4 @@ export type {
   RouteMapping,
 } from './middleware';
 export { mountFortressRoutes, mountPluginRoutes } from './routes';
+export { createValidationMiddleware } from './validation-middleware';

@@ -676,11 +676,19 @@ const adapter = createTestAdapter(); // zero-setup, in-memory
 
 ## OpenAPI & Endpoint Definitions
 
-### JSON Schema-First Architecture
+### JSON Schema-First Architecture + Standard Schema
 
 Fortress uses JSON Schema (draft 2020-12) as the universal format for endpoint definitions. Every auth method, IAM method, and plugin route carries an `EndpointDefinition` with JSON Schema metadata describing its inputs and outputs.
 
-Since OpenAPI 3.1 uses JSON Schema natively, spec generation is trivial (just wrapping). Consumers can convert to Zod, Valibot, TypeBox, or any schema library.
+Since OpenAPI 3.1 uses JSON Schema natively, spec generation is trivial (just wrapping).
+
+**Standard Schema V1:** Fortress's schema builder (`obj()`, `str()`, `int()`, etc.) returns `FortressSchema<T>` — objects that are simultaneously valid JSON Schema AND valid [Standard Schema V1](https://standardschema.dev). This gives each schema three capabilities from a single definition:
+
+1. **JSON Schema** — `schema.type`, `schema.properties` → OpenAPI 3.1
+2. **Standard Schema** — `schema['~standard'].validate()` → runtime validation
+3. **TypeScript types** — `Infer<typeof schema>` or `StandardSchemaV1.InferOutput<typeof schema>` → compile-time inference
+
+Additionally, `endpoint().body()`, `.query()`, `.params()` accept external Standard Schema (Zod, Valibot, ArkType) directly — fortress extracts JSON Schema for OpenAPI and uses `~standard.validate()` for runtime validation.
 
 ### EndpointDefinition
 
@@ -703,15 +711,43 @@ interface EndpointDefinition {
 
 ### Builder Helpers
 
-Fluent API for ergonomic JSON Schema authoring:
+Fluent API for typed schema authoring:
 
 ```ts
+import { obj, str, int, arr, endpoint, type Infer } from '@bajustone/fortress';
+
+// Define a schema — typed + JSON Schema + Standard Schema in one object
+const createRoleBody = obj(
+  { name: str(), permissions: arr(ref('PermissionInput')) },
+  'name', 'permissions',
+);
+type CreateRoleBody = Infer<typeof createRoleBody>;
+// { name: string; permissions: unknown[] }
+
 endpoint('POST', '/iam/roles')
   .summary('Create a role').tags('IAM').security('bearer')
   .permission('fortress', 'createRole')
-  .body(obj({ name: str(), permissions: arr(ref('PermissionInput')) }, 'name', 'permissions'))
+  .body(createRoleBody)
   .response(201, 'Role created', ref('Role'))
   .handler('createRole').build()
+```
+
+Schemas can also be external Standard Schema (Zod, Valibot, ArkType):
+
+```ts
+import { z } from 'zod';
+endpoint('POST', '/users').body(z.object({ name: z.string() })).build()
+```
+
+### Runtime Validation Middleware
+
+`createValidationMiddleware` validates incoming requests against endpoint schemas using `~standard.validate()`. Works with fortress schemas or any Standard Schema provider:
+
+```ts
+import { createValidationMiddleware } from '@bajustone/fortress/hono';
+
+app.use('/api/*', createValidationMiddleware(myEndpoints));
+// 422 with structured errors on validation failure
 ```
 
 ### OpenAPI Plugin

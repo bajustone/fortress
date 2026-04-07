@@ -1,4 +1,5 @@
 import type { JSONSchema } from './json-schema';
+import type { StandardSchemaV1 } from './standard-schema';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -20,9 +21,14 @@ export interface EndpointMeta {
 }
 
 export interface EndpointInput {
+  /** JSON Schema for OpenAPI spec generation. */
   body?: JSONSchema;
   query?: JSONSchema;
   params?: JSONSchema;
+  /** Standard Schema references for runtime validation (set by endpoint builder). */
+  bodySchema?: StandardSchemaV1;
+  querySchema?: StandardSchemaV1;
+  paramsSchema?: StandardSchemaV1;
 }
 
 export interface EndpointResponse {

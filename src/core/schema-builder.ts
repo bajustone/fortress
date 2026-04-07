@@ -1,79 +1,174 @@
 import type { EndpointDefinition, EndpointResponse, HttpMethod, SecurityRequirement } from './endpoint';
-import type { JSONSchema } from './json-schema';
+import type { FortressSchema, Infer, JSONSchema, Simplify } from './json-schema';
+import type { StandardSchemaV1 } from './standard-schema';
+import { validateJsonSchema } from './json-schema-validator';
+
+// ── Standard Schema wiring ─────────────────────────────────────────
+
+function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~standard'] {
+  return {
+    version: 1,
+    vendor: 'fortress',
+    validate(value: unknown): StandardSchemaV1.Result<T> {
+      const issues = validateJsonSchema(schema, value);
+      if (issues.length > 0)
+        return { issues };
+      return { value: value as T };
+    },
+  } as StandardSchemaV1<T, T>['~standard'];
+}
+
+function toFortressSchema<T>(schema: JSONSchema): FortressSchema<T> {
+  return Object.assign(schema, {
+    '~standard': createStandardProps<T>(schema),
+  }) as FortressSchema<T>;
+}
 
 // ── Schema Builders ─────────────────────────────────────────────────
 
-export function str(description?: string): JSONSchema {
+export function str(description?: string): FortressSchema<string> {
   const s: JSONSchema = { type: 'string' };
   if (description)
     s.description = description;
-  return s;
+  return toFortressSchema<string>(s);
 }
 
-export function num(description?: string): JSONSchema {
+export function num(description?: string): FortressSchema<number> {
   const s: JSONSchema = { type: 'number' };
   if (description)
     s.description = description;
-  return s;
+  return toFortressSchema<number>(s);
 }
 
-export function int(description?: string): JSONSchema {
+export function int(description?: string): FortressSchema<number> {
   const s: JSONSchema = { type: 'integer' };
   if (description)
     s.description = description;
-  return s;
+  return toFortressSchema<number>(s);
 }
 
-export function bool(description?: string): JSONSchema {
+export function bool(description?: string): FortressSchema<boolean> {
   const s: JSONSchema = { type: 'boolean' };
   if (description)
     s.description = description;
-  return s;
+  return toFortressSchema<boolean>(s);
 }
 
-export function arr(items: JSONSchema, description?: string): JSONSchema {
+export function arr<T>(items: FortressSchema<T>, description?: string): FortressSchema<T[]> {
   const s: JSONSchema = { type: 'array', items };
   if (description)
     s.description = description;
-  return s;
+  return toFortressSchema<T[]>(s);
 }
 
-export function obj(
-  properties: Record<string, JSONSchema>,
-  ...required: string[]
-): JSONSchema {
-  const s: JSONSchema = { type: 'object', properties };
+export function obj<
+  P extends Record<string, FortressSchema<any>>,
+  K extends (keyof P & string)[] = [],
+>(
+  properties: P,
+  ...required: K
+): FortressSchema<
+  Simplify<
+    { [Key in K[number]]: Infer<P[Key]> }
+    & { [Key in Exclude<keyof P & string, K[number]>]?: Infer<P[Key]> }
+  >
+> {
+  const s: JSONSchema = { type: 'object', properties: properties as Record<string, JSONSchema> };
   if (required.length > 0)
     s.required = required;
-  return s;
+  return toFortressSchema(s);
 }
 
-export function nullable(schema: JSONSchema): JSONSchema {
-  return { ...schema, nullable: true };
+export function nullable<T>(schema: FortressSchema<T>): FortressSchema<T | null> {
+  const s: JSONSchema = { ...schema, nullable: true };
+  return toFortressSchema<T | null>(s);
 }
 
-export function oneOf(...schemas: JSONSchema[]): JSONSchema {
-  return { oneOf: schemas };
+export function oneOf<S extends FortressSchema<any>[]>(
+  ...schemas: S
+): FortressSchema<Infer<S[number]>> {
+  return toFortressSchema<Infer<S[number]>>({ oneOf: schemas as JSONSchema[] });
 }
 
-export function anyOf(...schemas: JSONSchema[]): JSONSchema {
-  return { anyOf: schemas };
+export function anyOf<S extends FortressSchema<any>[]>(
+  ...schemas: S
+): FortressSchema<Infer<S[number]>> {
+  return toFortressSchema<Infer<S[number]>>({ anyOf: schemas as JSONSchema[] });
 }
 
-export function ref(name: string): JSONSchema {
-  return { $ref: `#/components/schemas/${name}` };
+export function ref(name: string): FortressSchema<unknown> {
+  return toFortressSchema<unknown>({ $ref: `#/components/schemas/${name}` });
 }
 
-export function enums<T extends string | number>(...values: T[]): JSONSchema {
-  return { enum: values };
+export function enums<T extends string | number>(...values: T[]): FortressSchema<T> {
+  return toFortressSchema<T>({ enum: values });
 }
 
-export function strFormat(format: string, description?: string): JSONSchema {
+export function strFormat(format: string, description?: string): FortressSchema<string> {
   const s: JSONSchema = { type: 'string', format };
   if (description)
     s.description = description;
-  return s;
+  return toFortressSchema<string>(s);
 }
+
+export function nullType(): FortressSchema<null> {
+  return toFortressSchema<null>({ type: 'null' });
+}
+
+/** An object with unknown additional properties (e.g., plugin data, metadata). */
+export function record(description?: string): FortressSchema<Record<string, unknown>> {
+  const s: JSONSchema = { type: 'object', additionalProperties: true };
+  if (description)
+    s.description = description;
+  return toFortressSchema<Record<string, unknown>>(s);
+}
+
+/** A record where values match a specific schema. */
+export function recordOf<T>(valueSchema: FortressSchema<T>, description?: string): FortressSchema<Record<string, T>> {
+  const s: JSONSchema = { type: 'object', additionalProperties: valueSchema as JSONSchema };
+  if (description)
+    s.description = description;
+  return toFortressSchema<Record<string, T>>(s);
+}
+
+// ── Schema detection helpers ────────────────────────────────────────
+
+/** Check if a value implements Standard Schema V1. */
+export function isStandardSchema(value: unknown): value is StandardSchemaV1 {
+  return (
+    typeof value === 'object'
+    && value !== null
+    && '~standard' in value
+    && typeof (value as any)['~standard']?.validate === 'function'
+  );
+}
+
+/** Check if a value is a FortressSchema (has both JSON Schema fields and Standard Schema). */
+export function isFortressSchema(value: unknown): value is FortressSchema {
+  return isStandardSchema(value) && ('type' in (value as any) || '$ref' in (value as any) || 'oneOf' in (value as any) || 'anyOf' in (value as any));
+}
+
+/**
+ * Extract JSON Schema from a schema input.
+ * - FortressSchema: return as-is (it IS JSON Schema)
+ * - External Standard Schema: extract via ~standard.jsonSchema if available, otherwise empty object
+ */
+export function extractJsonSchema(schema: FortressSchema<any> | StandardSchemaV1<any>): JSONSchema {
+  if (isFortressSchema(schema)) {
+    return schema;
+  }
+  // External Standard Schema — try StandardJSONSchemaV1 interface
+  const std = (schema as any)['~standard'];
+  if (std?.jsonSchema?.input) {
+    return std.jsonSchema.input({ target: 'draft-2020-12' }) as JSONSchema;
+  }
+  // Fallback: no JSON Schema available from external schema
+  return {};
+}
+
+// ── Schema input type for endpoint builder ──────────────────────────
+
+export type SchemaInput = FortressSchema<any> | StandardSchemaV1<any>;
 
 // ── Endpoint Builder ────────────────────────────────────────────────
 
@@ -87,9 +182,9 @@ export class EndpointBuilder {
   private _security: SecurityRequirement[] = [];
   private _deprecated = false;
   private _permission?: { resource: string; action: string };
-  private _body?: JSONSchema;
-  private _query?: JSONSchema;
-  private _params?: JSONSchema;
+  private _body?: SchemaInput;
+  private _query?: SchemaInput;
+  private _params?: SchemaInput;
   private _responses: Record<number, EndpointResponse> = {};
 
   constructor(method: HttpMethod, path: string) {
@@ -127,17 +222,17 @@ export class EndpointBuilder {
     return this;
   }
 
-  body(schema: JSONSchema): this {
+  body(schema: SchemaInput): this {
     this._body = schema;
     return this;
   }
 
-  query(schema: JSONSchema): this {
+  query(schema: SchemaInput): this {
     this._query = schema;
     return this;
   }
 
-  params(schema: JSONSchema): this {
+  params(schema: SchemaInput): this {
     this._params = schema;
     return this;
   }
@@ -172,12 +267,21 @@ export class EndpointBuilder {
 
     if (this._body || this._query || this._params) {
       def.input = {};
-      if (this._body)
-        def.input.body = this._body;
-      if (this._query)
-        def.input.query = this._query;
-      if (this._params)
-        def.input.params = this._params;
+      if (this._body) {
+        def.input.body = extractJsonSchema(this._body);
+        if (isStandardSchema(this._body))
+          def.input.bodySchema = this._body;
+      }
+      if (this._query) {
+        def.input.query = extractJsonSchema(this._query);
+        if (isStandardSchema(this._query))
+          def.input.querySchema = this._query;
+      }
+      if (this._params) {
+        def.input.params = extractJsonSchema(this._params);
+        if (isStandardSchema(this._params))
+          def.input.paramsSchema = this._params;
+      }
     }
 
     if (Object.keys(this._responses).length > 0) {

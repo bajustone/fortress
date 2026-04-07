@@ -1,5 +1,5 @@
 import type { ComponentSchemas, EndpointDefinition } from '../endpoint';
-import { arr, bool, endpoint, enums, int, nullable, obj, ref, str } from '../schema-builder';
+import { arr, bool, endpoint, enums, int, nullable, obj, record, recordOf, ref, str } from '../schema-builder';
 
 // ── Component Schemas (reusable via $ref) ───────────────────────────
 
@@ -31,15 +31,11 @@ export const iamComponentSchemas: ComponentSchemas = {
       resource: str('Resource name'),
       action: str('Action name'),
       effect: enums('ALLOW', 'DENY'),
-      conditions: {
-        type: 'array',
-        items: obj({
-          field: str('Condition field'),
-          operator: enums('eq', 'neq', 'in', 'startsWith'),
-          value: str('Condition value'),
-        }),
-        description: 'Permission conditions',
-      },
+      conditions: arr(obj({
+        field: str('Condition field'),
+        operator: enums('eq', 'neq', 'in', 'startsWith'),
+        value: str('Condition value'),
+      }), 'Permission conditions'),
       description: nullable(str('Permission description')),
     },
     'id',
@@ -53,14 +49,11 @@ export const iamComponentSchemas: ComponentSchemas = {
       resource: str('Resource name'),
       action: str('Action name'),
       effect: enums('ALLOW', 'DENY'),
-      conditions: {
-        type: 'array',
-        items: obj({
-          field: str('Condition field'),
-          operator: enums('eq', 'neq', 'in', 'startsWith'),
-          value: str('Condition value'),
-        }),
-      },
+      conditions: arr(obj({
+        field: str('Condition field'),
+        operator: enums('eq', 'neq', 'in', 'startsWith'),
+        value: str('Condition value'),
+      })),
     },
     'resource',
     'action',
@@ -78,14 +71,10 @@ export const iamEndpoints: EndpointDefinition[] = [
     .security('bearer')
     .permission('fortress', 'viewResources')
     .response(200, 'Available resources with their actions', obj({
-      resources: {
-        type: 'object',
-        additionalProperties: obj({
-          actions: arr(str('Action name'), 'Available actions'),
-          description: str('Resource description'),
-        }),
-        description: 'Map of resource name to definition',
-      },
+      resources: recordOf(obj({
+        actions: arr(str('Action name'), 'Available actions'),
+        description: str('Resource description'),
+      }), 'Map of resource name to definition'),
     }, 'resources'))
     .response(401, 'Not authenticated', ref('ErrorResponse'))
     .handler('getResources')
@@ -249,7 +238,7 @@ export const iamEndpoints: EndpointDefinition[] = [
         userId: int('User ID'),
         resource: str('Resource name'),
         action: str('Action name'),
-        context: { type: 'object', additionalProperties: true, description: 'Permission context' },
+        context: record('Permission context'),
       },
       'userId',
       'resource',

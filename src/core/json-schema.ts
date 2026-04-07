@@ -1,10 +1,13 @@
 /**
- * JSON Schema types (draft 2020-12 subset).
+ * JSON Schema types (draft 2020-12 subset) + FortressSchema.
  *
- * Fortress uses JSON Schema as the universal format for endpoint definitions.
- * OpenAPI 3.1 uses JSON Schema natively, so conversion is trivial.
- * Consumers can convert to Zod, Valibot, TypeBox, etc.
+ * FortressSchema<T> extends JSONSchema with Standard Schema V1 support,
+ * giving each schema: JSON Schema fields (OpenAPI), runtime validation,
+ * and TypeScript type inference — all from one object.
  */
+
+import type { StandardSchemaV1 } from './standard-schema';
+
 export interface JSONSchema {
   type?: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object' | 'null';
   properties?: Record<string, JSONSchema>;
@@ -27,3 +30,18 @@ export interface JSONSchema {
   pattern?: string;
   title?: string;
 }
+
+/**
+ * A JSON Schema object that also implements Standard Schema V1.
+ *
+ * - JSON Schema fields → OpenAPI 3.1 spec generation
+ * - `~standard.validate()` → runtime validation
+ * - `StandardSchemaV1.InferOutput<typeof schema>` → TypeScript type inference
+ */
+export type FortressSchema<T = unknown> = JSONSchema & StandardSchemaV1<T, T>;
+
+/** Extract the TypeScript type from a FortressSchema or StandardSchemaV1. */
+export type Infer<T> = T extends StandardSchemaV1<any, infer O> ? O : unknown;
+
+/** Flatten intersection types for clean IDE tooltips. */
+export type Simplify<T> = { [K in keyof T]: T[K] } & {};

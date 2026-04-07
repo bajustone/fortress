@@ -61,7 +61,10 @@ vi.mock('@simplewebauthn/server', () => ({
   })),
 }));
 
-const simplewebauthn = await import('@simplewebauthn/server');
+const simplewebauthn = await import('@simplewebauthn/server') as unknown as {
+  [K in keyof Awaited<typeof import('@simplewebauthn/server')>]:
+  import('vitest').Mock;
+};
 
 describe('webauthn plugin', () => {
   let fortress: Fortress<any>;
@@ -111,10 +114,10 @@ describe('webauthn plugin', () => {
       });
 
       // Generate options again - should exclude the existing credential
-      vi.mocked(simplewebauthn.generateRegistrationOptions).mockClear();
+      (simplewebauthn.generateRegistrationOptions).mockClear();
       await methods.generateRegistrationOptions({ userId });
 
-      const call = vi.mocked(simplewebauthn.generateRegistrationOptions).mock.calls[0][0];
+      const call = (simplewebauthn.generateRegistrationOptions).mock.calls[0][0];
       expect(call.excludeCredentials).toHaveLength(1);
       expect(call.excludeCredentials![0].id).toBe(MOCK_CREDENTIAL_ID);
     });
@@ -145,7 +148,7 @@ describe('webauthn plugin', () => {
     it('throws on failed verification', async () => {
       await methods.generateRegistrationOptions({ userId });
 
-      vi.mocked(simplewebauthn.verifyRegistrationResponse).mockResolvedValueOnce({
+      (simplewebauthn.verifyRegistrationResponse).mockResolvedValueOnce({
         verified: false,
       });
 
@@ -165,19 +168,19 @@ describe('webauthn plugin', () => {
         response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       });
 
-      vi.mocked(simplewebauthn.generateAuthenticationOptions).mockClear();
+      (simplewebauthn.generateAuthenticationOptions).mockClear();
       await methods.generateAuthenticationOptions({ userId });
 
-      const call = vi.mocked(simplewebauthn.generateAuthenticationOptions).mock.calls[0][0];
+      const call = (simplewebauthn.generateAuthenticationOptions).mock.calls[0][0];
       expect(call.allowCredentials).toHaveLength(1);
       expect(call.allowCredentials![0].id).toBe(MOCK_CREDENTIAL_ID);
     });
 
     it('returns options without allowCredentials when no userId (discoverable)', async () => {
-      vi.mocked(simplewebauthn.generateAuthenticationOptions).mockClear();
+      (simplewebauthn.generateAuthenticationOptions).mockClear();
       await methods.generateAuthenticationOptions({});
 
-      const call = vi.mocked(simplewebauthn.generateAuthenticationOptions).mock.calls[0][0];
+      const call = (simplewebauthn.generateAuthenticationOptions).mock.calls[0][0];
       expect(call.allowCredentials).toBeUndefined();
     });
   });
@@ -227,7 +230,7 @@ describe('webauthn plugin', () => {
     it('throws on failed verification', async () => {
       await registerAndPrepareAuth();
 
-      vi.mocked(simplewebauthn.verifyAuthenticationResponse).mockResolvedValueOnce({
+      (simplewebauthn.verifyAuthenticationResponse).mockResolvedValueOnce({
         verified: false,
         authenticationInfo: {
           credentialID: MOCK_CREDENTIAL_ID,
@@ -249,7 +252,7 @@ describe('webauthn plugin', () => {
       await registerAndPrepareAuth();
 
       // First authentication: counter goes to 5
-      vi.mocked(simplewebauthn.verifyAuthenticationResponse).mockResolvedValueOnce({
+      (simplewebauthn.verifyAuthenticationResponse).mockResolvedValueOnce({
         verified: true,
         authenticationInfo: {
           credentialID: MOCK_CREDENTIAL_ID,
@@ -269,7 +272,7 @@ describe('webauthn plugin', () => {
       // Second auth: counter rolls back to 3 (clone!)
       await methods.generateAuthenticationOptions({ userId });
 
-      vi.mocked(simplewebauthn.verifyAuthenticationResponse).mockResolvedValueOnce({
+      (simplewebauthn.verifyAuthenticationResponse).mockResolvedValueOnce({
         verified: true,
         authenticationInfo: {
           credentialID: MOCK_CREDENTIAL_ID,

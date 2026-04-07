@@ -18,6 +18,7 @@ export type { SecurityHeadersConfig } from './middleware/security-headers';
 export { buildRouteDefinition, getFortressRoutes, mountFortressOpenAPI } from './openapi';
 export type { SchemaConverter } from './openapi';
 export { mountPluginRoutes } from './plugin-routes';
+export { createValidationMiddleware } from './validation-middleware';
 
 export interface HonoAdapterOptions extends RbacOptions {}
 

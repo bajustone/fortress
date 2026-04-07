@@ -21,6 +21,12 @@
 - **IAM service admin methods** — `getRole`, `updateRole`, `listGroups`, `getGroup`, `updateGroup`, `deleteGroup`, `getGroupUsers`, `listPermissions`, `createPermission`, `deletePermission`, `addPermissionToRole` on `IamService`
 - `iam` property on `PluginContext` — plugins can now access the IAM service via `ctx.iam`
 - `like` operator support in Drizzle adapter
+- **Standard Schema V1 support** — `obj()`, `str()`, `int()`, etc. now implement Standard Schema, providing runtime validation + TypeScript type inference + JSON Schema for OpenAPI from a single definition
+- `FortressSchema<T>`, `Infer<T>`, `StandardSchemaV1.InferOutput` types for type extraction
+- Built-in JSON Schema validator for fortress schemas' `~standard.validate()`
+- New schema helpers: `nullType()`, `record()`, `recordOf()`
+- `isStandardSchema()`, `isFortressSchema()`, `extractJsonSchema()` utilities
+- `endpoint().body()`, `.query()`, `.params()` accept both `FortressSchema` and external Standard Schema (Zod, Valibot, ArkType)
 - `/auth/users` added to `FORTRESS_AUTH_PROTECTED` for default-deny
 
 ### Changed

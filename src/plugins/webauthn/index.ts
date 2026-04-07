@@ -14,7 +14,7 @@ import {
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
 import { Errors } from '../../core/errors';
-import { bool, endpoint, int, obj, str } from '../../core/schema-builder';
+import { bool, endpoint, int, obj, record, str } from '../../core/schema-builder';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -118,7 +118,7 @@ const webauthnRoutes = [
     .security('bearer')
     .body(obj({ userId: int('User ID to register the credential for') }, 'userId'))
     .response(200, 'Registration options', obj({
-      options: { type: 'object', description: 'PublicKeyCredentialCreationOptions JSON', additionalProperties: true },
+      options: record('PublicKeyCredentialCreationOptions JSON'),
     }, 'options'))
     .response(400, 'Bad request')
     .response(404, 'User not found')
@@ -132,7 +132,7 @@ const webauthnRoutes = [
     .security('bearer')
     .body(obj({
       userId: int('User ID'),
-      response: { type: 'object', description: 'RegistrationResponseJSON from navigator.credentials.create()', additionalProperties: true },
+      response: record('RegistrationResponseJSON from navigator.credentials.create()'),
     }, 'userId', 'response'))
     .response(200, 'Registration verified', obj({
       verified: bool('Whether registration was successful'),
@@ -151,7 +151,7 @@ const webauthnRoutes = [
     .security('none')
     .body(obj({ userId: int('Optional user ID') }))
     .response(200, 'Authentication options', obj({
-      options: { type: 'object', description: 'PublicKeyCredentialRequestOptions JSON', additionalProperties: true },
+      options: record('PublicKeyCredentialRequestOptions JSON'),
     }, 'options'))
     .handler('generateAuthenticationOptions')
     .build(),
@@ -162,7 +162,7 @@ const webauthnRoutes = [
     .tags('WebAuthn')
     .security('none')
     .body(obj({
-      response: { type: 'object', description: 'AuthenticationResponseJSON from navigator.credentials.get()', additionalProperties: true },
+      response: record('AuthenticationResponseJSON from navigator.credentials.get()'),
     }, 'response'))
     .response(200, 'Authentication verified', obj({
       verified: bool('Whether authentication was successful'),

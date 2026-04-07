@@ -1,5 +1,5 @@
 import type { ComponentSchemas, EndpointDefinition } from '../endpoint';
-import { arr, bool, endpoint, int, nullable, obj, oneOf, ref, str, strFormat } from '../schema-builder';
+import { arr, bool, endpoint, enums, int, nullable, nullType, obj, oneOf, record, ref, str, strFormat } from '../schema-builder';
 
 // ── Component Schemas (reusable via $ref) ───────────────────────────
 
@@ -25,11 +25,11 @@ export const authComponentSchemas: ComponentSchemas = {
   AuthResponse: oneOf(
     obj(
       {
-        status: { type: 'string', enum: ['success'] },
+        status: enums('success'),
         user: ref('User'),
         accessToken: str('JWT access token'),
         refreshToken: str('Refresh token for rotation'),
-        pluginData: { type: 'object', additionalProperties: true },
+        pluginData: record(),
       },
       'status',
       'user',
@@ -38,11 +38,11 @@ export const authComponentSchemas: ComponentSchemas = {
     ),
     obj(
       {
-        status: { type: 'string', enum: ['pending'] },
+        status: enums('pending'),
         user: ref('User'),
-        accessToken: { type: 'null' },
-        refreshToken: { type: 'null' },
-        pluginData: { type: 'object', additionalProperties: true },
+        accessToken: nullType(),
+        refreshToken: nullType(),
+        pluginData: record(),
       },
       'status',
       'user',
@@ -51,11 +51,11 @@ export const authComponentSchemas: ComponentSchemas = {
     ),
     obj(
       {
-        status: { type: 'string', enum: ['impersonation'] },
+        status: enums('impersonation'),
         user: ref('User'),
         accessToken: str('JWT access token'),
-        refreshToken: { type: 'null' },
-        pluginData: { type: 'object', additionalProperties: true },
+        refreshToken: nullType(),
+        pluginData: record(),
       },
       'status',
       'user',
@@ -112,7 +112,7 @@ export const authComponentSchemas: ComponentSchemas = {
     {
       id: int('Identifier ID'),
       userId: int('User ID'),
-      type: { type: 'string', enum: ['email', 'phone', 'username'], description: 'Identifier type' },
+      type: enums('email', 'phone', 'username'),
       value: str('Identifier value'),
     },
     'id',
@@ -213,7 +213,7 @@ export const authEndpoints: EndpointDefinition[] = [
     .security('bearer')
     .body(obj(
       {
-        type: { type: 'string', enum: ['email', 'phone', 'username'], description: 'Identifier type' },
+        type: enums('email', 'phone', 'username'),
         value: str('Identifier value'),
       },
       'type',
@@ -230,7 +230,7 @@ export const authEndpoints: EndpointDefinition[] = [
     .security('bearer')
     .body(obj(
       {
-        type: { type: 'string', enum: ['email', 'phone', 'username'], description: 'Identifier type' },
+        type: enums('email', 'phone', 'username'),
         value: str('Identifier value'),
       },
       'type',
