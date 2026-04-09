@@ -46,7 +46,7 @@ See `docs/architecture.md` for the full technical design.
 **Adapters:**
 - `src/adapters/database/` — `DatabaseAdapter` interface (7 required + 1 optional method)
 - `src/drizzle/` — Drizzle adapter (PostgreSQL, MySQL, SQLite)
-- `src/hono/` — Hono middleware (auth, RBAC, error handler, plugin mounting, OpenAPI integration). New `mountFortress(app, fortress)` delegates to core; legacy `createHonoMiddleware` + `mountPluginRoutes` still work.
+- `src/hono/` — Hono middleware (`mountFortress` for one-line setup, plus `createHonoMiddleware` / `createCsrfMiddleware` / `createSecurityHeadersMiddleware` for user routes). All Fortress dispatch is delegated to `fortress.handleRequest`.
 - `src/express/` — Express middleware (auth, RBAC, error handler, route mounting). New `mountFortress(app, fortress)` delegates to core.
 - `src/sveltekit/` — SvelteKit handle hook (`createSvelteKitHandle`), catch-all escape hatch (`toSvelteKitHandler`), form-action helpers (`fortressActions.login` / `logout` / `register` / `refresh`), `event.locals.fortress` helpers (`getUserId` / `getClaims` / `getDb` / `getScopedDb`). Auto-refreshes expired access tokens during SSR loads.
 - `src/testing/` — In-memory SQLite test adapter via bun:sqlite

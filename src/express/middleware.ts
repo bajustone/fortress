@@ -1,5 +1,4 @@
 import type { DatabaseAdapter } from '../adapters/database';
-import type { EndpointDefinition } from '../core/endpoint';
 import type { Fortress } from '../core/fortress';
 import type { MiddlewareDefinition, PluginContext } from '../core/plugin';
 import type { TokenClaims } from '../core/types';
@@ -12,6 +11,7 @@ import {
 } from '../core/plugin-runner';
 
 // Minimal Express-compatible types so users bring their own express version
+
 /** Minimal Express request shape fortress reads from. Compatible with any modern Express version. */
 export interface ExpressRequest {
   headers: Record<string, string | string[] | undefined>;
@@ -35,7 +35,7 @@ export type ExpressNextFunction = (err?: unknown) => void;
 /** Express middleware signature fortress's adapter exports use. */
 export type ExpressMiddleware = (req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => void;
 
-// --- Route mapping (same as Hono adapter) ---
+// --- Route mapping ---
 
 /** A `(resource, action)` IAM mapping for an HTTP route. */
 export interface RouteMapping {
@@ -48,29 +48,37 @@ export interface RbacOptions {
   routeMap?: Record<string, RouteMapping>;
   mapRequest?: (method: string, path: string) => RouteMapping | null;
   skipPaths?: string[];
-  /** Disable default-deny for fortress-owned routes (not recommended) */
-  allowUnmappedFortressPaths?: boolean;
 }
 
 // --- Auth middleware ---
 
 /**
- * Build the Express auth middleware. Verifies the bearer token, attaches
- * `fortressUserId` / `fortressClaims` / `fortressDb` to the request, and
- * exposes the per-request scoped database accessor.
+ * Build the Express auth middleware. Extracts the access token via
+ * `fortress.extractAccessToken` (cookie-first, `Authorization: Bearer`
+ * fallback), verifies it, and attaches `fortressUserId` / `fortressClaims`
+ * / `fortressDb` / `fortressGetScopedDb` to the request for downstream
+ * user-route handlers.
  */
 export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
   return async (req, _res, next) => {
     try {
-      const header = typeof req.headers.authorization === 'string'
-        ? req.headers.authorization
-        : undefined;
-      const bearerPrefix = 'Bearer ';
-      if (!header?.startsWith(bearerPrefix)) {
-        throw new FortressError('UNAUTHORIZED', 'Missing or invalid Authorization header', 401);
+      // Adapter the Express request into a minimal web Request just for
+      // header reading — fortress.extractAccessToken takes a real Request.
+      const headerJar = new Headers();
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (Array.isArray(v)) {
+          for (const item of v) headerJar.append(k, item);
+        }
+        else if (typeof v === 'string') {
+          headerJar.set(k, v);
+        }
+      }
+      const probe = new Request('http://localhost/', { headers: headerJar });
+      const token = fortress.extractAccessToken(probe);
+      if (!token) {
+        throw new FortressError('UNAUTHORIZED', 'Missing or invalid access token', 401);
       }
 
-      const token = header.slice(bearerPrefix.length);
       const claims = await fortress.auth.verifyToken(token);
 
       req.fortressUserId = claims.sub;
@@ -102,59 +110,19 @@ export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
   };
 }
 
-// --- RBAC middleware ---
-
-/** Known fortress core path prefixes that are always protected */
-const FORTRESS_CORE_PREFIXES = ['/iam/'];
-
-/** Sensitive auth endpoints that require admin protection */
-const FORTRESS_AUTH_PROTECTED = ['/auth/impersonate', '/auth/users'];
+// --- RBAC middleware (user routes only) ---
 
 /**
- * Check if a path belongs to a fortress-owned route (core or plugin).
- * Fortress-owned routes are denied by default when no permission mapping exists.
- */
-function isFortressPath(path: string, pluginPathPrefixes: string[]): boolean {
-  if (FORTRESS_CORE_PREFIXES.some(prefix => path.startsWith(prefix)))
-    return true;
-  if (FORTRESS_AUTH_PROTECTED.some(p => path === p || path.startsWith(`${p}/`)))
-    return true;
-  if (pluginPathPrefixes.some(prefix => path.startsWith(prefix)))
-    return true;
-  return false;
-}
-
-/** Extracts first path segment: '/oauth/token' → '/oauth/' */
-const PLUGIN_PREFIX_REGEX = /^(\/[^/]+\/)/;
-
-/**
- * Extract unique path prefixes from plugin routes.
- */
-function getPluginPathPrefixes(fortress: Fortress): string[] {
-  const plugins = fortress.config.plugins ?? [];
-  const prefixes = new Set<string>();
-  for (const plugin of plugins) {
-    if (!plugin.routes)
-      continue;
-    for (const route of plugin.routes) {
-      const match = route.path.match(PLUGIN_PREFIX_REGEX);
-      if (match)
-        prefixes.add(match[1]);
-    }
-  }
-  return [...prefixes];
-}
-
-/**
- * Build the Express RBAC middleware. Resolves a `(resource, action)` mapping
- * for the request, applies fortress's default-deny policy to fortress-owned
- * routes, and enforces the IAM permission check.
+ * Build the Express RBAC middleware for **user-owned routes**. Resolves a
+ * `(resource, action)` mapping via `routeMap` / `mapRequest` and enforces
+ * the IAM permission check. Fortress-managed routes (`/auth/*`, `/iam/*`,
+ * plugin paths) are protected automatically inside `fortress.handleRequest`
+ * — this middleware only handles routes the caller registered themselves.
  */
 export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions): ExpressMiddleware {
   const routeMap = options?.routeMap ?? {};
   const skipPaths = options?.skipPaths ?? [];
   const skipPatterns = skipPaths.map(p => pathToRegex(p));
-  const pluginPathPrefixes = getPluginPathPrefixes(fortress);
 
   return async (req, _res, next) => {
     try {
@@ -177,42 +145,8 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
         mapping = options.mapRequest(method, path);
       }
 
-      // No mapping found — smart default deny for fortress-owned paths
       if (!mapping) {
-        if (!options?.allowUnmappedFortressPaths && isFortressPath(path, pluginPathPrefixes)) {
-          const ep = findEndpoint(fortress.endpoints, method, path);
-
-          // Public or self-authenticated routes pass through
-          if (ep?.meta?.security?.includes('none') || ep?.meta?.security?.includes('basic')) {
-            next();
-            return;
-          }
-
-          // Routes with declared permissions — enforce via IAM
-          if (ep?.meta?.permission) {
-            if (!req.fortressUserId) {
-              throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
-            }
-            const allowed = await fortress.iam.checkPermission(req.fortressUserId, ep.meta.permission.resource, ep.meta.permission.action);
-            if (!allowed) {
-              throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403);
-            }
-            next();
-            return;
-          }
-
-          // Bearer-only routes without permission — require auth but no IAM check
-          if (ep?.meta?.security?.includes('bearer')) {
-            if (!req.fortressUserId) {
-              throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
-            }
-            next();
-            return;
-          }
-
-          // Unknown / no security metadata — deny
-          throw new FortressError('FORBIDDEN', 'No permission mapping for this route', 403);
-        }
+        // No declarative mapping — caller treats this as a public route.
         next();
         return;
       }
@@ -352,7 +286,7 @@ export function getScopedDb(req: ExpressRequest, model: string): Promise<Databas
   return req.fortressGetScopedDb(model);
 }
 
-// --- Internal route matching (shared with Hono) ---
+// --- Internal route matching ---
 
 function findRouteMapMatch(method: string, path: string, routeMap: Record<string, RouteMapping>): RouteMapping | null {
   for (const [pattern, mapping] of Object.entries(routeMap)) {
@@ -371,17 +305,4 @@ function pathToRegex(pattern: string): RegExp {
     .replace(/\*/g, '.*')
     .replace(/\//g, '\\/');
   return new RegExp(`^${regexStr}$`);
-}
-
-/**
- * Find an endpoint definition matching the given method and path.
- */
-function findEndpoint(endpoints: EndpointDefinition[], method: string, path: string): EndpointDefinition | undefined {
-  return endpoints.find((ep) => {
-    if (ep.method !== method)
-      return false;
-    if (ep.path === path)
-      return true;
-    return pathToRegex(ep.path).test(path);
-  });
 }

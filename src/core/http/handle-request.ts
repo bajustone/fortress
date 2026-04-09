@@ -67,10 +67,17 @@ export function buildHandleRequest(
       }
       const { endpoint, params } = matched;
 
-      // 3. Token verification (only if the endpoint requires bearer auth)
+      // 3. Token verification (only if the endpoint requires bearer auth).
+      //
+      // OAuth endpoints declare `security: ['bearer']` but the bearer is an
+      // OAuth access token (not a Fortress JWT) — `dispatchOAuth` parses
+      // and validates it through the OAuth plugin's own token store. Skip
+      // the JWT check for those paths so we don't reject valid OAuth tokens.
       let userId: number | undefined;
       let claims: TokenClaims | undefined;
-      const requiresBearer = endpoint.meta?.security?.includes('bearer') ?? false;
+      const isOauthPath = endpoint.path.startsWith('/oauth/');
+      const requiresBearer
+        = !isOauthPath && (endpoint.meta?.security?.includes('bearer') ?? false);
       if (requiresBearer) {
         const token = extractAccessToken(request, cookieConfig);
         if (!token)
@@ -93,11 +100,15 @@ export function buildHandleRequest(
         fortressClaims: claims,
       });
 
-      // 5. Fortress-managed default-deny RBAC
-      await enforceFortressPermission(endpoint, userId, {
-        checkPermission: (uid, resource, action): Promise<boolean> =>
-          fortress.iam.checkPermission(uid, resource, action),
-      });
+      // 5. Fortress-managed default-deny RBAC. OAuth paths self-authenticate
+      //    inside their handlers (the bearer is an OAuth token, not a JWT)
+      //    so they're exempt from the IAM check too.
+      if (!isOauthPath) {
+        await enforceFortressPermission(endpoint, userId, {
+          checkPermission: (uid, resource, action): Promise<boolean> =>
+            fortress.iam.checkPermission(uid, resource, action),
+        });
+      }
 
       // 6. Plugin after-rbac middleware
       await runPluginMiddleware(plugins, fortress.config, 'after-rbac', {
@@ -108,17 +119,21 @@ export function buildHandleRequest(
 
       // 7. Body parse + validation. Validation reads the body via clone()
       //    so dispatch can re-read it. We sniff the content-type to know
-      //    whether validateRequest can parse JSON.
-      let parsedBody: unknown;
-      if (
-        request.method !== 'GET'
-        && request.method !== 'HEAD'
-        && (request.headers.get('content-type') ?? '').includes('json')
-      ) {
-        parsedBody = await request.clone().json().catch(() => undefined);
+      //    whether validateRequest can parse JSON. Skip for OAuth — its
+      //    bodies are `application/x-www-form-urlencoded` and the OAuth
+      //    dispatcher does its own parsing/validation per RFC 6749.
+      if (!isOauthPath) {
+        let parsedBody: unknown;
+        if (
+          request.method !== 'GET'
+          && request.method !== 'HEAD'
+          && (request.headers.get('content-type') ?? '').includes('json')
+        ) {
+          parsedBody = await request.clone().json().catch(() => undefined);
+        }
+        const query = Object.fromEntries(url.searchParams);
+        await validateRequest(endpoint.input, { body: parsedBody, query, params });
       }
-      const query = Object.fromEntries(url.searchParams);
-      await validateRequest(endpoint.input, { body: parsedBody, query, params });
 
       // 8. Dispatch + serialize. Pass IP/UA from headers as RequestMeta so
       //    auth handlers can stamp refresh tokens with their origin.

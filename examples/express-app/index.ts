@@ -26,7 +26,7 @@ import {
   getDb,
   getScopedDb,
   getUserId,
-  mountPluginRoutes,
+  mountFortress,
 } from '../../src/express';
 import { accountLockout } from '../../src/plugins/account-lockout';
 import { admin } from '../../src/plugins/admin';
@@ -479,13 +479,19 @@ app.get('/api/documents', async (req, res, next) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 8. Mount plugin routes (OAuth + OpenAPI)
+// 8. Mount Fortress routes (auth, IAM, plugins, OAuth, OpenAPI)
 // ═══════════════════════════════════════════════════════════════════════════
-
-// OAuth: POST /oauth/token, POST /oauth/introspect, POST /oauth/revoke,
-//        GET /oauth/userinfo, GET /oauth/.well-known/openid-configuration
-// OpenAPI: GET /openapi.json (spec), GET /openapi (Scalar UI)
-mountPluginRoutes(app, fortress);
+//
+// `mountFortress` registers a single Express middleware that detects any
+// Fortress-managed path and delegates to `fortress.handleRequest`. The
+// custom `/auth/*` handlers above are registered FIRST, so Express's
+// route order means they win — `mountFortress` only handles paths the
+// user did not handle manually.
+//
+// Auth issuing endpoints (login/refresh/impersonate) inside core
+// dispatch automatically attach `Set-Cookie` headers using
+// `FortressConfig.cookies` defaults.
+mountFortress(app, fortress);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 9. Seed data on startup

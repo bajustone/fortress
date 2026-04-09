@@ -29,28 +29,33 @@ export interface FortressEnv {
 }
 
 /**
- * Hono middleware that extracts and verifies JWT from the Authorization header.
- * Sets `fortressUserId`, `fortressClaims`, `fortressDb`, and `fortressGetScopedDb`
- * on the Hono context.
+ * Hono middleware that extracts and verifies the access token, then sets
+ * `fortressUserId`, `fortressClaims`, `fortressDb`, and `fortressGetScopedDb`
+ * on the Hono context for downstream user-route handlers.
  *
- * `fortressDb` has plugin wrapAdapter applied (e.g., tenancy schema switching).
- * `fortressGetScopedDb(model)` additionally applies scopeRules for a specific model.
+ * Token extraction is delegated to `fortress.extractAccessToken`, which
+ * reads the configured cookie first and falls back to
+ * `Authorization: Bearer`. This means the same Hono app can serve both
+ * cookie-authenticated browsers and Bearer-authenticated API clients
+ * without extra wiring.
+ *
+ * `fortressDb` has plugin `wrapAdapter` applied (e.g. tenancy schema
+ * switching). `fortressGetScopedDb(model)` additionally applies
+ * `scopeRules` for the requested model.
  */
 export function createAuthMiddleware(
   fortress: Fortress,
 ): MiddlewareHandler<FortressEnv> {
   return async (c, next) => {
-    const header = c.req.header('Authorization');
-    const bearerTokenPrefix = 'Bearer ';
-    if (!header?.startsWith(bearerTokenPrefix)) {
+    const token = fortress.extractAccessToken(c.req.raw);
+    if (!token) {
       throw new FortressError(
         'UNAUTHORIZED',
-        'Missing or invalid Authorization header',
+        'Missing or invalid access token',
         401,
       );
     }
 
-    const token = header.slice(bearerTokenPrefix.length);
     const claims = await fortress.auth.verifyToken(token);
 
     c.set('fortressUserId', claims.sub);

@@ -289,17 +289,18 @@ Returns `null` for invalid/expired tokens or client_credentials tokens (which ha
 
 ## HTTP Endpoints
 
-Mount all plugin routes onto a Hono app with a single call:
+Mount the OAuth endpoints (along with all other Fortress routes) with a
+single call:
 
 ```ts
 import { Hono } from "hono";
-import { mountPluginRoutes } from "@bajustone/fortress/hono";
+import { mountFortress } from "@bajustone/fortress/hono";
 
 const app = new Hono();
-mountPluginRoutes(app, fortress);
+mountFortress(app, fortress);
 ```
 
-This registers the following endpoints. An optional `prefix` can be passed: `mountPluginRoutes(app, fortress, { prefix: "/api" })`.
+This registers the following endpoints. An optional `prefix` can be passed: `mountFortress(app, fortress, { prefix: "/api" })`.
 
 ### POST /oauth/token
 

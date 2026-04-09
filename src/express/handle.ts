@@ -20,10 +20,7 @@
 
 import type { Fortress } from '../core/fortress';
 import type { ExpressMiddleware, ExpressNextFunction, ExpressRequest, ExpressResponse } from './middleware';
-import {
-  getPluginPathPrefixes,
-  isFortressPath,
-} from '../core/http/fortress-rbac';
+import { buildRouteTable, matchRoute } from '../core/http/match';
 
 interface ExpressApp {
   use: (path: string | ExpressMiddleware, handler?: ExpressMiddleware) => void;
@@ -49,8 +46,10 @@ export function mountFortress(
   options: MountFortressOptions = {},
 ): void {
   const prefix = options.prefix ?? '';
-  const plugins = fortress.config.plugins ?? [];
-  const pluginPathPrefixes = getPluginPathPrefixes(plugins);
+  // Pre-build the route table once at startup. The middleware uses it to
+  // detect whether a request is for a Fortress endpoint (catches every
+  // declared endpoint, not just the IAM/oauth-prefix ones).
+  const routeTable = buildRouteTable(fortress.endpoints);
 
   const middleware: ExpressMiddleware = async (req, res, next) => {
     let pathname = req.path;
@@ -62,7 +61,7 @@ export function mountFortress(
       return;
     }
 
-    if (!isFortressPath(pathname, pluginPathPrefixes)) {
+    if (!matchRoute(routeTable, req.method, pathname)) {
       next();
       return;
     }

@@ -550,22 +550,26 @@ type CreateUserBody = Infer<typeof createUserBody>;
 
 ### Runtime Validation
 
-Use `createValidationMiddleware` to validate incoming requests against endpoint schemas. No external validator needed -- schemas validate themselves via Standard Schema.
+Schemas validate themselves via Standard Schema — no external validator needed. Validation runs automatically inside `fortress.handleRequest` for every Fortress-managed endpoint declared with `.body()` / `.params()` / `.query()`. Failures return a 422 with structured details.
 
 ```typescript
-import { createValidationMiddleware } from '@bajustone/fortress/hono'; // or /express
 import { endpoint, obj, str } from '@bajustone/fortress';
 
-const endpoints = [
-  endpoint('POST', '/users')
-    .body(obj({ name: str(), email: str() }, 'name', 'email'))
-    .handler('createUser')
-    .build(),
-];
+const createUser = endpoint('POST', '/users')
+  .body(obj({ name: str(), email: str() }, 'name', 'email'))
+  .handler('createUser')
+  .build();
 
-app.use('/api/*', createValidationMiddleware(endpoints));
-// Returns 422 with structured errors on validation failure
+// When `createUser` is registered as a plugin route, requests to POST /users
+// are automatically validated by `fortress.handleRequest` before the handler
+// runs. Invalid bodies → 422 VALIDATION_ERROR with `details: [...]`.
 ```
+
+For **custom routes** outside the Fortress dispatch pipeline (your own
+`/api/*` endpoints in Hono / Express / SvelteKit), use the `vBody` /
+`vParam` / `vQuery` typed extraction helpers — they give TypeScript type
+inference. If you also need runtime validation on those custom routes,
+call `schema['~standard'].validate(data)` yourself.
 
 The `.permission()` method on endpoints declares IAM permissions for RBAC enforcement:
 
@@ -606,19 +610,30 @@ Workers, Deno Deploy, Vercel Edge, etc.
 
 ```typescript
 import { Hono } from 'hono';
-import { createHonoMiddleware, getUserId, getClaims, mountPluginRoutes } from '@bajustone/fortress/hono';
+import { Hono } from 'hono';
+import {
+  createHonoMiddleware,
+  getClaims,
+  getUserId,
+  mountFortress,
+} from '@bajustone/fortress/hono';
 
 const app = new Hono();
 
+// One-line mount: handles all Fortress routes (auth, IAM, plugins, OAuth,
+// OpenAPI). Auth-issuing endpoints (login/refresh) attach Set-Cookie
+// headers automatically.
+mountFortress(app, fortress);
+
+// Optional: protect your own user routes via the IAM middleware.
 const { authMiddleware, rbacMiddleware, errorHandler, pluginMiddleware } = createHonoMiddleware(fortress, {
-  // Map HTTP requests to resource+action permissions
   routeMap: {
     'GET /api/posts': { resource: 'post', action: 'list' },
     'POST /api/posts': { resource: 'post', action: 'create' },
     'PUT /api/posts/:id': { resource: 'post', action: 'update' },
     'DELETE /api/posts/:id': { resource: 'post', action: 'delete' },
   },
-  skipPaths: ['/health', '/auth/*'],  // bypass RBAC for these paths
+  skipPaths: ['/health'],
 });
 
 app.onError(errorHandler);
@@ -664,23 +679,21 @@ app.get('/api/posts', async (c) => {
 });
 ```
 
-#### Validated Request Helpers
+#### Typed Extraction Helpers (custom routes)
 
-Type-safe request extraction for Hono handlers. Zero runtime cost — fortress's `createValidationMiddleware` validates requests before handlers run. The schema parameter is used only for TypeScript type inference.
-
-Works with any Standard Schema V1 library (Zod, Valibot, ArkType, or fortress's built-in schemas).
+For your own user routes (outside the Fortress dispatch pipeline), `vBody` /
+`vParam` / `vQuery` give zero-runtime-cost typed extraction. The schema
+argument is used only for TypeScript inference; runtime validation is up to
+you. Works with any Standard Schema V1 library (Zod, Valibot, ArkType, or
+fortress's built-in schemas).
 
 ```typescript
-import { vBody, vParam, vQuery, createValidationMiddleware } from '@bajustone/fortress/hono';
-import { endpoint, obj, str } from '@bajustone/fortress';
+import { vBody, vParam, vQuery } from '@bajustone/fortress/hono';
+import { obj, str } from '@bajustone/fortress';
 
-// Define schemas once
 const CreatePostBody = obj({ title: str(), content: str() }, 'title', 'content');
 const IdParam = obj({ id: str('Post ID') }, 'id');
 const SearchQuery = obj({ q: str('Search term'), page: str() }, 'q');
-
-// Register validation middleware (validates against endpoint definitions)
-app.use('/*', createValidationMiddleware(endpoints));
 
 // Handlers get full type inference
 app.post('/posts', async (c) => {
@@ -704,16 +717,27 @@ app.get('/search', (c) => {
 
 ```typescript
 import express from 'express';
-import { createExpressMiddleware, getUserId, getClaims } from '@bajustone/fortress/express';
+import {
+  createExpressMiddleware,
+  getClaims,
+  getUserId,
+  mountFortress,
+} from '@bajustone/fortress/express';
 
 const app = express();
+app.use(express.json());
 
+// One-line mount: handles all Fortress routes (auth, IAM, plugins, OAuth,
+// OpenAPI). Auth-issuing endpoints attach Set-Cookie headers automatically.
+mountFortress(app, fortress);
+
+// Optional: protect your own user routes via the IAM middleware.
 const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress, {
   routeMap: {
     'GET /api/posts': { resource: 'post', action: 'list' },
     'POST /api/posts': { resource: 'post', action: 'create' },
   },
-  skipPaths: ['/health', '/auth/*'],
+  skipPaths: ['/health'],
 });
 
 app.use('/api', authMiddleware);
@@ -893,15 +917,17 @@ app.use(createSecurityHeadersMiddleware({
 
 ### Plugin Routes
 
-Auto-mount HTTP routes defined by plugins (OAuth endpoints, WebAuthn, etc.):
+Plugin-defined HTTP routes (OAuth endpoints, WebAuthn challenges, OpenAPI
+spec/UI, etc.) are mounted automatically by `mountFortress` — there's
+nothing extra to wire. Use the `prefix` option to namespace them under a
+common base path:
 
 ```typescript
-import { mountPluginRoutes } from '@bajustone/fortress/hono';
+import { mountFortress } from '@bajustone/fortress/hono'; // or /express
 
-mountPluginRoutes(app, fortress, {
-  prefix: '/auth',  // optional prefix for all plugin routes
+mountFortress(app, fortress, {
+  prefix: '/api',  // /api/auth/login, /api/iam/roles, /api/oauth/token, …
 });
-// Mounts: POST /auth/oauth/token, POST /auth/oauth/introspect, etc.
 ```
 
 ## Database Adapters
@@ -1057,7 +1083,7 @@ await tf.enable(userId);
 
 ### Admin
 
-Full IAM administration: users, roles, groups, permissions, role/permission bindings, and resource sync. Provides 35 endpoints + bootstrap for first admin setup. All endpoints are protected by `fortress:*` permissions and auto-mounted via `mountPluginRoutes`.
+Full IAM administration: users, roles, groups, permissions, role/permission bindings, and resource sync. Provides 35 endpoints + bootstrap for first admin setup. All endpoints are protected by `fortress:*` permissions and auto-mounted via `mountFortress`.
 
 ```typescript
 import { admin } from '@bajustone/fortress/plugins/admin';
@@ -1691,7 +1717,7 @@ const userInfo = await fortress.plugins['oauth'].getUserInfo(accessToken);
 const perms = await fortress.plugins['oauth'].resolveTokenPermissions(accessToken);
 ```
 
-**HTTP Routes** (auto-mounted via `mountPluginRoutes`):
+**HTTP Routes** (auto-mounted via `mountFortress`):
 
 | Method | Path | Description |
 |--------|------|-------------|

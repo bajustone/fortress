@@ -1,12 +1,9 @@
 /**
- * Modern entry point for the Hono adapter: register a single fortress
+ * Primary entry point for the Hono adapter: register a single fortress
  * middleware that detects Fortress-managed paths and delegates to
- * `fortress.handleRequest`.
- *
- * Replaces the older split surface (`createHonoMiddleware` +
- * `mountPluginRoutes`) for greenfield projects. Custom user routes
- * registered before `mountFortress` keep working — Hono's first-match
- * routing means user handlers win over the catch-all.
+ * `fortress.handleRequest`. Custom user routes registered *before*
+ * `mountFortress` keep working — Hono's first-match routing means user
+ * handlers win over the catch-all.
  *
  * @example
  * ```ts
@@ -21,12 +18,9 @@
  * ```
  */
 
-import type { Hono } from 'hono';
+import type { Env, Hono } from 'hono';
 import type { Fortress } from '../core/fortress';
-import {
-  getPluginPathPrefixes,
-  isFortressPath,
-} from '../core/http/fortress-rbac';
+import { buildRouteTable, matchRoute } from '../core/http/match';
 
 /** Options for {@link mountFortress}. */
 export interface MountFortressOptions {
@@ -47,14 +41,18 @@ export interface MountFortressOptions {
  * the `Response` returned by `fortress.handleRequest` already carries the
  * `Set-Cookie` headers built by core, and Hono returns it verbatim.
  */
-export function mountFortress(
-  app: Hono,
+export function mountFortress<E extends Env = Env>(
+  app: Hono<E>,
   fortress: Fortress,
   options: MountFortressOptions = {},
 ): void {
   const prefix = options.prefix ?? '';
-  const plugins = fortress.config.plugins ?? [];
-  const pluginPathPrefixes = getPluginPathPrefixes(plugins);
+  // Pre-build the route table once at startup. The middleware uses this to
+  // detect whether a request belongs to Fortress before delegating to core.
+  // Matching against the table catches every endpoint (auth, iam, plugin
+  // routes including OpenAPI's flat `/openapi.json` and `/openapi`) without
+  // needing per-prefix heuristics.
+  const routeTable = buildRouteTable(fortress.endpoints);
 
   app.use('*', async (c, next) => {
     const url = new URL(c.req.url);
@@ -68,7 +66,7 @@ export function mountFortress(
       return;
     }
 
-    if (!isFortressPath(pathname, pluginPathPrefixes)) {
+    if (!matchRoute(routeTable, c.req.method, pathname)) {
       await next();
       return;
     }

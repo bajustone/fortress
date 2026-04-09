@@ -1,18 +1,29 @@
 /**
  * Hono adapter for fortress.
  *
- * Provides the {@link createHonoMiddleware} entrypoint plus auth, RBAC, CSRF,
- * security-headers, and error-handler middleware. Mounts core auth and IAM
- * routes (and any plugin routes) on a Hono app, integrates with the OpenAPI
- * plugin, and exposes typed validation helpers for endpoint definitions.
+ * Provides {@link mountFortress}, the modern entry point that delegates to
+ * `fortress.handleRequest`, plus the lower-level middleware factories
+ * (`createHonoMiddleware`, `createAuthMiddleware`, `createRbacMiddleware`,
+ * `createCsrfMiddleware`, `createSecurityHeadersMiddleware`, etc.) for
+ * user-owned routes. Also exports `vBody` / `vParam` / `vQuery` typed
+ * extraction helpers for custom routes.
  *
  * @example
  * ```ts
  * import { Hono } from 'hono';
- * import { createHonoMiddleware } from '@bajustone/fortress/hono';
+ * import { mountFortress, createHonoMiddleware } from '@bajustone/fortress/hono';
  *
  * const app = new Hono();
- * createHonoMiddleware(app, fortress);
+ *
+ * // One-line mount: handles all Fortress routes (auth, IAM, plugins, OAuth, OpenAPI).
+ * mountFortress(app, fortress);
+ *
+ * // Optional: protect your own routes with the IAM middleware.
+ * const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fortress, {
+ *   routeMap: { 'GET /api/users': { resource: 'user', action: 'list' } },
+ * });
+ * app.use('/api/*', authMiddleware, rbacMiddleware);
+ * app.onError(errorHandler);
  * ```
  *
  * @module
@@ -39,13 +50,8 @@ export { createSecurityHeadersMiddleware } from './middleware/security-headers';
 export type { SecurityHeadersConfig } from './middleware/security-headers';
 export { buildRouteDefinition, getFortressRoutes, mountFortressOpenAPI } from './openapi';
 export type { SchemaConverter } from './openapi';
-/** @deprecated Prefer {@link mountFortress}, which delegates to `fortress.handleRequest` and handles plugin routes for free. */
-export { mountPluginRoutes } from './plugin-routes';
 export { vBody, vParam, vQuery } from './validated';
 export type { InferOutput } from './validated';
-/** @deprecated Validation now happens inside `fortress.handleRequest`. Use {@link mountFortress} instead. For custom user routes, use `vBody` / `vParam` / `vQuery` from this module. */
-export { createValidationMiddleware } from './validation-middleware';
-export type { ValidationMiddlewareOptions } from './validation-middleware';
 
 /**
  * Options for {@link createHonoMiddleware}. Currently extends {@link RbacOptions}

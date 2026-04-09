@@ -46,7 +46,7 @@ Once registered, methods are available at `fortress.plugins['webauthn']` with fu
 
 ## HTTP Routes
 
-The plugin defines four routes that are auto-mounted via `mountPluginRoutes`:
+The plugin defines four routes that are auto-mounted via `mountFortress`:
 
 | Method | Path | Auth Required | Description |
 |---|---|---|---|

@@ -26,20 +26,44 @@
   custom flows on user-owned routes.
 - **`mountFortress(app, fortress)`** in the Hono and Express adapters — new
   modern entry point that delegates Fortress-managed paths to
-  `fortress.handleRequest` via a single middleware. Existing
-  `createHonoMiddleware` / `createExpressMiddleware` / `mountPluginRoutes`
-  still work; `mountPluginRoutes` and `createValidationMiddleware` are now
-  marked `@deprecated`.
+  `fortress.handleRequest` via a single middleware. Replaces the old split
+  surface (`createHonoMiddleware` + `mountPluginRoutes`).
 
 ### Changed
 - The Hono `createErrorHandler` now delegates to the framework-agnostic
   `errorToResponse` from core so the FortressError → HTTP mapping
   (`Retry-After`, sanitized 500s, etc.) stays in one place.
-- Plugin route dispatch, OAuth form-body handling, OpenAPI HTML responses,
-  Standard Schema validation, and default-deny RBAC for fortress-managed
-  paths now live in `src/core/http/`. Adapters delegate to core. The old
-  per-adapter implementations remain in place for backward compatibility
-  but are scheduled for removal in a future minor release.
+- The Hono `createAuthMiddleware` and Express `createAuthMiddleware` now
+  use `fortress.extractAccessToken` (cookie-first, `Authorization: Bearer`
+  fallback), so the same adapter serves both browsers and API clients.
+- The Hono and Express RBAC middleware are simplified — they only handle
+  user-route `routeMap` lookups now. The default-deny logic for
+  Fortress-managed paths moved into core (`src/core/http/fortress-rbac.ts`)
+  and runs inside `fortress.handleRequest`.
+
+### Removed (breaking)
+- **Deleted `mountPluginRoutes`** from the Hono adapter
+  (`src/hono/plugin-routes.ts`). Replaced by `mountFortress`, which
+  delegates to `fortress.handleRequest` and handles plugin routes
+  (OAuth, OpenAPI, etc.) automatically.
+- **Deleted `createValidationMiddleware`** from the Hono and Express
+  adapters (`src/hono/validation-middleware.ts`,
+  `src/express/validation-middleware.ts`). Validation now runs
+  automatically inside `fortress.handleRequest` for every Fortress-managed
+  endpoint. For custom user routes, use `vBody` / `vParam` / `vQuery`
+  from `@bajustone/fortress/hono` plus your own
+  `schema['~standard'].validate()` call.
+- **Deleted `mountFortressRoutes` and `mountPluginRoutes`** from the
+  Express adapter (`src/express/routes.ts`). Same migration: use
+  `mountFortress(app, fortress)` from `@bajustone/fortress/express`.
+- **Removed `RbacOptions.allowUnmappedFortressPaths`** from the Hono and
+  Express adapters. The fortress-path default-deny now lives in core, so
+  the adapter-side opt-out is gone. Core's default-deny is non-negotiable
+  (it's part of the security contract).
+- **Migration**: replace
+  `mountPluginRoutes(app, fortress)` → `mountFortress(app, fortress)`,
+  delete any `createValidationMiddleware(...)` calls, and rely on the
+  automatic validation inside `fortress.handleRequest`.
 
 ## [0.0.28] - 2026-04-09
 

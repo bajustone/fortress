@@ -779,16 +779,17 @@ import { z } from 'zod';
 endpoint('POST', '/users').body(z.object({ name: z.string() })).build()
 ```
 
-### Runtime Validation Middleware
+### Runtime Validation
 
-`createValidationMiddleware` validates incoming requests against endpoint schemas using `~standard.validate()`. Works with fortress schemas or any Standard Schema provider:
-
-```ts
-import { createValidationMiddleware } from '@bajustone/fortress/hono';
-
-app.use('/api/*', createValidationMiddleware(myEndpoints));
-// 422 with structured errors on validation failure
-```
+Validation runs automatically inside `fortress.handleRequest` for every
+Fortress-managed endpoint that declares a body / params / query schema.
+The dispatcher reads the parsed body, calls `validateRequest` from
+`src/core/validation.ts`, and throws `FortressError('VALIDATION_ERROR',
+422)` on failure. Adapter middleware (`mountFortress` for Hono/Express,
+`createSvelteKitHandle` for SvelteKit) doesn't need to do anything extra
+— delegating to `fortress.handleRequest` is enough. For custom user
+routes, validate against the schema yourself with
+`schema['~standard'].validate(data)`.
 
 ### OpenAPI Plugin
 
@@ -1399,7 +1400,7 @@ app.use('*', securityHeaders);
 app.use('/api/*', csrfMiddleware);
 app.use('/api/*', authMiddleware);
 app.use('/api/*', rbacMiddleware);
-mountPluginRoutes(app, fortress);  // Mounts plugin-defined HTTP routes
+mountFortress(app, fortress);  // Mounts all Fortress routes (auth, IAM, plugins, OAuth, OpenAPI)
 ```
 
 **Hono context variables** (set by auth middleware, read by helpers):
@@ -1416,7 +1417,7 @@ mountPluginRoutes(app, fortress);  // Mounts plugin-defined HTTP routes
 
 **Error handler** (`src/hono/middleware/error-handler.ts`): Transforms `FortressError` to JSON `{ code, message, statusCode }`. Sets `Retry-After` header for `RATE_LIMITED`. Returns generic 500 for unhandled errors.
 
-**Validated request helpers** (`src/hono/validated.ts`): `vBody(c, schema)`, `vParam(c, schema)`, `vQuery(c, schema)` — type-safe request extraction with zero runtime cost. The schema parameter (any Standard Schema V1 — Zod, Valibot, ArkType, fortress built-in) is used only for TypeScript type inference. Requires `createValidationMiddleware(endpoints)` registered upstream, which validates requests against `EndpointDefinition` schemas before handlers run. Exports `InferOutput<T>` utility type.
+**Validated request helpers** (`src/hono/validated.ts`): `vBody(c, schema)`, `vParam(c, schema)`, `vQuery(c, schema)` — type-safe request extraction for **custom user routes**. The schema parameter (any Standard Schema V1 — Zod, Valibot, ArkType, fortress built-in) is used only for TypeScript type inference; no runtime validation occurs. Fortress-managed endpoints validate themselves automatically inside `fortress.handleRequest`. Exports `InferOutput<T>` utility type.
 
 ### Express Adapter
 
@@ -1447,14 +1448,22 @@ app.use('/api', rbacMiddleware);
 
 ### How to Add a New Framework Adapter
 
-1. Create `src/<framework>/index.ts` and `src/<framework>/middleware.ts`
-2. Implement auth middleware: extract Bearer token → `fortress.auth.verifyToken()` → set context
-3. Implement RBAC middleware: map request → `fortress.iam.checkPermission()`
-4. Implement error handler: catch `FortressError` → framework response
-5. Export context helpers: `getUserId()`, `getClaims()`, `getDb()`, `getScopedDb()`
-6. Chain `wrapAdapter` from plugins in auth middleware (see Hono auth.ts for reference)
-7. Implement `mountPluginRoutes()` to mount plugin-defined HTTP routes
-8. Add JSR export in `jsr.json`
+Most of the work lives in `fortress.handleRequest` (core HTTP pipeline).
+A new adapter is typically a ~10-line wrapper that:
+
+1. Translates the framework's incoming request into a web-standard `Request`
+2. Detects whether the path matches a Fortress endpoint
+   (`buildRouteTable(fortress.endpoints)` + `matchRoute(...)` from
+   `src/core/http/match.ts`)
+3. If yes, calls `await fortress.handleRequest(request)` and returns the
+   `Response` to the framework
+4. If no, falls through to the framework's normal routing
+
+For user-route helpers (`getUserId`, etc.), reuse the `fortress.extractAccessToken`
++ `fortress.auth.verifyToken` + `chainAdapterWrappers` + `collectScopeRules`
+flow — see `src/sveltekit/handle.ts` for the canonical reference.
+
+Add the new sub-path to `jsr.json` and `package.json` exports.
 
 ---
 

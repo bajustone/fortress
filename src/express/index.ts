@@ -1,17 +1,28 @@
 /**
  * Express adapter for fortress.
  *
- * Provides {@link createExpressMiddleware}, RBAC and plugin middleware,
- * route mounting helpers, and validation middleware for Express apps.
+ * Provides {@link mountFortress}, the modern entry point that delegates to
+ * `fortress.handleRequest`, plus the lower-level middleware factories
+ * (`createAuthMiddleware`, `createRbacMiddleware`, `createErrorHandler`,
+ * `createExpressPluginMiddleware`) for user-owned routes.
  *
  * @example
  * ```ts
  * import express from 'express';
- * import { createExpressMiddleware, mountFortressRoutes } from '@bajustone/fortress/express';
+ * import { createExpressMiddleware, mountFortress } from '@bajustone/fortress/express';
  *
  * const app = express();
- * app.use(createExpressMiddleware(fortress));
- * mountFortressRoutes(app, fortress);
+ * app.use(express.json());
+ *
+ * // One-line mount: handles all Fortress routes (auth, IAM, plugins, OAuth, OpenAPI).
+ * mountFortress(app, fortress);
+ *
+ * // Optional: protect your own routes with the IAM middleware.
+ * const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress, {
+ *   routeMap: { 'GET /api/users': { resource: 'user', action: 'list' } },
+ * });
+ * app.use('/api', authMiddleware, rbacMiddleware);
+ * app.use(errorHandler);
  * ```
  *
  * @module
@@ -41,7 +52,3 @@ export type {
   RbacOptions,
   RouteMapping,
 } from './middleware';
-/** @deprecated Prefer {@link mountFortress}, which delegates to `fortress.handleRequest` and handles plugin routes for free. */
-export { mountFortressRoutes, mountPluginRoutes } from './routes';
-/** @deprecated Validation now happens inside `fortress.handleRequest`. Use {@link mountFortress} instead. */
-export { createValidationMiddleware } from './validation-middleware';

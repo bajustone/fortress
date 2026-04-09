@@ -3,23 +3,13 @@ import { Hono } from 'hono';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { obj, str } from '../core/schema-builder';
 import { vBody, vParam, vQuery } from './validated';
-import { createValidationMiddleware } from './validation-middleware';
 
 const CreateUserBody = obj({ name: str(), email: str() }, 'name', 'email');
 const IdParam = obj({ id: str('User ID') }, 'id');
 const SearchQuery = obj({ q: str('Search query'), page: str() }, 'q');
 
-const endpoints = [
-  (await import('../core/schema-builder')).endpoint('POST', '/users').body(CreateUserBody).handler('createUser').build(),
-
-  (await import('../core/schema-builder')).endpoint('GET', '/users/:id').params(IdParam).handler('getUser').build(),
-
-  (await import('../core/schema-builder')).endpoint('GET', '/search').query(SearchQuery).handler('search').build(),
-];
-
 function createApp(): Hono {
   const app = new Hono();
-  app.use('/*', createValidationMiddleware(endpoints));
 
   app.post('/users', async (c) => {
     const body = await vBody(c, CreateUserBody);

@@ -159,21 +159,22 @@ async function dispatchPlugin(
   pathParams: Record<string, string>,
 ): Promise<Response> {
   const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)[plugin.name];
-  const handler = methods?.[endpoint.handler];
-  if (!handler) {
+  if (!methods?.[endpoint.handler]) {
     throw Errors.notFound(`Plugin handler '${plugin.name}.${endpoint.handler}' not found`);
   }
 
+  // Call as `methods.<handler>(...)` so the `this` binding is preserved —
+  // some plugin methods reference sibling helpers via `this`.
   // OpenAPI Scalar UI returns HTML, not JSON.
   if (plugin.name === 'openapi' && endpoint.handler === 'getUI') {
-    const html = handler() as string;
+    const html = methods.getUI() as string;
     return new Response(html, {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   }
 
-  const result = await handler({ ...body, ...pathParams });
+  const result = await methods[endpoint.handler]({ ...body, ...pathParams });
   // Allow handlers to opt into HTML by returning a string starting with `<!`.
   if (typeof result === 'string' && result.trimStart().startsWith('<!')) {
     return new Response(result, {
@@ -195,17 +196,21 @@ async function dispatchOAuth(
   if (!methods)
     throw Errors.notFound(`OAuth plugin not registered`);
   const handlerName = endpoint.handler;
-  const handler = methods[handlerName];
-  if (!handler)
+  if (!methods[handlerName])
     throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
 
+  // IMPORTANT: invoke as `methods.<name>(...)` so the `this` binding is the
+  // methods object — the OAuth plugin's `handleTokenRequest` calls
+  // `this.clientCredentialsGrant(...)` and friends, which would otherwise
+  // throw "Cannot read properties of undefined" if called bare.
+  const m = methods as Record<string, (...args: unknown[]) => Promise<unknown> | unknown>;
   const authHeader = request.headers.get('authorization');
 
   switch (handlerName) {
     case 'handleTokenRequest': {
       const body = await parseFormBody(request);
       const clientAuth = parseBasicAuth(authHeader);
-      const result = await (handler as (b: unknown, a: unknown) => Promise<unknown>)(body, clientAuth);
+      const result = await m.handleTokenRequest(body, clientAuth);
       return jsonResponse(result, 200);
     }
     case 'handleIntrospectRequest': {
@@ -217,15 +222,12 @@ async function dispatchOAuth(
           401,
         );
       }
-      const result = await (handler as (b: unknown, a: unknown) => Promise<unknown>)(
-        { token: body.token },
-        clientAuth,
-      );
+      const result = await m.handleIntrospectRequest({ token: body.token }, clientAuth);
       return jsonResponse(result, 200);
     }
     case 'handleRevokeRequest': {
       const body = await parseFormBody(request);
-      await (handler as (b: unknown) => Promise<unknown>)({ token: body.token });
+      await m.handleRevokeRequest({ token: body.token });
       return jsonResponse({}, 200);
     }
     case 'handleUserInfoRequest': {
@@ -236,11 +238,11 @@ async function dispatchOAuth(
           401,
         );
       }
-      const user = (await (handler as (t: string) => Promise<{
+      const user = (await m.handleUserInfoRequest(bearer)) as {
         id: number;
         email: string;
         name: string;
-      } | null>)(bearer));
+      } | null;
       if (!user) {
         return jsonResponse(
           { error: 'invalid_token', error_description: 'Token invalid or expired' },
@@ -253,13 +255,14 @@ async function dispatchOAuth(
       );
     }
     case 'handleDiscovery': {
-      const result = (handler as () => unknown)();
+      const result = m.handleDiscovery();
       return jsonResponse(result, 200);
     }
     default: {
-      // Authorize endpoint and friends — JSON body.
+      // Authorize endpoint and friends — JSON body. Call through `m` so the
+      // `this` binding survives.
       const body = (await request.json().catch(() => ({}))) as unknown;
-      const result = await (handler as (b: unknown) => Promise<unknown>)(body);
+      const result = await m[handlerName](body);
       return jsonResponse(result ?? { ok: true }, successStatus(endpoint));
     }
   }

@@ -7,10 +7,10 @@ import { createFortress } from '../core/fortress';
 import { oauth } from '../plugins/oauth';
 import { openapi } from '../plugins/openapi';
 import { createTestAdapter } from '../testing';
+import { mountFortress } from './handle';
 import { getClaims, getDb, getUserId } from './helpers';
 import { createHonoMiddleware } from './index';
 import { createCsrfMiddleware } from './middleware/csrf';
-import { mountPluginRoutes } from './plugin-routes';
 
 const SECRET = 'hono-handler-test-secret-at-least-32!!';
 
@@ -507,7 +507,7 @@ describe('plugin route mounting: OAuth', () => {
     const { errorHandler } = createHonoMiddleware(fortress);
     app.onError(errorHandler);
 
-    mountPluginRoutes(app, fortress);
+    mountFortress(app, fortress);
 
     // Create an OAuth client
     const methods = fortress.plugins.oauth as any;
@@ -728,7 +728,7 @@ describe('plugin route mounting: OpenAPI with prefix', () => {
     const { errorHandler } = createHonoMiddleware(fortress);
     app.onError(errorHandler);
 
-    mountPluginRoutes(app, fortress, { prefix: '/api/v1' });
+    mountFortress(app, fortress, { prefix: '/api/v1' });
 
     // Spec should be served at the prefixed path
     const specRes = await app.request('/api/v1/openapi.json');
@@ -753,7 +753,7 @@ describe('plugin route mounting: OpenAPI with prefix', () => {
     });
 
     const app = new Hono<FortressEnv>();
-    mountPluginRoutes(app, fortress, { prefix: '/api/v1' });
+    mountFortress(app, fortress, { prefix: '/api/v1' });
 
     const res = await app.request('/openapi.json');
     expect(res.status).toBe(404);
