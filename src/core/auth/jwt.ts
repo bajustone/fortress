@@ -1,3 +1,14 @@
+/**
+ * JWT signing and verification helpers built on `jose` (Web Crypto API).
+ *
+ * Provides {@link signAccessToken} and {@link verifyAccessToken} for short-lived
+ * access tokens. Refresh tokens are handled separately in
+ * `core/auth/refresh-token.ts`. Supports secret rotation by accepting an array
+ * of secrets — the first is used to sign, all are accepted on verify.
+ *
+ * @module
+ */
+
 import type { TokenClaims } from '../types';
 
 import { jwtVerify, SignJWT } from 'jose';

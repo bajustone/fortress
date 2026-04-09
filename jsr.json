@@ -1,7 +1,36 @@
 {
   "name": "@bajustone/fortress",
-  "version": "0.0.20",
+  "version": "0.0.25",
   "license": "MIT",
+  "description": "Framework-agnostic, adapter-based authentication and authorization library for TypeScript. Core auth (JWT, refresh tokens, password hashing) plus IAM (resource+action permissions, groups, roles) with a plugin system for OAuth, 2FA, tenancy, WebAuthn, magic links, audit logging, rate limiting, and more.",
+  "runtimeCompat": {
+    "node": true,
+    "deno": true,
+    "bun": true,
+    "workerd": true,
+    "browser": false
+  },
+  "publish": {
+    "exclude": [
+      "**/*.test.ts",
+      "**/*.spec.ts",
+      "**/*.integration-test.ts",
+      "vitest.config.ts",
+      "vitest.integration.config.ts",
+      "tsup.config.ts",
+      "tsconfig.json",
+      ".github",
+      "examples",
+      "docs",
+      "scripts",
+      "bin",
+      ".claude",
+      ".husky",
+      "CLAUDE.md",
+      "bun.lock",
+      "eslint.config.js"
+    ]
+  },
   "exports": {
     ".": "./src/index.ts",
     "./crypto": "./src/core/auth/password.ts",

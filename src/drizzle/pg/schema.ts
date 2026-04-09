@@ -1,3 +1,5 @@
+import type { AnyPgTable } from 'drizzle-orm/pg-core';
+
 import { boolean, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, varchar } from 'drizzle-orm/pg-core';
 
 // --- Core Identity ---
@@ -350,7 +352,17 @@ const webauthnChallenges = pgTable('fortress_webauthn_challenge', {
 
 // --- All tables for easy iteration ---
 
-export const fortressPgSchema = {
+/**
+ * Aggregate of every Drizzle PostgreSQL table fortress uses.
+ *
+ * Typed as `Record<string, AnyPgTable>` so JSR can statically resolve
+ * the public API without recursing through Drizzle's complex generic
+ * column types. The fortress drizzle adapter accesses tables generically,
+ * so column-level inference is not needed internally. Consumers who need
+ * column-level types should declare their own typed Drizzle schema and
+ * pass it via `createDrizzleAdapter(db, { tables })`.
+ */
+export const fortressPgSchema: Record<string, AnyPgTable> = {
   users,
   loginIdentifiers,
   refreshTokens,

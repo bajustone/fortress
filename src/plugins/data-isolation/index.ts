@@ -1,3 +1,13 @@
+/**
+ * Row-level data isolation plugin for fortress.
+ *
+ * Lets you scope read/write access to a database row by per-user assignments,
+ * for example "user can only see rows where `org_id` equals their assigned
+ * org". Works with any database adapter via the core `scopeRules` capability.
+ *
+ * @module
+ */
+
 import type { ScopeRule } from '../../adapters/database/types';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
 

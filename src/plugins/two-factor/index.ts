@@ -1,3 +1,13 @@
+/**
+ * Two-factor authentication plugin for fortress.
+ *
+ * Adds TOTP enrolment and verification, hashed backup codes, and trusted
+ * device enrolment so users can opt out of 2FA prompts on familiar devices.
+ * Exposes setup, verify, and disable methods on the fortress instance.
+ *
+ * @module
+ */
+
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser, RequestMeta } from '../../core/types';
 import { hashToken } from '../../core/auth/refresh-token';

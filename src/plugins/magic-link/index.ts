@@ -1,3 +1,13 @@
+/**
+ * Passwordless magic-link plugin for fortress.
+ *
+ * Issues short-lived hashed tokens delivered out-of-band (typically by email)
+ * and exchanges a valid token for a fortress access/refresh token pair.
+ * Useful as a passwordless sign-in flow or as a recovery mechanism.
+ *
+ * @module
+ */
+
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';

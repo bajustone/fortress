@@ -1,3 +1,13 @@
+/**
+ * Account lockout plugin for fortress.
+ *
+ * Tracks failed sign-in attempts per identifier and applies a progressive
+ * lockout (each successive lockout extends the cooldown). Hooks into the
+ * sign-in flow to reject attempts during a lockout window.
+ *
+ * @module
+ */
+
 import type { FortressPlugin } from '../../core/plugin';
 import { Errors } from '../../core/errors';
 

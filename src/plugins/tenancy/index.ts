@@ -1,3 +1,13 @@
+/**
+ * Schema-per-tenant tenancy plugin for fortress (PostgreSQL only).
+ *
+ * Switches the active PostgreSQL `search_path` per request based on the
+ * resolved tenant, providing strong data isolation between tenants without
+ * touching application code. Requires a PostgreSQL-backed Drizzle adapter.
+ *
+ * @module
+ */
+
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
 import { Errors } from '../../core/errors';

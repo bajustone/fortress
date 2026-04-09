@@ -1,3 +1,14 @@
+/**
+ * WebAuthn / Passkeys plugin for fortress.
+ *
+ * Implements passkey registration, passwordless authentication, and a
+ * second-factor mode using `@simplewebauthn/server`. Persists credentials
+ * and challenges via the fortress database adapter and exposes the standard
+ * begin/finish endpoints when mounted on a framework adapter.
+ *
+ * @module
+ */
+
 import type {
   AuthenticationResponseJSON,
   AuthenticatorTransportFuture,

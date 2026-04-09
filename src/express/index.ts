@@ -1,3 +1,22 @@
+/**
+ * Express adapter for fortress.
+ *
+ * Provides {@link createExpressMiddleware}, RBAC and plugin middleware,
+ * route mounting helpers, and validation middleware for Express apps.
+ *
+ * @example
+ * ```ts
+ * import express from 'express';
+ * import { createExpressMiddleware, mountFortressRoutes } from '@bajustone/fortress/express';
+ *
+ * const app = express();
+ * app.use(createExpressMiddleware(fortress));
+ * mountFortressRoutes(app, fortress);
+ * ```
+ *
+ * @module
+ */
+
 export { convertRoutes } from '../hono/convert-routes';
 export type { ConvertRoutesOptions, ExternalRoute, ToJSONSchemaConverter } from '../hono/convert-routes';
 export {

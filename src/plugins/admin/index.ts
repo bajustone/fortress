@@ -1,3 +1,15 @@
+/**
+ * Admin plugin for fortress.
+ *
+ * Bootstraps an initial admin user and applies a default-deny policy to the
+ * IAM management endpoints, then exposes the full admin CRUD surface
+ * (users, groups, roles, permissions, role bindings) as HTTP routes guarded
+ * by fortress's own RBAC. Required if you want a self-service IAM admin UI
+ * out of the box.
+ *
+ * @module
+ */
+
 import type { EndpointDefinition, EndpointPermission } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';

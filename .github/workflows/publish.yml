@@ -17,7 +17,7 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           jq --arg v "$VERSION" '.version = $v' jsr.json > jsr.tmp && mv jsr.tmp jsr.json
-      - run: npx jsr publish --allow-slow-types --allow-dirty
+      - run: npx jsr publish --allow-dirty
 
   publish-npm:
     runs-on: ubuntu-latest

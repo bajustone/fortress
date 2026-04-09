@@ -1,3 +1,14 @@
+/**
+ * Webhook delivery plugin for fortress.
+ *
+ * Implements the [Standard Webhooks](https://www.standardwebhooks.com) spec
+ * with HMAC-SHA256 signing, configurable retry with exponential backoff, and
+ * persisted delivery state. Subscribes to fortress lifecycle events and
+ * pushes them to consumer-registered endpoints.
+ *
+ * @module
+ */
+
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin } from '../../core/plugin';
 

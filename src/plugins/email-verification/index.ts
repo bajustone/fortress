@@ -1,3 +1,13 @@
+/**
+ * Email verification plugin for fortress.
+ *
+ * Issues hashed, time-limited verification tokens, exposes
+ * `requestVerification` and `verifyEmail` methods on the fortress instance,
+ * and adds the corresponding HTTP routes when mounted via a framework adapter.
+ *
+ * @module
+ */
+
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';

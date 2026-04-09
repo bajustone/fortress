@@ -1,3 +1,14 @@
+/**
+ * Social login (OAuth/OIDC consumer) plugin for fortress.
+ *
+ * Supports Microsoft, Google, GitHub, Discord, Apple, and any generic OIDC
+ * provider. Handles the authorization-code flow, exchanges tokens, links
+ * provider accounts to fortress users, and issues fortress refresh tokens
+ * on success.
+ *
+ * @module
+ */
+
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import type { ProviderConfig, ProviderDefinition, ProviderProfile, SocialLoginConfig } from './types';

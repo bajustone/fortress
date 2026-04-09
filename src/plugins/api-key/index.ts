@@ -1,3 +1,14 @@
+/**
+ * API key plugin for fortress.
+ *
+ * Issues scoped, hashed API keys for service accounts and devices, with
+ * optional expiry, revocation, and per-key permission scopes. Authenticates
+ * incoming requests via a configurable header and exposes management methods
+ * on the fortress instance.
+ *
+ * @module
+ */
+
 import type { FortressPlugin } from '../../core/plugin';
 import { hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';

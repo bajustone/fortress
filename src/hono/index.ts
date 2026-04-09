@@ -1,3 +1,23 @@
+/**
+ * Hono adapter for fortress.
+ *
+ * Provides the {@link createHonoMiddleware} entrypoint plus auth, RBAC, CSRF,
+ * security-headers, and error-handler middleware. Mounts core auth and IAM
+ * routes (and any plugin routes) on a Hono app, integrates with the OpenAPI
+ * plugin, and exposes typed validation helpers for endpoint definitions.
+ *
+ * @example
+ * ```ts
+ * import { Hono } from 'hono';
+ * import { createHonoMiddleware } from '@bajustone/fortress/hono';
+ *
+ * const app = new Hono();
+ * createHonoMiddleware(app, fortress);
+ * ```
+ *
+ * @module
+ */
+
 import type { Fortress } from '../core/fortress';
 import type { RbacOptions } from './middleware/rbac';
 import { createAuthMiddleware } from './middleware/auth';

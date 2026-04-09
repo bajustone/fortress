@@ -1,3 +1,22 @@
+/**
+ * In-memory SQLite test adapter for fortress.
+ *
+ * Spins up a fresh `bun:sqlite` database with the full fortress schema and
+ * returns a {@link DatabaseAdapter} ready to pass into `createFortress` from
+ * unit tests. Designed for fast, isolated test runs — every call creates a
+ * new database, so tests cannot leak state into each other.
+ *
+ * @example
+ * ```ts
+ * import { createTestAdapter } from '@bajustone/fortress/testing';
+ *
+ * const db = createTestAdapter();
+ * const fortress = await createFortress({ db, jwt: { secret: 'test' } });
+ * ```
+ *
+ * @module
+ */
+
 import type { DatabaseAdapter } from '../adapters/database';
 import { createDrizzleAdapter } from '../drizzle/adapter';
 

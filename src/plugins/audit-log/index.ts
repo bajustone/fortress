@@ -1,3 +1,13 @@
+/**
+ * Append-only audit log plugin for fortress.
+ *
+ * Captures auth and IAM lifecycle events into the `fortress_audit_log` table
+ * with a tamper-evident hash chain (each entry links to the previous entry's
+ * hash). Configurable event filtering and a query API for compliance reads.
+ *
+ * @module
+ */
+
 import type { WhereClause } from '../../adapters/database/types';
 import type { FortressPlugin } from '../../core/plugin';
 

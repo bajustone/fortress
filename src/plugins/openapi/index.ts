@@ -1,3 +1,14 @@
+/**
+ * OpenAPI 3.1 generator plugin for fortress.
+ *
+ * Walks every registered endpoint definition (auth, IAM, and any plugin
+ * routes), folds in their JSON Schema component definitions, and emits a
+ * complete OpenAPI 3.1 specification. Pairs with Scalar UI for an
+ * interactive docs page mounted by the framework adapters.
+ *
+ * @module
+ */
+
 import type { ComponentSchemas, EndpointDefinition } from '../../core/endpoint';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
 import type { OpenAPISpec } from './spec-builder';

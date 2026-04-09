@@ -793,6 +793,15 @@ const drizzleDb = drizzle(connectionString, { schema: fortressPgSchema });
 const db = createDrizzleAdapter(drizzleDb, { dialect: 'pg' });
 ```
 
+> **Schema typing note:** `fortressSchema` and `fortressPgSchema` are typed as
+> `Record<string, AnySQLiteTable>` / `Record<string, AnyPgTable>` so JSR can
+> ship `.d.ts` files without "slow types" errors. This means
+> `fortressSchema.users` does **not** carry column-level inference. The
+> drizzle adapter itself accesses tables generically, so this is invisible to
+> normal fortress usage. If you want to query the fortress tables directly
+> with full column inference, declare your own typed Drizzle tables matching
+> the same names and pass them via `createDrizzleAdapter(db, { tables })`.
+
 #### MySQL
 
 ```typescript

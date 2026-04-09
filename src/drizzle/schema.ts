@@ -1,3 +1,5 @@
+import type { AnySQLiteTable } from 'drizzle-orm/sqlite-core';
+
 import { integer, primaryKey, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
 
 // --- Core Identity ---
@@ -350,7 +352,17 @@ const webauthnChallenges = sqliteTable('fortress_webauthn_challenge', {
 
 // --- All tables for easy iteration ---
 
-export const fortressSchema = {
+/**
+ * Aggregate of every Drizzle SQLite table fortress uses.
+ *
+ * Typed as `Record<string, AnySQLiteTable>` so JSR can statically resolve
+ * the public API without recursing through Drizzle's complex generic
+ * column types. The fortress drizzle adapter accesses tables generically,
+ * so column-level inference is not needed internally. Consumers who need
+ * column-level types should declare their own typed Drizzle schema and
+ * pass it via `createDrizzleAdapter(db, { tables })`.
+ */
+export const fortressSchema: Record<string, AnySQLiteTable> = {
   users,
   loginIdentifiers,
   refreshTokens,

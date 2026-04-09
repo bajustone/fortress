@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.0.25] - 2026-04-09
+
+### Changed
+- chore(jsr): eliminate all 62 slow-type errors by typing `fortressSchema` /
+  `fortressPgSchema` as `Record<string, AnySQLiteTable>` /
+  `Record<string, AnyPgTable>`. The drizzle adapter is unaffected (it already
+  accesses tables generically), but consumers who relied on column-level
+  inference from `fortressSchema.users.email` style access will now see the
+  loose `AnySQLiteTable`/`AnyPgTable` type. Workaround: declare your own
+  typed Drizzle tables and pass them via `createDrizzleAdapter(db, { tables })`.
+- chore(jsr): drop `--allow-slow-types` from `publish:dry` and the publish
+  workflow so future regressions fail loudly. JSR will now ship proper
+  `.d.ts` files for Node consumers.
+- docs: add `@module` JSDoc to every JSR entrypoint (22 files) and document
+  every re-export in `src/index.ts`.
+
+### Added
+- chore(jsr): add `description`, `runtimeCompat` (node/deno/bun/workerd), and
+  `publish.exclude` to `jsr.json`. The published tarball no longer bundles
+  test files, vitest/tsup configs, `.github`, `examples`, `docs`, `scripts`,
+  or local tooling files.
+
 ## [0.0.24] - 2026-04-07
 
 ### Fixed

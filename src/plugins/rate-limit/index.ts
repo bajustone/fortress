@@ -1,3 +1,13 @@
+/**
+ * Sliding-window rate limiting plugin for fortress.
+ *
+ * Limits requests per identifier (IP, user ID, or custom) over a rolling
+ * window. Ships with an in-memory store; bring-your-own store via the
+ * {@link RateLimitStore} interface for distributed deployments (Redis, etc).
+ *
+ * @module
+ */
+
 import type { FortressPlugin } from '../../core/plugin';
 import type { RateLimitStore } from './memory-store';
 import { Errors } from '../../core/errors';

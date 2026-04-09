@@ -1,3 +1,14 @@
+/**
+ * OAuth 2.0 authorization server plugin for fortress.
+ *
+ * Implements the authorization-code grant (with PKCE) and client-credentials
+ * grant for confidential and public clients. Persists clients, authorization
+ * codes, access tokens, and pending flows via the fortress database adapter,
+ * and exposes the standard `/authorize` and `/token` endpoints when mounted.
+ *
+ * @module
+ */
+
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';
