@@ -1,22 +1,12 @@
 import type { ErrorHandler } from 'hono';
-import { FortressError } from '../../core/errors';
+import { errorToResponse } from '../../core/http/error-response';
 
 /**
  * Hono error handler that maps FortressError to HTTP responses.
- * Adds Retry-After header for rate limit errors.
+ * Delegates to the framework-agnostic `errorToResponse` in core so the
+ * mapping (status codes, `Retry-After`, sanitized 500s) stays consistent
+ * across Hono / Express / SvelteKit / `fortress.handleRequest`.
  */
 export function createErrorHandler(): ErrorHandler {
-  return (err, c) => {
-    if (err instanceof FortressError) {
-      if (err.code === 'RATE_LIMITED' && err.retryAfter) {
-        c.header('Retry-After', String(err.retryAfter));
-      }
-
-      return c.json(err.toJSON(), err.statusCode as any);
-    }
-
-    // Unknown error — log message only, don't leak stack traces
-    console.error('Unhandled error:', err instanceof Error ? err.message : 'Unknown error');
-    return c.json({ code: 'INTERNAL_ERROR', message: 'Internal server error', statusCode: 500 }, 500);
-  };
+  return err => errorToResponse(err);
 }

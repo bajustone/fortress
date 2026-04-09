@@ -7,9 +7,14 @@ import { executePluginMiddleware } from '../../core/plugin-runner';
 /**
  * Hono middleware that executes plugin-defined middleware for a given position.
  *
- * Wraps `executePluginMiddleware()` as a Hono `MiddlewareHandler`.
  * Passes the Hono context as the `request` parameter so plugin middleware
- * can access request data in a framework-agnostic way.
+ * can access request data in a framework-agnostic way (the admin plugin's
+ * `extractUserId` helper duck-types Hono `c.get('fortressUserId')`).
+ *
+ * This wraps `executePluginMiddleware` directly rather than going through
+ * `fortress.runPluginMiddleware` because the `request` argument needs to be
+ * the Hono `Context` (not a wrapper object) so existing plugin middleware
+ * keeps working.
  */
 export function createPluginMiddleware(
   fortress: Fortress,

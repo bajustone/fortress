@@ -240,6 +240,10 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
  * Build the Express error handler. Translates {@link FortressError} into the
  * appropriate HTTP response with `Retry-After` for rate-limited responses,
  * and returns a generic 500 for everything else.
+ *
+ * Stays synchronous so it composes naturally with Express's `(err, req,
+ * res, next)` signature. Shares the response *shape* with core's
+ * `errorToResponse` via {@link FortressError.toJSON}.
  */
 export function createErrorHandler(): (err: unknown, req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => void {
   return (err, _req, res, _next) => {

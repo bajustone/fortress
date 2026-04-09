@@ -19,6 +19,8 @@
 
 export { convertRoutes } from '../hono/convert-routes';
 export type { ConvertRoutesOptions, ExternalRoute, ToJSONSchemaConverter } from '../hono/convert-routes';
+export { mountFortress } from './handle';
+export type { MountFortressOptions } from './handle';
 export {
   createAuthMiddleware,
   createErrorHandler,
@@ -39,5 +41,7 @@ export type {
   RbacOptions,
   RouteMapping,
 } from './middleware';
+/** @deprecated Prefer {@link mountFortress}, which delegates to `fortress.handleRequest` and handles plugin routes for free. */
 export { mountFortressRoutes, mountPluginRoutes } from './routes';
+/** @deprecated Validation now happens inside `fortress.handleRequest`. Use {@link mountFortress} instead. */
 export { createValidationMiddleware } from './validation-middleware';

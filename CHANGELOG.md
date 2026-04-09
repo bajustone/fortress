@@ -1,5 +1,46 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **SvelteKit adapter** at `@bajustone/fortress/sveltekit`. Single
+  `createSvelteKitHandle(fortress)` hook for `hooks.server.ts`. Intercepts
+  Fortress paths and delegates to `fortress.handleRequest`. Auto-refreshes
+  expired access tokens during SSR loads. Populates `event.locals.fortress`
+  for user routes. Form-action helpers (`fortressActions.login` /
+  `logout` / `register` / `refresh`). Optional catch-all `+server.ts`
+  escape hatch via `toSvelteKitHandler(fortress)`.
+- **`fortress.handleRequest(request: Request): Promise<Response>`** —
+  framework-agnostic HTTP entry point on every Fortress instance. Composes
+  plugin middleware → token verification → fortress-managed RBAC →
+  validation → endpoint dispatch → cookie attachment. All adapters delegate
+  to it; future runtimes (Cloudflare Workers, Deno Deploy, etc.) only need a
+  ~10-line wrapper.
+- **`FortressConfig.cookies`** — `__Host-` prefixed access/refresh cookie
+  names with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` defaults in
+  production. Auto-relaxes (drops `__Host-` and `Secure`) in
+  `NODE_ENV !== 'production'` so localhost over HTTP works.
+- **`fortress.runPluginMiddleware`**, **`fortress.extractAccessToken`**,
+  **`fortress.serializeAuthCookies`**, **`fortress.cookies`** — auxiliary
+  HTTP helpers exposed on the Fortress instance for adapters that compose
+  custom flows on user-owned routes.
+- **`mountFortress(app, fortress)`** in the Hono and Express adapters — new
+  modern entry point that delegates Fortress-managed paths to
+  `fortress.handleRequest` via a single middleware. Existing
+  `createHonoMiddleware` / `createExpressMiddleware` / `mountPluginRoutes`
+  still work; `mountPluginRoutes` and `createValidationMiddleware` are now
+  marked `@deprecated`.
+
+### Changed
+- The Hono `createErrorHandler` now delegates to the framework-agnostic
+  `errorToResponse` from core so the FortressError → HTTP mapping
+  (`Retry-After`, sanitized 500s, etc.) stays in one place.
+- Plugin route dispatch, OAuth form-body handling, OpenAPI HTML responses,
+  Standard Schema validation, and default-deny RBAC for fortress-managed
+  paths now live in `src/core/http/`. Adapters delegate to core. The old
+  per-adapter implementations remain in place for backward compatibility
+  but are scheduled for removal in a future minor release.
+
 ## [0.0.28] - 2026-04-09
 
 ### Fixed

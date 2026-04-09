@@ -33,11 +33,22 @@ See `docs/architecture.md` for the full technical design.
 - `src/core/plugin.ts` — `FortressPlugin` interface (8 capabilities)
 - `src/core/config.ts` — `FortressConfig` type
 
+**HTTP entry points (`src/core/http/`):**
+- `src/core/http/handle-request.ts` — `fortress.handleRequest(request): Promise<Response>` framework-agnostic dispatcher
+- `src/core/http/dispatch.ts` — body parsing + handler invocation (auth/iam hardcoded switches + plugin lookup + OAuth special cases + OpenAPI HTML)
+- `src/core/http/match.ts` — endpoint route table + matcher (`:param` extraction)
+- `src/core/http/cookie-serialize.ts` — `Set-Cookie` header builder + `parseCookieHeader`
+- `src/core/http/token-extraction.ts` — cookie-first then `Authorization: Bearer`
+- `src/core/http/error-response.ts` — `FortressError` → web `Response` mapping
+- `src/core/http/fortress-rbac.ts` — default-deny logic for fortress-managed paths
+- `src/core/http/plugin-middleware.ts` — `runPluginMiddleware(plugins, phase, ctx)` for adapter use
+
 **Adapters:**
 - `src/adapters/database/` — `DatabaseAdapter` interface (7 required + 1 optional method)
 - `src/drizzle/` — Drizzle adapter (PostgreSQL, MySQL, SQLite)
-- `src/hono/` — Hono middleware (auth, RBAC, error handler, plugin mounting, OpenAPI integration)
-- `src/express/` — Express middleware (auth, RBAC, error handler, route mounting)
+- `src/hono/` — Hono middleware (auth, RBAC, error handler, plugin mounting, OpenAPI integration). New `mountFortress(app, fortress)` delegates to core; legacy `createHonoMiddleware` + `mountPluginRoutes` still work.
+- `src/express/` — Express middleware (auth, RBAC, error handler, route mounting). New `mountFortress(app, fortress)` delegates to core.
+- `src/sveltekit/` — SvelteKit handle hook (`createSvelteKitHandle`), catch-all escape hatch (`toSvelteKitHandler`), form-action helpers (`fortressActions.login` / `logout` / `register` / `refresh`), `event.locals.fortress` helpers (`getUserId` / `getClaims` / `getDb` / `getScopedDb`). Auto-refreshes expired access tokens during SSR loads.
 - `src/testing/` — In-memory SQLite test adapter via bun:sqlite
 
 **Plugins (all optional, 15 total):**
@@ -69,6 +80,8 @@ See `docs/architecture.md` for the full technical design.
 8. **Secret rotation** — `jwt.secret` accepts `string | string[]` for zero-downtime rotation.
 9. **`scopeRules`** — handles both reads (WHERE filters) and writes (default values on create).
 10. **Endpoint Definitions** — Declarative `EndpointDefinition` with OpenAPI metadata enables framework-agnostic route mounting and automatic OpenAPI spec generation.
+11. **Framework-agnostic `fortress.handleRequest`** — every Fortress instance exposes a web-standard `(request: Request) => Promise<Response>` entry point that runs the full pipeline (plugin middleware → token verification → fortress RBAC → validation → endpoint dispatch → cookie attachment). All adapters delegate to it; new adapters are ~10-line wrappers.
+12. **Cookie defaults via `FortressConfig.cookies`** — `__Host-` prefixed `httpOnly`/`Secure`/`SameSite=Lax` in production, auto-relaxed (drops `__Host-` and `Secure`) in development so localhost over HTTP works. Login/refresh responses get `Set-Cookie` headers automatically.
 
 ## Testing
 

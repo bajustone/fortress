@@ -30,6 +30,16 @@
         "default": "./dist/hono.cjs"
       }
     },
+    "./sveltekit": {
+      "import": {
+        "types": "./dist/sveltekit.d.ts",
+        "default": "./dist/sveltekit.js"
+      },
+      "require": {
+        "types": "./dist/sveltekit.d.cts",
+        "default": "./dist/sveltekit.cjs"
+      }
+    },
     "./drizzle": {
       "import": {
         "types": "./dist/drizzle.d.ts",
@@ -102,11 +112,15 @@
     "vitest": "^4.1.2"
   },
   "peerDependencies": {
+    "@sveltejs/kit": "^2.0.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.10",
     "typescript": "^5.0.0"
   },
   "peerDependenciesMeta": {
+    "@sveltejs/kit": {
+      "optional": true
+    },
     "drizzle-orm": {
       "optional": true
     },

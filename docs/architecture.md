@@ -45,6 +45,16 @@ src/
     schema-builder.ts                   # Fluent builder helpers: str(), obj(), endpoint(), etc.
       permission-cache.ts               # LRU cache with TTL and invalidation
 
+    http/
+      handle-request.ts                 # fortress.handleRequest(request) — top-level pipeline
+      dispatch.ts                       # body parse + handler invoke (auth/iam/plugin/oauth/openapi)
+      match.ts                          # endpoint route table + matchRoute()
+      cookie-serialize.ts               # Set-Cookie builder + parseCookieHeader
+      token-extraction.ts               # cookie-first then Authorization: Bearer
+      error-response.ts                 # FortressError → web Response
+      fortress-rbac.ts                  # default-deny for fortress-managed paths
+      plugin-middleware.ts              # runPluginMiddleware(plugins, phase, ctx)
+
   adapters/
     database/
       index.ts                          # DatabaseAdapter interface (generic CRUD)
@@ -63,19 +73,31 @@ src/
       schema.ts                         # PostgreSQL table definitions (pgTable, serial, varchar, timestamp)
 
   hono/
-    index.ts                            # createHonoMiddleware() export
+    index.ts                            # createHonoMiddleware() + mountFortress() exports
+    handle.ts                           # mountFortress(app, fortress) — delegates to core.handleRequest
     middleware/
       auth.ts                           # Bearer token extraction + JWT verify + plugin adapter wrapping
-      rbac.ts                           # Resource+action permission check via route mapping
+      rbac.ts                           # User-route routeMap RBAC (fortress-path RBAC moved to core)
       csrf.ts                           # Custom-header CSRF protection (X-Fortress-CSRF)
       security-headers.ts               # HSTS, CSP, X-Frame-Options, etc.
-      error-handler.ts                  # FortressError → HTTP response
+      error-handler.ts                  # Delegates to core errorToResponse
     helpers.ts                          # getUserId(), getClaims(), getDb(), getScopedDb()
-    plugin-routes.ts                    # mountPluginRoutes() — mounts plugin HTTP routes
+    plugin-routes.ts                    # @deprecated — replaced by mountFortress + core.handleRequest
 
   express/
-    index.ts                            # Express middleware exports
-    middleware.ts                        # Auth, RBAC, error handler for Express
+    index.ts                            # Express middleware + mountFortress() exports
+    handle.ts                           # mountFortress(app, fortress) — bridges Express ↔ web Request/Response
+    middleware.ts                       # Auth, RBAC, error handler for Express
+    routes.ts                           # @deprecated — replaced by mountFortress
+
+  sveltekit/
+    index.ts                            # createSvelteKitHandle, toSvelteKitHandler, fortressActions, helpers
+    handle.ts                           # createSvelteKitHandle(fortress, options) — primary handle hook
+    catch-all.ts                        # toSvelteKitHandler(fortress) — escape hatch for +server.ts
+    actions.ts                          # fortressActions.login/logout/register/refresh
+    cookies.ts                          # setAuthCookies, clearAuthCookies, replayCookies
+    helpers.ts                          # getUserId, getClaims, getDb, getScopedDb (read event.locals.fortress)
+    types.ts                            # FortressLocals, SvelteKitAdapterOptions, minimal SvelteKit types
 
   plugins/
     tenancy/index.ts                    # Schema-per-tenant isolation (PostgreSQL only)
@@ -164,9 +186,15 @@ See `src/core/auth/jwt.ts`.
 
 See `src/core/auth/password.ts`.
 
-### 4. No FrameworkAdapter Interface
+### 4. Framework-Agnostic Core HTTP Pipeline (`fortress.handleRequest`)
 
-Each framework package (`hono/`, `express/`) exports middleware factories specific to that framework. No shared abstraction — it would just be dead weight since each framework has different middleware signatures.
+The core exposes a single web-standard entry point: `fortress.handleRequest(request: Request): Promise<Response>`. It runs the full pipeline — plugin `before-auth` middleware → token verification (cookie-first, `Authorization: Bearer` fallback) → plugin `after-auth` → fortress-managed default-deny RBAC → plugin `after-rbac` → Standard Schema validation → endpoint dispatch → cookie attachment for auth-issuing endpoints.
+
+Login / refresh / impersonate responses get `Set-Cookie` headers automatically using `FortressConfig.cookies` (defaults: `__Host-` prefixed `httpOnly` `Secure` `SameSite=Lax` in production, relaxed in dev so localhost over HTTP works).
+
+Adapters (`hono/`, `express/`, `sveltekit/`) detect Fortress-managed paths and delegate. New adapters are ~10-line wrappers — translate the framework's request to a `Request`, call `fortress.handleRequest`, send the `Response` back.
+
+See `src/core/http/` for the implementation: `handle-request.ts`, `dispatch.ts`, `match.ts`, `cookie-serialize.ts`, `token-extraction.ts`, `error-response.ts`, `fortress-rbac.ts`, `plugin-middleware.ts`.
 
 ### 5. Everything Beyond Core Auth + IAM Is a Plugin
 

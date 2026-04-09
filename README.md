@@ -43,8 +43,10 @@ Published on [JSR](https://jsr.io/@bajustone/fortress). Runs on Bun, Deno, Node.
   - [Type Inference](#type-inference)
   - [Runtime Validation](#runtime-validation)
 - [Framework Integration](#framework-integration)
+  - [Framework-agnostic core: `fortress.handleRequest`](#framework-agnostic-core-fortresshandlerequest)
   - [Hono](#hono)
   - [Express](#express)
+  - [SvelteKit](#sveltekit)
   - [CSRF Protection](#csrf-protection)
   - [Security Headers](#security-headers)
   - [Plugin Routes](#plugin-routes)
@@ -578,6 +580,28 @@ endpoint('DELETE', '/iam/roles/:id')
 
 ## Framework Integration
 
+### Framework-agnostic core: `fortress.handleRequest`
+
+Every Fortress instance exposes a web-standard request handler:
+
+```typescript
+const response = await fortress.handleRequest(request); // Request → Response
+```
+
+It runs the full pipeline: plugin `before-auth` middleware → token
+verification (cookie-first, `Authorization: Bearer` fallback) → plugin
+`after-auth` → fortress-managed RBAC → plugin `after-rbac` → validation →
+endpoint dispatch → cookie attachment.
+
+Login / refresh / impersonate responses include `Set-Cookie` headers
+automatically using {@link FortressConfig.cookies} (defaults: `__Host-`
+prefixed names + `HttpOnly` + `Secure` + `SameSite=Lax` in production,
+relaxed in dev).
+
+This is the entry point all framework adapters delegate to. You can call
+it directly from any runtime that speaks `Request`/`Response`: Cloudflare
+Workers, Deno Deploy, Vercel Edge, etc.
+
 ### Hono
 
 ```typescript
@@ -716,6 +740,120 @@ app.get('/api/posts', async (req, res) => {
   const scopedDb = await getScopedDb(req, 'post');
 });
 ```
+
+### SvelteKit
+
+The SvelteKit adapter integrates as a single `handle` hook. It intercepts
+Fortress-managed paths (`/auth/*`, `/iam/*`, plugin paths, OAuth, OpenAPI)
+and delegates to `fortress.handleRequest`. For user routes, it auto-extracts
+the access token from the configured cookie (or `Authorization: Bearer`),
+verifies it, **silently refreshes when expired**, and populates
+`event.locals.fortress` with the user ID, JWT claims, and a per-request DB
+adapter.
+
+```typescript
+// src/lib/server/fortress.ts
+import { createFortress } from '@bajustone/fortress';
+import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
+
+export const fortress = createFortress({
+  database: createDrizzleAdapter(/* ... */),
+  jwt: { secret: process.env.JWT_SECRET! },
+});
+
+// src/hooks.server.ts
+import { sequence } from '@sveltejs/kit/hooks';
+import { createSvelteKitHandle } from '@bajustone/fortress/sveltekit';
+import { fortress } from '$lib/server/fortress';
+
+export const handle = sequence(
+  createSvelteKitHandle(fortress, { basePath: '/api' }),
+);
+
+// src/app.d.ts
+import type { FortressLocals } from '@bajustone/fortress/sveltekit';
+
+declare global {
+  namespace App {
+    interface Locals extends FortressLocals {}
+  }
+}
+```
+
+#### Server load functions and `+server.ts`
+
+```typescript
+// src/routes/dashboard/+page.server.ts
+import { error } from '@sveltejs/kit';
+import { getUserId, getScopedDb } from '@bajustone/fortress/sveltekit';
+
+export const load = async (event) => {
+  try {
+    const userId = getUserId(event);
+    const db = await getScopedDb(event, 'post');
+    return { posts: await db.findMany({ model: 'post' }) };
+  } catch {
+    throw error(401, 'Unauthorized');
+  }
+};
+```
+
+#### Form-action login (primary flow)
+
+```typescript
+// src/routes/login/+page.server.ts
+import { fortressActions } from '@bajustone/fortress/sveltekit';
+import { fortress } from '$lib/server/fortress';
+
+export const actions = {
+  default: fortressActions.login(fortress, { redirectTo: '/dashboard' }),
+};
+```
+
+```svelte
+<!-- src/routes/login/+page.svelte -->
+<script>
+  import { enhance } from '$app/forms';
+  export let form;
+</script>
+
+<form method="POST" use:enhance>
+  <input name="identifier" required />
+  <input name="password" type="password" required />
+  {#if form?.error}<p>{form.error}</p>{/if}
+  <button>Log in</button>
+</form>
+```
+
+`fortressActions` ships `login`, `logout`, `register`, and `refresh`.
+
+#### Optional catch-all `+server.ts` (escape hatch)
+
+```typescript
+// src/routes/api/fortress/[...path]/+server.ts
+import { toSvelteKitHandler } from '@bajustone/fortress/sveltekit';
+import { fortress } from '$lib/server/fortress';
+
+export const { GET, POST, PUT, DELETE, PATCH } = toSvelteKitHandler(fortress);
+```
+
+#### Cookies and CSRF
+
+- **Cookie defaults**: `__Host-fortress_access` / `__Host-fortress_refresh`
+  with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` in production. In
+  dev (`NODE_ENV !== 'production'`) the `__Host-` prefix and `Secure` are
+  dropped so localhost over HTTP works. Override via
+  `FortressConfig.cookies`.
+- **CSRF**: Fortress-managed routes are intercepted before `resolve()` so
+  SvelteKit's built-in `csrf.checkOrigin` does not apply. Form actions
+  (`?/login`) DO go through `resolve()` and ARE subject to it.
+- **Auto-refresh**: when an access cookie is expired but the refresh
+  cookie is still valid, the handle hook silently refreshes both tokens
+  and sets new cookies before `resolve(event)`. Opening N tabs at once
+  triggers N parallel refreshes — JWT family rotation will fail all but
+  one. (Out of scope; same trade-off as any cookie-based JWT setup.)
+
+See `examples/sveltekit-app/` for a complete reference.
 
 ### CSRF Protection
 

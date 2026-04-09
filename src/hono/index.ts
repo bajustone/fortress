@@ -27,6 +27,8 @@ import { createRbacMiddleware } from './middleware/rbac';
 
 export { convertRoutes } from './convert-routes';
 export type { ConvertRoutesOptions, ExternalRoute, ToJSONSchemaConverter } from './convert-routes';
+export { mountFortress } from './handle';
+export type { MountFortressOptions } from './handle';
 export { getClaims, getDb, getScopedDb, getUserId } from './helpers';
 export type { FortressEnv } from './middleware/auth';
 export { createCsrfMiddleware } from './middleware/csrf';
@@ -37,9 +39,11 @@ export { createSecurityHeadersMiddleware } from './middleware/security-headers';
 export type { SecurityHeadersConfig } from './middleware/security-headers';
 export { buildRouteDefinition, getFortressRoutes, mountFortressOpenAPI } from './openapi';
 export type { SchemaConverter } from './openapi';
+/** @deprecated Prefer {@link mountFortress}, which delegates to `fortress.handleRequest` and handles plugin routes for free. */
 export { mountPluginRoutes } from './plugin-routes';
 export { vBody, vParam, vQuery } from './validated';
 export type { InferOutput } from './validated';
+/** @deprecated Validation now happens inside `fortress.handleRequest`. Use {@link mountFortress} instead. For custom user routes, use `vBody` / `vParam` / `vQuery` from this module. */
 export { createValidationMiddleware } from './validation-middleware';
 export type { ValidationMiddlewareOptions } from './validation-middleware';
 
