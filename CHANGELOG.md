@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.30] - 2026-04-09
+
+### Added
+- feat!: validate consumer routes (hono/sveltekit/express) at runtime
+
+### Fixed
+- fix jsr
+
 ## [0.0.29] - 2026-04-09
 
 ### Changed
