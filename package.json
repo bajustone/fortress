@@ -1,6 +1,6 @@
 {
   "name": "@bajustone/fortress",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "description": "Framework-agnostic, adapter-based authentication and authorization library for TypeScript. Core auth (JWT, refresh tokens, password hashing) plus IAM (resource+action permissions, groups, roles) with a plugin system for OAuth, 2FA, tenancy, WebAuthn, magic links, audit logging, rate limiting, and more.",
   "type": "module",
   "module": "src/index.ts",
