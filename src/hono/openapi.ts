@@ -16,8 +16,10 @@ import type { JSONSchema } from '../core/json-schema';
 import { FortressError } from '../core/errors';
 
 /**
- * A function that converts a JSON Schema to whatever schema type
- * your framework adapter expects (e.g., Zod schema, Valibot schema).
+ * A function that converts a JSON Schema to whatever schema type your
+ * framework adapter expects (e.g. Zod schema, Valibot schema). Used by
+ * {@link buildRouteDefinition} so fortress's OpenAPI generator stays
+ * schema-library agnostic.
  */
 export type SchemaConverter<T = unknown> = (jsonSchema: JSONSchema) => T;
 

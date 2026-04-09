@@ -11,6 +11,11 @@ import { iamEndpoints } from './iam/iam-endpoints';
 import { createIamService } from './iam/iam-service';
 import { processPlugins } from './plugin-runner';
 
+/**
+ * Configured fortress instance returned by {@link createFortress}. Holds the
+ * core auth and IAM services, the resolved config, every endpoint definition
+ * (auth + IAM + plugin routes), and the typed plugin method surface.
+ */
 // eslint-disable-next-line ts/no-unsafe-function-type -- fallback type for untyped plugin access
 export interface Fortress<TPlugins = Record<string, Record<string, Function>>> {
   auth: AuthService;
@@ -48,6 +53,13 @@ export function getPluginMethods<T>(fortress: Fortress, pluginName: string): T {
 
 const MIN_SECRET_BYTES = 32;
 
+/**
+ * Build a configured {@link Fortress} instance from a {@link FortressConfig}.
+ *
+ * Validates the JWT secret strength, deduplicates and processes the plugin
+ * list, wires up auth/IAM services, and returns the assembled instance with
+ * type-safe plugin method access for any plugins listed in the config.
+ */
 export function createFortress<const T extends readonly FortressPlugin[]>(
   config: FortressConfig & { plugins?: T },
 ): Fortress<InferPlugins<T>> {

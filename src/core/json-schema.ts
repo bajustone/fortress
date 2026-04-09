@@ -8,6 +8,7 @@
 
 import type { StandardSchemaV1 } from './standard-schema';
 
+/** A subset of JSON Schema (draft 2020-12) sufficient for fortress endpoint definitions and OpenAPI generation. */
 export interface JSONSchema {
   type?: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object' | 'null';
   properties?: Record<string, JSONSchema>;

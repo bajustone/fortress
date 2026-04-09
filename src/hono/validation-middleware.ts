@@ -12,6 +12,7 @@ import type { EndpointDefinition } from '../core/endpoint';
 import { FortressError } from '../core/errors';
 import { validateRequest } from '../core/validation';
 
+/** Options accepted by {@link createValidationMiddleware}. */
 export interface ValidationMiddlewareOptions {
   /** Log a warning when a request doesn't match any endpoint definition. Default: true in non-production. */
   warnOnUnmatched?: boolean;

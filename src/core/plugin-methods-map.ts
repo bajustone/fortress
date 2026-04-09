@@ -9,6 +9,11 @@ import type { TwoFactorMethods } from '../plugins/two-factor';
 import type { WebAuthnMethods } from '../plugins/webauthn';
 import type { FortressPlugin } from './plugin';
 
+/**
+ * Type-level map of every built-in plugin name to its method-surface
+ * interface. {@link InferPlugins} uses this to expose typed plugin methods
+ * on the fortress instance.
+ */
 export interface PluginMethodsMap {
   'api-key': ApiKeyMethods;
   'audit-log': AuditLogMethods;
@@ -21,7 +26,7 @@ export interface PluginMethodsMap {
   'webauthn': WebAuthnMethods;
 }
 
-/** Infer typed plugin methods from the plugins array */
+/** Infer the typed plugin-methods record from a `plugins` tuple passed to {@link createFortress}. */
 export type InferPlugins<T extends readonly FortressPlugin[]> = {
   [P in T[number] as P['name']]: P['name'] extends keyof PluginMethodsMap
     ? PluginMethodsMap[P['name']]

@@ -1,3 +1,4 @@
+/** Discriminated string union of every error code fortress can throw. Maps 1:1 to an HTTP status. */
 export type FortressErrorCode
   = | 'UNAUTHORIZED'
     | 'TOKEN_REUSE'
@@ -9,6 +10,7 @@ export type FortressErrorCode
     | 'DATABASE_ERROR'
     | 'VALIDATION_ERROR';
 
+/** The single error class fortress throws. Carries an error code, HTTP status, and structured details. */
 export class FortressError extends Error {
   readonly code: FortressErrorCode;
   readonly statusCode: number;
@@ -38,6 +40,7 @@ export class FortressError extends Error {
   }
 }
 
+/** Typed factory of {@link FortressError} constructors — one helper per error code. */
 export const Errors = {
   unauthorized: (message = 'Unauthorized'): FortressError =>
     new FortressError('UNAUTHORIZED', message, 401),

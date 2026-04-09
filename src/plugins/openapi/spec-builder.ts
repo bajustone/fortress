@@ -1,6 +1,7 @@
 import type { ComponentSchemas, EndpointDefinition, SecurityRequirement } from '../../core/endpoint';
 import type { JSONSchema } from '../../core/json-schema';
 
+/** Minimal OpenAPI 3.1 spec shape produced by {@link buildOpenAPISpec}. */
 export interface OpenAPISpec {
   openapi: string;
   info: { title: string; version: string; description?: string };
@@ -46,6 +47,7 @@ interface OpenAPISecurityScheme {
   in?: string;
 }
 
+/** Options accepted by {@link buildOpenAPISpec}. */
 export interface SpecBuilderOptions {
   title: string;
   version: string;
@@ -124,6 +126,7 @@ function toOpenAPIPath(path: string): string {
   return path.replace(/:(\w+)/g, '{$1}');
 }
 
+/** Walk every endpoint definition and component-schemas record and emit a complete OpenAPI 3.1 {@link OpenAPISpec}. */
 export function buildOpenAPISpec(
   endpoints: EndpointDefinition[],
   componentSchemas: ComponentSchemas,

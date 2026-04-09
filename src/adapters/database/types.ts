@@ -1,6 +1,7 @@
 /** Core operators that all DatabaseAdapter implementations MUST support */
 export type CoreOperator = '=' | '!=' | 'in' | 'gt' | 'lt' | 'gte' | 'lte';
 
+/** A single condition in a database query, joined with AND by the adapter. */
 export interface WhereClause {
   field: string;
   /**

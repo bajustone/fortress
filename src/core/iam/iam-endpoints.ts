@@ -3,6 +3,7 @@ import { arr, bool, endpoint, enums, int, nullable, obj, record, recordOf, ref, 
 
 // ── Component Schemas (reusable via $ref) ───────────────────────────
 
+/** Reusable OpenAPI component schemas referenced by the core IAM endpoints. */
 export const iamComponentSchemas: ComponentSchemas = {
   Role: obj(
     {
@@ -62,6 +63,7 @@ export const iamComponentSchemas: ComponentSchemas = {
 
 // ── IAM Endpoint Definitions ────────────────────────────────────────
 
+/** Declarative {@link EndpointDefinition}s for fortress's built-in IAM admin routes (users, groups, roles, permissions, role bindings). */
 export const iamEndpoints: EndpointDefinition[] = [
   // ── Resources ──
 

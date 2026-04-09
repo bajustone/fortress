@@ -49,6 +49,7 @@ export interface ExternalRoute {
   }>;
 }
 
+/** Options accepted by {@link convertRoutes}. */
 export interface ConvertRoutesOptions {
   /** Convert your schema objects to JSON Schema (e.g., `z.toJSONSchema` for Zod v4). */
   schemaConverter: ToJSONSchemaConverter;

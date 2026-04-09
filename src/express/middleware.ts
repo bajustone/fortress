@@ -12,6 +12,7 @@ import {
 } from '../core/plugin-runner';
 
 // Minimal Express-compatible types so users bring their own express version
+/** Minimal Express request shape fortress reads from. Compatible with any modern Express version. */
 export interface ExpressRequest {
   headers: Record<string, string | string[] | undefined>;
   method: string;
@@ -22,22 +23,27 @@ export interface ExpressRequest {
   fortressGetScopedDb?: (model: string) => Promise<DatabaseAdapter>;
 }
 
+/** Minimal Express response shape fortress writes to. */
 export interface ExpressResponse {
   status: (code: number) => ExpressResponse;
   json: (body: unknown) => void;
   setHeader: (name: string, value: string) => void;
 }
 
+/** The `next(err?)` callback Express middleware signs off with. */
 export type ExpressNextFunction = (err?: unknown) => void;
+/** Express middleware signature fortress's adapter exports use. */
 export type ExpressMiddleware = (req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => void;
 
 // --- Route mapping (same as Hono adapter) ---
 
+/** A `(resource, action)` IAM mapping for an HTTP route. */
 export interface RouteMapping {
   resource: string;
   action: string;
 }
 
+/** Options accepted by {@link createRbacMiddleware} (and the express adapter factory). */
 export interface RbacOptions {
   routeMap?: Record<string, RouteMapping>;
   mapRequest?: (method: string, path: string) => RouteMapping | null;
@@ -48,6 +54,11 @@ export interface RbacOptions {
 
 // --- Auth middleware ---
 
+/**
+ * Build the Express auth middleware. Verifies the bearer token, attaches
+ * `fortressUserId` / `fortressClaims` / `fortressDb` to the request, and
+ * exposes the per-request scoped database accessor.
+ */
 export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
   return async (req, _res, next) => {
     try {
@@ -134,6 +145,11 @@ function getPluginPathPrefixes(fortress: Fortress): string[] {
   return [...prefixes];
 }
 
+/**
+ * Build the Express RBAC middleware. Resolves a `(resource, action)` mapping
+ * for the request, applies fortress's default-deny policy to fortress-owned
+ * routes, and enforces the IAM permission check.
+ */
 export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions): ExpressMiddleware {
   const routeMap = options?.routeMap ?? {};
   const skipPaths = options?.skipPaths ?? [];
@@ -220,6 +236,11 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
 
 // --- Error handler ---
 
+/**
+ * Build the Express error handler. Translates {@link FortressError} into the
+ * appropriate HTTP response with `Retry-After` for rate-limited responses,
+ * and returns a generic 500 for everything else.
+ */
 export function createErrorHandler(): (err: unknown, req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => void {
   return (err, _req, res, _next) => {
     if (err instanceof FortressError) {
@@ -238,7 +259,10 @@ export function createErrorHandler(): (err: unknown, req: ExpressRequest, res: E
 // --- Plugin middleware ---
 
 /**
- * Express middleware that executes plugin-defined middleware for a given position.
+ * Express middleware that executes plugin-defined middleware for a given
+ * position (`before-auth`, `after-auth`, `after-rbac`). Used internally by
+ * {@link createExpressMiddleware}; expose if you want to mount the plugin
+ * middleware slots manually.
  */
 export function createExpressPluginMiddleware(
   fortress: Fortress,
@@ -260,8 +284,14 @@ export function createExpressPluginMiddleware(
 
 // --- Factory ---
 
+/** Options for {@link createExpressMiddleware}. Extends {@link RbacOptions}. */
 export interface ExpressAdapterOptions extends RbacOptions {}
 
+/**
+ * Build the full set of fortress Express middleware: auth, RBAC, error
+ * handler, and the three plugin middleware slots (`beforeAuth`, `afterAuth`,
+ * `afterRbac`). Mount each in the corresponding place in your Express app.
+ */
 export function createExpressMiddleware(fortress: Fortress, options?: ExpressAdapterOptions): {
   authMiddleware: ExpressMiddleware;
   rbacMiddleware: ExpressMiddleware;
@@ -286,6 +316,7 @@ export function createExpressMiddleware(fortress: Fortress, options?: ExpressAda
 
 // --- Helpers ---
 
+/** Read the authenticated user ID from an Express request. Throws if the auth middleware did not run or rejected the token. */
 export function getUserId(req: ExpressRequest): number {
   if (!req.fortressUserId) {
     throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
@@ -293,6 +324,7 @@ export function getUserId(req: ExpressRequest): number {
   return req.fortressUserId;
 }
 
+/** Read the verified JWT claims from an Express request. */
 export function getClaims(req: ExpressRequest): TokenClaims {
   if (!req.fortressClaims) {
     throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
@@ -300,6 +332,7 @@ export function getClaims(req: ExpressRequest): TokenClaims {
   return req.fortressClaims;
 }
 
+/** Read the per-request fortress database adapter (with plugin wrappers applied). */
 export function getDb(req: ExpressRequest): DatabaseAdapter {
   if (!req.fortressDb) {
     throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
@@ -307,6 +340,7 @@ export function getDb(req: ExpressRequest): DatabaseAdapter {
   return req.fortressDb;
 }
 
+/** Read the per-request fortress database adapter scoped to a specific model (applies any active row-level scope rules). */
 export function getScopedDb(req: ExpressRequest, model: string): Promise<DatabaseAdapter> {
   if (!req.fortressGetScopedDb) {
     throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);

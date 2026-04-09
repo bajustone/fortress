@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 
+/** Options accepted by {@link createSecurityHeadersMiddleware}. */
 export interface SecurityHeadersConfig {
   /** Strict-Transport-Security max-age in seconds. Default: 63072000 (2 years). Set to 0 to disable. */
   hstsMaxAge?: number;

@@ -10,6 +10,15 @@ import {
   wrapAdapterWithScopeRules,
 } from '../../core/plugin-runner';
 
+/**
+ * Hono context type augmentation populated by the fortress auth middleware.
+ * Pass to `Hono<FortressEnv>` for typed access to the per-request state
+ * (`fortressUserId`, `fortressClaims`, `fortressDb`, `fortressGetScopedDb`).
+ */
+/**
+ * Hono context type augmentation populated by the fortress auth middleware.
+ * Pass to `Hono<FortressEnv>` for typed access to fortress request state.
+ */
 export interface FortressEnv {
   Variables: {
     fortressUserId: number;

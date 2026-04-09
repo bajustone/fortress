@@ -2,6 +2,12 @@ import type { WhereClause } from './types';
 
 export type { CoreOperator, ScopeRule, WhereClause } from './types';
 
+/**
+ * Generic CRUD database adapter interface fortress uses to talk to any
+ * datastore. Implement seven required methods (create, findOne, findMany,
+ * update, delete, count, transaction) and optionally `rawQuery` for
+ * performance-critical multi-table operations.
+ */
 export interface DatabaseAdapter {
   create: <T>(params: {
     model: string;

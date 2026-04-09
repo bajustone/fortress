@@ -4,11 +4,15 @@ import type { Fortress } from '../../core/fortress';
 import type { FortressEnv } from './auth';
 import { FortressError } from '../../core/errors';
 
+/** A `(resource, action)` IAM mapping for an HTTP route. */
+/** A `(resource, action)` IAM mapping for an HTTP route. */
 export interface RouteMapping {
   resource: string;
   action: string;
 }
 
+/** Options accepted by {@link createRbacMiddleware} (and the Hono adapter factory). */
+/** Options accepted by {@link createRbacMiddleware} (and the Hono adapter factory). */
 export interface RbacOptions {
   /** Declarative route-to-resource mapping: 'METHOD /path' → { resource, action } */
   routeMap?: Record<string, RouteMapping>;

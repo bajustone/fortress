@@ -3,6 +3,7 @@ import { arr, bool, endpoint, enums, int, nullable, nullType, obj, oneOf, record
 
 // ── Component Schemas (reusable via $ref) ───────────────────────────
 
+/** Reusable OpenAPI component schemas referenced by the core auth endpoints. */
 export const authComponentSchemas: ComponentSchemas = {
   User: obj(
     {
@@ -124,6 +125,7 @@ export const authComponentSchemas: ComponentSchemas = {
 
 // ── Auth Endpoint Definitions ───────────────────────────────────────
 
+/** Declarative {@link EndpointDefinition}s for fortress's built-in auth routes (sign in, refresh, sessions, impersonation). */
 export const authEndpoints: EndpointDefinition[] = [
   endpoint('POST', '/auth/login')
     .summary('Login with credentials')

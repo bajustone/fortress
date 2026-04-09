@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 
+/** Options accepted by {@link createCsrfMiddleware}. */
 export interface CsrfConfig {
   /** Header name to check. Default: 'X-Fortress-CSRF'. */
   headerName?: string;
