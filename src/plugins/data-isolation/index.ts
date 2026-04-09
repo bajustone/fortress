@@ -34,6 +34,11 @@ export interface DataIsolationMethods {
   withoutScope: <T>(scopeName: string, fn: () => Promise<T>) => Promise<T>;
   unscoped: <T>(fn: () => Promise<T>) => Promise<T>;
 }
+/**
+ * Data isolation plugin factory. Returns a {@link FortressPlugin} that scopes
+ * read and write access to a database row by per-user scope assignments,
+ * enforcing isolation through the core `scopeRules` capability.
+ */
 export function dataIsolation(config: DataIsolationConfig): FortressPlugin & { readonly name: 'data-isolation' } {
   return {
     name: 'data-isolation',

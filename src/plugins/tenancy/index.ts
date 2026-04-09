@@ -40,6 +40,11 @@ export interface TenancyMethods {
   getUserTenants: (userId: number) => Promise<{ id: number; name: string; taxId: string; description: string | null; createdAt: Date; updatedAt: Date }[]>;
   switchTenant: (userId: number, taxId: string) => Promise<void>;
 }
+/**
+ * Tenancy plugin factory (PostgreSQL only). Returns a {@link FortressPlugin}
+ * that switches the active PostgreSQL `search_path` per request based on
+ * the resolved tenant, providing schema-level isolation between tenants.
+ */
 export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly name: 'tenancy' } {
   const schemaPrefix = config.schemaPrefix ?? 'tenant_';
 

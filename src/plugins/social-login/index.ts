@@ -76,6 +76,11 @@ export interface SocialLoginMethods {
   unlinkAccount: (userId: number, provider: string) => Promise<void>;
   getProviders: () => string[];
 }
+/**
+ * Social login plugin factory. Returns a {@link FortressPlugin} that handles
+ * the OAuth/OIDC authorization-code flow against the configured providers,
+ * links provider accounts to fortress users, and issues fortress tokens.
+ */
 export function socialLogin(config: SocialLoginConfig): FortressPlugin & { readonly name: 'social-login' } {
   const autoRegister = config.autoRegister ?? true;
   const linkAccounts = config.linkAccounts ?? true;

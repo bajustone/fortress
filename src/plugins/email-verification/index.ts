@@ -35,6 +35,11 @@ export interface EmailVerificationMethods {
   sendVerification: (userId: number, email?: string) => Promise<{ token: string }>;
   verify: (rawToken: string) => Promise<{ userId: number; email: string }>;
 }
+/**
+ * Email verification plugin factory. Returns a {@link FortressPlugin} that
+ * issues hashed verification tokens, exposes `requestVerification` /
+ * `verifyEmail` methods, and (when mounted) the corresponding HTTP routes.
+ */
 export function emailVerification(config: EmailVerificationConfig = {}): FortressPlugin & { readonly name: 'email-verification' } {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 86400;
   const requireVerification = config.requireVerification ?? true;

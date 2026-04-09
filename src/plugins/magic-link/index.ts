@@ -29,6 +29,12 @@ interface MagicLinkTokenRecord {
   createdAt: Date;
 }
 
+/**
+ * Magic link plugin factory. Returns a {@link FortressPlugin} that issues
+ * short-lived hashed tokens for passwordless sign-in. Tokens are typically
+ * delivered out-of-band (email) and exchanged for fortress access/refresh
+ * tokens via the verify endpoint.
+ */
 export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 600;
 

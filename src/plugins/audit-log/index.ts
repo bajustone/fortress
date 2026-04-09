@@ -88,6 +88,11 @@ export interface AuditLogMethods {
   logCustomEvent: (event: CustomAuditEvent) => Promise<void>;
   verifyChain: () => Promise<ChainVerificationResult>;
 }
+/**
+ * Audit log plugin factory. Returns a {@link FortressPlugin} that records
+ * auth and IAM lifecycle events into an append-only table with a
+ * tamper-evident hash chain, plus a query API for compliance reads.
+ */
 export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readonly name: 'audit-log' } {
   const allowedEvents = config.events ?? null;
   const hashChain = config.hashChain ?? false;

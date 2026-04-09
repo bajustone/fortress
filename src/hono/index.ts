@@ -43,6 +43,10 @@ export type { InferOutput } from './validated';
 export { createValidationMiddleware } from './validation-middleware';
 export type { ValidationMiddlewareOptions } from './validation-middleware';
 
+/**
+ * Options for {@link createHonoMiddleware}. Currently extends {@link RbacOptions}
+ * so callers can override which IAM resource/action a route maps to.
+ */
 export interface HonoAdapterOptions extends RbacOptions {}
 
 /**

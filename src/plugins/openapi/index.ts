@@ -76,6 +76,11 @@ function buildScalarHTML(specPath: string, title: string): string {
 </html>`;
 }
 
+/**
+ * OpenAPI plugin factory. Returns a {@link FortressPlugin} that walks every
+ * registered endpoint definition and emits a complete OpenAPI 3.1 spec,
+ * pairable with Scalar UI for interactive documentation.
+ */
 export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly name: 'openapi' } {
   const specPath = config.specPath ?? '/openapi.json';
   const uiPath = config.uiPath ?? '/openapi';

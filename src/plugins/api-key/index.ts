@@ -62,6 +62,11 @@ export interface ApiKeyMethods {
   rotateKey: (userId: number, keyId: number) => Promise<{ key: string; id: number }>;
   resolveKey: (rawKey: string) => Promise<{ userId: number; scopes: string[] | null } | null>;
 }
+/**
+ * API key plugin factory. Returns a {@link FortressPlugin} that issues scoped,
+ * hashed API keys, authenticates incoming requests via a configurable header,
+ * and exposes management methods on the fortress instance.
+ */
 export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly name: 'api-key' } {
   const prefix = config.prefix ?? 'fortress';
   const defaultExpirySeconds = config.defaultExpirySeconds ?? null;

@@ -86,6 +86,11 @@ async function defaultDeliver(url: string, payload: string, headers: Record<stri
   }
 }
 
+/**
+ * Webhook plugin factory. Returns a {@link FortressPlugin} that delivers
+ * fortress lifecycle events to subscriber endpoints using the Standard
+ * Webhooks spec (HMAC-SHA256 signing, retries with exponential backoff).
+ */
 export function webhook(config: WebhookConfig = {}): FortressPlugin {
   const allowedEvents = config.events ?? null;
   const maxRetries = config.maxRetries ?? 5;

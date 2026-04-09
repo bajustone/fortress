@@ -107,6 +107,10 @@ function base32Decode(encoded: string): Uint8Array {
   return new Uint8Array(output);
 }
 
+/**
+ * Generate a TOTP code from a base32 secret. Re-exported from this module
+ * for testing — normal callers should use the plugin methods instead.
+ */
 async function generateTOTP(secret: string, period: number, digits: number, timeOffset = 0): Promise<string> {
   const counter = Math.floor((Date.now() / 1000 + timeOffset) / period);
   const counterBytes = new ArrayBuffer(8);
@@ -134,6 +138,11 @@ async function generateTOTP(secret: string, period: number, digits: number, time
   return String(code).padStart(digits, '0');
 }
 
+/**
+ * Verify a TOTP code against a base32 secret, allowing ±1 time window for
+ * clock drift. Re-exported from this module for testing — normal callers
+ * should use the plugin methods instead.
+ */
 async function verifyTOTP(secret: string, code: string, period: number, digits: number): Promise<boolean> {
   // Check current and adjacent time windows (±1) to handle clock drift
   for (const offset of [0, -period, period]) {
@@ -176,6 +185,11 @@ export interface TwoFactorMethods {
   verify: (userId: number, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>;
   disable: (userId: number) => Promise<void>;
 }
+/**
+ * Two-factor authentication plugin factory. Returns a {@link FortressPlugin}
+ * that adds TOTP enrolment and verification, hashed backup codes, and
+ * trusted-device opt-out for the sign-in flow.
+ */
 export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { readonly name: 'two-factor' } {
   const issuer = config.totp?.issuer ?? 'Fortress';
   const period = config.totp?.period ?? 30;

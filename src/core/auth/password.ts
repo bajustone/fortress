@@ -1,3 +1,15 @@
+/**
+ * Password hashing primitives for fortress.
+ *
+ * Exports {@link createDefaultHasher}, a WASM-based Argon2id `PasswordHasher`
+ * that works across every runtime fortress targets (Bun, Deno, Node, Cloudflare
+ * Workers, Vercel Edge). Consumers can drop in a faster native hasher
+ * (`@node-rs/argon2`, `Bun.password`) by implementing the `PasswordHasher`
+ * contract and passing it to `createFortress({ passwordHasher })`.
+ *
+ * @module
+ */
+
 import { argon2id, argon2Verify } from 'hash-wasm';
 
 export type { PasswordHasher } from '../config';

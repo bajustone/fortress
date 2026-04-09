@@ -41,6 +41,11 @@ interface LockoutRecord {
   createdAt: Date;
 }
 
+/**
+ * Account lockout plugin factory. Returns a {@link FortressPlugin} that
+ * tracks failed sign-in attempts per identifier and applies a progressive
+ * lockout (each successive lockout extends the cooldown window).
+ */
 export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugin {
   const maxFailedAttempts = config.maxFailedAttempts ?? 5;
   const lockoutDurationSeconds = config.lockoutDurationSeconds ?? 900;

@@ -66,6 +66,12 @@ function normalizeIp(ip: string | undefined): string {
  * Protects login and registration endpoints using a sliding window algorithm
  * with dual-key limiting (per-IP and per-account).
  */
+/**
+ * Rate limit plugin factory. Returns a {@link FortressPlugin} that enforces
+ * a sliding-window limit per identifier (IP, user ID, or custom). Defaults
+ * to an in-memory store; supply your own via `config.store` for distributed
+ * deployments.
+ */
 export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
   const store = config.store ?? createMemoryStore();
   const loginConfig = { ...DEFAULT_LOGIN, ...config.login };

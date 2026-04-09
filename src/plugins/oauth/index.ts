@@ -60,6 +60,7 @@ interface AccessTokenRecord {
   expiresAt: Date;
 }
 
+/** Persisted state for an in-flight OAuth authorization-code flow. */
 export interface PendingFlowRecord {
   id: number;
   clientId: string;
@@ -72,12 +73,14 @@ export interface PendingFlowRecord {
 }
 
 /** Client authentication extracted from HTTP request (Basic auth or body params) */
+/** Resolved client credentials parsed from a token-endpoint request. */
 export interface ClientAuth {
   clientId: string;
   clientSecret: string;
 }
 
 /** Token endpoint request body (application/x-www-form-urlencoded) */
+/** Body shape accepted by the OAuth `/token` endpoint. */
 export interface TokenRequestBody {
   grant_type: string;
   code?: string;
@@ -89,6 +92,7 @@ export interface TokenRequestBody {
 }
 
 /** Authorization endpoint query params */
+/** Query parameters accepted by the OAuth `/authorize` endpoint. */
 export interface AuthorizeRequestParams {
   client_id: string;
   redirect_uri: string;
@@ -118,6 +122,12 @@ export interface OAuthMethods {
   handleDiscovery: () => Record<string, unknown>;
   resolveTokenPermissions: (token: string) => Promise<{ resource: string; action: string }[]>;
 }
+/**
+ * OAuth 2.0 server plugin factory. Returns a {@link FortressPlugin} that
+ * implements the authorization-code grant (with PKCE) and client-credentials
+ * grant, persists clients and tokens, and exposes `/authorize` and `/token`
+ * endpoints when mounted on a framework adapter.
+ */
 export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly name: 'oauth' } {
   const authCodeExpiry = config.authCodeExpirySeconds ?? 600;
   const pendingFlowExpiry = config.pendingFlowExpirySeconds ?? 600;

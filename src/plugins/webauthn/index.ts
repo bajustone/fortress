@@ -188,6 +188,11 @@ const webauthnRoutes = [
 
 // ── Plugin Factory ──────────────────────────────────────────────────
 
+/**
+ * WebAuthn / Passkeys plugin factory. Returns a {@link FortressPlugin} that
+ * implements passkey registration, passwordless authentication, and a
+ * second-factor mode using `@simplewebauthn/server`.
+ */
 export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly name: 'webauthn' } {
   const rpName = config.rpName;
   const rpID = config.rpID;
