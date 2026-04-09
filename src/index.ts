@@ -4,8 +4,9 @@
  * The main entrypoint exposes the {@link createFortress} factory, plugin and
  * adapter interfaces, the schema builder DSL, and every public type. Combine
  * with one of the framework adapters (`@bajustone/fortress/hono`,
- * `@bajustone/fortress/express`) and a database adapter
- * (`@bajustone/fortress/drizzle`, `@bajustone/fortress/testing`).
+ * `@bajustone/fortress/express`, `@bajustone/fortress/sveltekit`) and a
+ * database adapter (`@bajustone/fortress/drizzle`,
+ * `@bajustone/fortress/testing`).
  *
  * @example
  * ```ts
