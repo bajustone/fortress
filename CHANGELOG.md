@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.29] - 2026-04-09
+
+### Changed
+- refactor(adapters)!: delete deprecated dispatch APIs, delegate fully to fortress.handleRequest
+- refactor
+
 ## [Unreleased]
 
 ### Added
