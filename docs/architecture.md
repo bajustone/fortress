@@ -781,15 +781,33 @@ endpoint('POST', '/users').body(z.object({ name: z.string() })).build()
 
 ### Runtime Validation
 
-Validation runs automatically inside `fortress.handleRequest` for every
-Fortress-managed endpoint that declares a body / params / query schema.
-The dispatcher reads the parsed body, calls `validateRequest` from
+Two surfaces, one shared primitive.
+
+**Fortress-managed endpoints** — auth, IAM, and plugin routes —
+validate automatically inside `fortress.handleRequest`. The dispatcher
+reads the parsed body, calls `validateRequest` from
 `src/core/validation.ts`, and throws `FortressError('VALIDATION_ERROR',
-422)` on failure. Adapter middleware (`mountFortress` for Hono/Express,
+422)` on failure (issues from body+query+params aggregated into a single
+error). Adapter middleware (`mountFortress` for Hono/Express,
 `createSvelteKitHandle` for SvelteKit) doesn't need to do anything extra
-— delegating to `fortress.handleRequest` is enough. For custom user
-routes, validate against the schema yourself with
-`schema['~standard'].validate(data)`.
+— delegating to `fortress.handleRequest` is enough.
+
+**Consumer-defined routes** — handlers a fortress user mounts in their
+own app — validate per call via the framework adapter's `vBody` /
+`vParam` / `vQuery` helpers. Each helper extracts the relevant slice of
+the request, calls the internal `validateValue` (a Standard Schema
+wrapper around the same `Errors.validationError` factory used by
+`validateRequest`), and returns the parsed value or throws
+`VALIDATION_ERROR`. The Hono, SvelteKit, and Express adapters all ship
+the same three helpers; only the receiver type differs (Hono `Context`,
+SvelteKit `RequestEvent`, Express `Request`-like). All three are async
+because Standard Schema's `validate()` may return a promise.
+
+**Runtimes without an adapter** — Next.js, Remix, Astro, Bun.serve,
+Deno, edge functions — call `validateRequest` directly. It is now a
+public export from `@bajustone/fortress` and validates a `{ body, query,
+params }` object against an `EndpointInput`, throwing the same
+`VALIDATION_ERROR` shape as the per-handler helpers.
 
 ### OpenAPI Plugin
 
@@ -1417,7 +1435,7 @@ mountFortress(app, fortress);  // Mounts all Fortress routes (auth, IAM, plugins
 
 **Error handler** (`src/hono/middleware/error-handler.ts`): Transforms `FortressError` to JSON `{ code, message, statusCode }`. Sets `Retry-After` header for `RATE_LIMITED`. Returns generic 500 for unhandled errors.
 
-**Validated request helpers** (`src/hono/validated.ts`): `vBody(c, schema)`, `vParam(c, schema)`, `vQuery(c, schema)` — type-safe request extraction for **custom user routes**. The schema parameter (any Standard Schema V1 — Zod, Valibot, ArkType, fortress built-in) is used only for TypeScript type inference; no runtime validation occurs. Fortress-managed endpoints validate themselves automatically inside `fortress.handleRequest`. Exports `InferOutput<T>` utility type.
+**Validated request helpers** (`src/hono/validated.ts`): `vBody(c, schema)`, `vParam(c, schema)`, `vQuery(c, schema)` — extract-and-validate helpers for **custom user routes**. Each takes any Standard Schema V1 (Zod, Valibot, ArkType, fortress built-in), runs `~standard.validate()` at runtime, and returns the parsed value typed via `InferOutput<T>` or throws `FortressError('VALIDATION_ERROR', 422)`. All three are async. The same triple is shipped by the SvelteKit (`src/sveltekit/validated.ts`, takes a `RequestEvent`) and Express (`src/express/validated.ts`, takes a structurally typed `Request`) adapters. Fortress-managed endpoints continue to validate themselves automatically inside `fortress.handleRequest`. Exports `InferOutput<T>` utility type.
 
 ### Express Adapter
 

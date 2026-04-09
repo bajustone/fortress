@@ -52,3 +52,5 @@ export type {
   RbacOptions,
   RouteMapping,
 } from './middleware';
+export { vBody, vParam, vQuery } from './validated';
+export type { ExpressRequestLike, InferOutput } from './validated';

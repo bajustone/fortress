@@ -9,6 +9,22 @@
 ## [Unreleased]
 
 ### Added
+- **`validateRequest` is now a public export** from `@bajustone/fortress`.
+  Framework-agnostic validation primitive that walks an `EndpointInput`,
+  aggregates body+query+params issues, and throws
+  `FortressError('VALIDATION_ERROR', 422)`. Use it from any runtime — Next.js
+  route handlers, SvelteKit `+server.ts`, Bun.serve, Deno, edge functions, or
+  custom middleware — to validate consumer-defined routes with the exact
+  shape fortress's own dispatch uses internally.
+- **`vBody` / `vParam` / `vQuery` for SvelteKit**
+  (`@bajustone/fortress/sveltekit`). Take a `RequestEvent`, validate against
+  a Standard Schema, return the parsed value or throw
+  `FortressError('VALIDATION_ERROR', 422)`. Drop-in for `+server.ts` handlers.
+- **`vBody` / `vParam` / `vQuery` for Express**
+  (`@bajustone/fortress/express`). Take a structurally typed Express
+  `Request`, validate against a Standard Schema, return the parsed value or
+  throw `FortressError('VALIDATION_ERROR', 422)`. The Express
+  `createErrorHandler` already maps the thrown error to a 422 JSON response.
 - **SvelteKit adapter** at `@bajustone/fortress/sveltekit`. Single
   `createSvelteKitHandle(fortress)` hook for `hooks.server.ts`. Intercepts
   Fortress paths and delegates to `fortress.handleRequest`. Auto-refreshes
@@ -36,6 +52,17 @@
   surface (`createHonoMiddleware` + `mountPluginRoutes`).
 
 ### Changed
+- **BREAKING: Hono `vBody` / `vParam` / `vQuery` now validate at runtime.**
+  Previously they were type-only — the schema parameter was used purely for
+  TypeScript inference and the deleted `createValidationMiddleware` did the
+  actual validation upstream. With that middleware gone, the helpers now
+  call `schema['~standard'].validate()` themselves and throw
+  `FortressError('VALIDATION_ERROR', 422)` on failure (the same shape every
+  fortress-managed endpoint produces). **`vParam` and `vQuery` are now
+  `async`** — Standard Schema's `validate()` may return a promise, so all
+  three helpers had to align. Migration: add `await` to any sync
+  destructuring call sites (`const { id } = vParam(c, P)` →
+  `const { id } = await vParam(c, P)`).
 - The Hono `createErrorHandler` now delegates to the framework-agnostic
   `errorToResponse` from core so the FortressError → HTTP mapping
   (`Retry-After`, sanitized 500s, etc.) stays in one place.
@@ -56,9 +83,10 @@
   adapters (`src/hono/validation-middleware.ts`,
   `src/express/validation-middleware.ts`). Validation now runs
   automatically inside `fortress.handleRequest` for every Fortress-managed
-  endpoint. For custom user routes, use `vBody` / `vParam` / `vQuery`
-  from `@bajustone/fortress/hono` plus your own
-  `schema['~standard'].validate()` call.
+  endpoint. For custom user routes, use the new runtime-validating
+  `vBody` / `vParam` / `vQuery` helpers (Hono / SvelteKit / Express) or
+  the framework-agnostic `validateRequest` export — see the Unreleased
+  section above.
 - **Deleted `mountFortressRoutes` and `mountPluginRoutes`** from the
   Express adapter (`src/express/routes.ts`). Same migration: use
   `mountFortress(app, fortress)` from `@bajustone/fortress/express`.

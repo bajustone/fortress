@@ -18,7 +18,7 @@ import type { ExpressNextFunction, ExpressRequest, ExpressResponse } from '../..
  *
  * Run:  bun run examples/express-app/index.ts
  */
-import { createFortress } from '../../src';
+import { createFortress, obj, str } from '../../src';
 import {
   convertRoutes,
   createExpressMiddleware,
@@ -27,6 +27,9 @@ import {
   getScopedDb,
   getUserId,
   mountFortress,
+  vBody,
+  vParam,
+  vQuery,
 } from '../../src/express';
 import { accountLockout } from '../../src/plugins/account-lockout';
 import { admin } from '../../src/plugins/admin';
@@ -240,6 +243,31 @@ app.use('/iam', pluginMiddleware.afterAuth);
 // ═══════════════════════════════════════════════════════════════════════════
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+// ── vBody / vParam / vQuery demo ──
+// curl 'http://localhost:3001/echo/42?greeting=hello'              → 200 { id: '42', greeting: 'hello' }
+// curl 'http://localhost:3001/echo/42'                             → 422 VALIDATION_ERROR (missing greeting)
+// curl -X POST http://localhost:3001/echo/42 -H 'Content-Type: application/json' -d '{"name":"x"}'  → 200
+// curl -X POST http://localhost:3001/echo/42 -H 'Content-Type: application/json' -d '{}'             → 422
+const EchoParam = obj({ id: str('Echo ID') }, 'id');
+const EchoQuery = obj({ greeting: str('Greeting') }, 'greeting');
+const EchoBody = obj({ name: str('Name') }, 'name');
+app.get('/echo/:id', async (req, res, next) => {
+  try {
+    const { id } = await vParam(req, EchoParam);
+    const { greeting } = await vQuery(req, EchoQuery);
+    res.json({ id, greeting });
+  }
+  catch (e) { next(e); }
+});
+app.post('/echo/:id', async (req, res, next) => {
+  try {
+    const { id } = await vParam(req, EchoParam);
+    const { name } = await vBody(req, EchoBody);
+    res.json({ id, name });
+  }
+  catch (e) { next(e); }
+});
 
 app.post('/auth/register', async (req, res, next) => {
   try {

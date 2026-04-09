@@ -68,3 +68,5 @@ export type {
   SvelteKitHandle,
   SvelteKitRequestEvent,
 } from './types';
+export { vBody, vParam, vQuery } from './validated';
+export type { InferOutput } from './validated';

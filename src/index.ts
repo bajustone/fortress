@@ -153,6 +153,16 @@ export type {
   TokenClaims,
 } from './core/types';
 
+/**
+ * Framework-agnostic validation primitive. Validates a `{ body, query, params }`
+ * object against an `EndpointInput`, aggregates all issues, and throws
+ * `Errors.validationError` (HTTP 422, code `VALIDATION_ERROR`) on failure.
+ * Use this from any runtime — SvelteKit `+server.ts`, Next.js route handlers,
+ * Bun.serve, Deno, or custom middleware — to validate consumer-defined routes
+ * with the same shape fortress's own dispatch uses internally.
+ */
+export { validateRequest } from './core/validation';
+
 /** Type-safe method surface contributed by the API key plugin. */
 export type { ApiKeyMethods } from './plugins/api-key';
 

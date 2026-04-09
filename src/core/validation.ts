@@ -60,3 +60,35 @@ async function validateSchema(
   }
   return [];
 }
+
+/**
+ * Validate a single value against a Standard Schema and return the parsed
+ * value, or throw `Errors.validationError` on failure.
+ *
+ * Used by the per-handler request-extraction helpers (`vBody`/`vParam`/
+ * `vQuery`) in each framework adapter. Unlike {@link validateRequest}, which
+ * aggregates issues across body+query+params, this validates one location
+ * at a time — appropriate for per-handler call sites where a single helper
+ * call corresponds to a single piece of request data.
+ *
+ * The thrown `FortressError` is byte-identical to what `validateRequest`
+ * produces (HTTP 422, `VALIDATION_ERROR`, `details: issues[]`), so adapter
+ * error handlers format both consistently.
+ */
+export async function validateValue<T extends StandardSchemaV1>(
+  schema: T,
+  data: unknown,
+  location: 'body' | 'query' | 'params',
+): Promise<StandardSchemaV1.InferOutput<T>> {
+  const result = await schema['~standard'].validate(data);
+  if (result.issues) {
+    throw Errors.validationError(
+      result.issues.map(issue => ({
+        path: issue.path,
+        message: issue.message,
+        location,
+      })),
+    );
+  }
+  return result.value as StandardSchemaV1.InferOutput<T>;
+}

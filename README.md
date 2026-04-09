@@ -567,9 +567,13 @@ const createUser = endpoint('POST', '/users')
 
 For **custom routes** outside the Fortress dispatch pipeline (your own
 `/api/*` endpoints in Hono / Express / SvelteKit), use the `vBody` /
-`vParam` / `vQuery` typed extraction helpers — they give TypeScript type
-inference. If you also need runtime validation on those custom routes,
-call `schema['~standard'].validate(data)` yourself.
+`vParam` / `vQuery` extract-and-validate helpers from the matching adapter
+— they extract request data **and validate it at runtime** against your
+Standard Schema, returning the parsed value or throwing
+`FortressError('VALIDATION_ERROR', 422)` (the same shape every
+fortress-managed endpoint produces). For runtimes without a fortress
+adapter (Next.js, Remix, Astro, Bun.serve, Deno, edge functions), call the
+framework-agnostic `validateRequest` from `@bajustone/fortress` directly.
 
 The `.permission()` method on endpoints declares IAM permissions for RBAC enforcement:
 
@@ -679,13 +683,16 @@ app.get('/api/posts', async (c) => {
 });
 ```
 
-#### Typed Extraction Helpers (custom routes)
+#### Validated Extraction Helpers (custom routes)
 
 For your own user routes (outside the Fortress dispatch pipeline), `vBody` /
-`vParam` / `vQuery` give zero-runtime-cost typed extraction. The schema
-argument is used only for TypeScript inference; runtime validation is up to
-you. Works with any Standard Schema V1 library (Zod, Valibot, ArkType, or
-fortress's built-in schemas).
+`vParam` / `vQuery` extract request data **and validate it at runtime**
+against the supplied Standard Schema. On success they return the parsed
+value with full TypeScript inference; on failure they throw
+`FortressError('VALIDATION_ERROR', 422)` and the registered Hono error
+handler formats it identically to fortress-managed endpoint failures. Works
+with any Standard Schema V1 library (Zod, Valibot, ArkType, or fortress's
+built-in schemas). All three helpers are async.
 
 ```typescript
 import { vBody, vParam, vQuery } from '@bajustone/fortress/hono';
@@ -695,23 +702,33 @@ const CreatePostBody = obj({ title: str(), content: str() }, 'title', 'content')
 const IdParam = obj({ id: str('Post ID') }, 'id');
 const SearchQuery = obj({ q: str('Search term'), page: str() }, 'q');
 
-// Handlers get full type inference
 app.post('/posts', async (c) => {
-  const { title, content } = await vBody(c, CreatePostBody);  // typed
+  const { title, content } = await vBody(c, CreatePostBody);  // typed + validated
   const userId = getUserId(c);
   // ...
 });
 
-app.get('/posts/:id', (c) => {
-  const { id } = vParam(c, IdParam);  // typed
+app.get('/posts/:id', async (c) => {
+  const { id } = await vParam(c, IdParam);  // typed + validated
   // ...
 });
 
-app.get('/search', (c) => {
-  const { q, page } = vQuery(c, SearchQuery);  // typed
+app.get('/search', async (c) => {
+  const { q, page } = await vQuery(c, SearchQuery);  // typed + validated
   // ...
 });
 ```
+
+The same helpers exist in the SvelteKit and Express adapters
+(`@bajustone/fortress/sveltekit`, `@bajustone/fortress/express`) — they
+take a `RequestEvent` or Express `Request` respectively and behave
+identically.
+
+For runtimes without a first-party adapter (Next.js, Remix, Astro,
+Bun.serve, Deno, edge functions), import `validateRequest` from
+`@bajustone/fortress` and call it directly inside your handler — it
+validates body+query+params in one go and aggregates issues into a single
+`VALIDATION_ERROR`.
 
 ### Express
 

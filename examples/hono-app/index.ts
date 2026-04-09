@@ -30,6 +30,8 @@ import {
   getUserId,
   mountFortress,
   vBody,
+  vParam,
+  vQuery,
 } from '../../src/hono';
 import { accountLockout } from '../../src/plugins/account-lockout';
 import { admin } from '../../src/plugins/admin';
@@ -219,10 +221,11 @@ app.use('/iam/*', pluginMiddleware.afterAuth);
 // curl http://localhost:3000/health
 app.get('/health', c => c.json({ status: 'ok' }));
 
-// ── Validated Request Helpers (vBody) ──
-// vBody/vParam/vQuery provide type-safe request extraction with zero runtime cost.
-// The schema is used only for TypeScript inference — fortress validation middleware
-// validates the request before the handler runs.
+// ── Validated Request Helpers (vBody / vParam / vQuery) ──
+// vBody/vParam/vQuery extract request data AND validate it at runtime against
+// the supplied Standard Schema. On failure they throw FortressError with code
+// VALIDATION_ERROR (HTTP 422) — the same shape every fortress-managed endpoint
+// produces — so the registered Hono error handler formats it identically.
 
 const RegisterBody = obj({ email: str(), password: str(), name: str() }, 'email', 'password');
 const LoginBody = obj({ identifier: str(), password: str() }, 'identifier', 'password');
@@ -244,6 +247,17 @@ app.post('/auth/login', async (c) => {
     userAgent: c.req.header('user-agent'),
   });
   return c.json({ data: result });
+});
+
+// ── vParam / vQuery demo ──
+// curl 'http://localhost:3000/echo/42?greeting=hello'              → 200 { id: '42', greeting: 'hello' }
+// curl 'http://localhost:3000/echo/42'                             → 422 VALIDATION_ERROR (missing greeting)
+const EchoParam = obj({ id: str('Echo ID') }, 'id');
+const EchoQuery = obj({ greeting: str('Greeting') }, 'greeting');
+app.get('/echo/:id', async (c) => {
+  const { id } = await vParam(c, EchoParam);
+  const { greeting } = await vQuery(c, EchoQuery);
+  return c.json({ id, greeting });
 });
 
 // curl -X POST http://localhost:3000/auth/refresh -H 'Content-Type: application/json' \
