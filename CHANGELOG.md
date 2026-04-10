@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.31] - 2026-04-10
+
+### Added
+- feat(openapi): emit per-resource discriminated unions for Permission schemas
+
 ## [0.0.30] - 2026-04-09
 
 ### Added
