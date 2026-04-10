@@ -10,6 +10,8 @@
  */
 
 import type { ComponentSchemas, EndpointDefinition } from '../../core/endpoint';
+import type { ResourceFile } from '../../core/iam/resource-sync';
+import type { JSONSchema } from '../../core/json-schema';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
 import type { OpenAPISpec } from './spec-builder';
 import { authComponentSchemas, authEndpoints } from '../../core/auth/auth-endpoints';
@@ -42,8 +44,9 @@ export interface OpenAPIConfig {
 }
 
 export interface OpenAPIMethods {
-  generateSpec: () => OpenAPISpec;
-  getSpec: () => Record<string, unknown>;
+  [key: string]: (...args: any[]) => any;
+  generateSpec: () => Promise<OpenAPISpec>;
+  getSpec: () => Promise<Record<string, unknown>>;
   getUI: () => string;
 }
 
@@ -74,6 +77,98 @@ function buildScalarHTML(specPath: string, title: string): string {
   <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
 </body>
 </html>`;
+}
+
+/**
+ * Build a single `oneOf` branch for a resource: `resource` is `const`,
+ * `action` is `enum` over the resource's valid actions, plus shared fields.
+ */
+function buildResourceBranch(
+  resourceName: string,
+  actions: string[],
+  sharedProps: Record<string, JSONSchema>,
+  requiredFields: string[],
+): JSONSchema {
+  const actionSchema: JSONSchema = actions.length > 0
+    ? { type: 'string', enum: actions, description: 'Action name' }
+    : { type: 'string', description: 'Action name' };
+
+  return {
+    type: 'object',
+    properties: {
+      resource: { type: 'string', const: resourceName, description: 'Resource name' },
+      action: actionSchema,
+      ...sharedProps,
+    },
+    required: requiredFields,
+  };
+}
+
+/**
+ * Enrich `Permission` and `PermissionInput` component schemas with
+ * per-resource `oneOf` discriminated branches, and patch the `/iam/check`
+ * endpoint's inline body with flat resource/action enums.
+ *
+ * Mutates `componentSchemas` and the matching endpoint in `allEndpoints`.
+ */
+function enrichIamSchemas(
+  componentSchemas: ComponentSchemas,
+  allEndpoints: EndpointDefinition[],
+  resourceFile: ResourceFile,
+): void {
+  const entries = Object.entries(resourceFile.resources);
+  if (entries.length === 0)
+    return;
+
+  // Shared fields for Permission (response schema — has id, description, conditions)
+  const permissionShared: Record<string, JSONSchema> = {
+    id: { type: 'integer', description: 'Permission ID' },
+    effect: { type: 'string', enum: ['ALLOW', 'DENY'] },
+    conditions: componentSchemas.Permission?.properties?.conditions ?? { type: 'array' },
+    description: { type: 'string', description: 'Permission description', nullable: true },
+  };
+
+  // Shared fields for PermissionInput (request schema — no id)
+  const permissionInputShared: Record<string, JSONSchema> = {
+    effect: { type: 'string', enum: ['ALLOW', 'DENY'] },
+    conditions: componentSchemas.PermissionInput?.properties?.conditions ?? { type: 'array' },
+  };
+
+  // Build oneOf branches
+  const permissionBranches: JSONSchema[] = [];
+  const permissionInputBranches: JSONSchema[] = [];
+
+  for (const [name, def] of entries) {
+    permissionBranches.push(
+      buildResourceBranch(name, def.actions, permissionShared, ['id', 'resource', 'action', 'effect']),
+    );
+    permissionInputBranches.push(
+      buildResourceBranch(name, def.actions, permissionInputShared, ['resource', 'action']),
+    );
+  }
+
+  // Replace component schemas with oneOf
+  componentSchemas.Permission = { oneOf: permissionBranches };
+  componentSchemas.PermissionInput = { oneOf: permissionInputBranches };
+
+  // Patch /iam/check inline body with flat enums
+  const allResourceNames = entries.map(([name]) => name).sort();
+  const allActions = [...new Set(entries.flatMap(([, def]) => def.actions))].sort();
+
+  for (const ep of allEndpoints) {
+    if (ep.path === '/iam/check' && ep.input?.body?.properties) {
+      // Clone to avoid mutating the static endpoint definition
+      const bodyClone: JSONSchema = JSON.parse(JSON.stringify(ep.input.body));
+      if (bodyClone.properties!.resource) {
+        bodyClone.properties!.resource = { ...bodyClone.properties!.resource, enum: allResourceNames };
+      }
+      if (bodyClone.properties!.action && allActions.length > 0) {
+        bodyClone.properties!.action = { ...bodyClone.properties!.action, enum: allActions };
+      }
+      ep.input = { ...ep.input, body: bodyClone };
+      break;
+    }
+  }
 }
 
 /**
@@ -115,7 +210,7 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
     routes,
 
     methods: (ctx: PluginContext) => {
-      function generateSpec(): OpenAPISpec {
+      async function generateSpec(): Promise<OpenAPISpec> {
         if (cachedSpec)
           return cachedSpec;
 
@@ -152,6 +247,17 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
           ...(config.additionalSchemas ?? {}),
         };
 
+        // Enrich IAM schemas with dynamic resource/action enums from the DB
+        if (config.includeCoreIam !== false && ctx.iam) {
+          try {
+            const resourceFile = await ctx.iam.getResources();
+            enrichIamSchemas(componentSchemas, allEndpoints, resourceFile);
+          }
+          catch {
+            // If resource fetch fails, fall back to plain string schemas
+          }
+        }
+
         cachedSpec = buildOpenAPISpec(allEndpoints, componentSchemas, {
           title,
           version,
@@ -165,8 +271,8 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
       return {
         generateSpec,
 
-        getSpec(): Record<string, unknown> {
-          return generateSpec() as unknown as Record<string, unknown>;
+        async getSpec(): Promise<Record<string, unknown>> {
+          return await generateSpec() as unknown as Record<string, unknown>;
         },
 
         getUI(): string {

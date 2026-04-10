@@ -3,6 +3,7 @@ import type { AuditLogMethods } from '../plugins/audit-log';
 import type { DataIsolationMethods } from '../plugins/data-isolation';
 import type { EmailVerificationMethods } from '../plugins/email-verification';
 import type { OAuthMethods } from '../plugins/oauth';
+import type { OpenAPIMethods } from '../plugins/openapi';
 import type { SocialLoginMethods } from '../plugins/social-login';
 import type { TenancyMethods } from '../plugins/tenancy';
 import type { TwoFactorMethods } from '../plugins/two-factor';
@@ -20,6 +21,7 @@ export interface PluginMethodsMap {
   'data-isolation': DataIsolationMethods;
   'email-verification': EmailVerificationMethods;
   'oauth': OAuthMethods;
+  'openapi': OpenAPIMethods;
   'social-login': SocialLoginMethods;
   'tenancy': TenancyMethods;
   'two-factor': TwoFactorMethods;

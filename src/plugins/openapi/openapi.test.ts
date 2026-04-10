@@ -133,21 +133,21 @@ describe('openapi plugin', () => {
     expect(fortress.plugins.openapi.getUI).toBeTypeOf('function');
   });
 
-  it('generates spec with all core endpoints', () => {
+  it('generates spec with all core endpoints', async () => {
     const fortress = createFortress({
       jwt: { secret: SECRET },
       database: createTestAdapter(),
       plugins: [openapi({ title: 'My API', version: '2.0.0' })],
     });
 
-    const spec = fortress.plugins.openapi.generateSpec();
+    const spec = await fortress.plugins.openapi.generateSpec();
     expect(spec.info.title).toBe('My API');
     expect(spec.info.version).toBe('2.0.0');
     expect(spec.paths['/auth/login']).toBeDefined();
     expect(spec.paths['/iam/roles']).toBeDefined();
   });
 
-  it('includes plugin routes in spec', () => {
+  it('includes plugin routes in spec', async () => {
     const fortress = createFortress({
       jwt: { secret: SECRET },
       database: createTestAdapter(),
@@ -157,33 +157,33 @@ describe('openapi plugin', () => {
       ],
     });
 
-    const spec = fortress.plugins.openapi.generateSpec();
+    const spec = await fortress.plugins.openapi.generateSpec();
     expect(spec.paths['/oauth/token']).toBeDefined();
     expect(spec.paths['/oauth/introspect']).toBeDefined();
     expect(spec.paths['/oauth/userinfo']).toBeDefined();
   });
 
-  it('excludes core auth when configured', () => {
+  it('excludes core auth when configured', async () => {
     const fortress = createFortress({
       jwt: { secret: SECRET },
       database: createTestAdapter(),
       plugins: [openapi({ includeCoreAuth: false })],
     });
 
-    const spec = fortress.plugins.openapi.generateSpec();
+    const spec = await fortress.plugins.openapi.generateSpec();
     expect(spec.paths['/auth/login']).toBeUndefined();
     // IAM should still be there
     expect(spec.paths['/iam/roles']).toBeDefined();
   });
 
-  it('excludes core IAM when configured', () => {
+  it('excludes core IAM when configured', async () => {
     const fortress = createFortress({
       jwt: { secret: SECRET },
       database: createTestAdapter(),
       plugins: [openapi({ includeCoreIam: false })],
     });
 
-    const spec = fortress.plugins.openapi.generateSpec();
+    const spec = await fortress.plugins.openapi.generateSpec();
     expect(spec.paths['/iam/roles']).toBeUndefined();
     // Auth should still be there
     expect(spec.paths['/auth/login']).toBeDefined();
@@ -239,5 +239,91 @@ describe('openapi plugin', () => {
     expect(paths).toContain('/iam/roles');
     expect(paths).toContain('/oauth/token');
     expect(paths).toContain('/openapi.json');
+  });
+});
+
+describe('openapi resource/action enum enrichment', () => {
+  async function seedResources(db: ReturnType<typeof createTestAdapter>): Promise<void> {
+    await db.create({ model: 'resource', data: { name: 'students', description: 'Student records' } });
+    await db.create({ model: 'resource', data: { name: 'posts', description: 'Blog posts' } });
+    await db.create({ model: 'permission', data: { resource: 'students', action: 'read', effect: 'ALLOW', description: 'read students' } });
+    await db.create({ model: 'permission', data: { resource: 'students', action: 'write', effect: 'ALLOW', description: 'write students' } });
+    await db.create({ model: 'permission', data: { resource: 'students', action: 'delete', effect: 'ALLOW', description: 'delete students' } });
+    await db.create({ model: 'permission', data: { resource: 'posts', action: 'read', effect: 'ALLOW', description: 'read posts' } });
+    await db.create({ model: 'permission', data: { resource: 'posts', action: 'publish', effect: 'ALLOW', description: 'publish posts' } });
+  }
+
+  it('builds oneOf discriminated unions for Permission and PermissionInput', async () => {
+    const db = createTestAdapter();
+    await seedResources(db);
+
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: db,
+      plugins: [openapi()],
+    });
+
+    const spec = await fortress.plugins.openapi.generateSpec();
+
+    // Permission should be a oneOf with per-resource branches
+    const permission = spec.components.schemas.Permission;
+    expect(permission.oneOf).toBeDefined();
+    expect(permission.oneOf).toHaveLength(2);
+
+    // Each branch should have const resource and enum actions
+    const studentsBranch = permission.oneOf!.find(b => b.properties?.resource?.const === 'students');
+    expect(studentsBranch).toBeDefined();
+    expect(studentsBranch!.properties!.action.enum).toEqual(['read', 'write', 'delete']);
+    expect(studentsBranch!.properties!.effect!.enum).toEqual(['ALLOW', 'DENY']);
+    expect(studentsBranch!.required).toContain('id');
+
+    const postsBranch = permission.oneOf!.find(b => b.properties?.resource?.const === 'posts');
+    expect(postsBranch).toBeDefined();
+    expect(postsBranch!.properties!.action.enum).toEqual(['read', 'publish']);
+
+    // PermissionInput should also be oneOf but without id
+    const permInput = spec.components.schemas.PermissionInput;
+    expect(permInput.oneOf).toBeDefined();
+    expect(permInput.oneOf).toHaveLength(2);
+
+    const inputBranch = permInput.oneOf!.find(b => b.properties?.resource?.const === 'students');
+    expect(inputBranch).toBeDefined();
+    expect(inputBranch!.required).not.toContain('id');
+    expect(inputBranch!.properties!.action.enum).toEqual(['read', 'write', 'delete']);
+  });
+
+  it('adds flat enums to /iam/check inline body', async () => {
+    const db = createTestAdapter();
+    await seedResources(db);
+
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: db,
+      plugins: [openapi()],
+    });
+
+    const spec = await fortress.plugins.openapi.generateSpec();
+    const checkOp = spec.paths['/iam/check']?.post;
+    expect(checkOp).toBeDefined();
+
+    const bodySchema = checkOp.requestBody!.content['application/json'].schema;
+    expect(bodySchema.properties!.resource.enum).toEqual(['posts', 'students']);
+    expect(bodySchema.properties!.action.enum).toEqual(['delete', 'publish', 'read', 'write']);
+  });
+
+  it('falls back to plain strings when no resources are registered', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      plugins: [openapi()],
+    });
+
+    const spec = await fortress.plugins.openapi.generateSpec();
+
+    // Should have the original static schemas, not oneOf
+    const permission = spec.components.schemas.Permission;
+    expect(permission.oneOf).toBeUndefined();
+    expect(permission.properties?.resource?.type).toBe('string');
+    expect(permission.properties?.resource?.enum).toBeUndefined();
   });
 });
