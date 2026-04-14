@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.33] - 2026-04-14
+
+### Added
+- feat(admin): HTTP endpoints to mint api keys for any subject
+
 ## [0.0.32] - 2026-04-14
 
 ### Added
