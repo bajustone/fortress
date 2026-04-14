@@ -4,15 +4,18 @@
  * end-to-end (with the in-memory test DB).
  */
 
-import type { SvelteKitCookieOptions, SvelteKitCookies, SvelteKitRequestEvent } from './types';
+import type { Fortress } from '../core/fortress';
+import type { Subject } from '../core/types';
+import type { FortressLocals, SvelteKitCookieOptions, SvelteKitCookies, SvelteKitRequestEvent } from './types';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../core/fortress';
+import { apiKey } from '../plugins/api-key';
 import { createTestAdapter } from '../testing';
 import { fortressActions } from './actions';
 import { toSvelteKitHandler } from './catch-all';
 import { replayCookies, setAuthCookies } from './cookies';
 import { createSvelteKitHandle } from './handle';
-import { getUserId } from './helpers';
+import { getSubject, getUserId } from './helpers';
 
 const SECRET = 'sveltekit-test-secret-32-chars-long!';
 
@@ -351,5 +354,201 @@ describe('setAuthCookies', () => {
     setAuthCookies(event, fortress, { accessToken: 'a', refreshToken: null });
     expect(event.cookies._store.get(fortress.cookies.accessName)).toBe('a');
     expect(event.cookies._store.has(fortress.cookies.refreshName)).toBe(false);
+  });
+});
+
+// ── createSvelteKitHandle: api-key on user routes ───────────────────
+
+/**
+ * These tests cover the gap this branch closed: plugin `resolvePrincipal`
+ * hooks (api-key) must fire on user-owned routes, not just Fortress-managed
+ * ones. Every request goes through `tryPluginPrincipal` before the JWT
+ * fallback, so both USER and SERVICE_ACCOUNT api-keys authenticate SvelteKit
+ * user routes uniformly and `event.locals.fortress.subject` is the
+ * authoritative principal.
+ */
+describe('createSvelteKitHandle: api-key on user routes', () => {
+  async function setupWithApiKey() {
+    const fortress: Fortress<any> = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      plugins: [apiKey({ prefix: 'test' })],
+    });
+
+    const user = await fortress.auth.createUser({
+      email: 'human@example.com',
+      name: 'Human',
+      password: 'password-123',
+    });
+    const deployRole = await fortress.iam.createRole('deployer', [
+      { resource: 'deploy', action: 'run' },
+    ]);
+    await fortress.iam.bindRoleToUser(user.id, deployRole.id);
+
+    const sa = await fortress.iam.createServiceAccount({ name: 'ci-deploy-bot' });
+    await fortress.iam.bindRoleToServiceAccount(sa.id, deployRole.id);
+    const saNoPerm = await fortress.iam.createServiceAccount({ name: 'observer-bot' });
+
+    const { key: userKey } = await fortress.plugins['api-key'].createKey({
+      subject: { type: 'USER', id: user.id },
+      name: 'user-key',
+    });
+    const { key: saKey } = await fortress.plugins['api-key'].createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+      name: 'sa-key',
+    });
+    const { key: saKeyNoPerm } = await fortress.plugins['api-key'].createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: saNoPerm.id },
+      name: 'observer-key',
+    });
+
+    return { fortress, user, sa, userKey, saKey, saKeyNoPerm };
+  }
+
+  it('populates locals.fortress.subject for a USER api-key', async () => {
+    const { fortress, user, userKey } = await setupWithApiKey();
+    const handle = createSvelteKitHandle(fortress);
+    const event = fakeEvent({
+      url: 'http://localhost/dashboard',
+      headers: { authorization: `ApiKey ${userKey}` },
+    });
+    await handle({ event, resolve: async () => new Response() });
+    const locals = event.locals as unknown as FortressLocals;
+    expect(locals.fortress?.subject).toEqual({ type: 'USER', id: user.id });
+    expect(locals.fortress?.userId).toBe(user.id);
+    expect(getSubject(event as never)).toEqual({ type: 'USER', id: user.id });
+    expect(getUserId(event as never)).toBe(user.id);
+  });
+
+  it('populates locals.fortress.subject for a SERVICE_ACCOUNT api-key; userId stays undefined', async () => {
+    const { fortress, sa, saKey } = await setupWithApiKey();
+    const handle = createSvelteKitHandle(fortress);
+    const event = fakeEvent({
+      url: 'http://localhost/dashboard',
+      headers: { 'x-api-key': saKey },
+    });
+    await handle({ event, resolve: async () => new Response() });
+    const locals = event.locals as unknown as FortressLocals;
+    expect(locals.fortress?.subject).toEqual({ type: 'SERVICE_ACCOUNT', id: sa.id });
+    // userId is USER-only
+    expect(locals.fortress?.userId).toBeUndefined();
+    expect(getSubject(event as never).type).toBe('SERVICE_ACCOUNT');
+  });
+
+  it('getUserId throws for a SERVICE_ACCOUNT principal', async () => {
+    const { fortress, saKey } = await setupWithApiKey();
+    const handle = createSvelteKitHandle(fortress);
+    const event = fakeEvent({
+      url: 'http://localhost/dashboard',
+      headers: { 'x-api-key': saKey },
+    });
+    await handle({ event, resolve: async () => new Response() });
+    expect(() => getUserId(event as never)).toThrow(/User not authenticated/);
+  });
+
+  it('still falls back to JWT bearer when no api-key header is present', async () => {
+    const { fortress, user } = await setupWithApiKey();
+    const login = await fortress.auth.login('human@example.com', 'password-123');
+    if (login.status !== 'success')
+      throw new Error('login should succeed');
+    const handle = createSvelteKitHandle(fortress);
+    const event = fakeEvent({
+      url: 'http://localhost/dashboard',
+      headers: { authorization: `Bearer ${login.accessToken}` },
+    });
+    await handle({ event, resolve: async () => new Response() });
+    const locals = event.locals as unknown as FortressLocals;
+    expect(locals.fortress?.subject).toEqual({ type: 'USER', id: user.id });
+    expect(locals.fortress?.claims).toBeDefined();
+  });
+
+  it('plugin resolvers win over a present JWT (api-key takes priority)', async () => {
+    const { fortress, sa, saKey } = await setupWithApiKey();
+    const login = await fortress.auth.login('human@example.com', 'password-123');
+    if (login.status !== 'success')
+      throw new Error('login should succeed');
+    const handle = createSvelteKitHandle(fortress);
+    const event = fakeEvent({
+      url: 'http://localhost/dashboard',
+      headers: {
+        'authorization': `Bearer ${login.accessToken}`,
+        'x-api-key': saKey,
+      },
+    });
+    await handle({ event, resolve: async () => new Response() });
+    const locals = event.locals as unknown as FortressLocals;
+    expect(locals.fortress?.subject).toEqual({ type: 'SERVICE_ACCOUNT', id: sa.id });
+  });
+
+  it('leaves locals empty for an unknown api-key (no fallthrough to JWT)', async () => {
+    const { fortress } = await setupWithApiKey();
+    const handle = createSvelteKitHandle(fortress);
+    const event = fakeEvent({
+      url: 'http://localhost/dashboard',
+      headers: { 'x-api-key': 'test_sk_not-a-real-key' },
+    });
+    await handle({ event, resolve: async () => new Response() });
+    const locals = event.locals as unknown as FortressLocals;
+    expect(locals.fortress?.subject).toBeUndefined();
+  });
+
+  it('route-map RBAC allows a SERVICE_ACCOUNT with the required permission', async () => {
+    const { fortress, saKey } = await setupWithApiKey();
+    const handle = createSvelteKitHandle(fortress, {
+      routeMap: { 'POST /deploy/run': { resource: 'deploy', action: 'run' } },
+    });
+    const event = fakeEvent({
+      method: 'POST',
+      url: 'http://localhost/deploy/run',
+      headers: { authorization: `ApiKey ${saKey}` },
+    });
+    let resolved = false;
+    let observed: Subject | undefined;
+    const response = await handle({
+      event,
+      resolve: async () => {
+        resolved = true;
+        observed = (event.locals as unknown as FortressLocals).fortress?.subject;
+        return new Response('ok');
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(resolved).toBe(true);
+    expect(observed?.type).toBe('SERVICE_ACCOUNT');
+  });
+
+  it('route-map RBAC denies a SERVICE_ACCOUNT without the permission', async () => {
+    const { fortress, saKeyNoPerm } = await setupWithApiKey();
+    const handle = createSvelteKitHandle(fortress, {
+      routeMap: { 'POST /deploy/run': { resource: 'deploy', action: 'run' } },
+    });
+    const event = fakeEvent({
+      method: 'POST',
+      url: 'http://localhost/deploy/run',
+      headers: { 'x-api-key': saKeyNoPerm },
+    });
+    let resolved = false;
+    const response = await handle({
+      event,
+      resolve: async () => {
+        resolved = true;
+        return new Response('should not reach');
+      },
+    });
+    expect(resolved).toBe(false);
+    expect(response.status).toBe(403);
+  });
+
+  it('route-map RBAC returns 401 when there is no credential at all', async () => {
+    const { fortress } = await setupWithApiKey();
+    const handle = createSvelteKitHandle(fortress, {
+      routeMap: { 'POST /deploy/run': { resource: 'deploy', action: 'run' } },
+    });
+    const event = fakeEvent({
+      method: 'POST',
+      url: 'http://localhost/deploy/run',
+    });
+    const response = await handle({ event, resolve: async () => new Response('x') });
+    expect(response.status).toBe(401);
   });
 });
