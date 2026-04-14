@@ -541,6 +541,7 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
           if (user) {
             accessToken = await ctx.auth.signToken({
               sub: user.id,
+              subjectType: 'USER',
               name: user.name,
               groups: [],
               iss: 'fortress',

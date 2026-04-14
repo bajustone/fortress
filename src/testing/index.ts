@@ -66,6 +66,16 @@ const CREATE_TABLES_SQL = `
     PRIMARY KEY (group_id, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS fortress_service_account (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT,
+    description TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
   CREATE TABLE IF NOT EXISTS fortress_resource (
     name TEXT PRIMARY KEY,
     description TEXT
@@ -130,7 +140,8 @@ const CREATE_TABLES_SQL = `
 
   CREATE TABLE IF NOT EXISTS fortress_api_key (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    subject_type TEXT NOT NULL,
+    subject_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     key_hash TEXT NOT NULL UNIQUE,
     key_prefix TEXT NOT NULL,
@@ -140,6 +151,7 @@ const CREATE_TABLES_SQL = `
     is_revoked INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+  CREATE INDEX IF NOT EXISTS api_key_subject_idx ON fortress_api_key (subject_type, subject_id);
 
   CREATE TABLE IF NOT EXISTS fortress_two_factor_secret (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

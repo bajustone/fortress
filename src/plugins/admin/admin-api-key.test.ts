@@ -24,7 +24,7 @@ async function setup(adminOptions: AdminPluginOptions = { apiKeyRoutes: true }):
     jwt: { secret: SECRET },
     database: createTestAdapter(),
     plugins: [
-      apiKey({ prefix: 'test', maxKeysPerUser: 5 }),
+      apiKey({ prefix: 'test', maxKeysPerSubject: 5 }),
       admin(adminOptions),
     ],
   });
@@ -135,8 +135,8 @@ describe('admin plugin — api-key routes', () => {
     });
 
     it('admin calling GET /admin/users/:userId/api-keys returns the target user\'s keys', async () => {
-      await s.apiKeyMethods.createKey({ userId: s.targetUserId, name: 'Target Key 1' });
-      await s.apiKeyMethods.createKey({ userId: s.targetUserId, name: 'Target Key 2' });
+      await s.apiKeyMethods.createKey({ subject: { type: 'USER', id: s.targetUserId }, name: 'Target Key 1' });
+      await s.apiKeyMethods.createKey({ subject: { type: 'USER', id: s.targetUserId }, name: 'Target Key 2' });
 
       const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/users/${s.targetUserId}/api-keys`, {
         headers: { authorization: `Bearer ${s.adminToken}` },
@@ -148,7 +148,7 @@ describe('admin plugin — api-key routes', () => {
     });
 
     it('admin can revoke any user\'s key — bypassing the self-service ownership check', async () => {
-      const { id } = await s.apiKeyMethods.createKey({ userId: s.targetUserId, name: 'Target Key' });
+      const { id } = await s.apiKeyMethods.createKey({ subject: { type: 'USER', id: s.targetUserId }, name: 'Target Key' });
 
       const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/users/${s.targetUserId}/api-keys/${id}`, {
         method: 'DELETE',
@@ -157,7 +157,7 @@ describe('admin plugin — api-key routes', () => {
       expect(res.status).toBe(200);
 
       // Key no longer shows up in the target's self-service list.
-      const keys = await s.apiKeyMethods.listKeys({ userId: s.targetUserId });
+      const keys = await s.apiKeyMethods.listKeys({ subject: { type: 'USER', id: s.targetUserId } });
       expect(keys.find(k => k.id === id)).toBeUndefined();
     });
 

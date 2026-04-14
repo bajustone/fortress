@@ -267,9 +267,9 @@ describe('iAM integration', () => {
     await fortress.iam.bindRoleToUser(user.id, role.id);
 
     // Check permissions
-    const canCreate = await fortress.iam.checkPermission(user.id, 'post', 'create');
-    const canRead = await fortress.iam.checkPermission(user.id, 'post', 'read');
-    const canDelete = await fortress.iam.checkPermission(user.id, 'post', 'delete');
+    const canCreate = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'create');
+    const canRead = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'read');
+    const canDelete = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'delete');
 
     expect(canCreate).toBe(true);
     expect(canRead).toBe(true);
@@ -294,9 +294,9 @@ describe('iAM integration', () => {
     await fortress.iam.bindRoleToGroup(group.id, role.id);
 
     // User should have permissions via group
-    const canCreate = await fortress.iam.checkPermission(user.id, 'user', 'create');
-    const canDelete = await fortress.iam.checkPermission(user.id, 'user', 'delete');
-    const canUpdate = await fortress.iam.checkPermission(user.id, 'user', 'update');
+    const canCreate = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'user', 'create');
+    const canDelete = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'user', 'delete');
+    const canUpdate = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'user', 'update');
 
     expect(canCreate).toBe(true);
     expect(canDelete).toBe(true);
@@ -310,7 +310,7 @@ describe('iAM integration', () => {
       password: 'password-123',
     });
 
-    const allowed = await fortress.iam.checkPermission(user.id, 'anything', 'read');
+    const allowed = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'anything', 'read');
     expect(allowed).toBe(false);
   });
 });

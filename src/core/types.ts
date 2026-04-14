@@ -16,12 +16,14 @@ export interface FortressUser {
 /** JWT claims fortress signs into the access token, plus the optional impersonation actor (`act`) and per-deployment custom claims. */
 export interface TokenClaims {
   sub: number;
+  /** Subject kind — defaults to 'USER' on legacy tokens that do not carry the claim. */
+  subjectType: SubjectType;
   name: string;
   groups: string[];
   iss: string;
   iat: number;
   exp: number;
-  act?: { sub: number }; // RFC 8693 actor claim for impersonation
+  act?: { sub: number; subjectType?: SubjectType }; // RFC 8693 actor claim for impersonation
   customClaims?: Record<string, unknown>;
 }
 
@@ -90,6 +92,12 @@ export interface CreateUserInput {
 
 /** The kind of subject a role or permission can be bound to. */
 export type SubjectType = 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
+
+/** A subject identity — a discriminated (type, id) pair used by IAM and the auth pipeline. */
+export interface Subject {
+  type: SubjectType;
+  id: number;
+}
 
 /** A persisted IAM permission — a (resource, action) pair with optional conditions and an allow/deny effect. */
 export interface Permission {
@@ -166,5 +174,23 @@ export interface LoginIdentifier {
 export interface Group {
   id: number;
   name: string;
+  description?: string;
+}
+
+/** A persisted IAM service account — a non-human principal that can hold roles and direct permissions. */
+export interface ServiceAccount {
+  id: number;
+  name: string;
+  displayName: string | null;
+  description: string | null;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Input shape for creating a new {@link ServiceAccount}. `name` is the immutable machine identifier. */
+export interface CreateServiceAccountInput {
+  name: string;
+  displayName?: string;
   description?: string;
 }

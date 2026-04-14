@@ -19,7 +19,7 @@ import { authEndpoints } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
 import { iamEndpoints } from '../../core/iam/iam-endpoints';
 import { pullResources } from '../../core/iam/resource-sync';
-import { listKeysForUser, revokeKeyAsAdmin } from '../api-key/core';
+import { listKeysForSubject, revokeKeyAsAdmin } from '../api-key/core';
 
 export interface AdminPluginOptions {
   /** User IDs that bypass all permission checks (superadmins) */
@@ -1146,8 +1146,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async getUserPermissions(body: Record<string, unknown>): Promise<Permission[]> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        return ctx.iam.getUserPermissions(
-          requireInt(body.id, 'id'),
+        return ctx.iam.getPermissionsForSubject(
+          { type: 'USER', id: requireInt(body.id, 'id') },
           body.tenantId as string | undefined,
         );
       },
@@ -1156,7 +1156,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         const allowed = await ctx.iam.checkPermission(
-          requireInt(body.userId, 'userId'),
+          { type: 'USER', id: requireInt(body.userId, 'userId') },
           body.resource as string,
           body.action as string,
           body.context as Record<string, unknown> | undefined,
@@ -1218,7 +1218,10 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async adminListUserApiKeys(
         body: Record<string, unknown>,
       ): Promise<{ keys: ApiKeyInfo[] }> {
-        const keys = await listKeysForUser(ctx.db, requireInt(body.userId, 'userId'));
+        const keys = await listKeysForSubject(ctx.db, {
+          type: 'USER',
+          id: requireInt(body.userId, 'userId'),
+        });
         return { keys };
       },
 

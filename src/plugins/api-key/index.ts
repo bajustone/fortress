@@ -1,29 +1,36 @@
 /**
  * API key plugin for fortress.
  *
- * Issues scoped, hashed API keys for service accounts and devices, with
+ * Issues scoped, hashed API keys for users and service accounts, with
  * optional expiry, revocation, and per-key permission scopes. Authenticates
- * incoming requests via a configurable header and exposes management methods
- * on the fortress instance.
+ * incoming requests via `Authorization: ApiKey <key>` or `X-API-Key: <key>`
+ * headers and exposes management methods on the fortress instance.
  *
  * HTTP endpoints are opt-in: pass `apiKey({ routes: true })` to mount the
  * self-service routes under `/api-key/keys/*`. The programmatic methods on
  * `fortress.plugins['api-key']` are always available regardless of the flag.
  *
+ * Keys are owned by a {@link Subject} — either a USER or a SERVICE_ACCOUNT.
+ * When a service account is deleted via core IAM, this plugin's IAM
+ * observer hard-deletes every key it owns.
+ *
  * @module
  */
 
 import type { EndpointDefinition } from '../../core/endpoint';
-import type { FortressPlugin, PluginRouteContext } from '../../core/plugin';
+import type { IamEvent, IamEventListener } from '../../core/iam/iam-service';
+import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
+import type { Subject } from '../../core/types';
 import type { ApiKeyInfo, ApiKeyKnobs, CreateKeyOptions } from './core';
 import { Errors } from '../../core/errors';
 import { arr, bool, endpoint, int, obj, str } from '../../core/schema-builder';
 import {
-  createKeyForUser,
-  listKeysForUser,
+  createKeyForSubject,
+  deleteAllKeysForSubject,
+  listKeysForSubject,
   resolveApiKey,
-  revokeKeyForUser,
-  rotateKeyForUser,
+  revokeKeyForSubject,
+  rotateKeyForSubject,
 } from './core';
 
 export type { ApiKeyInfo, ApiKeyRecord } from './core';
@@ -33,8 +40,8 @@ export interface ApiKeyConfig {
   prefix?: string;
   /** Default expiry in seconds. null = never expires (default: null) */
   defaultExpirySeconds?: number | null;
-  /** Maximum active (non-revoked) keys per user (default: 10) */
-  maxKeysPerUser?: number;
+  /** Maximum active (non-revoked) keys per subject (default: 10) */
+  maxKeysPerSubject?: number;
   /**
    * Mount self-service HTTP routes under `/api-key/keys/*`. Default `false`.
    * The programmatic methods on `fortress.plugins['api-key']` are always
@@ -45,24 +52,24 @@ export interface ApiKeyConfig {
 
 export interface ApiKeyMethods {
   createKey: (
-    input: { userId?: number; name: string; scopes?: string[]; expiresAt?: Date | string },
+    input: { subject?: Subject; name: string; scopes?: string[]; expiresAt?: Date | string },
     routeCtx?: PluginRouteContext,
   ) => Promise<{ key: string; id: number }>;
   listKeys: (
-    input: { userId?: number },
+    input: { subject?: Subject },
     routeCtx?: PluginRouteContext,
   ) => Promise<ApiKeyInfo[]>;
   revokeKey: (
-    input: { userId?: number; id: number | string },
+    input: { subject?: Subject; id: number | string },
     routeCtx?: PluginRouteContext,
   ) => Promise<{ ok: true }>;
   rotateKey: (
-    input: { userId?: number; id: number | string },
+    input: { subject?: Subject; id: number | string },
     routeCtx?: PluginRouteContext,
   ) => Promise<{ key: string; id: number }>;
   resolveKey: (
     rawKey: string,
-  ) => Promise<{ userId: number; scopes: string[] | null } | null>;
+  ) => Promise<{ subject: Subject; scopes: string[] | null } | null>;
 }
 
 // ── Routes ──────────────────────────────────────────────────────────
@@ -141,17 +148,19 @@ const apiKeySelfServiceRoutes: EndpointDefinition[] = [
 
 /**
  * API key plugin factory. Returns a {@link FortressPlugin} that issues
- * scoped, hashed API keys and exposes management methods on the fortress
- * instance. Pass `{ routes: true }` to mount the self-service HTTP routes
- * under `/api-key/keys/*`.
+ * scoped, hashed API keys, resolves them into request principals via the
+ * `Authorization: ApiKey`/`X-API-Key` headers, and exposes management
+ * methods on the fortress instance. Pass `{ routes: true }` to mount the
+ * self-service HTTP routes under `/api-key/keys/*`.
  */
 export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly name: 'api-key' } {
   const knobs: ApiKeyKnobs = {
     prefix: config.prefix ?? 'fortress',
     defaultExpirySeconds: config.defaultExpirySeconds ?? null,
-    maxKeysPerUser: config.maxKeysPerUser ?? 10,
+    maxKeysPerSubject: config.maxKeysPerSubject ?? 10,
   };
   const mountRoutes = config.routes === true;
+  let observerRegistered = false;
 
   return {
     name: 'api-key',
@@ -160,7 +169,8 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
       name: 'api_key',
       fields: {
         id: { type: 'number', required: true },
-        userId: { type: 'number', required: true, references: { model: 'user', field: 'id' } },
+        subjectType: { type: 'string', required: true },
+        subjectId: { type: 'number', required: true },
         name: { type: 'string', required: true },
         keyHash: { type: 'string', required: true, unique: true },
         keyPrefix: { type: 'string', required: true },
@@ -174,84 +184,118 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
 
     ...(mountRoutes ? { routes: apiKeySelfServiceRoutes } : {}),
 
-    methods: ctx => ({
-      async createKey(
-        input: { userId?: number; name: string; scopes?: string[]; expiresAt?: Date | string },
-        routeCtx?: PluginRouteContext,
-      ): Promise<{ key: string; id: number }> {
-        const userId = resolveCallerId(input, routeCtx);
-        const options: CreateKeyOptions = {
-          name: String(input.name ?? ''),
-          scopes: Array.isArray(input.scopes) ? input.scopes.map(String) : undefined,
-          expiresAt: coerceDate(input.expiresAt),
+    async resolvePrincipal(request: Request, ctx: PluginContext): Promise<{ subject: Subject; scopes?: string[] | null } | null> {
+      const auth = request.headers.get('authorization') ?? '';
+      const fromAuth = auth.startsWith('ApiKey ') ? auth.slice(7).trim() : null;
+      const fromHeader = !fromAuth ? request.headers.get('x-api-key') : null;
+      const key = fromAuth ?? fromHeader;
+      if (!key)
+        return null;
+      const resolved = await resolveApiKey(ctx.db, key);
+      if (!resolved)
+        return null;
+      return { subject: resolved.subject };
+    },
+
+    methods: (ctx: PluginContext) => {
+      // Register the IAM cascade observer exactly once per plugin instance.
+      // Done inside `methods` (rather than at factory time) because `ctx.iam`
+      // is not wired at factory construction — the Fortress boot order
+      // constructs services first, then calls `processPlugins` which invokes
+      // this `methods` factory with a fully-populated ctx.
+      if (!observerRegistered && ctx.iam) {
+        observerRegistered = true;
+        const cascade: IamEventListener = async (event: IamEvent) => {
+          if (event.eventType === 'SERVICE_ACCOUNT_DELETED' && event.targetId != null) {
+            await deleteAllKeysForSubject(ctx.db, {
+              type: 'SERVICE_ACCOUNT',
+              id: event.targetId,
+            });
+          }
         };
-        if (!options.name)
-          throw Errors.badRequest('name is required');
-        return createKeyForUser(ctx.db, userId, options, knobs);
-      },
+        ctx.iam.addIamObserver(cascade);
+      }
 
-      async listKeys(
-        input: { userId?: number },
-        routeCtx?: PluginRouteContext,
-      ): Promise<ApiKeyInfo[]> {
-        const userId = resolveCallerId(input, routeCtx);
-        return listKeysForUser(ctx.db, userId);
-      },
+      return {
+        async createKey(
+          input: { subject?: Subject; name: string; scopes?: string[]; expiresAt?: Date | string },
+          routeCtx?: PluginRouteContext,
+        ): Promise<{ key: string; id: number }> {
+          const subject = resolveCallerSubject(input, routeCtx);
+          const options: CreateKeyOptions = {
+            name: String(input.name ?? ''),
+            scopes: Array.isArray(input.scopes) ? input.scopes.map(String) : undefined,
+            expiresAt: coerceDate(input.expiresAt),
+          };
+          if (!options.name)
+            throw Errors.badRequest('name is required');
+          return createKeyForSubject(ctx.db, subject, options, knobs);
+        },
 
-      async revokeKey(
-        input: { userId?: number; id: number | string },
-        routeCtx?: PluginRouteContext,
-      ): Promise<{ ok: true }> {
-        const userId = resolveCallerId(input, routeCtx);
-        const keyId = Number(input.id);
-        if (!Number.isFinite(keyId))
-          throw Errors.badRequest('id is required');
-        await revokeKeyForUser(ctx.db, userId, keyId);
-        return { ok: true };
-      },
+        async listKeys(
+          input: { subject?: Subject },
+          routeCtx?: PluginRouteContext,
+        ): Promise<ApiKeyInfo[]> {
+          const subject = resolveCallerSubject(input, routeCtx);
+          return listKeysForSubject(ctx.db, subject);
+        },
 
-      async rotateKey(
-        input: { userId?: number; id: number | string },
-        routeCtx?: PluginRouteContext,
-      ): Promise<{ key: string; id: number }> {
-        const userId = resolveCallerId(input, routeCtx);
-        const keyId = Number(input.id);
-        if (!Number.isFinite(keyId))
-          throw Errors.badRequest('id is required');
-        return rotateKeyForUser(ctx.db, userId, keyId, { prefix: knobs.prefix });
-      },
+        async revokeKey(
+          input: { subject?: Subject; id: number | string },
+          routeCtx?: PluginRouteContext,
+        ): Promise<{ ok: true }> {
+          const subject = resolveCallerSubject(input, routeCtx);
+          const keyId = Number(input.id);
+          if (!Number.isFinite(keyId))
+            throw Errors.badRequest('id is required');
+          await revokeKeyForSubject(ctx.db, subject, keyId);
+          return { ok: true };
+        },
 
-      async resolveKey(
-        rawKey: string,
-      ): Promise<{ userId: number; scopes: string[] | null } | null> {
-        return resolveApiKey(ctx.db, rawKey);
-      },
-    }),
+        async rotateKey(
+          input: { subject?: Subject; id: number | string },
+          routeCtx?: PluginRouteContext,
+        ): Promise<{ key: string; id: number }> {
+          const subject = resolveCallerSubject(input, routeCtx);
+          const keyId = Number(input.id);
+          if (!Number.isFinite(keyId))
+            throw Errors.badRequest('id is required');
+          return rotateKeyForSubject(ctx.db, subject, keyId, { prefix: knobs.prefix });
+        },
+
+        async resolveKey(
+          rawKey: string,
+        ): Promise<{ subject: Subject; scopes: string[] | null } | null> {
+          return resolveApiKey(ctx.db, rawKey);
+        },
+      };
+    },
   };
 }
 
 /**
- * Resolve the caller's userId. Two call paths:
+ * Resolve the caller's subject. Two call paths:
  *
- *  1. HTTP: the dispatcher passes `routeCtx` with the verified JWT subject.
- *     Use it and ignore any `userId` in the body — the client doesn't get to
- *     pick which user a key is created for.
- *  2. Programmatic (seed scripts, custom server code): no `routeCtx`, so fall
- *     back to `body.userId`. These callers are trusted because they already
- *     hold a reference to `fortress.plugins['api-key']`.
+ *  1. HTTP: the dispatcher passes `routeCtx` with the verified principal
+ *     (resolved from a JWT or an api-key `resolvePrincipal` pass). Use it
+ *     and ignore any `subject` in the body — the client doesn't get to pick
+ *     which subject a key is created for.
+ *  2. Programmatic (seed scripts, custom server code): no `routeCtx`, so
+ *     fall back to `input.subject`. These callers are trusted because they
+ *     already hold a reference to `fortress.plugins['api-key']`.
  */
-function resolveCallerId(
-  input: { userId?: number },
+function resolveCallerSubject(
+  input: { subject?: Subject },
   routeCtx?: PluginRouteContext,
-): number {
+): Subject {
   if (routeCtx) {
-    if (routeCtx.userId == null)
-      throw Errors.unauthorized('User not authenticated');
-    return routeCtx.userId;
+    if (!routeCtx.subject)
+      throw Errors.unauthorized('Not authenticated');
+    return routeCtx.subject;
   }
-  if (input.userId == null)
-    throw Errors.badRequest('userId is required for programmatic calls');
-  return Number(input.userId);
+  if (!input.subject)
+    throw Errors.badRequest('subject is required for programmatic calls');
+  return input.subject;
 }
 
 function coerceDate(value: Date | string | undefined): Date | undefined {

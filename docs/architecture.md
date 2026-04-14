@@ -491,13 +491,48 @@ interface PermissionCondition {
 Role bindings reference subjects directly via `subjectType` + `subjectId` — no intermediate `principal` table:
 
 ```
-User ──┐
-       ├── RoleBinding ── Role ── RolePermission ── Permission
-Group ─┘
-  (via group_user)
+User ──────────┐
+               │
+Group ─────────┼── RoleBinding ── Role ── RolePermission ── Permission
+  (via group_user)  │
+               │
+ServiceAccount ┘
 ```
 
-Permissions are also directly bindable to users/groups without a role (via `permission_binding`).
+Permissions are also directly bindable to any subject type without a role (via `direct_permission_binding`).
+
+### Service Accounts
+
+Service accounts are non-human IAM principals — CI/CD pipelines, devices, M2M clients, anything that needs permissions without being tied to a human user. They're a first-class peer of `USER` and `GROUP` in the subject system.
+
+**File:** `src/core/iam/iam-service.ts` (CRUD methods) + `src/drizzle/schema.ts` (`fortress_service_account`).
+
+Key characteristics:
+
+- **No sessions, passwords, or refresh tokens.** They don't sign in — they're authenticated by api keys (or future credential mechanisms: OAuth client_credentials, mTLS, signed JWT assertions).
+- **No group memberships.** Service accounts hold roles and direct permission bindings directly. The permission resolver (`getSubjectPermissions`) skips the group-walk for any non-user subject — a service account with the same numeric id as a group will not inherit that group's permissions.
+- **Globally scoped at the table level.** Tenant scoping happens at `role_binding.tenantId`, the same mechanism users use. A single service account can hold tenant-scoped or global bindings.
+- **Immutable `name`.** The `name` column is the machine identifier and cannot be updated after creation (matches Kubernetes / IAM conventions). To rename, delete and recreate.
+- **`isActive` kill-switch.** Flipping `isActive: false` makes `resolveApiKey` return `null` for every key owned by the service account, and makes `getSubjectPermissions` return an empty permission list — two independent layers of defense.
+- **Hard delete with cascade.** `deleteServiceAccount` removes the account row and all `role_binding` / `direct_permission_binding` rows for that subject. The api-key plugin listens via `addIamObserver` for `SERVICE_ACCOUNT_DELETED` and hard-deletes its owned keys. Core IAM doesn't import from the api-key plugin; the cascade is plugin-owned.
+- **JWT tokens are not issued for service accounts.** `auth-service.issueTokens` always mints `subjectType: 'USER'`. A future plugin (OAuth client_credentials, mTLS) that wants to issue tokens for service accounts can call `signAccessToken` directly with `subjectType: 'SERVICE_ACCOUNT'` — the claims pipeline already supports it.
+
+### Request Principal Resolution
+
+**File:** `src/core/http/handle-request.ts` (step 3).
+
+Fortress threads a single `Subject` type through the entire pipeline:
+
+```ts
+type Subject = { type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'; id: number };
+```
+
+Every request resolves to a `Subject` (or `undefined` for public routes) via two ordered paths:
+
+1. **Plugin `resolvePrincipal`**: plugins implementing the `resolvePrincipal` capability are tried in registration order. The first to return non-null wins; its subject becomes the request principal. The api-key plugin implements this for `Authorization: ApiKey <key>` and `X-API-Key: <key>` headers. Future credential plugins (OAuth client_credentials, mTLS, signed JWT assertions) plug in at the same point without core changes.
+2. **JWT fallback**: if no plugin resolves the request and the endpoint declares `security: 'bearer'`, the core JWT verifier runs. `TokenClaims.subjectType` is read from the JWT payload (default `'USER'` for legacy tokens that don't carry the claim).
+
+The resolved `subject` flows into `enforceFortressPermission` and `fortress.iam.checkPermission`, both of which are subject-aware. Downstream RBAC evaluates the same way regardless of how the principal was authenticated.
 
 ### Permission Evaluation
 

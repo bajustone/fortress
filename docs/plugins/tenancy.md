@@ -6,6 +6,12 @@ The `tenancy` plugin adds schema-per-tenant isolation to Fortress for PostgreSQL
 
 This plugin is PostgreSQL-specific. For row-level isolation that works with any database, see the [Data Isolation](./data-isolation.md) plugin.
 
+### Service accounts and tenancy
+
+Service accounts are **not members of a tenant** in the membership sense — there is no `tenant_service_account` join table. Instead, service accounts are global identities that hold tenant-scoped grants via `role_binding.tenantId`, the same mechanism users use. A single service account can hold tenant-scoped or global bindings at the same time without any schema change.
+
+The `tenancy` plugin's `enrichTokenClaims` hook reads `tenant_user` to find a user's default tenant; service accounts have no entry there, so the claim simply won't fire for them. Service-account-authenticated requests typically carry the tenant header (`X-Tenant-Code`) explicitly, and `fortress.iam.checkPermission({ type: 'SERVICE_ACCOUNT', id }, resource, action, { tenantId })` resolves the permission against bindings scoped to that tenant.
+
 ## Installation
 
 Import the `tenancy` factory and pass it in the `plugins` array when creating a Fortress instance:

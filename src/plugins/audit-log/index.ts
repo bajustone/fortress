@@ -32,7 +32,10 @@ export type AuditEventType
     | 'PERMISSION_CHANGED'
     | 'GROUP_CREATED'
     | 'GROUP_MEMBER_ADDED'
-    | 'GROUP_MEMBER_REMOVED';
+    | 'GROUP_MEMBER_REMOVED'
+    | 'SERVICE_ACCOUNT_CREATED'
+    | 'SERVICE_ACCOUNT_UPDATED'
+    | 'SERVICE_ACCOUNT_DELETED';
 
 export interface AuditLogEntry {
   id: number;

@@ -6,6 +6,7 @@ describe('jwt', () => {
   const secret = 'test-secret-at-least-32-chars-long!';
   const claims = {
     sub: 42,
+    subjectType: 'USER' as const,
     name: 'Test User',
     groups: ['admin', 'editor'],
     iss: 'fortress-test',

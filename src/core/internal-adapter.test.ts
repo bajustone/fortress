@@ -110,7 +110,7 @@ describe('findRefreshTokenByHash', () => {
   });
 });
 
-describe('getUserPermissions', () => {
+describe('getSubjectPermissions', () => {
   it('resolves permissions through direct role binding', async () => {
     const user = await db.create<{ id: number }>({
       model: 'user',
@@ -132,7 +132,7 @@ describe('getUserPermissions', () => {
     await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
     await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'USER', subjectId: user.id } });
 
-    const permissions = await adapter.getUserPermissions(user.id);
+    const permissions = await adapter.getSubjectPermissions({ type: 'USER', id: user.id });
     expect(permissions).toHaveLength(1);
     expect(permissions[0].resource).toBe('document');
     expect(permissions[0].action).toBe('read');
@@ -162,7 +162,7 @@ describe('getUserPermissions', () => {
     await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
     await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'GROUP', subjectId: group.id } });
 
-    const permissions = await adapter.getUserPermissions(user.id);
+    const permissions = await adapter.getSubjectPermissions({ type: 'USER', id: user.id });
     expect(permissions).toHaveLength(1);
     expect(permissions[0].resource).toBe('article');
     expect(permissions[0].action).toBe('write');
@@ -174,7 +174,98 @@ describe('getUserPermissions', () => {
       data: { email: 'nobody@example.com', name: 'Nobody', passwordHash: 'hashed', isActive: true },
     });
 
-    const permissions = await adapter.getUserPermissions(user.id);
+    const permissions = await adapter.getSubjectPermissions({ type: 'USER', id: user.id });
+    expect(permissions).toEqual([]);
+  });
+
+  it('resolves permissions through a SERVICE_ACCOUNT role binding', async () => {
+    const sa = await db.create<{ id: number }>({
+      model: 'service_account',
+      data: { name: 'ci-deploy', displayName: 'CI Deploy', description: null, isActive: true },
+    });
+
+    await db.create({ model: 'resource', data: { name: 'deploy' } });
+
+    const permission = await db.create<{ id: number }>({
+      model: 'permission',
+      data: { resource: 'deploy', action: 'run', effect: 'ALLOW', description: 'run deploy' },
+    });
+
+    const role = await db.create<{ id: number }>({
+      model: 'role',
+      data: { name: 'deployer' },
+    });
+
+    await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
+    await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'SERVICE_ACCOUNT', subjectId: sa.id } });
+
+    const permissions = await adapter.getSubjectPermissions({ type: 'SERVICE_ACCOUNT', id: sa.id });
+    expect(permissions).toHaveLength(1);
+    expect(permissions[0].resource).toBe('deploy');
+    expect(permissions[0].action).toBe('run');
+  });
+
+  it('resolves direct permission bindings for a SERVICE_ACCOUNT', async () => {
+    const sa = await db.create<{ id: number }>({
+      model: 'service_account',
+      data: { name: 'audit-reader', displayName: null, description: null, isActive: true },
+    });
+
+    await db.create({ model: 'resource', data: { name: 'audit' } });
+    const permission = await db.create<{ id: number }>({
+      model: 'permission',
+      data: { resource: 'audit', action: 'read', effect: 'ALLOW', description: null },
+    });
+
+    await db.create({
+      model: 'direct_permission_binding',
+      data: { permissionId: permission.id, subjectType: 'SERVICE_ACCOUNT', subjectId: sa.id },
+    });
+
+    const permissions = await adapter.getSubjectPermissions({ type: 'SERVICE_ACCOUNT', id: sa.id });
+    expect(permissions).toHaveLength(1);
+    expect(permissions[0].resource).toBe('audit');
+  });
+
+  it('returns empty for an inactive SERVICE_ACCOUNT even with a bound role', async () => {
+    const sa = await db.create<{ id: number }>({
+      model: 'service_account',
+      data: { name: 'disabled-sa', displayName: null, description: null, isActive: false },
+    });
+
+    await db.create({ model: 'resource', data: { name: 'deploy' } });
+    const permission = await db.create<{ id: number }>({
+      model: 'permission',
+      data: { resource: 'deploy', action: 'run', effect: 'ALLOW', description: null },
+    });
+    const role = await db.create<{ id: number }>({ model: 'role', data: { name: 'deployer-disabled' } });
+    await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
+    await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'SERVICE_ACCOUNT', subjectId: sa.id } });
+
+    const permissions = await adapter.getSubjectPermissions({ type: 'SERVICE_ACCOUNT', id: sa.id });
+    expect(permissions).toEqual([]);
+  });
+
+  it('service account subjects do not inherit permissions from groups', async () => {
+    // Set up a group with a permission, and a user in that group.
+    const group = await db.create<{ id: number }>({ model: 'group', data: { name: 'inheritance-group' } });
+    await db.create({ model: 'resource', data: { name: 'article' } });
+    const permission = await db.create<{ id: number }>({
+      model: 'permission',
+      data: { resource: 'article', action: 'read', effect: 'ALLOW', description: null },
+    });
+    const role = await db.create<{ id: number }>({ model: 'role', data: { name: 'reader-inherit' } });
+    await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
+    await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'GROUP', subjectId: group.id } });
+
+    // Create a service account with the SAME numeric id as the group — group-walk
+    // must not accidentally match service accounts.
+    const sa = await db.create<{ id: number }>({
+      model: 'service_account',
+      data: { name: 'isolated-sa', displayName: null, description: null, isActive: true },
+    });
+
+    const permissions = await adapter.getSubjectPermissions({ type: 'SERVICE_ACCOUNT', id: sa.id });
     expect(permissions).toEqual([]);
   });
 });

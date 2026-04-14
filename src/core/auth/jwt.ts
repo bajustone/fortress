@@ -9,7 +9,7 @@
  * @module
  */
 
-import type { TokenClaims } from '../types';
+import type { SubjectType, TokenClaims } from '../types';
 
 import { jwtVerify, SignJWT } from 'jose';
 import { Errors } from '../errors';
@@ -42,6 +42,7 @@ export async function signAccessToken(
 
   return new SignJWT({
     name: claims.name,
+    subjectType: claims.subjectType,
     groups: claims.groups,
     ...(claims.act ? { act: claims.act } : {}),
     ...(claims.customClaims ?? {}),
@@ -68,15 +69,16 @@ export async function verifyAccessToken(
       const { payload } = await jwtVerify(token, key);
       return {
         sub: Number(payload.sub),
+        subjectType: (payload.subjectType as SubjectType | undefined) ?? 'USER',
         name: payload.name as string,
         groups: (payload.groups as string[]) ?? [],
         iss: payload.iss ?? '',
         iat: payload.iat ?? 0,
         exp: payload.exp ?? 0,
-        act: payload.act as { sub: number } | undefined,
+        act: payload.act as { sub: number; subjectType?: SubjectType } | undefined,
         customClaims: Object.fromEntries(
           Object.entries(payload).filter(
-            ([k]) => !['sub', 'name', 'groups', 'iss', 'iat', 'exp', 'act'].includes(k),
+            ([k]) => !['sub', 'subjectType', 'name', 'groups', 'iss', 'iat', 'exp', 'act'].includes(k),
           ),
         ),
       };

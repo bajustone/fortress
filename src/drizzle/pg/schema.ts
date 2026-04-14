@@ -1,6 +1,6 @@
 import type { AnyPgTable } from 'drizzle-orm/pg-core';
 
-import { boolean, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, varchar } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, varchar } from 'drizzle-orm/pg-core';
 
 // --- Core Identity ---
 
@@ -58,6 +58,18 @@ const groupUsers = pgTable(
   table => [primaryKey({ columns: [table.groupId, table.userId] })],
 );
 
+// --- IAM: Service Accounts ---
+
+const serviceAccounts = pgTable('fortress_service_account', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 100 }).notNull().unique(),
+  displayName: varchar('display_name', { length: 255 }),
+  description: text('description'),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
 // --- IAM: Resources & Permissions ---
 
 const resources = pgTable('fortress_resource', {
@@ -107,7 +119,7 @@ const roleBindings = pgTable('fortress_role_binding', {
 const directPermissionBindings = pgTable('fortress_direct_permission_binding', {
   id: serial('id').primaryKey(),
   permissionId: integer('permission_id').notNull().references(() => permissions.id, { onDelete: 'cascade' }),
-  subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'GROUP'
+  subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
   tenantId: varchar('tenant_id', { length: 100 }),
 });
@@ -139,7 +151,8 @@ const magicLinkTokens = pgTable('fortress_magic_link_token', {
 
 const apiKeys = pgTable('fortress_api_key', {
   id: serial('id').primaryKey(),
-  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'SERVICE_ACCOUNT' — polymorphic owner
+  subjectId: integer('subject_id').notNull(),
   name: varchar('name', { length: 255 }).notNull(),
   keyHash: varchar('key_hash', { length: 64 }).notNull().unique(),
   keyPrefix: varchar('key_prefix', { length: 20 }).notNull(),
@@ -148,7 +161,7 @@ const apiKeys = pgTable('fortress_api_key', {
   lastUsedAt: timestamp('last_used_at'),
   isRevoked: boolean('is_revoked').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
-});
+}, table => [index('api_key_subject_idx').on(table.subjectType, table.subjectId)]);
 
 // --- Plugins: Two-Factor ---
 
@@ -368,6 +381,7 @@ export const fortressPgSchema: Record<string, AnyPgTable> = {
   refreshTokens,
   groups,
   groupUsers,
+  serviceAccounts,
   resources,
   permissions,
   roles,

@@ -361,9 +361,9 @@ async function invokeIamHandler(
       await fortress.iam.removeUserFromGroup(Number(params.id), Number(params.userId));
       return { ok: true };
     case 'getUserPermissions':
-      return fortress.iam.getUserPermissions(Number(params.id), body?.tenantId);
+      return fortress.iam.getPermissionsForSubject({ type: 'USER', id: Number(params.id) }, body?.tenantId);
     case 'checkPermission': {
-      const allowed = await fortress.iam.checkPermission(body.userId, body.resource, body.action, body.context);
+      const allowed = await fortress.iam.checkPermission({ type: 'USER', id: body.userId }, body.resource, body.action, body.context);
       return { allowed };
     }
     case 'bindPermissionToUser':

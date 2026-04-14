@@ -68,6 +68,16 @@ const CREATE_TABLES_SQL = `
     PRIMARY KEY (group_id, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS fortress_service_account (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    display_name VARCHAR(255),
+    description TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
   CREATE TABLE IF NOT EXISTS fortress_resource (
     name VARCHAR(100) PRIMARY KEY,
     description TEXT
@@ -132,7 +142,8 @@ const CREATE_TABLES_SQL = `
 
   CREATE TABLE IF NOT EXISTS fortress_api_key (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    subject_type VARCHAR(20) NOT NULL,
+    subject_id INTEGER NOT NULL,
     name VARCHAR(255) NOT NULL,
     key_hash VARCHAR(64) NOT NULL UNIQUE,
     key_prefix VARCHAR(20) NOT NULL,
@@ -142,6 +153,7 @@ const CREATE_TABLES_SQL = `
     is_revoked BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
+  CREATE INDEX IF NOT EXISTS api_key_subject_idx ON fortress_api_key (subject_type, subject_id);
 
   CREATE TABLE IF NOT EXISTS fortress_two_factor_secret (
     id SERIAL PRIMARY KEY,
@@ -327,6 +339,7 @@ const TRUNCATE_SQL = `
     fortress_permission,
     fortress_resource,
     fortress_role,
+    fortress_service_account,
     fortress_group_user,
     fortress_group,
     fortress_refresh_token,
@@ -664,9 +677,9 @@ describe('pg: IAM', () => {
 
     await fortress.iam.bindRoleToUser(user.id, role.id);
 
-    const canRead = await fortress.iam.checkPermission(user.id, 'post', 'read');
-    const canWrite = await fortress.iam.checkPermission(user.id, 'post', 'write');
-    const canDelete = await fortress.iam.checkPermission(user.id, 'post', 'delete');
+    const canRead = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'read');
+    const canWrite = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'write');
+    const canDelete = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'delete');
 
     expect(canRead).toBe(true);
     expect(canWrite).toBe(true);
@@ -682,7 +695,7 @@ describe('pg: IAM', () => {
     ]);
     await fortress.iam.bindRoleToGroup(group.id, role.id);
 
-    const allowed = await fortress.iam.checkPermission(user.id, 'user', 'manage');
+    const allowed = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'user', 'manage');
     expect(allowed).toBe(true);
   });
 });

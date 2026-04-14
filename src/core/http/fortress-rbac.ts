@@ -16,6 +16,7 @@
 
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin } from '../plugin';
+import type { Subject } from '../types';
 import { Errors } from '../errors';
 
 const FORTRESS_CORE_PREFIXES = ['/iam/'];
@@ -65,7 +66,7 @@ export function isFortressPath(
 export interface PermissionEnforcement {
   /** IAM check, typically `fortress.iam.checkPermission`. */
   checkPermission: (
-    userId: number,
+    subject: Subject,
     resource: string,
     action: string,
   ) => Promise<boolean>;
@@ -75,18 +76,19 @@ export interface PermissionEnforcement {
  * Enforce fortress's default-deny policy for an already-matched endpoint.
  *
  * - Public endpoints (`security: 'none'` / `'basic'`) pass through.
- * - Endpoints with `meta.permission` require an authenticated user and a
+ * - Endpoints with `meta.permission` require an authenticated subject and a
  *   passing `checkPermission` call — otherwise throws `UNAUTHORIZED` /
  *   `FORBIDDEN`.
- * - Bearer-only endpoints require an authenticated user but skip IAM.
+ * - Bearer-only endpoints require an authenticated subject but skip IAM.
  * - Endpoints with no security metadata are denied.
  *
  * The caller (typically `fortress.handleRequest`) is responsible for first
- * verifying the access token and supplying `userId` from its claims.
+ * resolving the request principal (either via a plugin's `resolvePrincipal`
+ * or the JWT fallback) and supplying the resulting `subject`.
  */
 export async function enforceFortressPermission(
   endpoint: EndpointDefinition,
-  userId: number | undefined,
+  subject: Subject | undefined,
   enforcement: PermissionEnforcement,
 ): Promise<void> {
   const security = endpoint.meta?.security;
@@ -98,10 +100,10 @@ export async function enforceFortressPermission(
 
   // Routes with explicit IAM permission requirement
   if (endpoint.meta?.permission) {
-    if (!userId)
-      throw Errors.unauthorized('User not authenticated');
+    if (!subject)
+      throw Errors.unauthorized('Not authenticated');
     const allowed = await enforcement.checkPermission(
-      userId,
+      subject,
       endpoint.meta.permission.resource,
       endpoint.meta.permission.action,
     );
@@ -112,8 +114,8 @@ export async function enforceFortressPermission(
 
   // Bearer-only routes — auth required, no IAM check
   if (security?.includes('bearer')) {
-    if (!userId)
-      throw Errors.unauthorized('User not authenticated');
+    if (!subject)
+      throw Errors.unauthorized('Not authenticated');
     return;
   }
 

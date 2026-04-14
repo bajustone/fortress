@@ -22,6 +22,80 @@
 ## [Unreleased]
 
 ### Added
+- **`SERVICE_ACCOUNT` is now a first-class core IAM citizen.** Previously
+  `SERVICE_ACCOUNT` existed only as a `SubjectType` enum value and any role
+  binding to one was silently dropped at permission-check time. Service
+  accounts are now a fully-supported IAM entity with CRUD endpoints, role
+  bindings, direct permission bindings, and api-key authentication. Typical
+  use: CI/CD, M2M communication, mobile devices, or any machine principal
+  that should hold scoped permissions without being tied to a human user.
+  - **New table: `fortress_service_account`**. Columns: `id`, `name`
+    (unique machine identifier, immutable after creation), `displayName`,
+    `description`, `isActive`, `createdAt`, `updatedAt`. Service accounts
+    are globally scoped at the table level — tenant scoping happens via
+    `role_binding.tenantId`, the same mechanism users use.
+  - **New `IamService` methods**: `createServiceAccount`,
+    `getServiceAccount`, `listServiceAccounts`, `updateServiceAccount`
+    (rejects `name` changes), `deleteServiceAccount` (hard delete with
+    cascade cleanup of bindings + api keys), plus
+    `bindRoleToServiceAccount`, `unbindRoleFromServiceAccount`,
+    `bindPermissionToServiceAccount`, `unbindPermissionFromServiceAccount`.
+  - **New HTTP endpoints** under `/iam/service-accounts/*`: create, list,
+    get, patch, delete, `GET /iam/service-accounts/:id/permissions`,
+    `POST/DELETE /iam/roles/:id/bind/service-account`, and
+    `POST/DELETE /iam/permissions/bind/service-account`. All require the
+    new `fortress:createServiceAccount` / `fortress:viewServiceAccounts` /
+    `fortress:manageServiceAccount` permissions.
+  - **api-key plugin authenticates service accounts.** Keys can now belong
+    to either a USER or a SERVICE_ACCOUNT. The plugin implements the new
+    `resolvePrincipal` plugin capability (see below) so incoming requests
+    with `Authorization: ApiKey <key>` or `X-API-Key: <key>` headers
+    resolve to a subject principal end-to-end through RBAC. Deleting a
+    service account hard-deletes its api keys via the new multi-listener
+    IAM observer (no revocation step — the keys are gone).
+  - **The permission-resolution bug is fixed.** The legacy
+    `internal-adapter.getUserPermissions` hardcoded
+    `subject_type IN ('USER', 'GROUP')` in both the rawQuery and fallback
+    paths, silently dropping any `SERVICE_ACCOUNT` role binding. The new
+    `getSubjectPermissions(subject, tenantId?)` resolves permissions for
+    any subject type — users still walk their group memberships, service
+    accounts and other non-user subjects don't (they can't be group
+    members). The `direct_permission_binding` schema comment was also
+    updated from `'USER' | 'GROUP'` to
+    `'USER' | 'GROUP' | 'SERVICE_ACCOUNT'`.
+  - **Inactive service accounts authenticate to nothing.** Both
+    `resolveApiKey` and `getSubjectPermissions` short-circuit when
+    `service_account.isActive = false`, so deactivating a service account
+    immediately stops its keys from authenticating and drops any cached
+    permissions on the next check.
+- **New plugin capability: `resolvePrincipal`.** Plugins can now attach
+  non-JWT credential mechanisms to the request pipeline:
+  ```ts
+  resolvePrincipal?: (
+    request: Request,
+    ctx: PluginContext,
+  ) => Promise<{ subject: Subject; claims?: TokenClaims } | null>;
+  ```
+  Resolvers are tried in registration order; the first non-null return
+  wins. If none resolve, the JWT fallback runs as before. The api-key
+  plugin implements this; future credential plugins (OAuth client
+  credentials, mTLS, signed JWT assertions) can implement it the same way
+  without core changes.
+- **New `Subject` type.** `{ type: SubjectType; id: number }` —
+  discriminated principal shape threaded through
+  `IamService.checkPermission`, `enforceFortressPermission`,
+  `DispatchAuth`, and `PluginRouteContext`. Enables a single abstraction
+  across users, service accounts, and any future subject kinds.
+- **New `TokenClaims.subjectType` field.** JWTs now carry the subject type
+  alongside `sub`. Verifier defaults missing `subjectType` to `'USER'` so
+  tokens minted before this change keep verifying until they expire.
+- **`IamService.addIamObserver`** replaces `setIamObserver` (single-slot →
+  multi-listener). Enables plugins to coexist — the audit-log plugin keeps
+  its listener, and the api-key plugin attaches a cascade listener for
+  `SERVICE_ACCOUNT_DELETED`. Old `setIamObserver` is removed.
+- **Audit event types `SERVICE_ACCOUNT_CREATED`, `SERVICE_ACCOUNT_UPDATED`,
+  `SERVICE_ACCOUNT_DELETED`** added to the audit-log plugin's
+  `AuditEventType` union.
 - **`api-key` plugin now ships self-service HTTP routes — opt-in.** Pass
   `apiKey({ routes: true })` to mount four endpoints under `/api-key/keys/*`:
   `POST /api-key/keys` (create), `GET /api-key/keys` (list), `DELETE
@@ -66,22 +140,65 @@
     as required.
 
 ### Changed (breaking)
-- **`api-key` plugin programmatic method signatures.** The methods on
-  `fortress.plugins['api-key']` now take a single object argument and an
-  optional `PluginRouteContext`, matching the rest of the plugin system:
+- **`IamService.checkPermission` and `getUserPermissions` are now
+  subject-aware.** The first argument is a `Subject`, not a bare `userId`.
+  The old `getUserPermissions(userId, tenantId?)` is removed — use
+  `getPermissionsForSubject({ type: 'USER', id: userId }, tenantId?)` for
+  users or `{ type: 'SERVICE_ACCOUNT', id }` for service accounts.
   ```ts
   // Before
-  await fortress.plugins['api-key'].createKey(userId, { name, scopes });
-  await fortress.plugins['api-key'].listKeys(userId);
-  await fortress.plugins['api-key'].revokeKey(userId, id);
-  await fortress.plugins['api-key'].rotateKey(userId, id);
+  fortress.iam.checkPermission(userId, 'post', 'read');
+  fortress.iam.getUserPermissions(userId, tenantId);
   // After
-  await fortress.plugins['api-key'].createKey({ userId, name, scopes });
+  fortress.iam.checkPermission({ type: 'USER', id: userId }, 'post', 'read');
+  fortress.iam.getPermissionsForSubject({ type: 'USER', id: userId }, tenantId);
+  ```
+- **`api-key` plugin method signatures now take a `subject` instead of a
+  `userId`.** The polymorphic `(subject_type, subject_id)` schema mirrors
+  `role_binding` / `direct_permission_binding`, and lets keys belong to
+  service accounts as well as users.
+  ```ts
+  // Before
+  await fortress.plugins['api-key'].createKey({ userId, name });
   await fortress.plugins['api-key'].listKeys({ userId });
   await fortress.plugins['api-key'].revokeKey({ userId, id });
   await fortress.plugins['api-key'].rotateKey({ userId, id });
+  // After
+  await fortress.plugins['api-key'].createKey({ subject: { type: 'USER', id: userId }, name });
+  await fortress.plugins['api-key'].listKeys({ subject: { type: 'USER', id: userId } });
+  await fortress.plugins['api-key'].revokeKey({ subject: { type: 'USER', id: userId }, id });
+  await fortress.plugins['api-key'].rotateKey({ subject: { type: 'USER', id: userId }, id });
   ```
-  `resolveKey(rawKey)` is unchanged.
+  `resolveKey(rawKey)` now returns `{ subject, scopes }` instead of
+  `{ userId, scopes }`.
+- **`ApiKeyConfig.maxKeysPerUser` → `maxKeysPerSubject`.** The config
+  knob now counts keys per subject (either USER or SERVICE_ACCOUNT)
+  rather than per user specifically.
+- **`api_key` schema migration.** `user_id` is replaced by
+  `(subject_type, subject_id)`. For installs that manage their own
+  schema, apply the following SQL:
+  ```sql
+  ALTER TABLE fortress_api_key ADD COLUMN subject_type varchar(20) NOT NULL DEFAULT 'USER';
+  ALTER TABLE fortress_api_key RENAME COLUMN user_id TO subject_id;
+  ALTER TABLE fortress_api_key DROP CONSTRAINT IF EXISTS fortress_api_key_user_id_fkey;
+  CREATE INDEX api_key_subject_idx ON fortress_api_key (subject_type, subject_id);
+  ```
+- **`IamService.setIamObserver` → `addIamObserver`.** Semantics change
+  from single-slot overwrite to append-only. Multiple plugins (audit log,
+  api-key cascade, etc.) can now attach listeners without clobbering
+  each other.
+- **`enforceFortressPermission` takes a `Subject`** instead of
+  `userId: number | undefined`. `PermissionEnforcement.checkPermission`
+  signature changes likewise. Custom adapters that call these directly
+  need to pass a `Subject`.
+- **`DispatchAuth.subject`** is the canonical principal field.
+  `DispatchAuth.userId` remains as a convenience alias (`subject.id` when
+  `subject.type === 'USER'`, otherwise `undefined`) so most existing
+  handlers keep working.
+- **`POST /iam/check` body shape accepts `{ subject, resource, action }`**
+  in addition to the legacy `{ userId, resource, action }`. The dispatcher
+  prefers `subject` when present; the userId form is kept for backwards
+  compatibility until the next major and will be removed.
 - **`POST /webauthn/register/options` and `POST /webauthn/register/verify`
   no longer accept `userId` in the request body.** The passkey is always
   registered against the authenticated caller (`ctx.userId`). Clients

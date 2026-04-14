@@ -1,44 +1,53 @@
-import type { Permission } from '../types';
+import type { Permission, Subject } from '../types';
 
 interface CacheEntry {
   permissions: Permission[];
   expiresAt: number;
 }
 
+/**
+ * Build a stable cache key for a subject. The `${type}:${id}` form partitions
+ * users from service accounts (and any future subject types) so a USER and a
+ * SERVICE_ACCOUNT with the same numeric id never collide.
+ */
+export function subjectCacheKey(subject: Subject): string {
+  return `${subject.type}:${subject.id}`;
+}
+
 export interface PermissionCache {
-  get: (userId: number) => Permission[] | undefined;
-  set: (userId: number, permissions: Permission[]) => void;
-  invalidate: (userId: number) => void;
+  get: (key: string) => Permission[] | undefined;
+  set: (key: string, permissions: Permission[]) => void;
+  invalidate: (key: string) => void;
   invalidateAll: () => void;
 }
 
 export function createPermissionCache(ttlMs: number, maxEntries: number): PermissionCache {
-  const store = new Map<number, CacheEntry>();
+  const store = new Map<string, CacheEntry>();
 
   return {
-    get(userId: number): Permission[] | undefined {
-      const entry = store.get(userId);
+    get(key: string): Permission[] | undefined {
+      const entry = store.get(key);
       if (!entry)
         return undefined;
       if (Date.now() > entry.expiresAt) {
-        store.delete(userId);
+        store.delete(key);
         return undefined;
       }
       return entry.permissions;
     },
 
-    set(userId: number, permissions: Permission[]): void {
+    set(key: string, permissions: Permission[]): void {
       // Evict oldest entry if at capacity
-      if (store.size >= maxEntries && !store.has(userId)) {
+      if (store.size >= maxEntries && !store.has(key)) {
         const oldest = store.keys().next().value;
         if (oldest !== undefined)
           store.delete(oldest);
       }
-      store.set(userId, { permissions, expiresAt: Date.now() + ttlMs });
+      store.set(key, { permissions, expiresAt: Date.now() + ttlMs });
     },
 
-    invalidate(userId: number): void {
-      store.delete(userId);
+    invalidate(key: string): void {
+      store.delete(key);
     },
 
     invalidateAll(): void {

@@ -118,6 +118,7 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
         // Issue access token via the auth service
         const accessToken = await ctx.auth!.signToken({
           sub: user.id,
+          subjectType: 'USER',
           name: user.name,
           groups: [],
           iss: 'fortress',

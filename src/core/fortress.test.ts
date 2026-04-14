@@ -32,7 +32,7 @@ describe('createFortress', () => {
 
     expect(fortress.iam).toBeDefined();
     expect(fortress.iam.checkPermission).toBeTypeOf('function');
-    expect(fortress.iam.getUserPermissions).toBeTypeOf('function');
+    expect(fortress.iam.getPermissionsForSubject).toBeTypeOf('function');
     expect(fortress.iam.createRole).toBeTypeOf('function');
     expect(fortress.iam.bindRoleToUser).toBeTypeOf('function');
     expect(fortress.iam.bindRoleToGroup).toBeTypeOf('function');

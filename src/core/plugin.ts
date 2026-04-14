@@ -9,6 +9,7 @@ import type {
   CreateUserInput,
   FortressUser,
   RequestMeta,
+  Subject,
   TokenClaims,
 } from './types';
 
@@ -50,6 +51,26 @@ export interface FortressPlugin {
     model: string,
     ctx: PluginContext,
   ) => Promise<ScopeRule | null>;
+
+  /**
+   * Resolve a request principal from a non-JWT credential — API key,
+   * OAuth bearer, mTLS client cert, signed JWT assertion, etc.
+   *
+   * Called by `fortress.handleRequest` **before** the JWT fallback. Plugins
+   * are tried in registration order; the first to return a non-null result
+   * wins, and its subject (plus optional claims) become the request
+   * principal for downstream RBAC. Returning `null` means "defer" — the
+   * next plugin is tried, and if none resolve, the core JWT path runs.
+   *
+   * This is the extension point for any future credential mechanism. The
+   * api-key plugin implements it to turn `Authorization: ApiKey <key>` /
+   * `X-API-Key: <key>` headers into a `USER` or `SERVICE_ACCOUNT`
+   * principal.
+   */
+  resolvePrincipal?: (
+    request: Request,
+    ctx: PluginContext,
+  ) => Promise<{ subject: Subject; claims?: TokenClaims } | null>;
 }
 
 // --- Hooks ---
@@ -118,11 +139,16 @@ export type RouteDefinition = import('./endpoint').EndpointDefinition;
  * make authorization decisions, stamp audit entries, or read headers/cookies
  * without trusting client-supplied body fields.
  *
- * `userId` / `claims` are populated whenever the endpoint's `meta.security`
- * declared bearer auth (the dispatcher runs token verification first).
- * For public endpoints they are `undefined`.
+ * `subject` / `claims` are populated whenever the endpoint's `meta.security`
+ * declared bearer auth (the dispatcher resolves principals first). `userId`
+ * is a convenience — it's present iff `subject?.type === 'USER'`, matching
+ * the pre-SERVICE_ACCOUNT shape. For public endpoints all three are
+ * `undefined`.
  */
 export interface PluginRouteContext {
+  /** Resolved request principal — USER or SERVICE_ACCOUNT. */
+  subject?: Subject;
+  /** Convenience alias for `subject?.id` when the subject is a USER. */
   userId?: number;
   claims?: TokenClaims;
   meta?: RequestMeta;

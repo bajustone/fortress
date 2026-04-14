@@ -76,10 +76,10 @@ describe('inline permissions (direct binding)', () => {
 
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
 
-    const allowed = await fortress.iam.checkPermission(user.id, 'post', 'read');
+    const allowed = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'read');
     expect(allowed).toBe(true);
 
-    const denied = await fortress.iam.checkPermission(user.id, 'post', 'delete');
+    const denied = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'delete');
     expect(denied).toBe(false);
   });
 
@@ -94,7 +94,7 @@ describe('inline permissions (direct binding)', () => {
     await fortress.iam.addUserToGroup(group.id, user.id);
     await fortress.iam.bindPermissionToGroup(group.id, { resource: 'post', action: 'update' });
 
-    const allowed = await fortress.iam.checkPermission(user.id, 'post', 'update');
+    const allowed = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'update');
     expect(allowed).toBe(true);
   });
 
@@ -106,13 +106,13 @@ describe('inline permissions (direct binding)', () => {
     });
 
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
-    expect(await fortress.iam.checkPermission(user.id, 'post', 'read')).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'read')).toBe(true);
 
-    const perms = await fortress.iam.getUserPermissions(user.id);
+    const perms = await fortress.iam.getPermissionsForSubject({ type: 'USER', id: user.id });
     const perm = perms.find(p => p.resource === 'post' && p.action === 'read');
     await fortress.iam.unbindPermissionFromUser(user.id, perm!.id);
 
-    expect(await fortress.iam.checkPermission(user.id, 'post', 'read')).toBe(false);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'read')).toBe(false);
   });
 
   it('direct and role-based permissions combine', async () => {
@@ -126,9 +126,9 @@ describe('inline permissions (direct binding)', () => {
     await fortress.iam.bindRoleToUser(user.id, role.id);
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'update' });
 
-    expect(await fortress.iam.checkPermission(user.id, 'post', 'read')).toBe(true);
-    expect(await fortress.iam.checkPermission(user.id, 'post', 'update')).toBe(true);
-    expect(await fortress.iam.checkPermission(user.id, 'post', 'delete')).toBe(false);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'read')).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'update')).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'delete')).toBe(false);
   });
 });
 
@@ -160,12 +160,12 @@ describe('tenant-scoped IAM', () => {
     await fortress.iam.bindRoleToUser(user.id, viewerRole.id, 'tenant-b');
 
     // Admin in tenant A
-    expect(await fortress.iam.checkPermission(user.id, 'settings', 'write', { tenantId: 'tenant-a' })).toBe(true);
-    expect(await fortress.iam.checkPermission(user.id, 'settings', 'read', { tenantId: 'tenant-a' })).toBe(false);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'settings', 'write', { tenantId: 'tenant-a' })).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'settings', 'read', { tenantId: 'tenant-a' })).toBe(false);
 
     // Viewer in tenant B
-    expect(await fortress.iam.checkPermission(user.id, 'settings', 'write', { tenantId: 'tenant-b' })).toBe(false);
-    expect(await fortress.iam.checkPermission(user.id, 'settings', 'read', { tenantId: 'tenant-b' })).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'settings', 'write', { tenantId: 'tenant-b' })).toBe(false);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'settings', 'read', { tenantId: 'tenant-b' })).toBe(true);
   });
 
   it('global role bindings apply across all tenants', async () => {
@@ -183,10 +183,10 @@ describe('tenant-scoped IAM', () => {
     await fortress.iam.bindRoleToUser(user.id, globalRole.id);
 
     // Should be accessible in any tenant context
-    expect(await fortress.iam.checkPermission(user.id, 'audit', 'read', { tenantId: 'tenant-a' })).toBe(true);
-    expect(await fortress.iam.checkPermission(user.id, 'audit', 'read', { tenantId: 'tenant-b' })).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'audit', 'read', { tenantId: 'tenant-a' })).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'audit', 'read', { tenantId: 'tenant-b' })).toBe(true);
     // And without tenant context
-    expect(await fortress.iam.checkPermission(user.id, 'audit', 'read')).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'audit', 'read')).toBe(true);
   });
 
   it('tenant-scoped direct permission binding', async () => {
@@ -198,8 +198,8 @@ describe('tenant-scoped IAM', () => {
 
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'billing', action: 'manage' }, 'tenant-a');
 
-    expect(await fortress.iam.checkPermission(user.id, 'billing', 'manage', { tenantId: 'tenant-a' })).toBe(true);
-    expect(await fortress.iam.checkPermission(user.id, 'billing', 'manage', { tenantId: 'tenant-b' })).toBe(false);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'billing', 'manage', { tenantId: 'tenant-a' })).toBe(true);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'billing', 'manage', { tenantId: 'tenant-b' })).toBe(false);
   });
 
   it('getUserPermissions filters by tenant', async () => {
@@ -215,11 +215,11 @@ describe('tenant-scoped IAM', () => {
     await fortress.iam.bindRoleToUser(user.id, roleA.id, 'tenant-a');
     await fortress.iam.bindRoleToUser(user.id, roleB.id, 'tenant-b');
 
-    const permsA = await fortress.iam.getUserPermissions(user.id, 'tenant-a');
+    const permsA = await fortress.iam.getPermissionsForSubject({ type: 'USER', id: user.id }, 'tenant-a');
     expect(permsA).toHaveLength(1);
     expect(permsA[0].action).toBe('write');
 
-    const permsB = await fortress.iam.getUserPermissions(user.id, 'tenant-b');
+    const permsB = await fortress.iam.getPermissionsForSubject({ type: 'USER', id: user.id }, 'tenant-b');
     expect(permsB).toHaveLength(1);
     expect(permsB[0].action).toBe('read');
   });

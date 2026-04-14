@@ -4,6 +4,8 @@ import type {
   LoginIdentifier,
   Permission,
   PermissionInput,
+  ServiceAccount,
+  Subject,
 } from './types';
 
 // --- Stored types for typed queries ---
@@ -30,8 +32,14 @@ export interface InternalAdapter {
   getUserGroups: (userId: number) => Promise<string[]>;
   /** Find a refresh token by its SHA-256 hash */
   findRefreshTokenByHash: (tokenHash: string) => Promise<StoredRefreshToken | null>;
-  /** Get all permissions for a user through direct + group role bindings */
-  getUserPermissions: (userId: number, tenantId?: string) => Promise<Permission[]>;
+  /**
+   * Resolve every permission that applies to a subject. For `USER` subjects,
+   * walks group memberships and unions their bindings. For `SERVICE_ACCOUNT`
+   * and other non-user subjects, only direct bindings on that subject are
+   * considered. Inactive service accounts return an empty list (the isActive
+   * gate is a second layer of defense alongside the api-key resolver).
+   */
+  getSubjectPermissions: (subject: Subject, tenantId?: string) => Promise<Permission[]>;
   /** Find an existing permission or create it if missing */
   findOrCreatePermission: (input: PermissionInput) => Promise<Permission>;
   /** Ensure a resource exists (no-op if already present) */
@@ -88,16 +96,57 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       });
     },
 
-    async getUserPermissions(userId: number, tenantId?: string): Promise<Permission[]> {
+    async getSubjectPermissions(subject: Subject, tenantId?: string): Promise<Permission[]> {
       const tenantFilter = tenantId != null;
+      const isUser = subject.type === 'USER';
+
+      // Inactive service accounts never resolve any permissions. This is the
+      // second line of defense — the api-key resolver also short-circuits on
+      // isActive=false so requests never reach the permission check.
+      if (subject.type === 'SERVICE_ACCOUNT') {
+        const sa = await db.findOne<ServiceAccount>({
+          model: 'service_account',
+          where: [{ field: 'id', operator: '=', value: subject.id }],
+        });
+        if (!sa || !sa.isActive)
+          return [];
+      }
 
       // Optimized path: single JOIN query when rawQuery is available
       if (db.rawQuery) {
         const rbTenant = tenantFilter ? ' AND (rb.tenant_id = ? OR rb.tenant_id IS NULL)' : '';
         const dpbTenant = tenantFilter ? ' AND (dpb.tenant_id = ? OR dpb.tenant_id IS NULL)' : '';
-        const params = tenantFilter
-          ? [userId, userId, tenantId, userId, userId, tenantId]
-          : [userId, userId, userId, userId];
+
+        // Role-binding predicate: always match the bare subject.
+        // For USER subjects, also union group memberships.
+        const rbPredicate = isUser
+          ? `((rb.subject_type = 'USER' AND rb.subject_id = ?)
+             OR (rb.subject_type = 'GROUP' AND rb.subject_id IN (
+               SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
+             )))`
+          : `(rb.subject_type = ? AND rb.subject_id = ?)`;
+
+        const dpbPredicate = isUser
+          ? `((dpb.subject_type = 'USER' AND dpb.subject_id = ?)
+             OR (dpb.subject_type = 'GROUP' AND dpb.subject_id IN (
+               SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
+             )))`
+          : `(dpb.subject_type = ? AND dpb.subject_id = ?)`;
+
+        const rbParams = isUser
+          ? [subject.id, subject.id]
+          : [subject.type, subject.id];
+        const dpbParams = isUser
+          ? [subject.id, subject.id]
+          : [subject.type, subject.id];
+
+        const params: unknown[] = [];
+        params.push(...rbParams);
+        if (tenantFilter)
+          params.push(tenantId);
+        params.push(...dpbParams);
+        if (tenantFilter)
+          params.push(tenantId);
 
         const rows = await db.rawQuery<Permission>(
           `SELECT DISTINCT p.id, p.resource, p.action, p.effect, p.conditions, p.description
@@ -106,17 +155,11 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
              -- Role-based permissions
              SELECT rp.permission_id FROM fortress_role_permission rp
              JOIN fortress_role_binding rb ON rb.role_id = rp.role_id
-             WHERE ((rb.subject_type = 'USER' AND rb.subject_id = ?)
-                OR (rb.subject_type = 'GROUP' AND rb.subject_id IN (
-                  SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
-                )))${rbTenant}
+             WHERE ${rbPredicate}${rbTenant}
              UNION
              -- Direct permission bindings
              SELECT dpb.permission_id FROM fortress_direct_permission_binding dpb
-             WHERE ((dpb.subject_type = 'USER' AND dpb.subject_id = ?)
-                OR (dpb.subject_type = 'GROUP' AND dpb.subject_id IN (
-                  SELECT gu.group_id FROM fortress_group_user gu WHERE gu.user_id = ?
-                )))${dpbTenant}
+             WHERE ${dpbPredicate}${dpbTenant}
            )`,
           params,
         );
@@ -134,19 +177,23 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         return bindings.filter(b => b.tenantId == null || b.tenantId === tenantId);
       }
 
-      // 1. Group memberships (shared by role-based and direct paths)
-      const groupMemberships = await db.findMany<{ groupId: number }>({
-        model: 'group_user',
-        where: [{ field: 'userId', operator: '=', value: userId }],
-      });
-      const groupIds = groupMemberships.map(m => m.groupId);
+      // 1. Group memberships — USER subjects only. Non-user subjects aren't
+      //    members of groups, so skip this lookup entirely.
+      let groupIds: number[] = [];
+      if (isUser) {
+        const groupMemberships = await db.findMany<{ groupId: number }>({
+          model: 'group_user',
+          where: [{ field: 'userId', operator: '=', value: subject.id }],
+        });
+        groupIds = groupMemberships.map(m => m.groupId);
+      }
 
-      // 2. Role-based permission IDs
+      // 2. Role-based permission IDs — direct bindings on the subject.
       const directRoleBindings = matchesTenant(await db.findMany<{ roleId: number; tenantId?: string | null }>({
         model: 'role_binding',
         where: [
-          { field: 'subjectType', operator: '=', value: 'USER' },
-          { field: 'subjectId', operator: '=', value: userId },
+          { field: 'subjectType', operator: '=', value: subject.type },
+          { field: 'subjectId', operator: '=', value: subject.id },
         ],
       }));
 
@@ -175,12 +222,12 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         rolePermissionIds = rolePerms.map(rp => rp.permissionId);
       }
 
-      // 3. Direct permission binding IDs
-      const directUserBindings = matchesTenant(await db.findMany<{ permissionId: number; tenantId?: string | null }>({
+      // 3. Direct permission binding IDs — on the subject directly.
+      const directSubjectBindings = matchesTenant(await db.findMany<{ permissionId: number; tenantId?: string | null }>({
         model: 'direct_permission_binding',
         where: [
-          { field: 'subjectType', operator: '=', value: 'USER' },
-          { field: 'subjectId', operator: '=', value: userId },
+          { field: 'subjectType', operator: '=', value: subject.type },
+          { field: 'subjectId', operator: '=', value: subject.id },
         ],
       }));
 
@@ -198,7 +245,7 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       // 4. Merge and deduplicate permission IDs
       const allPermissionIds = [...new Set([
         ...rolePermissionIds,
-        ...directUserBindings.map(b => b.permissionId),
+        ...directSubjectBindings.map(b => b.permissionId),
         ...directGroupBindings.map(b => b.permissionId),
       ])];
 

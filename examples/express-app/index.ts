@@ -91,7 +91,7 @@ const fortress = createFortress({
         console.warn(`[magic-link] email=${email} token=${token}`);
       },
     }),
-    apiKey({ prefix: 'fortress', maxKeysPerUser: 5, routes: true }),
+    apiKey({ prefix: 'fortress', maxKeysPerSubject: 5, routes: true }),
     // `routes: true` mounts /api-key/keys/* self-service endpoints.
     // `admin({ apiKeyRoutes: true })` above adds /admin/users/:userId/api-keys/*
     // admin routes, gated by the `apiKey:manage` permission.
@@ -407,7 +407,7 @@ app.post('/auth/api-keys', async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { name, scopes } = (req as any).body;
-    const result = await fortress.plugins['api-key'].createKey(userId, { name, scopes });
+    const result = await fortress.plugins['api-key'].createKey({ subject: { type: 'USER', id: userId }, name, scopes });
     res.status(201).json({ data: result });
   }
   catch (e) { next(e); }
@@ -416,7 +416,7 @@ app.post('/auth/api-keys', async (req, res, next) => {
 app.get('/auth/api-keys', async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const keys = await fortress.plugins['api-key'].listKeys(userId);
+    const keys = await fortress.plugins['api-key'].listKeys({ subject: { type: 'USER', id: userId } });
     res.json({ data: keys });
   }
   catch (e) { next(e); }
@@ -426,7 +426,7 @@ app.delete('/auth/api-keys/:id', async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const keyId = Number((req as any).params.id);
-    await fortress.plugins['api-key'].revokeKey(userId, keyId);
+    await fortress.plugins['api-key'].revokeKey({ subject: { type: 'USER', id: userId }, id: keyId });
     res.json({ data: { revoked: true } });
   }
   catch (e) { next(e); }

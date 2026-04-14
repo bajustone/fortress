@@ -23,6 +23,7 @@ function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema):
     refresh_token: schema.refreshTokens,
     group: schema.groups,
     group_user: schema.groupUsers,
+    service_account: schema.serviceAccounts,
     resource: schema.resources,
     permission: schema.permissions,
     role: schema.roles,

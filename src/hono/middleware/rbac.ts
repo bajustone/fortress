@@ -77,7 +77,7 @@ export function createRbacMiddleware(
       throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
     }
 
-    const allowed = await fortress.iam.checkPermission(userId, mapping.resource, mapping.action);
+    const allowed = await fortress.iam.checkPermission({ type: 'USER', id: userId }, mapping.resource, mapping.action);
     if (!allowed) {
       throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403);
     }

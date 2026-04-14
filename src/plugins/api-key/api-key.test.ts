@@ -1,5 +1,6 @@
 import type { Fortress } from '../../core/fortress';
 import type { PluginRouteContext } from '../../core/plugin';
+import type { Subject } from '../../core/types';
 import type { ApiKeyConfig, ApiKeyMethods } from './index';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
@@ -8,16 +9,21 @@ import { apiKey } from './index';
 
 const SECRET = 'api-key-test-secret-at-least-32!!';
 
-function httpCtx(uid: number | undefined): PluginRouteContext {
+function httpCtx(subject: Subject | undefined): PluginRouteContext {
   return {
-    userId: uid,
+    subject,
+    userId: subject?.type === 'USER' ? subject.id : undefined,
     claims: undefined,
     meta: undefined,
     request: new Request('http://localhost/api-key/keys'),
   };
 }
 
-async function setup(config: ApiKeyConfig = { prefix: 'test', maxKeysPerUser: 3 }): Promise<{
+function userSubject(id: number): Subject {
+  return { type: 'USER', id };
+}
+
+async function setup(config: ApiKeyConfig = { prefix: 'test', maxKeysPerSubject: 3 }): Promise<{
   fortress: Fortress<any>;
   methods: ApiKeyMethods;
   userId: number;
@@ -67,54 +73,54 @@ describe('api-key plugin — programmatic methods', () => {
 
   describe('createKey', () => {
     it('returns a key with the configured prefix', async () => {
-      const result = await methods.createKey({ userId, name: 'My Key' });
+      const result = await methods.createKey({ subject: userSubject(userId), name: 'My Key' });
       expect(result.key).toMatch(/^test_sk_[a-f0-9]{64}$/);
       expect(result.id).toBeDefined();
     });
 
-    it('enforces maxKeysPerUser', async () => {
-      await methods.createKey({ userId, name: 'Key 1' });
-      await methods.createKey({ userId, name: 'Key 2' });
-      await methods.createKey({ userId, name: 'Key 3' });
+    it('enforces maxKeysPerSubject', async () => {
+      await methods.createKey({ subject: userSubject(userId), name: 'Key 1' });
+      await methods.createKey({ subject: userSubject(userId), name: 'Key 2' });
+      await methods.createKey({ subject: userSubject(userId), name: 'Key 3' });
 
-      await expect(methods.createKey({ userId, name: 'Key 4' }))
+      await expect(methods.createKey({ subject: userSubject(userId), name: 'Key 4' }))
         .rejects
         .toThrow('Maximum of 3 active API keys');
     });
 
     it('does not count revoked keys toward the limit', async () => {
-      const { id } = await methods.createKey({ userId, name: 'Key 1' });
-      await methods.createKey({ userId, name: 'Key 2' });
-      await methods.createKey({ userId, name: 'Key 3' });
+      const { id } = await methods.createKey({ subject: userSubject(userId), name: 'Key 1' });
+      await methods.createKey({ subject: userSubject(userId), name: 'Key 2' });
+      await methods.createKey({ subject: userSubject(userId), name: 'Key 3' });
 
-      await methods.revokeKey({ userId, id });
+      await methods.revokeKey({ subject: userSubject(userId), id });
 
-      const result = await methods.createKey({ userId, name: 'Key 4' });
+      const result = await methods.createKey({ subject: userSubject(userId), name: 'Key 4' });
       expect(result.key).toBeTruthy();
     });
 
-    it('requires userId when called without routeCtx', async () => {
+    it('requires subject when called without routeCtx', async () => {
       await expect(methods.createKey({ name: 'Orphan' } as { name: string }))
         .rejects
-        .toThrow('userId is required');
+        .toThrow('subject is required');
     });
   });
 
   describe('listKeys', () => {
     it('returns only non-revoked keys', async () => {
-      const { id } = await methods.createKey({ userId, name: 'Key A' });
-      await methods.createKey({ userId, name: 'Key B' });
-      await methods.revokeKey({ userId, id });
+      const { id } = await methods.createKey({ subject: userSubject(userId), name: 'Key A' });
+      await methods.createKey({ subject: userSubject(userId), name: 'Key B' });
+      await methods.revokeKey({ subject: userSubject(userId), id });
 
-      const keys = await methods.listKeys({ userId });
+      const keys = await methods.listKeys({ subject: userSubject(userId) });
       expect(keys).toHaveLength(1);
       expect(keys[0].name).toBe('Key B');
     });
 
     it('never exposes the full key or hash', async () => {
-      await methods.createKey({ userId, name: 'Secret Key' });
+      await methods.createKey({ subject: userSubject(userId), name: 'Secret Key' });
 
-      const keys = await methods.listKeys({ userId });
+      const keys = await methods.listKeys({ subject: userSubject(userId) });
       const key = keys[0] as unknown as Record<string, unknown>;
 
       expect(key.keyPrefix).toBeTruthy();
@@ -122,12 +128,12 @@ describe('api-key plugin — programmatic methods', () => {
       expect(key).not.toHaveProperty('key');
     });
 
-    it('scopes by userId — one user cannot see another user\'s keys', async () => {
-      await methods.createKey({ userId, name: 'Alice Key' });
-      await methods.createKey({ userId: otherUserId, name: 'Bob Key' });
+    it('scopes by subject — one user cannot see another user\'s keys', async () => {
+      await methods.createKey({ subject: userSubject(userId), name: 'Alice Key' });
+      await methods.createKey({ subject: userSubject(otherUserId), name: 'Bob Key' });
 
-      const aliceKeys = await methods.listKeys({ userId });
-      const bobKeys = await methods.listKeys({ userId: otherUserId });
+      const aliceKeys = await methods.listKeys({ subject: userSubject(userId) });
+      const bobKeys = await methods.listKeys({ subject: userSubject(otherUserId) });
 
       expect(aliceKeys).toHaveLength(1);
       expect(aliceKeys[0].name).toBe('Alice Key');
@@ -138,16 +144,16 @@ describe('api-key plugin — programmatic methods', () => {
 
   describe('revokeKey', () => {
     it('marks a key as revoked', async () => {
-      const { key, id } = await methods.createKey({ userId, name: 'To Revoke' });
-      await methods.revokeKey({ userId, id });
+      const { key, id } = await methods.createKey({ subject: userSubject(userId), name: 'To Revoke' });
+      await methods.revokeKey({ subject: userSubject(userId), id });
 
       const resolved = await methods.resolveKey(key);
       expect(resolved).toBeNull();
     });
 
     it('rejects revoking another user\'s key', async () => {
-      const { id } = await methods.createKey({ userId: otherUserId, name: 'Bob Key' });
-      await expect(methods.revokeKey({ userId, id }))
+      const { id } = await methods.createKey({ subject: userSubject(otherUserId), name: 'Bob Key' });
+      await expect(methods.revokeKey({ subject: userSubject(userId), id }))
         .rejects
         .toThrow('API key not found');
     });
@@ -155,36 +161,37 @@ describe('api-key plugin — programmatic methods', () => {
 
   describe('rotateKey', () => {
     it('revokes the old key and creates a new one', async () => {
-      const original = await methods.createKey({ userId, name: 'Rotate Me' });
-      const rotated = await methods.rotateKey({ userId, id: original.id });
+      const original = await methods.createKey({ subject: userSubject(userId), name: 'Rotate Me' });
+      const rotated = await methods.rotateKey({ subject: userSubject(userId), id: original.id });
 
       const oldResolved = await methods.resolveKey(original.key);
       expect(oldResolved).toBeNull();
 
       const newResolved = await methods.resolveKey(rotated.key);
       expect(newResolved).not.toBeNull();
-      expect(newResolved!.userId).toBe(userId);
+      expect(newResolved!.subject.type).toBe('USER');
+      expect(newResolved!.subject.id).toBe(userId);
     });
   });
 
   describe('resolveKey', () => {
     it('resolves a valid key', async () => {
-      const { key } = await methods.createKey({ userId, name: 'Valid Key' });
+      const { key } = await methods.createKey({ subject: userSubject(userId), name: 'Valid Key' });
       const result = await methods.resolveKey(key);
       expect(result).not.toBeNull();
-      expect(result!.userId).toBe(userId);
+      expect(result!.subject).toEqual({ type: 'USER', id: userId });
     });
 
     it('rejects a revoked key', async () => {
-      const { key, id } = await methods.createKey({ userId, name: 'Revoked Key' });
-      await methods.revokeKey({ userId, id });
+      const { key, id } = await methods.createKey({ subject: userSubject(userId), name: 'Revoked Key' });
+      await methods.revokeKey({ subject: userSubject(userId), id });
       const result = await methods.resolveKey(key);
       expect(result).toBeNull();
     });
 
     it('rejects an expired key', async () => {
       const { key } = await methods.createKey({
-        userId,
+        subject: userSubject(userId),
         name: 'Expired Key',
         expiresAt: new Date(Date.now() - 1000),
       });
@@ -193,14 +200,14 @@ describe('api-key plugin — programmatic methods', () => {
     });
 
     it('updates lastUsedAt on resolve', async () => {
-      const { key } = await methods.createKey({ userId, name: 'Track Usage' });
+      const { key } = await methods.createKey({ subject: userSubject(userId), name: 'Track Usage' });
 
-      let keys = await methods.listKeys({ userId });
+      let keys = await methods.listKeys({ subject: userSubject(userId) });
       expect(keys[0].lastUsedAt).toBeNull();
 
       await methods.resolveKey(key);
 
-      keys = await methods.listKeys({ userId });
+      keys = await methods.listKeys({ subject: userSubject(userId) });
       expect(keys[0].lastUsedAt).toBeTruthy();
     });
 
@@ -213,43 +220,43 @@ describe('api-key plugin — programmatic methods', () => {
   describe('scoped keys', () => {
     it('returns the correct scopes on resolve', async () => {
       const scopes = ['article:read', 'article:list'];
-      const { key } = await methods.createKey({ userId, name: 'Scoped Key', scopes });
+      const { key } = await methods.createKey({ subject: userSubject(userId), name: 'Scoped Key', scopes });
       const result = await methods.resolveKey(key);
       expect(result!.scopes).toEqual(scopes);
     });
 
     it('returns null scopes for an unscoped key', async () => {
-      const { key } = await methods.createKey({ userId, name: 'Unscoped Key' });
+      const { key } = await methods.createKey({ subject: userSubject(userId), name: 'Unscoped Key' });
       const result = await methods.resolveKey(key);
       expect(result!.scopes).toBeNull();
     });
   });
 });
 
-describe('api-key plugin — dual-mode (routeCtx takes precedence over body.userId)', () => {
-  it('uses routeCtx.userId and ignores body.userId when routeCtx is present', async () => {
+describe('api-key plugin — dual-mode (routeCtx takes precedence over input.subject)', () => {
+  it('uses routeCtx.subject and ignores input.subject when routeCtx is present', async () => {
     const { methods, userId, otherUserId } = await setup();
 
-    // Caller tries to forge a key for another user by passing userId in body.
-    // The route-mode invocation must ignore body.userId and trust routeCtx.
+    // Caller tries to forge a key for another subject by passing subject in input.
+    // The route-mode invocation must ignore input.subject and trust routeCtx.
     const result = await methods.createKey(
-      { userId: otherUserId, name: 'Forged' },
-      httpCtx(userId),
+      { subject: userSubject(otherUserId), name: 'Forged' },
+      httpCtx(userSubject(userId)),
     );
 
     // Key should belong to the authenticated caller, not the forged target
-    const aliceKeys = await methods.listKeys({ userId });
-    const bobKeys = await methods.listKeys({ userId: otherUserId });
+    const aliceKeys = await methods.listKeys({ subject: userSubject(userId) });
+    const bobKeys = await methods.listKeys({ subject: userSubject(otherUserId) });
 
     expect(aliceKeys.map(k => k.id)).toContain(result.id);
     expect(bobKeys.map(k => k.id)).not.toContain(result.id);
   });
 
-  it('throws UNAUTHORIZED when routeCtx.userId is missing', async () => {
+  it('throws UNAUTHORIZED when routeCtx.subject is missing', async () => {
     const { methods } = await setup();
     await expect(methods.createKey({ name: 'X' } as { name: string }, httpCtx(undefined)))
       .rejects
-      .toThrow('User not authenticated');
+      .toThrow('Not authenticated');
   });
 });
 
@@ -271,7 +278,7 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
 
     it('programmatic methods still work', async () => {
       const { methods, userId } = await setup({ prefix: 'test' });
-      const result = await methods.createKey({ userId, name: 'Programmatic' });
+      const result = await methods.createKey({ subject: userSubject(userId), name: 'Programmatic' });
       expect(result.key).toMatch(/^test_sk_/);
     });
   });
@@ -287,26 +294,26 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
       expect(res.status).toBe(401);
     });
 
-    it('creates a key for claims.sub and ignores body.userId on POST', async () => {
+    it('creates a key for the authenticated subject and ignores body.subject on POST', async () => {
       const { fortress, methods, userId, otherUserId, accessToken } = await setup({
         prefix: 'test',
         routes: true,
       });
 
-      // Caller tries to set userId in the body — should be ignored.
+      // Caller tries to forge a key for another user via body.subject — should be ignored.
       const res = await fortress.handleRequest(new Request('http://localhost/api-key/keys', {
         method: 'POST',
         headers: {
           'authorization': `Bearer ${accessToken}`,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ userId: otherUserId, name: 'Forged via HTTP' }),
+        body: JSON.stringify({ subject: userSubject(otherUserId), name: 'Forged via HTTP' }),
       }));
       expect(res.status).toBe(201);
       const body = await res.json() as { key: string; id: number };
       expect(body.key).toMatch(/^test_sk_/);
 
-      const aliceKeys = await methods.listKeys({ userId });
+      const aliceKeys = await methods.listKeys({ subject: userSubject(userId) });
       expect(aliceKeys.map(k => k.id)).toContain(body.id);
     });
 
@@ -316,8 +323,8 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
         routes: true,
       });
 
-      await methods.createKey({ userId, name: 'Alice HTTP' });
-      await methods.createKey({ userId: otherUserId, name: 'Bob Silent' });
+      await methods.createKey({ subject: userSubject(userId), name: 'Alice HTTP' });
+      await methods.createKey({ subject: userSubject(otherUserId), name: 'Bob Silent' });
 
       const res = await fortress.handleRequest(new Request('http://localhost/api-key/keys', {
         headers: { authorization: `Bearer ${accessToken}` },
@@ -336,7 +343,7 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
         routes: true,
       });
 
-      const { id } = await methods.createKey({ userId: otherUserId, name: 'Bob Key' });
+      const { id } = await methods.createKey({ subject: userSubject(otherUserId), name: 'Bob Key' });
 
       const res = await fortress.handleRequest(new Request(`http://localhost/api-key/keys/${id}`, {
         method: 'DELETE',
@@ -345,7 +352,7 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
       expect(res.status).toBe(404);
 
       // Key still resolves — not actually revoked
-      const bobKeys = await methods.listKeys({ userId: otherUserId });
+      const bobKeys = await methods.listKeys({ subject: userSubject(otherUserId) });
       expect(bobKeys.some(k => k.id === id)).toBe(true);
     });
 
@@ -355,7 +362,7 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
         routes: true,
       });
 
-      const original = await methods.createKey({ userId, name: 'Rotate Me' });
+      const original = await methods.createKey({ subject: userSubject(userId), name: 'Rotate Me' });
 
       const res = await fortress.handleRequest(new Request(`http://localhost/api-key/keys/${original.id}/rotate`, {
         method: 'POST',
@@ -373,7 +380,144 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
       expect(await methods.resolveKey(original.key)).toBeNull();
       // New key does
       const newResolved = await methods.resolveKey(body.key);
-      expect(newResolved!.userId).toBe(userId);
+      expect(newResolved!.subject).toEqual({ type: 'USER', id: userId });
     });
+  });
+});
+
+// ── Service account pipeline ────────────────────────────────────────
+
+describe('api-key plugin — SERVICE_ACCOUNT subjects', () => {
+  it('createKey for a SERVICE_ACCOUNT subject works programmatically', async () => {
+    const { fortress, methods } = await setup();
+    const sa = await fortress.iam.createServiceAccount({ name: 'ci-deploy' });
+
+    const result = await methods.createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+      name: 'CI Deploy Key',
+    });
+    expect(result.key).toMatch(/^test_sk_/);
+
+    const resolved = await methods.resolveKey(result.key);
+    expect(resolved!.subject).toEqual({ type: 'SERVICE_ACCOUNT', id: sa.id });
+  });
+
+  it('listKeys scopes by (subjectType, subjectId)', async () => {
+    const { fortress, methods, userId } = await setup();
+    const sa = await fortress.iam.createServiceAccount({ name: 'iso' });
+
+    // Create a USER key with the same numeric id would require a user with that id.
+    // Use the existing user but also create a SA key.
+    await methods.createKey({ subject: userSubject(userId), name: 'User Key' });
+    await methods.createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+      name: 'SA Key',
+    });
+
+    const userKeys = await methods.listKeys({ subject: userSubject(userId) });
+    const saKeys = await methods.listKeys({ subject: { type: 'SERVICE_ACCOUNT', id: sa.id } });
+
+    expect(userKeys.map(k => k.name)).toEqual(['User Key']);
+    expect(saKeys.map(k => k.name)).toEqual(['SA Key']);
+  });
+
+  it('resolveKey returns null for an inactive service account', async () => {
+    const { fortress, methods } = await setup();
+    const sa = await fortress.iam.createServiceAccount({ name: 'disabled' });
+
+    const { key } = await methods.createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+      name: 'Disabled Key',
+    });
+    expect(await methods.resolveKey(key)).not.toBeNull();
+
+    await fortress.iam.updateServiceAccount(sa.id, { isActive: false });
+    expect(await methods.resolveKey(key)).toBeNull();
+  });
+
+  it('cascade: deleting a service account hard-deletes its api keys', async () => {
+    const { fortress, methods } = await setup();
+    const sa = await fortress.iam.createServiceAccount({ name: 'to-delete' });
+
+    const { key, id } = await methods.createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+      name: 'Cascade Me',
+    });
+
+    await fortress.iam.deleteServiceAccount(sa.id);
+
+    // Key is gone entirely — not just revoked.
+    const remaining = await fortress.config.database.findMany({
+      model: 'api_key',
+      where: [{ field: 'id', operator: '=', value: id }],
+    });
+    expect(remaining).toHaveLength(0);
+
+    // resolveKey returns null for the now-deleted key
+    expect(await methods.resolveKey(key)).toBeNull();
+  });
+
+  it('authorization: ApiKey header authenticates a service account request', async () => {
+    const { fortress, methods } = await setup({ prefix: 'test', routes: true });
+    const sa = await fortress.iam.createServiceAccount({ name: 'ci-authed' });
+
+    // Bind the service account to a role that grants fortress:viewServiceAccounts
+    // so it can hit a real fortress-managed route.
+    const role = await fortress.iam.createRole('ci-viewer', [
+      { resource: 'fortress', action: 'viewServiceAccounts' },
+    ]);
+    await fortress.iam.bindRoleToServiceAccount(sa.id, role.id);
+
+    const { key } = await methods.createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+      name: 'ci-key',
+    });
+
+    const res = await fortress.handleRequest(
+      new Request('http://localhost/iam/service-accounts', {
+        headers: { authorization: `ApiKey ${key}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { serviceAccounts: unknown[]; total: number };
+    expect(body.total).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rejects a service account request without the bound role via 403', async () => {
+    const { fortress, methods } = await setup({ prefix: 'test', routes: true });
+    const sa = await fortress.iam.createServiceAccount({ name: 'unbound' });
+
+    const { key } = await methods.createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+      name: 'unbound-key',
+    });
+
+    const res = await fortress.handleRequest(
+      new Request('http://localhost/iam/service-accounts', {
+        headers: { authorization: `ApiKey ${key}` },
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('x-api-key header is accepted as an alternative to Authorization', async () => {
+    const { fortress, methods } = await setup();
+    const sa = await fortress.iam.createServiceAccount({ name: 'xheader' });
+    const role = await fortress.iam.createRole('xh-role', [
+      { resource: 'fortress', action: 'viewServiceAccounts' },
+    ]);
+    await fortress.iam.bindRoleToServiceAccount(sa.id, role.id);
+
+    const { key } = await methods.createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+      name: 'xheader-key',
+    });
+
+    const res = await fortress.handleRequest(
+      new Request('http://localhost/iam/service-accounts', {
+        headers: { 'x-api-key': key },
+      }),
+    );
+    expect(res.status).toBe(200);
   });
 });

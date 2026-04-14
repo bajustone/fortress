@@ -6,6 +6,10 @@ The `api-key` plugin adds scoped API key management to Fortress. It is designed 
 
 Keys are generated with a configurable prefix, hashed with SHA-256 before storage, and can be scoped to limit what actions a key is allowed to perform.
 
+**Polymorphic ownership.** Keys are owned by a `Subject` — either a `USER` or a `SERVICE_ACCOUNT`. The api-key schema stores `(subject_type, subject_id)` instead of a hard FK to `users.id`, mirroring `role_binding` and `direct_permission_binding`. Authentication flows support both subject types transparently.
+
+**Automatic request principal resolution.** The plugin implements Fortress's `resolvePrincipal` capability: when a request arrives with an `Authorization: ApiKey <key>` or `X-API-Key: <key>` header, the plugin resolves the key to its owning subject and that subject becomes the request principal for RBAC. No middleware setup required — just register the plugin.
+
 ## Installation
 
 Import the `apiKey` factory and pass it in the `plugins` array when creating a Fortress instance:
@@ -21,7 +25,7 @@ const fortress = createFortress({
     apiKey({
       prefix: 'myapp',
       defaultExpirySeconds: 90 * 24 * 60 * 60, // 90 days
-      maxKeysPerUser: 5,
+      maxKeysPerSubject: 5,
     }),
   ],
 });
@@ -37,15 +41,24 @@ All fields on `ApiKeyConfig` are optional:
 |---|---|---|---|
 | `prefix` | `string` | `'fortress'` | Prefix prepended to generated keys. Keys are formatted as `{prefix}_sk_{hex}`. |
 | `defaultExpirySeconds` | `number \| null` | `null` | Default time-to-live for new keys, in seconds. `null` means keys never expire unless an explicit `expiresAt` is provided at creation time. |
-| `maxKeysPerUser` | `number` | `10` | Maximum number of active (non-revoked) keys a single user can hold. Revoked keys do not count toward this limit. |
+| `maxKeysPerSubject` | `number` | `10` | Maximum number of active (non-revoked) keys a single subject (user or service account) can hold. Revoked keys do not count toward this limit. |
+| `routes` | `boolean` | `false` | Mount self-service HTTP routes under `/api-key/keys/*`. The programmatic methods on `fortress.plugins['api-key']` are always available regardless of this flag. |
 
 ## Usage
 
 ### Creating a key
 
 ```ts
-const { key, id } = await fortress.plugins['api-key'].createKey(userId, {
+// For a user
+const { key, id } = await fortress.plugins['api-key'].createKey({
+  subject: { type: 'USER', id: userId },
   name: 'CI deploy token',
+});
+
+// For a service account (see IAM docs for createServiceAccount)
+const { key: saKey } = await fortress.plugins['api-key'].createKey({
+  subject: { type: 'SERVICE_ACCOUNT', id: serviceAccountId },
+  name: 'ci-deploy-key',
 });
 
 // key = "myapp_sk_a1b2c3d4..." (the raw secret -- only returned once)
@@ -57,7 +70,8 @@ Store or display the raw `key` immediately. Fortress stores only the SHA-256 has
 You can set an explicit expiry:
 
 ```ts
-const { key } = await fortress.plugins['api-key'].createKey(userId, {
+const { key } = await fortress.plugins['api-key'].createKey({
+  subject: { type: 'USER', id: userId },
   name: 'Temp key',
   expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour from now
 });
@@ -68,27 +82,35 @@ If neither `expiresAt` nor `defaultExpirySeconds` is set, the key never expires.
 ### Listing keys
 
 ```ts
-const keys = await fortress.plugins['api-key'].listKeys(userId);
+const keys = await fortress.plugins['api-key'].listKeys({
+  subject: { type: 'USER', id: userId },
+});
 
 for (const k of keys) {
   console.log(k.id, k.name, k.keyPrefix, k.scopes, k.expiresAt, k.lastUsedAt);
 }
 ```
 
-Returns only active (non-revoked) keys. Each entry includes a short `keyPrefix` (first 12 characters) for identification but never exposes the full key or its hash.
+Returns only active (non-revoked) keys scoped to the given subject. Each entry includes a short `keyPrefix` (first 12 characters) for identification but never exposes the full key or its hash.
 
 ### Revoking a key
 
 ```ts
-await fortress.plugins['api-key'].revokeKey(userId, keyId);
+await fortress.plugins['api-key'].revokeKey({
+  subject: { type: 'USER', id: userId },
+  id: keyId,
+});
 ```
 
-Marks the key as revoked. Revoked keys cannot be resolved and do not count toward the per-user limit. The `userId` parameter is checked against the key's owner -- attempting to revoke another user's key throws a `NotFound` error.
+Marks the key as revoked. Revoked keys cannot be resolved and do not count toward the per-subject limit. The `subject` parameter is checked against the key's owner — attempting to revoke a key that belongs to a different subject throws a `NotFound` error.
 
 ### Rotating a key
 
 ```ts
-const { key: newKey, id: newId } = await fortress.plugins['api-key'].rotateKey(userId, keyId);
+const { key: newKey, id: newId } = await fortress.plugins['api-key'].rotateKey({
+  subject: { type: 'USER', id: userId },
+  id: keyId,
+});
 ```
 
 Rotation is a single atomic operation that:
@@ -104,22 +126,45 @@ The old key stops working immediately. The new raw key is returned and must be s
 const result = await fortress.plugins['api-key'].resolveKey(rawKey);
 
 if (!result) {
-  // Key is invalid, revoked, or expired
+  // Key is invalid, revoked, expired, or owned by a disabled service account.
   throw new Error('Unauthorized');
 }
 
-console.log(result.userId); // owner of the key
-console.log(result.scopes); // string[] | null
+console.log(result.subject); // { type: 'USER' | 'SERVICE_ACCOUNT', id: number }
+console.log(result.scopes);  // string[] | null
 ```
 
-`resolveKey` hashes the provided raw key and looks it up in the database. It returns `null` when the key is unknown, revoked, or past its `expiresAt`. On success it also updates the key's `lastUsedAt` timestamp.
+`resolveKey` hashes the provided raw key and looks it up in the database. It returns `null` when the key is unknown, revoked, past its `expiresAt`, or owned by a service account with `isActive: false`. On success it also updates the key's `lastUsedAt` timestamp.
+
+### Authenticating incoming requests
+
+You don't need to call `resolveKey` yourself — the api-key plugin implements Fortress's `resolvePrincipal` capability, so `fortress.handleRequest` automatically resolves requests bearing an api-key header into a subject principal. Two header formats are accepted:
+
+```
+Authorization: ApiKey myapp_sk_a1b2c3d4...
+X-API-Key: myapp_sk_a1b2c3d4...
+```
+
+If neither header is present, the pipeline falls back to the JWT path. If both a JWT and an api-key are present, the api-key wins (resolvers run before the JWT fallback).
+
+Once resolved, the principal flows through the same RBAC machinery as a JWT-authenticated request:
+
+```ts
+// Inside a fortress-managed route or an adapter middleware RBAC check
+await fortress.iam.checkPermission(
+  ctx.subject,  // { type: 'USER' | 'SERVICE_ACCOUNT', id }
+  'deploy',
+  'run',
+);
+```
 
 ### Scoped keys
 
 Scopes let you restrict what an API key is allowed to do. Pass a `scopes` array at creation time:
 
 ```ts
-const { key } = await fortress.plugins['api-key'].createKey(userId, {
+const { key } = await fortress.plugins['api-key'].createKey({
+  subject: { type: 'USER', id: userId },
   name: 'Read-only analytics',
   scopes: ['analytics:read', 'reports:list'],
 });
@@ -141,11 +186,13 @@ If no scopes are provided, `resolveKey` returns `scopes: null`, which you can tr
 
 | Method | Signature | Returns |
 |---|---|---|
-| `createKey` | `(userId: number, options: { name: string; scopes?: string[]; expiresAt?: Date })` | `Promise<{ key: string; id: number }>` |
-| `listKeys` | `(userId: number)` | `Promise<ApiKeyInfo[]>` |
-| `revokeKey` | `(userId: number, keyId: number)` | `Promise<void>` |
-| `rotateKey` | `(userId: number, keyId: number)` | `Promise<{ key: string; id: number }>` |
-| `resolveKey` | `(rawKey: string)` | `Promise<{ userId: number; scopes: string[] \| null } \| null>` |
+| `createKey` | `(input: { subject?: Subject; name: string; scopes?: string[]; expiresAt?: Date }, routeCtx?: PluginRouteContext)` | `Promise<{ key: string; id: number }>` |
+| `listKeys` | `(input: { subject?: Subject }, routeCtx?: PluginRouteContext)` | `Promise<ApiKeyInfo[]>` |
+| `revokeKey` | `(input: { subject?: Subject; id: number \| string }, routeCtx?: PluginRouteContext)` | `Promise<{ ok: true }>` |
+| `rotateKey` | `(input: { subject?: Subject; id: number \| string }, routeCtx?: PluginRouteContext)` | `Promise<{ key: string; id: number }>` |
+| `resolveKey` | `(rawKey: string)` | `Promise<{ subject: Subject; scopes: string[] \| null } \| null>` |
+
+**Dual-mode `subject`.** When called from an HTTP route handler with a `routeCtx`, the plugin uses `routeCtx.subject` and ignores any `subject` supplied in `input` — clients can't pick which subject a key is created for. When called programmatically (no `routeCtx`), the plugin uses `input.subject`; programmatic callers are trusted.
 
 The `ApiKeyInfo` type returned by `listKeys`:
 

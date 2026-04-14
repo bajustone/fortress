@@ -36,7 +36,7 @@ describe('impersonation', () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
     const claims = await fortress.auth.verifyToken(result.accessToken as string);
 
-    expect(claims.act).toEqual({ sub: adminId });
+    expect(claims.act).toEqual({ sub: adminId, subjectType: 'USER' });
   });
 
   it('token has the target user sub, name, and groups', async () => {

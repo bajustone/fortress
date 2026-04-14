@@ -94,7 +94,7 @@ const fortress = createFortress({
         console.warn(`[magic-link] email=${email} token=${token}`);
       },
     }),
-    apiKey({ prefix: 'fortress', maxKeysPerUser: 5, routes: true }),
+    apiKey({ prefix: 'fortress', maxKeysPerSubject: 5, routes: true }),
     // ^ `routes: true` mounts the self-service HTTP endpoints:
     //   POST   /api-key/keys                   — create a key for the caller
     //   GET    /api-key/keys                   — list the caller's keys
@@ -423,14 +423,14 @@ app.post('/auth/email/send-verification', async (c) => {
 app.post('/auth/api-keys', async (c) => {
   const userId = getUserId(c);
   const { name, scopes } = await c.req.json();
-  const result = await fortress.plugins['api-key'].createKey(userId, { name, scopes });
+  const result = await fortress.plugins['api-key'].createKey({ subject: { type: 'USER', id: userId }, name, scopes });
   return c.json({ data: result }, 201);
 });
 
 // curl http://localhost:3000/auth/api-keys -H 'Authorization: Bearer <token>'
 app.get('/auth/api-keys', async (c) => {
   const userId = getUserId(c);
-  const keys = await fortress.plugins['api-key'].listKeys(userId);
+  const keys = await fortress.plugins['api-key'].listKeys({ subject: { type: 'USER', id: userId } });
   return c.json({ data: keys });
 });
 
@@ -438,7 +438,7 @@ app.get('/auth/api-keys', async (c) => {
 app.delete('/auth/api-keys/:id', async (c) => {
   const userId = getUserId(c);
   const keyId = Number(c.req.param('id'));
-  await fortress.plugins['api-key'].revokeKey(userId, keyId);
+  await fortress.plugins['api-key'].revokeKey({ subject: { type: 'USER', id: userId }, id: keyId });
   return c.json({ data: { revoked: true } });
 });
 
@@ -446,7 +446,7 @@ app.delete('/auth/api-keys/:id', async (c) => {
 app.post('/auth/api-keys/:id/rotate', async (c) => {
   const userId = getUserId(c);
   const keyId = Number(c.req.param('id'));
-  const result = await fortress.plugins['api-key'].rotateKey(userId, keyId);
+  const result = await fortress.plugins['api-key'].rotateKey({ subject: { type: 'USER', id: userId }, id: keyId });
   return c.json({ data: result });
 });
 

@@ -138,7 +138,7 @@ export function createSvelteKitHandle(
         if (mapping) {
           if (!userId)
             throw Errors.unauthorized('Not authenticated');
-          const allowed = await fortress.iam.checkPermission(userId, mapping.resource, mapping.action);
+          const allowed = await fortress.iam.checkPermission({ type: 'USER', id: userId }, mapping.resource, mapping.action);
           if (!allowed)
             throw Errors.forbidden('Insufficient permissions');
         }

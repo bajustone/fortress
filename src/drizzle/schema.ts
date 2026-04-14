@@ -1,6 +1,6 @@
 import type { AnySQLiteTable } from 'drizzle-orm/sqlite-core';
 
-import { integer, primaryKey, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
 
 // --- Core Identity ---
 
@@ -58,6 +58,18 @@ const groupUsers = sqliteTable(
   table => [primaryKey({ columns: [table.groupId, table.userId] })],
 );
 
+// --- IAM: Service Accounts ---
+
+const serviceAccounts = sqliteTable('fortress_service_account', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull().unique(),
+  displayName: text('display_name'),
+  description: text('description'),
+  isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
 // --- IAM: Resources & Permissions ---
 
 const resources = sqliteTable('fortress_resource', {
@@ -107,7 +119,7 @@ const roleBindings = sqliteTable('fortress_role_binding', {
 const directPermissionBindings = sqliteTable('fortress_direct_permission_binding', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   permissionId: integer('permission_id').notNull().references(() => permissions.id, { onDelete: 'cascade' }),
-  subjectType: text('subject_type').notNull(), // 'USER' | 'GROUP'
+  subjectType: text('subject_type').notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
   tenantId: text('tenant_id'),
 });
@@ -139,7 +151,8 @@ const magicLinkTokens = sqliteTable('fortress_magic_link_token', {
 
 const apiKeys = sqliteTable('fortress_api_key', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  subjectType: text('subject_type').notNull(), // 'USER' | 'SERVICE_ACCOUNT' — polymorphic owner
+  subjectId: integer('subject_id').notNull(),
   name: text('name').notNull(),
   keyHash: text('key_hash').notNull().unique(),
   keyPrefix: text('key_prefix').notNull(),
@@ -148,7 +161,7 @@ const apiKeys = sqliteTable('fortress_api_key', {
   lastUsedAt: integer('last_used_at', { mode: 'timestamp' }),
   isRevoked: integer('is_revoked', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [index('api_key_subject_idx').on(table.subjectType, table.subjectId)]);
 
 // --- Plugins: Two-Factor ---
 
@@ -368,6 +381,7 @@ export const fortressSchema: Record<string, AnySQLiteTable> = {
   refreshTokens,
   groups,
   groupUsers,
+  serviceAccounts,
   resources,
   permissions,
   roles,

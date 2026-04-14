@@ -135,7 +135,7 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   // Wire IAM events → audit log if the plugin is registered
   if (pluginMethods['audit-log']?.logCustomEvent) {
     const logCustomEvent = pluginMethods['audit-log'].logCustomEvent as (event: import('./iam/iam-service').IamEvent) => Promise<void>;
-    iam.setIamObserver(event => logCustomEvent(event));
+    iam.addIamObserver(event => logCustomEvent(event));
   }
 
   // Assemble all endpoint definitions: core auth + IAM + plugin routes

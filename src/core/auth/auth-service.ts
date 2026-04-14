@@ -163,6 +163,7 @@ export function createAuthService(
     const accessToken = await signAccessToken(
       {
         sub: user.id,
+        subjectType: 'USER',
         name: user.name,
         groups,
         iss: resolved.issuer,
@@ -330,6 +331,7 @@ export function createAuthService(
       const accessToken = await signAccessToken(
         {
           sub: user.id,
+          subjectType: 'USER',
           name: user.name,
           groups,
           iss: resolved.issuer,
@@ -562,10 +564,11 @@ export function createAuthService(
       const accessToken = await signAccessToken(
         {
           sub: targetUser.id,
+          subjectType: 'USER',
           name: targetUser.name,
           groups,
           iss: resolved.issuer,
-          act: { sub: adminUserId },
+          act: { sub: adminUserId, subjectType: 'USER' },
           customClaims: Object.keys(customClaims).length > 0 ? customClaims : undefined,
         },
         resolved.secret,

@@ -12,7 +12,7 @@
  */
 
 import type { Fortress } from '../fortress';
-import type { TokenClaims } from '../types';
+import type { Subject, TokenClaims } from '../types';
 import type { RouteEntry } from './match';
 import { resolveCookieConfig } from '../config';
 import { Errors, FortressError } from '../errors';
@@ -67,24 +67,50 @@ export function buildHandleRequest(
       }
       const { endpoint, params } = matched;
 
-      // 3. Token verification (only if the endpoint requires bearer auth).
+      // 3. Principal resolution. Three paths, tried in order:
       //
-      // OAuth endpoints declare `security: ['bearer']` but the bearer is an
-      // OAuth access token (not a Fortress JWT) — `dispatchOAuth` parses
-      // and validates it through the OAuth plugin's own token store. Skip
-      // the JWT check for those paths so we don't reject valid OAuth tokens.
+      //    3a. Plugin-backed credential resolvers (api-key, future
+      //        OAuth client_credentials, future mTLS). First plugin to
+      //        return non-null wins — its subject + optional claims
+      //        become the request principal.
+      //    3b. JWT bearer fallback. Used when no plugin resolves the
+      //        request and the endpoint declared `security: 'bearer'`.
+      //    3c. OAuth paths declare `security: 'bearer'` but the bearer
+      //        is an OAuth access token, not a Fortress JWT — dispatch
+      //        parses those inside the OAuth handler, so we skip both
+      //        the resolver chain and the JWT check here.
+      let subject: Subject | undefined;
       let userId: number | undefined;
       let claims: TokenClaims | undefined;
       const isOauthPath = endpoint.path.startsWith('/oauth/');
+
+      if (!isOauthPath) {
+        for (const plugin of plugins) {
+          if (!plugin.resolvePrincipal)
+            continue;
+          const resolved = await plugin.resolvePrincipal(request, {
+            db: fortress.config.database,
+            config: fortress.config,
+            auth: fortress.auth,
+            iam: fortress.iam,
+          });
+          if (resolved) {
+            subject = resolved.subject;
+            claims = resolved.claims;
+            break;
+          }
+        }
+      }
+
       const requiresBearer
         = !isOauthPath && (endpoint.meta?.security?.includes('bearer') ?? false);
-      if (requiresBearer) {
+      if (!subject && requiresBearer) {
         const token = extractAccessToken(request, cookieConfig);
         if (!token)
           throw Errors.unauthorized('Missing access token');
         try {
           claims = await fortress.auth.verifyToken(token);
-          userId = claims.sub;
+          subject = { type: claims.subjectType, id: claims.sub };
         }
         catch (err) {
           if (err instanceof FortressError)
@@ -92,6 +118,13 @@ export function buildHandleRequest(
           throw Errors.unauthorized('Invalid access token');
         }
       }
+
+      // Convenience alias: downstream code that only needs `userId` (adapters,
+      // plugin middleware) still works for USER subjects. Non-user principals
+      // leave `userId` undefined, which is correct — they'd be hitting routes
+      // that RBAC-check via `subject` now.
+      if (subject?.type === 'USER')
+        userId = subject.id;
 
       // 4. Plugin after-auth middleware
       await runPluginMiddleware(plugins, fortress.config, 'after-auth', {
@@ -104,9 +137,9 @@ export function buildHandleRequest(
       //    inside their handlers (the bearer is an OAuth token, not a JWT)
       //    so they're exempt from the IAM check too.
       if (!isOauthPath) {
-        await enforceFortressPermission(endpoint, userId, {
-          checkPermission: (uid, resource, action): Promise<boolean> =>
-            fortress.iam.checkPermission(uid, resource, action),
+        await enforceFortressPermission(endpoint, subject, {
+          checkPermission: (subj, resource, action): Promise<boolean> =>
+            fortress.iam.checkPermission(subj, resource, action),
         });
       }
 
@@ -145,6 +178,7 @@ export function buildHandleRequest(
         userAgent: request.headers.get('user-agent') ?? undefined,
       };
       const response = await dispatchEndpoint(fortress, request, endpoint, params, {
+        subject,
         userId,
         claims,
         meta,

@@ -1,19 +1,22 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressConfig } from '../config';
 import type {
+  CreateServiceAccountInput,
   FortressUser,
   Group,
   Permission,
   PermissionContext,
   PermissionInput,
   Role,
+  ServiceAccount,
+  Subject,
   SubjectType,
 } from '../types';
 import type { EvaluationMode } from './permission-evaluator';
 import type { ResourceFile } from './resource-sync';
 import { Errors } from '../errors';
 import { createInternalAdapter } from '../internal-adapter';
-import { createPermissionCache } from './permission-cache';
+import { createPermissionCache, subjectCacheKey } from './permission-cache';
 import { evaluatePermissions } from './permission-evaluator';
 import { loadResourceFile, pullResources, pushResources, writeResourceFile } from './resource-sync';
 
@@ -28,8 +31,8 @@ export interface IamEvent {
 export type IamEventListener = (event: IamEvent) => Promise<void>;
 
 export interface IamService {
-  checkPermission: (userId: number, resource: string, action: string, context?: PermissionContext) => Promise<boolean>;
-  getUserPermissions: (userId: number, tenantId?: string) => Promise<Permission[]>;
+  checkPermission: (subject: Subject, resource: string, action: string, context?: PermissionContext) => Promise<boolean>;
+  getPermissionsForSubject: (subject: Subject, tenantId?: string) => Promise<Permission[]>;
   createRole: (name: string, permissions: PermissionInput[], description?: string) => Promise<Role>;
   deleteRole: (roleId: number) => Promise<void>;
   bindRole: (subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string) => Promise<void>;
@@ -47,7 +50,12 @@ export interface IamService {
   getRoles: () => Promise<Role[]>;
   syncResources: (direction: 'push' | 'pull', filePath?: string) => Promise<void>;
   clearPermissionCache: () => void;
-  setIamObserver: (listener: IamEventListener) => void;
+  /**
+   * Register a listener for IAM events. Multiple listeners are supported —
+   * each is invoked in registration order. Replaces the earlier single-slot
+   * `setIamObserver` so plugins (audit-log, api-key cascade, …) can coexist.
+   */
+  addIamObserver: (listener: IamEventListener) => void;
 
   // ── Admin CRUD ─────────────────────────────────────────────────
   getRole: (roleId: number) => Promise<Role & { permissions: Permission[] }>;
@@ -61,6 +69,17 @@ export interface IamService {
   createPermission: (permission: PermissionInput) => Promise<Permission>;
   deletePermission: (permissionId: number) => Promise<void>;
   addPermissionToRole: (roleId: number, permission: PermissionInput) => Promise<void>;
+
+  // ── Service Accounts ───────────────────────────────────────────
+  createServiceAccount: (input: CreateServiceAccountInput) => Promise<ServiceAccount>;
+  getServiceAccount: (id: number) => Promise<ServiceAccount>;
+  listServiceAccounts: (options?: { limit?: number; offset?: number }) => Promise<{ serviceAccounts: ServiceAccount[]; total: number }>;
+  updateServiceAccount: (id: number, data: { displayName?: string | null; description?: string | null; isActive?: boolean }) => Promise<ServiceAccount>;
+  deleteServiceAccount: (id: number) => Promise<void>;
+  bindRoleToServiceAccount: (serviceAccountId: number, roleId: number, tenantId?: string) => Promise<void>;
+  unbindRoleFromServiceAccount: (serviceAccountId: number, roleId: number, tenantId?: string) => Promise<void>;
+  bindPermissionToServiceAccount: (serviceAccountId: number, permission: PermissionInput, tenantId?: string) => Promise<void>;
+  unbindPermissionFromServiceAccount: (serviceAccountId: number, permissionId: number, tenantId?: string) => Promise<void>;
 }
 
 export function createIamService(
@@ -70,10 +89,12 @@ export function createIamService(
   const evaluationMode: EvaluationMode = config.rbac?.evaluationMode ?? 'allow-only';
   const resourceFile = config.rbac?.resourceFile ?? './fortress.resources.json';
   const adapter = createInternalAdapter(db);
-  let observer: IamEventListener | null = null;
+  const observers: IamEventListener[] = [];
 
   function emit(event: IamEvent): void {
-    observer?.(event).catch(() => { /* audit log failure should not break IAM operations */ });
+    for (const observer of observers) {
+      observer(event).catch(() => { /* observer failures must not break IAM operations */ });
+    }
   }
   const cacheConfig = config.rbac?.cache;
   const cache = cacheConfig
@@ -85,38 +106,43 @@ export function createIamService(
 
   return {
     async checkPermission(
-      userId: number,
+      subject: Subject,
       resource: string,
       action: string,
       context?: PermissionContext,
     ): Promise<boolean> {
       const tenantId = context?.tenantId;
+      const cacheKey = subjectCacheKey(subject);
       let permissions: Permission[];
 
       if (tenantId) {
         // Tenant-scoped: bypass cache (tenant varies per request)
-        permissions = await adapter.getUserPermissions(userId, tenantId);
+        permissions = await adapter.getSubjectPermissions(subject, tenantId);
       }
       else {
         // Global: use cache
-        permissions = cache?.get(userId) ?? await (async () => {
-          const perms = await adapter.getUserPermissions(userId);
-          cache?.set(userId, perms);
+        permissions = cache?.get(cacheKey) ?? await (async () => {
+          const perms = await adapter.getSubjectPermissions(subject);
+          cache?.set(cacheKey, perms);
           return perms;
         })();
       }
 
-      // Enrich context with user info
+      // Enrich context with subject info. USER subjects still populate
+      // `user.id` for backwards-compatible condition expressions; other
+      // subject types are exposed under `user.subjectType`/`user.subjectId`.
       const enrichedContext: PermissionContext = {
         ...context,
-        user: { id: userId, ...context?.user },
+        user: subject.type === 'USER'
+          ? { id: subject.id, ...context?.user }
+          : { subjectType: subject.type, subjectId: subject.id, ...context?.user },
       };
 
       return evaluatePermissions(permissions, resource, action, evaluationMode, enrichedContext);
     },
 
-    async getUserPermissions(userId: number, tenantId?: string): Promise<Permission[]> {
-      return adapter.getUserPermissions(userId, tenantId);
+    async getPermissionsForSubject(subject: Subject, tenantId?: string): Promise<Permission[]> {
+      return adapter.getSubjectPermissions(subject, tenantId);
     },
 
     async createRole(name: string, permissions: PermissionInput[], description?: string): Promise<Role> {
@@ -168,7 +194,7 @@ export function createIamService(
         model: 'role_binding',
         data: { roleId, subjectType: 'USER', subjectId: userId, tenantId: tenantId ?? null },
       });
-      cache?.invalidate(userId);
+      cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'ROLE_BOUND', actorId: userId, targetId: roleId, targetType: 'role', metadata: { subjectType: 'USER', tenantId } });
     },
 
@@ -190,7 +216,9 @@ export function createIamService(
       ];
       await db.delete({ model: 'role_binding', where });
       if (subjectType === 'USER')
-        cache?.invalidate(subjectId);
+        cache?.invalidate(subjectCacheKey({ type: 'USER', id: subjectId }));
+      else if (subjectType === 'SERVICE_ACCOUNT')
+        cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: subjectId }));
       else cache?.invalidateAll();
       emit({ eventType: 'ROLE_UNBOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId, tenantId } });
     },
@@ -202,7 +230,7 @@ export function createIamService(
         model: 'direct_permission_binding',
         data: { permissionId: perm.id, subjectType: 'USER', subjectId: userId, tenantId: tenantId ?? null },
       });
-      cache?.invalidate(userId);
+      cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'USER', tenantId } });
     },
 
@@ -225,7 +253,7 @@ export function createIamService(
         ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
       ];
       await db.delete({ model: 'direct_permission_binding', where });
-      cache?.invalidate(userId);
+      cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'USER', tenantId } });
     },
 
@@ -255,7 +283,7 @@ export function createIamService(
         model: 'group_user',
         data: { groupId, userId },
       });
-      cache?.invalidate(userId);
+      cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'GROUP_MEMBER_ADDED', actorId: userId, targetId: groupId, targetType: 'group' });
     },
 
@@ -267,7 +295,7 @@ export function createIamService(
           { field: 'userId', operator: '=', value: userId },
         ],
       });
-      cache?.invalidate(userId);
+      cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'GROUP_MEMBER_REMOVED', actorId: userId, targetId: groupId, targetType: 'group' });
     },
 
@@ -283,8 +311,8 @@ export function createIamService(
       cache?.invalidateAll();
     },
 
-    setIamObserver(listener: IamEventListener): void {
-      observer = listener;
+    addIamObserver(listener: IamEventListener): void {
+      observers.push(listener);
     },
 
     async syncResources(direction: 'push' | 'pull', filePath?: string): Promise<void> {
@@ -506,6 +534,230 @@ export function createIamService(
 
       cache?.invalidateAll();
       emit({ eventType: 'ROLE_PERMISSION_ADDED', targetId: roleId, targetType: 'role', metadata: { permissionId: perm.id, resource: permission.resource, action: permission.action } });
+    },
+
+    // ── Service Accounts ─────────────────────────────────────────
+
+    async createServiceAccount(input: CreateServiceAccountInput): Promise<ServiceAccount> {
+      if (!input.name || typeof input.name !== 'string') {
+        throw Errors.badRequest('Service account name is required');
+      }
+      const existing = await db.findOne<ServiceAccount>({
+        model: 'service_account',
+        where: [{ field: 'name', operator: '=', value: input.name }],
+      });
+      if (existing) {
+        throw Errors.badRequest(`Service account with name '${input.name}' already exists`);
+      }
+      const created = await db.create<ServiceAccount>({
+        model: 'service_account',
+        data: {
+          name: input.name,
+          displayName: input.displayName ?? null,
+          description: input.description ?? null,
+          isActive: true,
+        },
+      });
+      emit({
+        eventType: 'SERVICE_ACCOUNT_CREATED',
+        targetId: created.id,
+        targetType: 'service_account',
+        metadata: { name: created.name },
+      });
+      return created;
+    },
+
+    async getServiceAccount(id: number): Promise<ServiceAccount> {
+      const sa = await db.findOne<ServiceAccount>({
+        model: 'service_account',
+        where: [{ field: 'id', operator: '=', value: id }],
+      });
+      if (!sa) {
+        throw Errors.notFound('Service account not found');
+      }
+      return sa;
+    },
+
+    async listServiceAccounts(
+      options?: { limit?: number; offset?: number },
+    ): Promise<{ serviceAccounts: ServiceAccount[]; total: number }> {
+      const [serviceAccounts, total] = await Promise.all([
+        db.findMany<ServiceAccount>({
+          model: 'service_account',
+          limit: options?.limit ?? 50,
+          offset: options?.offset ?? 0,
+          sortBy: { field: 'id', direction: 'asc' },
+        }),
+        db.count({ model: 'service_account' }),
+      ]);
+      return { serviceAccounts, total };
+    },
+
+    async updateServiceAccount(
+      id: number,
+      data: { displayName?: string | null; description?: string | null; isActive?: boolean },
+    ): Promise<ServiceAccount> {
+      const existing = await db.findOne<ServiceAccount>({
+        model: 'service_account',
+        where: [{ field: 'id', operator: '=', value: id }],
+      });
+      if (!existing) {
+        throw Errors.notFound('Service account not found');
+      }
+      // `name` is immutable after creation — matches Kubernetes / IAM conventions.
+      const updateData: Record<string, unknown> = { updatedAt: new Date() };
+      if (data.displayName !== undefined)
+        updateData.displayName = data.displayName;
+      if (data.description !== undefined)
+        updateData.description = data.description;
+      if (data.isActive !== undefined)
+        updateData.isActive = data.isActive;
+
+      const updated = await db.update<ServiceAccount>({
+        model: 'service_account',
+        where: [{ field: 'id', operator: '=', value: id }],
+        data: updateData,
+      });
+
+      // Flipping isActive affects permission resolution — invalidate the cache.
+      cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id }));
+      emit({
+        eventType: 'SERVICE_ACCOUNT_UPDATED',
+        targetId: id,
+        targetType: 'service_account',
+        metadata: data as Record<string, unknown>,
+      });
+      return updated!;
+    },
+
+    async deleteServiceAccount(id: number): Promise<void> {
+      const existing = await db.findOne<ServiceAccount>({
+        model: 'service_account',
+        where: [{ field: 'id', operator: '=', value: id }],
+      });
+      if (!existing) {
+        throw Errors.notFound('Service account not found');
+      }
+
+      // Cascade: remove bindings first, then the account itself.
+      await db.delete({
+        model: 'role_binding',
+        where: [
+          { field: 'subjectType', operator: '=', value: 'SERVICE_ACCOUNT' },
+          { field: 'subjectId', operator: '=', value: id },
+        ],
+      });
+      await db.delete({
+        model: 'direct_permission_binding',
+        where: [
+          { field: 'subjectType', operator: '=', value: 'SERVICE_ACCOUNT' },
+          { field: 'subjectId', operator: '=', value: id },
+        ],
+      });
+      await db.delete({
+        model: 'service_account',
+        where: [{ field: 'id', operator: '=', value: id }],
+      });
+
+      cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id }));
+      // Observers (api-key plugin, audit log, …) react to this. The api-key
+      // plugin uses it to hard-delete keys owned by the deleted account.
+      emit({
+        eventType: 'SERVICE_ACCOUNT_DELETED',
+        targetId: id,
+        targetType: 'service_account',
+        metadata: { name: existing.name },
+      });
+    },
+
+    async bindRoleToServiceAccount(
+      serviceAccountId: number,
+      roleId: number,
+      tenantId?: string,
+    ): Promise<void> {
+      await db.create({
+        model: 'role_binding',
+        data: {
+          roleId,
+          subjectType: 'SERVICE_ACCOUNT',
+          subjectId: serviceAccountId,
+          tenantId: tenantId ?? null,
+        },
+      });
+      cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));
+      emit({
+        eventType: 'ROLE_BOUND',
+        targetId: roleId,
+        targetType: 'role',
+        metadata: { subjectType: 'SERVICE_ACCOUNT', subjectId: serviceAccountId, tenantId },
+      });
+    },
+
+    async unbindRoleFromServiceAccount(
+      serviceAccountId: number,
+      roleId: number,
+      tenantId?: string,
+    ): Promise<void> {
+      const where = [
+        { field: 'roleId' as const, operator: '=' as const, value: roleId },
+        { field: 'subjectType' as const, operator: '=' as const, value: 'SERVICE_ACCOUNT' },
+        { field: 'subjectId' as const, operator: '=' as const, value: serviceAccountId },
+        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+      ];
+      await db.delete({ model: 'role_binding', where });
+      cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));
+      emit({
+        eventType: 'ROLE_UNBOUND',
+        targetId: roleId,
+        targetType: 'role',
+        metadata: { subjectType: 'SERVICE_ACCOUNT', subjectId: serviceAccountId, tenantId },
+      });
+    },
+
+    async bindPermissionToServiceAccount(
+      serviceAccountId: number,
+      permission: PermissionInput,
+      tenantId?: string,
+    ): Promise<void> {
+      await adapter.ensureResource(permission.resource);
+      const perm = await adapter.findOrCreatePermission(permission);
+      await db.create({
+        model: 'direct_permission_binding',
+        data: {
+          permissionId: perm.id,
+          subjectType: 'SERVICE_ACCOUNT',
+          subjectId: serviceAccountId,
+          tenantId: tenantId ?? null,
+        },
+      });
+      cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));
+      emit({
+        eventType: 'PERMISSION_CHANGED',
+        targetId: perm.id,
+        targetType: 'permission',
+        metadata: { action: 'bind', subjectType: 'SERVICE_ACCOUNT', serviceAccountId, tenantId },
+      });
+    },
+
+    async unbindPermissionFromServiceAccount(
+      serviceAccountId: number,
+      permissionId: number,
+      tenantId?: string,
+    ): Promise<void> {
+      const where = [
+        { field: 'permissionId' as const, operator: '=' as const, value: permissionId },
+        { field: 'subjectType' as const, operator: '=' as const, value: 'SERVICE_ACCOUNT' },
+        { field: 'subjectId' as const, operator: '=' as const, value: serviceAccountId },
+        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+      ];
+      await db.delete({ model: 'direct_permission_binding', where });
+      cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));
+      emit({
+        eventType: 'PERMISSION_CHANGED',
+        targetId: permissionId,
+        targetType: 'permission',
+        metadata: { action: 'unbind', subjectType: 'SERVICE_ACCOUNT', serviceAccountId, tenantId },
+      });
     },
   };
 }

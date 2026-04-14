@@ -6,10 +6,16 @@
  * runtime coupling. Functions take a {@link DatabaseAdapter} plus args and
  * throw {@link FortressError} via the existing `Errors` factory on failure.
  *
+ * Keys are owned by a {@link Subject} — either a USER or a SERVICE_ACCOUNT
+ * (and extensible to future subject types). The storage schema uses a
+ * polymorphic `(subject_type, subject_id)` pair instead of a hard FK to
+ * `users.id`, mirroring `role_binding` / `direct_permission_binding`.
+ *
  * @module
  */
 
 import type { DatabaseAdapter } from '../../adapters/database';
+import type { ServiceAccount, Subject, SubjectType } from '../../core/types';
 import { hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
 
@@ -25,7 +31,8 @@ export interface ApiKeyInfo {
 
 export interface ApiKeyRecord {
   id: number;
-  userId: number;
+  subjectType: SubjectType;
+  subjectId: number;
   name: string;
   keyHash: string;
   keyPrefix: string;
@@ -39,7 +46,7 @@ export interface ApiKeyRecord {
 export interface ApiKeyKnobs {
   prefix: string;
   defaultExpirySeconds: number | null;
-  maxKeysPerUser: number;
+  maxKeysPerSubject: number;
 }
 
 export interface CreateKeyOptions {
@@ -73,27 +80,34 @@ function toInfo(r: ApiKeyRecord): ApiKeyInfo {
   };
 }
 
+function subjectWhere(subject: Subject): Array<{ field: 'subjectType' | 'subjectId'; operator: '='; value: string | number }> {
+  return [
+    { field: 'subjectType', operator: '=', value: subject.type },
+    { field: 'subjectId', operator: '=', value: subject.id },
+  ];
+}
+
 /**
- * Create a new key for a user. Enforces `maxKeysPerUser`. Caller-neutral —
- * the admin plugin calls this with a target userId, self-service calls with
- * the authenticated caller's id.
+ * Create a new key for a subject. Enforces `maxKeysPerSubject`. Caller-neutral —
+ * the admin plugin calls this on behalf of a target subject, self-service
+ * calls with the authenticated caller's subject.
  */
-export async function createKeyForUser(
+export async function createKeyForSubject(
   db: DatabaseAdapter,
-  userId: number,
+  subject: Subject,
   options: CreateKeyOptions,
   knobs: ApiKeyKnobs,
 ): Promise<{ key: string; id: number }> {
   const activeCount = await db.count({
     model: 'api_key',
     where: [
-      { field: 'userId', operator: '=', value: userId },
+      ...subjectWhere(subject),
       { field: 'isRevoked', operator: '=', value: false },
     ],
   });
 
-  if (activeCount >= knobs.maxKeysPerUser) {
-    throw Errors.badRequest(`Maximum of ${knobs.maxKeysPerUser} active API keys per user`);
+  if (activeCount >= knobs.maxKeysPerSubject) {
+    throw Errors.badRequest(`Maximum of ${knobs.maxKeysPerSubject} active API keys per subject`);
   }
 
   const { raw, hash, keyPrefix } = await generateApiKey(knobs.prefix);
@@ -109,7 +123,8 @@ export async function createKeyForUser(
   const record = await db.create<ApiKeyRecord>({
     model: 'api_key',
     data: {
-      userId,
+      subjectType: subject.type,
+      subjectId: subject.id,
       name: options.name,
       keyHash: hash,
       keyPrefix,
@@ -123,15 +138,15 @@ export async function createKeyForUser(
   return { key: raw, id: record.id };
 }
 
-/** List non-revoked keys for a user. Caller-neutral. */
-export async function listKeysForUser(
+/** List non-revoked keys owned by a subject. Caller-neutral. */
+export async function listKeysForSubject(
   db: DatabaseAdapter,
-  userId: number,
+  subject: Subject,
 ): Promise<ApiKeyInfo[]> {
   const records = await db.findMany<ApiKeyRecord>({
     model: 'api_key',
     where: [
-      { field: 'userId', operator: '=', value: userId },
+      ...subjectWhere(subject),
       { field: 'isRevoked', operator: '=', value: false },
     ],
   });
@@ -139,19 +154,20 @@ export async function listKeysForUser(
 }
 
 /**
- * Revoke a key the caller owns. Throws `notFound` if the key is missing or
- * belongs to another user — self-service ownership enforcement.
+ * Revoke a key owned by the given subject. Throws `notFound` if the key is
+ * missing or belongs to a different subject — the ownership check enforces
+ * self-service semantics.
  */
-export async function revokeKeyForUser(
+export async function revokeKeyForSubject(
   db: DatabaseAdapter,
-  userId: number,
+  subject: Subject,
   keyId: number,
 ): Promise<void> {
   const record = await db.findOne<ApiKeyRecord>({
     model: 'api_key',
     where: [{ field: 'id', operator: '=', value: keyId }],
   });
-  if (!record || record.userId !== userId) {
+  if (!record || record.subjectType !== subject.type || record.subjectId !== subject.id) {
     throw Errors.notFound('API key not found');
   }
   await db.update({
@@ -162,13 +178,13 @@ export async function revokeKeyForUser(
 }
 
 /**
- * Rotate one of the caller's own keys — revokes the old one and creates a
- * new one with the same name, scopes, and expiry. Same ownership check as
- * {@link revokeKeyForUser}.
+ * Rotate a key owned by the given subject — revokes the old one and issues
+ * a new one with the same name, scopes, and expiry. Same ownership check as
+ * {@link revokeKeyForSubject}.
  */
-export async function rotateKeyForUser(
+export async function rotateKeyForSubject(
   db: DatabaseAdapter,
-  userId: number,
+  subject: Subject,
   keyId: number,
   knobs: { prefix: string },
 ): Promise<{ key: string; id: number }> {
@@ -176,7 +192,7 @@ export async function rotateKeyForUser(
     model: 'api_key',
     where: [{ field: 'id', operator: '=', value: keyId }],
   });
-  if (!record || record.userId !== userId) {
+  if (!record || record.subjectType !== subject.type || record.subjectId !== subject.id) {
     throw Errors.notFound('API key not found');
   }
 
@@ -190,7 +206,8 @@ export async function rotateKeyForUser(
   const newRecord = await db.create<ApiKeyRecord>({
     model: 'api_key',
     data: {
-      userId,
+      subjectType: record.subjectType,
+      subjectId: record.subjectId,
       name: record.name,
       keyHash: hash,
       keyPrefix,
@@ -205,13 +222,18 @@ export async function rotateKeyForUser(
 }
 
 /**
- * Resolve a raw API key to its owning user + scopes. Returns `null` for
- * unknown, revoked, or expired keys. Side-effect: updates `lastUsedAt`.
+ * Resolve a raw API key to its owning subject + scopes. Returns `null` for
+ * unknown, revoked, expired, or inactive keys. Side-effect: updates
+ * `lastUsedAt` on successful resolution.
+ *
+ * SERVICE_ACCOUNT owners are additionally checked for `isActive` — this is
+ * the first line of defense before the permission resolver enforces the
+ * same gate in `internal-adapter.getSubjectPermissions`.
  */
 export async function resolveApiKey(
   db: DatabaseAdapter,
   rawKey: string,
-): Promise<{ userId: number; scopes: string[] | null } | null> {
+): Promise<{ subject: Subject; scopes: string[] | null } | null> {
   const hash = await hashToken(rawKey);
   const record = await db.findOne<ApiKeyRecord>({
     model: 'api_key',
@@ -223,6 +245,16 @@ export async function resolveApiKey(
   if (record.expiresAt && record.expiresAt < new Date())
     return null;
 
+  // Enforce isActive for service-account owners.
+  if (record.subjectType === 'SERVICE_ACCOUNT') {
+    const sa = await db.findOne<ServiceAccount>({
+      model: 'service_account',
+      where: [{ field: 'id', operator: '=', value: record.subjectId }],
+    });
+    if (!sa || !sa.isActive)
+      return null;
+  }
+
   await db.update({
     model: 'api_key',
     where: [{ field: 'id', operator: '=', value: record.id }],
@@ -230,7 +262,7 @@ export async function resolveApiKey(
   });
 
   return {
-    userId: record.userId,
+    subject: { type: record.subjectType, id: record.subjectId },
     scopes: record.scopes ? JSON.parse(record.scopes) as string[] : null,
   };
 }
@@ -238,8 +270,8 @@ export async function resolveApiKey(
 // ── Admin-only helpers ───────────────────────────────────────────────
 
 /**
- * Admin variant of {@link revokeKeyForUser} — revokes any key by id without
- * an ownership check. Use only behind an admin-permission gate.
+ * Admin variant of {@link revokeKeyForSubject} — revokes any key by id
+ * without an ownership check. Use only behind an admin-permission gate.
  */
 export async function revokeKeyAsAdmin(
   db: DatabaseAdapter,
@@ -255,5 +287,31 @@ export async function revokeKeyAsAdmin(
     model: 'api_key',
     where: [{ field: 'id', operator: '=', value: keyId }],
     data: { isRevoked: true },
+  });
+}
+
+/**
+ * Admin variant of {@link listKeysForSubject} — lists all keys for any
+ * subject without an ownership check. Used by the admin plugin's
+ * `adminListUserApiKeys` convenience helper.
+ */
+export async function listKeysForAnySubject(
+  db: DatabaseAdapter,
+  subject: Subject,
+): Promise<ApiKeyInfo[]> {
+  return listKeysForSubject(db, subject);
+}
+
+/**
+ * Hard-delete every api key owned by a subject. Used by the api-key plugin's
+ * IAM observer to cascade-delete keys when a service account is deleted.
+ */
+export async function deleteAllKeysForSubject(
+  db: DatabaseAdapter,
+  subject: Subject,
+): Promise<void> {
+  await db.delete({
+    model: 'api_key',
+    where: subjectWhere(subject),
   });
 }

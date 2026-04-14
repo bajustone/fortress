@@ -22,11 +22,14 @@ import type { ClientAuth } from '../../plugins/oauth';
 import type { EndpointDefinition } from '../endpoint';
 import type { Fortress } from '../fortress';
 import type { FortressPlugin, PluginRouteContext } from '../plugin';
-import type { RequestMeta, TokenClaims } from '../types';
+import type { RequestMeta, Subject, TokenClaims } from '../types';
 import { Errors, FortressError } from '../errors';
 
 /** Auth context resolved by `handleRequest` before dispatch. */
 export interface DispatchAuth {
+  /** Resolved request principal — USER or SERVICE_ACCOUNT. Present iff authenticated. */
+  subject?: Subject;
+  /** Convenience alias for `subject?.id` when the subject is a USER. */
   userId?: number;
   claims?: TokenClaims;
   meta?: RequestMeta;
@@ -178,7 +181,8 @@ async function dispatchPlugin(
   }
 
   const ctx: PluginRouteContext = {
-    userId: auth.userId,
+    subject: auth.subject,
+    userId: auth.subject?.type === 'USER' ? auth.subject.id : undefined,
     claims: auth.claims,
     meta: auth.meta,
     request,
@@ -387,13 +391,21 @@ async function invokeIamHandler(
       await fortress.iam.removeUserFromGroup(Number(params.id), Number(params.userId));
       return { ok: true };
     case 'getUserPermissions':
-      return fortress.iam.getUserPermissions(
-        Number(params.id),
+      return fortress.iam.getPermissionsForSubject(
+        { type: 'USER', id: Number(params.id) },
         body.tenantId as string | undefined,
       );
     case 'checkPermission': {
+      // Accept either the new `{ subject: { type, id } }` shape or the
+      // legacy `{ userId }` shape. Defaulting to USER keeps this backwards
+      // compatible for callers that haven't migrated yet — step 10 updates
+      // the endpoint body schema to the new shape.
+      const subjectIn = body.subject as { type?: string; id?: number } | undefined;
+      const subject = subjectIn?.type && subjectIn?.id != null
+        ? { type: subjectIn.type as 'USER' | 'GROUP' | 'SERVICE_ACCOUNT', id: Number(subjectIn.id) }
+        : { type: 'USER' as const, id: Number(body.userId) };
       const allowed = await fortress.iam.checkPermission(
-        Number(body.userId),
+        subject,
         String(body.resource ?? ''),
         String(body.action ?? ''),
         body.context as never,
@@ -428,6 +440,64 @@ async function invokeIamHandler(
         body.tenantId as string | undefined,
       );
       return { ok: true };
+
+    // ── Service Accounts ──────────────────────────────────────────
+    case 'createServiceAccount':
+      return fortress.iam.createServiceAccount({
+        name: String(body.name ?? ''),
+        displayName: body.displayName as string | undefined,
+        description: body.description as string | undefined,
+      });
+    case 'listServiceAccounts':
+      return fortress.iam.listServiceAccounts({
+        limit: body.limit != null ? Number(body.limit) : undefined,
+        offset: body.offset != null ? Number(body.offset) : undefined,
+      });
+    case 'getServiceAccount':
+      return fortress.iam.getServiceAccount(Number(params.id));
+    case 'updateServiceAccount':
+      return fortress.iam.updateServiceAccount(Number(params.id), {
+        displayName: body.displayName as string | null | undefined,
+        description: body.description as string | null | undefined,
+        isActive: body.isActive as boolean | undefined,
+      });
+    case 'deleteServiceAccount':
+      await fortress.iam.deleteServiceAccount(Number(params.id));
+      return { ok: true };
+    case 'getServiceAccountPermissions':
+      return fortress.iam.getPermissionsForSubject(
+        { type: 'SERVICE_ACCOUNT', id: Number(params.id) },
+        body.tenantId as string | undefined,
+      );
+    case 'bindRoleToServiceAccount':
+      await fortress.iam.bindRoleToServiceAccount(
+        Number(body.serviceAccountId),
+        Number(params.id),
+        body.tenantId as string | undefined,
+      );
+      return { ok: true };
+    case 'unbindRoleFromServiceAccount':
+      await fortress.iam.unbindRoleFromServiceAccount(
+        Number(body.serviceAccountId),
+        Number(params.id),
+        body.tenantId as string | undefined,
+      );
+      return { ok: true };
+    case 'bindPermissionToServiceAccount':
+      await fortress.iam.bindPermissionToServiceAccount(
+        Number(body.serviceAccountId),
+        body.permission as never,
+        body.tenantId as string | undefined,
+      );
+      return { ok: true };
+    case 'unbindPermissionFromServiceAccount':
+      await fortress.iam.unbindPermissionFromServiceAccount(
+        Number(body.serviceAccountId),
+        Number(body.permissionId),
+        body.tenantId as string | undefined,
+      );
+      return { ok: true };
+
     default:
       throw Errors.notFound(`IAM handler '${handler}' not found`);
   }

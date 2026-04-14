@@ -59,6 +59,21 @@ export const iamComponentSchemas: ComponentSchemas = {
     'resource',
     'action',
   ),
+
+  ServiceAccount: obj(
+    {
+      id: int('Service account ID'),
+      name: str('Machine identifier — immutable after creation'),
+      displayName: nullable(str('Human-readable label')),
+      description: nullable(str('Free-form description')),
+      isActive: bool('Whether the account can authenticate and resolve permissions'),
+      createdAt: str('ISO 8601 creation timestamp'),
+      updatedAt: str('ISO 8601 update timestamp'),
+    },
+    'id',
+    'name',
+    'isActive',
+  ),
 };
 
 // ── IAM Endpoint Definitions ────────────────────────────────────────
@@ -325,5 +340,167 @@ export const iamEndpoints: EndpointDefinition[] = [
     .response(200, 'Permission unbound', obj({ ok: bool() }))
     .response(401, 'Not authenticated', ref('ErrorResponse'))
     .handler('unbindPermissionFromGroup')
+    .build(),
+
+  // ── Service Accounts ──
+
+  endpoint('POST', '/iam/service-accounts')
+    .summary('Create a service account')
+    .description('Create a non-human IAM principal. Service accounts hold roles and direct permissions just like users, but have no sessions, passwords, or group memberships. The `name` is immutable after creation.')
+    .tags('IAM', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'createServiceAccount')
+    .body(obj(
+      {
+        name: str('Machine identifier (immutable)'),
+        displayName: str('Human-readable label'),
+        description: str('Free-form description'),
+      },
+      'name',
+    ))
+    .response(201, 'Service account created', ref('ServiceAccount'))
+    .response(400, 'Bad request', ref('ErrorResponse'))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('createServiceAccount')
+    .build(),
+
+  endpoint('GET', '/iam/service-accounts')
+    .summary('List service accounts')
+    .tags('IAM', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'viewServiceAccounts')
+    .query(obj({
+      limit: int('Page size (default 50)'),
+      offset: int('Offset from the start of the list'),
+    }))
+    .response(200, 'Service accounts', obj({
+      serviceAccounts: arr(ref('ServiceAccount')),
+      total: int('Total service accounts'),
+    }, 'serviceAccounts', 'total'))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('listServiceAccounts')
+    .build(),
+
+  endpoint('GET', '/iam/service-accounts/:id')
+    .summary('Get a service account by ID')
+    .tags('IAM', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'viewServiceAccounts')
+    .params(obj({ id: int('Service account ID') }, 'id'))
+    .response(200, 'Service account', ref('ServiceAccount'))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(404, 'Not found', ref('ErrorResponse'))
+    .handler('getServiceAccount')
+    .build(),
+
+  endpoint('PATCH', '/iam/service-accounts/:id')
+    .summary('Update a service account')
+    .description('Update displayName, description, or isActive. The `name` field is immutable — to rename, delete and recreate.')
+    .tags('IAM', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'manageServiceAccount')
+    .params(obj({ id: int('Service account ID') }, 'id'))
+    .body(obj({
+      displayName: nullable(str('New human-readable label')),
+      description: nullable(str('New description')),
+      isActive: bool('Whether the account is active'),
+    }))
+    .response(200, 'Service account updated', ref('ServiceAccount'))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(404, 'Not found', ref('ErrorResponse'))
+    .handler('updateServiceAccount')
+    .build(),
+
+  endpoint('DELETE', '/iam/service-accounts/:id')
+    .summary('Delete a service account')
+    .description('Hard-deletes the service account and cascades to role bindings, direct permission bindings, and (via plugin observer) api keys owned by the account.')
+    .tags('IAM', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'manageServiceAccount')
+    .params(obj({ id: int('Service account ID') }, 'id'))
+    .response(200, 'Service account deleted', obj({ ok: bool() }))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(404, 'Not found', ref('ErrorResponse'))
+    .handler('deleteServiceAccount')
+    .build(),
+
+  endpoint('GET', '/iam/service-accounts/:id/permissions')
+    .summary('Get effective permissions for a service account')
+    .tags('IAM', 'Service Accounts', 'Permissions')
+    .security('bearer')
+    .permission('fortress', 'viewPermissions')
+    .params(obj({ id: int('Service account ID') }, 'id'))
+    .query(obj({ tenantId: str('Tenant ID (optional)') }))
+    .response(200, 'Service account permissions', arr(ref('Permission')))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('getServiceAccountPermissions')
+    .build(),
+
+  endpoint('POST', '/iam/roles/:id/bind/service-account')
+    .summary('Bind role to a service account')
+    .tags('IAM', 'Roles', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'bindRole')
+    .params(obj({ id: int('Role ID') }, 'id'))
+    .body(obj(
+      { serviceAccountId: int('Service account ID'), tenantId: str('Tenant ID (optional)') },
+      'serviceAccountId',
+    ))
+    .response(200, 'Role bound to service account', obj({ ok: bool() }))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('bindRoleToServiceAccount')
+    .build(),
+
+  endpoint('DELETE', '/iam/roles/:id/bind/service-account')
+    .summary('Unbind role from a service account')
+    .tags('IAM', 'Roles', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'unbindRole')
+    .params(obj({ id: int('Role ID') }, 'id'))
+    .body(obj(
+      { serviceAccountId: int('Service account ID'), tenantId: str('Tenant ID (optional)') },
+      'serviceAccountId',
+    ))
+    .response(200, 'Role unbound', obj({ ok: bool() }))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('unbindRoleFromServiceAccount')
+    .build(),
+
+  endpoint('POST', '/iam/permissions/bind/service-account')
+    .summary('Bind permission directly to a service account')
+    .tags('IAM', 'Permissions', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'managePermissions')
+    .body(obj(
+      {
+        serviceAccountId: int('Service account ID'),
+        permission: ref('PermissionInput'),
+        tenantId: str('Tenant ID (optional)'),
+      },
+      'serviceAccountId',
+      'permission',
+    ))
+    .response(200, 'Permission bound', obj({ ok: bool() }))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('bindPermissionToServiceAccount')
+    .build(),
+
+  endpoint('DELETE', '/iam/permissions/bind/service-account')
+    .summary('Unbind permission from a service account')
+    .tags('IAM', 'Permissions', 'Service Accounts')
+    .security('bearer')
+    .permission('fortress', 'managePermissions')
+    .body(obj(
+      {
+        serviceAccountId: int('Service account ID'),
+        permissionId: int('Permission ID'),
+        tenantId: str('Tenant ID (optional)'),
+      },
+      'serviceAccountId',
+      'permissionId',
+    ))
+    .response(200, 'Permission unbound', obj({ ok: bool() }))
+    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .handler('unbindPermissionFromServiceAccount')
     .build(),
 ];
