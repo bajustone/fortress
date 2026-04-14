@@ -1338,28 +1338,63 @@ apiKey({
   prefix: 'fortress',              // default: 'fortress' (key format: fortress_sk_<hex>)
   defaultExpirySeconds: null,       // default: null (never expires)
   maxKeysPerUser: 10,               // default: 10
+  routes: true,                     // default: false -- mount HTTP endpoints (see below)
 })
 ```
 
-**Methods:**
+**HTTP endpoints (opt-in via `routes: true`):**
+
+```
+POST   /api-key/keys                 create a key for the authenticated caller
+GET    /api-key/keys                 list the caller's active keys
+DELETE /api-key/keys/:id             revoke one of the caller's keys
+POST   /api-key/keys/:id/rotate      rotate one of the caller's keys
+```
+
+All four require a bearer token. The authenticated caller can only manage
+their own keys -- a body-supplied `userId` is ignored in favor of the JWT
+subject, so clients cannot forge keys for other users.
+
+For admin management (operating on any user's keys), register the `admin`
+plugin with `apiKeyRoutes: true`:
+
+```typescript
+import { admin } from '@bajustone/fortress/plugins/admin';
+
+admin({ apiKeyRoutes: true })
+```
+
+This mounts:
+
+```
+GET    /admin/users/:userId/api-keys        list any user's keys
+DELETE /admin/users/:userId/api-keys/:id    revoke any user's key
+```
+
+Both are guarded by the `apiKey:manage` permission, which the admin
+plugin's `POST /iam/admin/bootstrap` auto-registers into the
+`fortress-admin` role when `apiKeyRoutes` is enabled.
+
+**Programmatic methods** (always available, regardless of the `routes` flag):
 
 ```typescript
 // Create a key
-const key = await fortress.plugins['api-key'].createKey(userId, {
+const key = await fortress.plugins['api-key'].createKey({
+  userId,
   name: 'CI Pipeline',
   scopes: ['post:read', 'post:create'],
   expiresAt: new Date('2025-12-31'),  // optional
 });
-// key.rawKey -- ONLY returned at creation (e.g., "fortress_sk_a1b2c3...")
+// key.key -- raw key, ONLY returned at creation (e.g., "fortress_sk_a1b2c3...")
 
-// List active keys (never includes raw key)
-const keys = await fortress.plugins['api-key'].listKeys(userId);
+// List active keys (never includes the raw key)
+const keys = await fortress.plugins['api-key'].listKeys({ userId });
 
 // Revoke a key (soft delete)
-await fortress.plugins['api-key'].revokeKey(userId, keyId);
+await fortress.plugins['api-key'].revokeKey({ userId, id: keyId });
 
-// Rotate a key (revoke + create new with same scopes)
-const newKey = await fortress.plugins['api-key'].rotateKey(userId, keyId);
+// Rotate a key (revoke + create new with same name, scopes, and expiry)
+const newKey = await fortress.plugins['api-key'].rotateKey({ userId, id: keyId });
 
 // Resolve a key from a raw token (for middleware/auth)
 const resolved = await fortress.plugins['api-key'].resolveKey('fortress_sk_a1b2c3...');

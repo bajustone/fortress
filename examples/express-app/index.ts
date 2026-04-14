@@ -65,7 +65,7 @@ const fortress = createFortress({
   // Plugin order matters — hooks run in array order
   plugins: [
     // ── Admin (IAM route protection + bootstrap) ──
-    admin(),
+    admin({ apiKeyRoutes: true }),
 
     // ── Gate plugins (reject early) ──
     rateLimit({
@@ -91,7 +91,10 @@ const fortress = createFortress({
         console.warn(`[magic-link] email=${email} token=${token}`);
       },
     }),
-    apiKey({ prefix: 'fortress', maxKeysPerUser: 5 }),
+    apiKey({ prefix: 'fortress', maxKeysPerUser: 5, routes: true }),
+    // `routes: true` mounts /api-key/keys/* self-service endpoints.
+    // `admin({ apiKeyRoutes: true })` above adds /admin/users/:userId/api-keys/*
+    // admin routes, gated by the `apiKey:manage` permission.
     socialLogin({
       providers: [
         { name: 'google', clientId: 'GOOGLE_CLIENT_ID', clientSecret: 'GOOGLE_SECRET' },

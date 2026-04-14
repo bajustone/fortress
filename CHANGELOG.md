@@ -22,6 +22,30 @@
 ## [Unreleased]
 
 ### Added
+- **`api-key` plugin now ships self-service HTTP routes — opt-in.** Pass
+  `apiKey({ routes: true })` to mount four endpoints under `/api-key/keys/*`:
+  `POST /api-key/keys` (create), `GET /api-key/keys` (list), `DELETE
+  /api-key/keys/:id` (revoke), `POST /api-key/keys/:id/rotate` (rotate). All
+  require a bearer token; the authenticated caller can only manage their own
+  keys — a body-supplied `userId` is ignored in favor of `ctx.userId` so
+  clients cannot forge keys for other users. The programmatic API on
+  `fortress.plugins['api-key']` is always available regardless of the flag.
+- **`admin` plugin now exposes admin-side api-key management routes —
+  opt-in.** Pass `admin({ apiKeyRoutes: true })` alongside `apiKey()` to
+  mount `GET /admin/users/:userId/api-keys` and `DELETE
+  /admin/users/:userId/api-keys/:id`. Both are guarded by the
+  `apiKey:manage` permission, which bootstrap auto-discovers into the
+  `fortress-admin` role when the routes are mounted. Typical use:
+  responding to leaked keys or auditing a user's active surface.
+- **Design convention: plugins that ship HTTP routes are moving to
+  opt-in.** New HTTP-ish surfaces (starting with `api-key` and the new
+  `admin` api-key routes) gate route mounting behind a boolean config
+  flag that defaults to `false`. The programmatic methods on
+  `fortress.plugins[name]` stay always-on, so consumers keep the library
+  behavior they had before and can explicitly opt in to the URL
+  namespace. Existing plugins (`webauthn`, `two-factor`, `oauth`,
+  `email-verification`, `magic-link`, `webhook`, `social-login`,
+  `openapi`) will migrate in a follow-up PR.
 - **Plugin HTTP route handlers now receive a `PluginRouteContext`** as a
   second argument: `(input, ctx) => ...`. `ctx` carries the verified
   caller (`userId`, `claims`), request metadata (`meta` with `ipAddress`
@@ -42,6 +66,22 @@
     as required.
 
 ### Changed (breaking)
+- **`api-key` plugin programmatic method signatures.** The methods on
+  `fortress.plugins['api-key']` now take a single object argument and an
+  optional `PluginRouteContext`, matching the rest of the plugin system:
+  ```ts
+  // Before
+  await fortress.plugins['api-key'].createKey(userId, { name, scopes });
+  await fortress.plugins['api-key'].listKeys(userId);
+  await fortress.plugins['api-key'].revokeKey(userId, id);
+  await fortress.plugins['api-key'].rotateKey(userId, id);
+  // After
+  await fortress.plugins['api-key'].createKey({ userId, name, scopes });
+  await fortress.plugins['api-key'].listKeys({ userId });
+  await fortress.plugins['api-key'].revokeKey({ userId, id });
+  await fortress.plugins['api-key'].rotateKey({ userId, id });
+  ```
+  `resolveKey(rawKey)` is unchanged.
 - **`POST /webauthn/register/options` and `POST /webauthn/register/verify`
   no longer accept `userId` in the request body.** The passkey is always
   registered against the authenticated caller (`ctx.userId`). Clients

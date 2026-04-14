@@ -1157,7 +1157,8 @@ Long-lived API keys for service accounts, devices, CI/CD, and M2M communication.
 {
   prefix: 'fortress',           // Key prefix: fortress_sk_...
   defaultExpirySeconds: null,   // Never expire (revocable)
-  maxKeysPerUser: 10
+  maxKeysPerUser: 10,
+  routes: false                 // Opt-in: mount /api-key/keys/* HTTP endpoints
 }
 ```
 
@@ -1165,14 +1166,26 @@ Long-lived API keys for service accounts, devices, CI/CD, and M2M communication.
 
 **Models:** `api_key` — `keyHash` (SHA-256), `keyPrefix` (first 8 chars for identification), `scopes` (JSON), `expiresAt`, `lastUsedAt`, `isRevoked`
 
-**Methods:**
-- `createKey(userId, options?)` → `{ key, keyId }` — Key shown once, only hash stored
-- `listKeys(userId)` — Returns metadata (prefix, scopes, expiry, lastUsedAt) — never the raw key
-- `revokeKey(keyId)` — Soft-delete
-- `rotateKey(keyId, options?)` → `{ key, keyId }` — Revoke old + create new atomically
-- `resolveKey(rawKey)` — Hash token, lookup, validate expiry, update `lastUsedAt`
+**Methods** (dual-mode — accept `(input, routeCtx?)`):
+- `createKey({ userId, name, scopes?, expiresAt? })` → `{ key, id }` — key shown once
+- `listKeys({ userId })` — metadata only (prefix, scopes, expiry, lastUsedAt)
+- `revokeKey({ userId, id })` — ownership-checked soft delete
+- `rotateKey({ userId, id })` → `{ key, id }` — revoke old + create new atomically
+- `resolveKey(rawKey)` — hash, lookup, validate expiry, update `lastUsedAt`
+
+**Routes** (opt-in via `apiKey({ routes: true })`):
+- `POST /api-key/keys` · `GET /api-key/keys` · `DELETE /api-key/keys/:id` · `POST /api-key/keys/:id/rotate`
+
+All self-service routes use `security: ['bearer']` with no explicit permission. The route handlers read `userId` from `PluginRouteContext` (JWT subject) and ignore any client-supplied `userId` in the body, so authenticated callers can only manage their own keys.
+
+**Admin-side routes** (opt-in via `admin({ apiKeyRoutes: true })`, lives in the admin plugin):
+- `GET /admin/users/:userId/api-keys` · `DELETE /admin/users/:userId/api-keys/:id`
+
+Guarded by `meta.permission: { resource: 'apiKey', action: 'manage' }`. The admin plugin's bootstrap auto-discovers this permission when the routes are mounted and binds it to the `fortress-admin` role. Requires the `api-key` plugin to also be registered (for the `api_key` model). Shared CRUD logic lives in `src/plugins/api-key/core.ts` so both plugins call the same helpers.
 
 **Scope restriction:** Keys can be scoped to `resource:action` patterns. Permission checks are intersected: the account must have the permission AND the key scope must include it.
+
+**Opt-in routes convention:** the `routes` flag on `apiKey()` and the `apiKeyRoutes` flag on `admin()` are the first adopters of a forward-looking design rule — plugins that ship HTTP endpoints gate them behind a boolean that defaults to `false`, keeping consumer URL namespaces under their control and leaving the programmatic methods always-on. Existing plugins (webauthn, two-factor, oauth, email-verification, magic-link, webhook, social-login, openapi) will migrate in a follow-up.
 
 #### Social Login
 

@@ -68,7 +68,7 @@ const fortress = createFortress({
   // Plugin order matters — hooks run in array order
   plugins: [
     // ── Admin (IAM route protection + bootstrap) ──
-    admin(),
+    admin({ apiKeyRoutes: true }),
 
     // ── Gate plugins (reject early) ──
     rateLimit({
@@ -94,7 +94,17 @@ const fortress = createFortress({
         console.warn(`[magic-link] email=${email} token=${token}`);
       },
     }),
-    apiKey({ prefix: 'fortress', maxKeysPerUser: 5 }),
+    apiKey({ prefix: 'fortress', maxKeysPerUser: 5, routes: true }),
+    // ^ `routes: true` mounts the self-service HTTP endpoints:
+    //   POST   /api-key/keys                   — create a key for the caller
+    //   GET    /api-key/keys                   — list the caller's keys
+    //   DELETE /api-key/keys/:id               — revoke one of the caller's keys
+    //   POST   /api-key/keys/:id/rotate        — rotate one of the caller's keys
+    // The admin plugin above adds admin-side routes when `apiKeyRoutes: true`:
+    //   GET    /admin/users/:userId/api-keys       — list any user's keys
+    //   DELETE /admin/users/:userId/api-keys/:id   — revoke any user's key
+    // Both require the `apiKey:manage` permission (auto-registered into
+    // `fortress-admin` via `/iam/admin/bootstrap`).
     socialLogin({
       providers: [
         // Placeholder credentials — shows the config API but won't complete real OAuth flows

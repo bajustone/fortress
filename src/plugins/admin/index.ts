@@ -14,16 +14,28 @@ import type { EndpointDefinition, EndpointPermission } from '../../core/endpoint
 import type { ResourceFile } from '../../core/iam/resource-sync';
 import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
 import type { FortressUser, Group, Permission, PermissionInput, Role, SubjectType } from '../../core/types';
+import type { ApiKeyInfo } from '../api-key/core';
 import { authEndpoints } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
 import { iamEndpoints } from '../../core/iam/iam-endpoints';
 import { pullResources } from '../../core/iam/resource-sync';
+import { listKeysForUser, revokeKeyAsAdmin } from '../api-key/core';
 
 export interface AdminPluginOptions {
   /** User IDs that bypass all permission checks (superadmins) */
   adminUserIds?: number[];
   /** Resource name for fortress admin permissions. Default: 'fortress'. */
   resource?: string;
+  /**
+   * Mount admin-side api-key management routes under
+   * `/admin/users/:userId/api-keys/*`. Default `false`.
+   *
+   * When enabled, the admin plugin exposes GET and DELETE endpoints for any
+   * user's API keys, guarded by the `apiKey:manage` permission (auto-registered
+   * into the `fortress-admin` role via bootstrap). Requires the `api-key`
+   * plugin to also be registered, since the `api_key` model lives there.
+   */
+  apiKeyRoutes?: boolean;
 }
 
 /**
@@ -622,6 +634,100 @@ const bootstrapEndpoint: EndpointDefinition = {
   },
 };
 
+// ── Admin-side api-key management endpoints ─────────────────────────
+//
+// Mounted only when `admin({ apiKeyRoutes: true })`. Guarded by the
+// `apiKey:manage` permission (auto-discovered into the `fortress-admin` role
+// by `bootstrap` when these routes are present). Requires the `api-key`
+// plugin to be registered alongside admin, since the `api_key` model lives
+// there.
+
+const apiKeyInfoSchema = {
+  type: 'object' as const,
+  properties: {
+    id: intSchema('Database id'),
+    name: strSchema('Key label'),
+    keyPrefix: strSchema('First 12 characters of the key, for identification'),
+    scopes: { type: 'array' as const, items: { type: 'string' as const }, nullable: true },
+    expiresAt: { type: 'string' as const, format: 'date-time', nullable: true },
+    lastUsedAt: { type: 'string' as const, format: 'date-time', nullable: true },
+    createdAt: { type: 'string' as const, format: 'date-time' },
+  },
+  required: ['id', 'name', 'keyPrefix', 'createdAt'] as string[],
+};
+
+const adminApiKeyEndpoints: EndpointDefinition[] = [
+  {
+    method: 'GET',
+    path: '/admin/users/:userId/api-keys',
+    handler: 'adminListUserApiKeys',
+    meta: {
+      summary: 'List a user\'s API keys',
+      description: 'Return the active (non-revoked) API keys belonging to any user. Raw keys and hashes are never returned. Requires the `apiKey:manage` permission.',
+      tags: ['Admin', 'API Keys'],
+      security: ['bearer'],
+      permission: { resource: 'apiKey', action: 'manage' },
+    },
+    input: {
+      params: {
+        type: 'object',
+        properties: { userId: intSchema('Target user ID') },
+        required: ['userId'],
+      },
+    },
+    responses: {
+      200: {
+        description: 'Keys',
+        schema: {
+          type: 'object',
+          properties: {
+            keys: { type: 'array', items: apiKeyInfoSchema },
+          },
+          required: ['keys'],
+        },
+      },
+      401: { description: 'Not authenticated', schema: errorRef },
+      403: { description: 'Forbidden', schema: errorRef },
+    },
+  },
+
+  {
+    method: 'DELETE',
+    path: '/admin/users/:userId/api-keys/:id',
+    handler: 'adminRevokeUserApiKey',
+    meta: {
+      summary: 'Revoke a user\'s API key',
+      description: 'Revoke any API key by id, bypassing the self-service ownership check. Requires the `apiKey:manage` permission. Typically used to respond to leaked keys or compromised accounts.',
+      tags: ['Admin', 'API Keys'],
+      security: ['bearer'],
+      permission: { resource: 'apiKey', action: 'manage' },
+    },
+    input: {
+      params: {
+        type: 'object',
+        properties: {
+          userId: intSchema('Target user ID (for URL namespacing; ownership is not enforced)'),
+          id: intSchema('Key id to revoke'),
+        },
+        required: ['userId', 'id'],
+      },
+    },
+    responses: {
+      200: {
+        description: 'Revoked',
+        schema: {
+          type: 'object',
+          properties: { ok: boolSchema('Success') },
+          required: ['ok'],
+        },
+      },
+      401: { description: 'Not authenticated', schema: errorRef },
+      403: { description: 'Forbidden', schema: errorRef },
+      404: { description: 'Not found', schema: errorRef },
+    },
+  },
+];
+
 /**
  * Admin plugin — protects fortress routes and provides admin CRUD endpoints.
  *
@@ -650,6 +756,7 @@ const bootstrapEndpoint: EndpointDefinition = {
  */
 export function admin(options: AdminPluginOptions = {}): FortressPlugin {
   const adminUserIds = new Set(options.adminUserIds ?? []);
+  const mountApiKeyRoutes = options.apiKeyRoutes === true;
 
   const superadminMiddleware = {
     position: 'after-auth' as const,
@@ -682,6 +789,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       ...adminAuthEndpoints,
       ...adminIamEndpoints,
       ...iamEndpoints,
+      ...(mountApiKeyRoutes ? adminApiKeyEndpoints : []),
     ],
 
     methods: (ctx: PluginContext) => ({
@@ -1097,6 +1205,27 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
           requireInt(body.permissionId, 'permissionId'),
           body.tenantId as string | undefined,
         );
+        return { ok: true };
+      },
+
+      // ── Admin api-key management ───────────────────────────────
+      //
+      // These delegate to the shared helpers in `api-key/core.ts`. They're
+      // available as programmatic methods regardless of the
+      // `apiKeyRoutes` flag — only the HTTP mounting is gated. Requires
+      // the `api-key` plugin to be registered (for the `api_key` model).
+
+      async adminListUserApiKeys(
+        body: Record<string, unknown>,
+      ): Promise<{ keys: ApiKeyInfo[] }> {
+        const keys = await listKeysForUser(ctx.db, requireInt(body.userId, 'userId'));
+        return { keys };
+      },
+
+      async adminRevokeUserApiKey(
+        body: Record<string, unknown>,
+      ): Promise<{ ok: boolean }> {
+        await revokeKeyAsAdmin(ctx.db, requireInt(body.id, 'id'));
         return { ok: true };
       },
 
