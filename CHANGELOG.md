@@ -22,6 +22,26 @@
 ## [Unreleased]
 
 ### Added
+- **Plugin HTTP route handlers now receive a `PluginRouteContext`** as a
+  second argument: `(input, ctx) => ...`. `ctx` carries the verified
+  caller (`userId`, `claims`), request metadata (`meta` with `ipAddress`
+  / `userAgent`), and the raw `Request` — the data the dispatcher already
+  had but was dropping before calling plugin methods. Plugin handlers
+  that need to know who is calling them no longer have to trust a
+  client-supplied body field or re-verify the JWT themselves.
+  - The new `PluginRouteContext` type is exported from
+    `@bajustone/fortress` (re-exported from `src/core/plugin.ts`).
+  - Existing handlers that ignore the second argument still work — the
+    new argument is additive.
+  - `admin.bootstrap` now uses `ctx.userId` as the default target. Only
+    superadmins (configured via `adminUserIds`) may pass `body.userId`
+    to bootstrap another user. Programmatic callers
+    (`fortress.plugins.admin.bootstrap({ userId })`) are unaffected —
+    when `ctx` is absent the handler still trusts `body.userId`.
+  - The `POST /iam/admin/bootstrap` body schema no longer marks `userId`
+    as required.
+
+### Added
 - **`validateRequest` is now a public export** from `@bajustone/fortress`.
   Framework-agnostic validation primitive that walks an `EndpointInput`,
   aggregates body+query+params issues, and throws

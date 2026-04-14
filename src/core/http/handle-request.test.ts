@@ -1,3 +1,4 @@
+import type { FortressPlugin, PluginRouteContext } from '../plugin';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
@@ -169,6 +170,105 @@ describe('fortress.handleRequest', () => {
       expect(res.status).toBe(422);
       const body = await res.json() as { code: string };
       expect(body.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('plugin route context', () => {
+    // A spy plugin that records whatever `PluginRouteContext` the dispatcher
+    // hands it. Verifies that handlers see the verified caller id, claims,
+    // request meta, and the raw Request.
+    function makeSpyPlugin(): { plugin: FortressPlugin; received: PluginRouteContext[] } {
+      const received: PluginRouteContext[] = [];
+      const plugin: FortressPlugin = {
+        name: 'spy',
+        routes: [
+          {
+            method: 'POST',
+            path: '/spy/echo',
+            handler: 'echo',
+            meta: { summary: 'Echo caller', tags: ['Test'], security: ['bearer'] },
+            responses: { 200: { description: 'ok' } },
+          },
+          {
+            method: 'GET',
+            path: '/spy/public',
+            handler: 'publicEcho',
+            meta: { summary: 'Public echo', tags: ['Test'], security: ['none'] },
+            responses: { 200: { description: 'ok' } },
+          },
+        ],
+        methods: () => ({
+          echo(_body: unknown, ctx: PluginRouteContext): { ok: true } {
+            received.push(ctx);
+            return { ok: true };
+          },
+          publicEcho(_body: unknown, ctx: PluginRouteContext): { ok: true } {
+            received.push(ctx);
+            return { ok: true };
+          },
+        }),
+      };
+      return { plugin, received };
+    }
+
+    it('passes verified userId, claims, meta, and request to plugin handlers', async () => {
+      const { plugin, received } = makeSpyPlugin();
+      const spyFortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [plugin],
+      });
+
+      const user = await spyFortress.auth.createUser({
+        email: 'spy@b.co',
+        name: 'Spy',
+        password: 'password123',
+      });
+      const login = await spyFortress.auth.login('spy@b.co', 'password123');
+      if (login.status !== 'success')
+        throw new Error('expected success');
+
+      const res = await spyFortress.handleRequest(new Request('http://localhost/spy/echo', {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${login.accessToken}`,
+          'content-type': 'application/json',
+          'x-forwarded-for': '10.0.0.5',
+          'user-agent': 'spy-agent/1.0',
+        },
+        body: JSON.stringify({ hello: 'world' }),
+      }));
+      expect(res.status).toBe(200);
+
+      expect(received).toHaveLength(1);
+      const ctx = received[0]!;
+      expect(ctx.userId).toBe(user.id);
+      expect(ctx.claims?.sub).toBe(user.id);
+      expect(ctx.meta?.ipAddress).toBe('10.0.0.5');
+      expect(ctx.meta?.userAgent).toBe('spy-agent/1.0');
+      expect(ctx.request).toBeInstanceOf(Request);
+      expect(new URL(ctx.request.url).pathname).toBe('/spy/echo');
+    });
+
+    it('passes request + meta but leaves userId/claims undefined on public routes', async () => {
+      const { plugin, received } = makeSpyPlugin();
+      const spyFortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [plugin],
+      });
+
+      const res = await spyFortress.handleRequest(new Request('http://localhost/spy/public', {
+        headers: { 'user-agent': 'anon-agent/1.0' },
+      }));
+      expect(res.status).toBe(200);
+
+      expect(received).toHaveLength(1);
+      const ctx = received[0]!;
+      expect(ctx.userId).toBeUndefined();
+      expect(ctx.claims).toBeUndefined();
+      expect(ctx.meta?.userAgent).toBe('anon-agent/1.0');
+      expect(ctx.request).toBeInstanceOf(Request);
     });
   });
 });

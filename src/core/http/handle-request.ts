@@ -146,6 +146,7 @@ export function buildHandleRequest(
       };
       const response = await dispatchEndpoint(fortress, request, endpoint, params, {
         userId,
+        claims,
         meta,
       });
 

@@ -943,6 +943,25 @@ interface PluginContext {
 
 **Circular reference note:** `auth` is `undefined` when `plugin.methods(ctx)` is called during initialization (because the auth service hasn't been created yet). It's populated later. Plugin methods that need `auth` must access it lazily from the context at call time, not at binding time.
 
+### Plugin Route Context
+
+When a plugin route handler is invoked over HTTP, `fortress.handleRequest` passes a second positional argument of type `PluginRouteContext`:
+
+```typescript
+interface PluginRouteContext {
+  userId?: number;       // Verified JWT subject (if security: ['bearer'])
+  claims?: TokenClaims;  // Verified token claims
+  meta?: RequestMeta;    // { ipAddress, userAgent } from forwarding headers
+  request: Request;      // Raw Request — read headers, cookies, URL directly
+}
+```
+
+Handlers signature: `(input: Record<string, unknown>, ctx: PluginRouteContext) => Promise<unknown>`. The `input` is the merged `{...body, ...pathParams}` the dispatcher already assembled.
+
+This is the **only** safe way for a plugin route handler to know who is calling it — do not read a `userId` out of the request body for authorization, because the client controls that field. For `security: ['bearer']` endpoints the dispatcher has already verified the JWT and rejected unauthenticated callers before the handler runs, so `ctx.userId` is trustworthy.
+
+When a plugin method is called **programmatically** (e.g. `fortress.plugins.admin.bootstrap({ userId })` from a seed script), `ctx` is `undefined`. Handlers that need both call paths should branch on `routeCtx` to decide whether to trust `body.userId`.
+
 ### Plugin Capability Matrix
 
 | Capability | Use Case | Example Plugins |
@@ -950,7 +969,7 @@ interface PluginContext {
 | `models` | Declare new DB tables | 2FA (`two_factor_secret`, `backup_code`), OAuth (`oauth_client`), all plugins |
 | `hooks` | Intercept auth lifecycle | 2FA (afterLogin), email verification (beforeLogin), account lockout (beforeLogin, onLoginFailure) |
 | `methods` | Expose operations | All plugins — e.g., `fortress.plugins['two-factor'].enable(userId)` |
-| `routes` | Add HTTP endpoints | OAuth (`/oauth/token`), social login (`/auth/social/:provider/callback`) |
+| `routes` | Add HTTP endpoints | OAuth (`/oauth/token`), social login (`/auth/social/:provider/callback`) — handlers receive `(input, ctx: PluginRouteContext)` where `ctx` carries the verified caller id/claims, request meta, and raw `Request` |
 | `middleware` | Per-request logic | Tenancy (sets schema search_path) |
 | `wrapAdapter` | Modify DB per-request | Tenancy (schema scoping), data isolation (row filtering) |
 | `enrichTokenClaims` | Extend JWT claims | Tenancy (adds `tenantId`, `tenantCode`) |

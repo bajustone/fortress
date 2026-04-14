@@ -9,6 +9,7 @@ import type {
   CreateUserInput,
   FortressUser,
   RequestMeta,
+  TokenClaims,
 } from './types';
 
 export interface FortressPlugin {
@@ -110,6 +111,23 @@ export interface PluginContext {
 
 /** @deprecated Use EndpointDefinition from './endpoint' instead. Kept as alias for backward compatibility. */
 export type RouteDefinition = import('./endpoint').EndpointDefinition;
+
+/**
+ * Second argument passed to plugin HTTP route handlers by the dispatcher.
+ * Carries the verified caller identity and the raw Request so handlers can
+ * make authorization decisions, stamp audit entries, or read headers/cookies
+ * without trusting client-supplied body fields.
+ *
+ * `userId` / `claims` are populated whenever the endpoint's `meta.security`
+ * declared bearer auth (the dispatcher runs token verification first).
+ * For public endpoints they are `undefined`.
+ */
+export interface PluginRouteContext {
+  userId?: number;
+  claims?: TokenClaims;
+  meta?: RequestMeta;
+  request: Request;
+}
 
 export interface MiddlewareDefinition {
   path: string;

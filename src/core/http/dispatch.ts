@@ -21,13 +21,14 @@
 import type { ClientAuth } from '../../plugins/oauth';
 import type { EndpointDefinition } from '../endpoint';
 import type { Fortress } from '../fortress';
-import type { FortressPlugin } from '../plugin';
-import type { RequestMeta } from '../types';
+import type { FortressPlugin, PluginRouteContext } from '../plugin';
+import type { RequestMeta, TokenClaims } from '../types';
 import { Errors, FortressError } from '../errors';
 
 /** Auth context resolved by `handleRequest` before dispatch. */
 export interface DispatchAuth {
   userId?: number;
+  claims?: TokenClaims;
   meta?: RequestMeta;
 }
 
@@ -61,7 +62,7 @@ export async function dispatchEndpoint(
 
   // Plugin route (non-oauth)
   if (owningPlugin) {
-    return dispatchPlugin(fortress, owningPlugin, endpoint, body, pathParams);
+    return dispatchPlugin(fortress, owningPlugin, endpoint, body, pathParams, request, auth);
   }
 
   // Core auth / IAM dispatch
@@ -157,6 +158,8 @@ async function dispatchPlugin(
   endpoint: EndpointDefinition,
   body: Record<string, unknown>,
   pathParams: Record<string, string>,
+  request: Request,
+  auth: DispatchAuth,
 ): Promise<Response> {
   const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)[plugin.name];
   if (!methods?.[endpoint.handler]) {
@@ -174,7 +177,13 @@ async function dispatchPlugin(
     });
   }
 
-  const result = await methods[endpoint.handler]({ ...body, ...pathParams });
+  const ctx: PluginRouteContext = {
+    userId: auth.userId,
+    claims: auth.claims,
+    meta: auth.meta,
+    request,
+  };
+  const result = await methods[endpoint.handler]({ ...body, ...pathParams }, ctx);
   // Allow handlers to opt into HTML by returning a string starting with `<!`.
   if (typeof result === 'string' && result.trimStart().startsWith('<!')) {
     return new Response(result, {

@@ -12,7 +12,7 @@
 
 import type { EndpointDefinition, EndpointPermission } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
-import type { FortressPlugin, PluginContext } from '../../core/plugin';
+import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
 import type { FortressUser, Group, Permission, PermissionInput, Role, SubjectType } from '../../core/types';
 import { authEndpoints } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
@@ -603,7 +603,7 @@ const bootstrapEndpoint: EndpointDefinition = {
   handler: 'bootstrap',
   meta: {
     summary: 'Bootstrap admin user',
-    description: 'Assigns all fortress admin permissions to a user. Creates the fortress resource and permissions if they do not exist.',
+    description: 'Assigns all fortress admin permissions to the authenticated caller. Superadmins (configured via adminUserIds) may bootstrap another user by passing `userId` in the body; for everyone else the field is ignored and the caller bootstraps themselves. Creates the fortress resource and permissions if they do not exist.',
     tags: ['IAM', 'Admin'],
     security: ['bearer'],
   },
@@ -611,14 +611,14 @@ const bootstrapEndpoint: EndpointDefinition = {
     body: {
       type: 'object',
       properties: {
-        userId: { type: 'integer', description: 'User ID to make admin' },
+        userId: { type: 'integer', description: 'Target user ID (superadmins only). Defaults to the authenticated caller.' },
       },
-      required: ['userId'],
     },
   },
   responses: {
     200: { description: 'Admin bootstrapped', schema: { type: 'object', properties: { ok: { type: 'boolean' }, role: { type: 'object' } } } },
     401: { description: 'Not authenticated' },
+    403: { description: 'Already bootstrapped and caller is not a superadmin' },
   },
 };
 
@@ -689,8 +689,31 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         return pullResources(ctx.db);
       },
 
-      async bootstrap(body: { userId: number }): Promise<{ ok: boolean; role: Role }> {
-        const { userId } = body;
+      async bootstrap(
+        body: { userId?: number },
+        routeCtx?: PluginRouteContext,
+      ): Promise<{ ok: boolean; role: Role }> {
+        // Two call paths:
+        //   1. HTTP: dispatcher passes `routeCtx` with the verified JWT
+        //      subject. The caller bootstraps themselves; only superadmins
+        //      (listed in options.adminUserIds) may pass `body.userId` to
+        //      bootstrap someone else.
+        //   2. Programmatic (e.g. seed scripts): no `routeCtx`, so fall back
+        //      to `body.userId`. These callers are trusted — they already
+        //      have a direct reference to `fortress.plugins.admin`.
+        const callerId = routeCtx?.userId;
+        const isSuperadmin = callerId != null && adminUserIds.has(callerId);
+        let userId: number | undefined;
+        if (routeCtx) {
+          userId = isSuperadmin && body.userId != null ? body.userId : callerId;
+          if (userId == null)
+            throw Errors.unauthorized('User not authenticated');
+        }
+        else {
+          userId = body.userId;
+          if (userId == null)
+            throw Errors.badRequest('userId is required for programmatic bootstrap');
+        }
         const db = ctx.db;
 
         // Verify user exists
@@ -702,12 +725,13 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
           throw Errors.notFound('User not found');
         }
 
-        // Check if already bootstrapped — only superadmins can re-bootstrap
+        // Check if already bootstrapped — only superadmins (or trusted
+        // programmatic callers with no routeCtx) can re-bootstrap.
         const existingRole = await db.findOne<Role>({
           model: 'role',
           where: [{ field: 'name', operator: '=', value: 'fortress-admin' }],
         });
-        if (existingRole && !adminUserIds.has(userId)) {
+        if (existingRole && routeCtx && !isSuperadmin) {
           throw Errors.forbidden('Admin already bootstrapped. Only superadmins can re-bootstrap.');
         }
 
