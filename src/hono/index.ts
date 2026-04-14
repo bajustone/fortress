@@ -40,7 +40,7 @@ export { convertRoutes } from './convert-routes';
 export type { ConvertRoutesOptions, ExternalRoute, ToJSONSchemaConverter } from './convert-routes';
 export { mountFortress } from './handle';
 export type { MountFortressOptions } from './handle';
-export { getClaims, getDb, getScopedDb, getUserId } from './helpers';
+export { getClaims, getDb, getScopedDb, getSubject, getUserId } from './helpers';
 export type { FortressEnv } from './middleware/auth';
 export { createCsrfMiddleware } from './middleware/csrf';
 export type { CsrfConfig } from './middleware/csrf';

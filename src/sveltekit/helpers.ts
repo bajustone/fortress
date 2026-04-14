@@ -7,25 +7,45 @@
  */
 
 import type { DatabaseAdapter } from '../adapters/database';
-import type { TokenClaims } from '../core/types';
+import type { Subject, TokenClaims } from '../core/types';
 import type { FortressLocals, SvelteKitRequestEvent } from './types';
 import { Errors } from '../core/errors';
 
 type EventWithFortress = SvelteKitRequestEvent<FortressLocals>;
 
-/** Read the authenticated user ID, throwing 401 if missing. */
-export function getUserId(event: EventWithFortress): number {
-  const id = event.locals.fortress?.userId;
-  if (id == null)
+/**
+ * Read the resolved principal from the event, throwing 401 if missing.
+ * Works for every subject kind (`USER`, `SERVICE_ACCOUNT`, ...).
+ */
+export function getSubject(event: EventWithFortress): Subject {
+  const subject = event.locals.fortress?.subject;
+  if (!subject)
     throw Errors.unauthorized('Not authenticated');
-  return id;
+  return subject;
 }
 
-/** Read the verified JWT claims, throwing 401 if missing. */
+/**
+ * Read the authenticated user ID. Throws 401 when the request was
+ * authenticated by a non-USER subject (e.g. a service account via
+ * api-key) — use {@link getSubject} for handlers that accept any
+ * principal.
+ */
+export function getUserId(event: EventWithFortress): number {
+  const subject = event.locals.fortress?.subject;
+  if (!subject || subject.type !== 'USER')
+    throw Errors.unauthorized('User not authenticated');
+  return subject.id;
+}
+
+/**
+ * Read the verified JWT claims. Only populated when the request was
+ * authenticated via a JWT — api-key principals have no JWT claims and
+ * this helper throws 401.
+ */
 export function getClaims(event: EventWithFortress): TokenClaims {
   const claims = event.locals.fortress?.claims;
   if (!claims)
-    throw Errors.unauthorized('Not authenticated');
+    throw Errors.unauthorized('No JWT claims on this request');
   return claims;
 }
 

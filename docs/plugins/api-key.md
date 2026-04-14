@@ -138,7 +138,7 @@ console.log(result.scopes);  // string[] | null
 
 ### Authenticating incoming requests
 
-You don't need to call `resolveKey` yourself — the api-key plugin implements Fortress's `resolvePrincipal` capability, so `fortress.handleRequest` automatically resolves requests bearing an api-key header into a subject principal. Two header formats are accepted:
+You don't need to call `resolveKey` yourself — the api-key plugin implements Fortress's `resolvePrincipal` capability, so both `fortress.handleRequest` *and* the Hono / Express / SvelteKit user-route auth middleware automatically resolve requests bearing an api-key header into a subject principal. Two header formats are accepted:
 
 ```
 Authorization: ApiKey myapp_sk_a1b2c3d4...
@@ -146,6 +146,8 @@ X-API-Key: myapp_sk_a1b2c3d4...
 ```
 
 If neither header is present, the pipeline falls back to the JWT path. If both a JWT and an api-key are present, the api-key wins (resolvers run before the JWT fallback).
+
+> Note: api-key authentication works uniformly on Fortress-owned routes (`/auth/*`, `/iam/*`, plugin routes) *and* your own custom routes — any route protected by the adapter's auth middleware goes through `fortress.resolvePrincipal`, which tries the plugin chain before the JWT fallback. The resolved principal is available as `fortressSubject` on the adapter request context (Hono `c.get('fortressSubject')` / Express `req.fortressSubject` / SvelteKit `event.locals.fortress.subject`).
 
 Once resolved, the principal flows through the same RBAC machinery as a JWT-authenticated request:
 

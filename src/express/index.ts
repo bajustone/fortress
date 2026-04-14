@@ -41,6 +41,7 @@ export {
   getClaims,
   getDb,
   getScopedDb,
+  getSubject,
   getUserId,
 } from './middleware';
 export type {

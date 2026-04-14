@@ -9,7 +9,7 @@
  */
 
 import type { DatabaseAdapter } from '../adapters/database';
-import type { TokenClaims } from '../core/types';
+import type { Subject, TokenClaims } from '../core/types';
 
 // ── Minimal SvelteKit type subset ───────────────────────────────────
 
@@ -85,9 +85,23 @@ export type SvelteKitAction<TResult = unknown> = (
  */
 export interface FortressLocals {
   fortress: {
-    /** Authenticated user ID, if a valid token was present. */
+    /**
+     * Resolved principal for the current request. Set for every
+     * authenticated request regardless of credential type (JWT, api-key,
+     * future OAuth client_credentials, mTLS). Check `subject.type` to
+     * distinguish `USER` / `SERVICE_ACCOUNT` / `GROUP`.
+     */
+    subject?: Subject;
+    /**
+     * Convenience alias for `subject.id` — set **only** when
+     * `subject.type === 'USER'`. Non-USER principals (e.g. a service
+     * account via api-key) leave this undefined; fall back to `subject`.
+     */
     userId?: number;
-    /** Verified JWT claims, if a valid token was present. */
+    /**
+     * Verified JWT claims, if the request was authenticated via a JWT.
+     * Plugin-resolved principals (api-key, etc.) do not populate this.
+     */
     claims?: TokenClaims;
     /** Per-request DB adapter with plugin `wrapAdapter` chain applied. */
     db?: DatabaseAdapter;

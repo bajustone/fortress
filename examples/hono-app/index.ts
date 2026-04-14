@@ -27,6 +27,7 @@ import {
   getClaims,
   getDb,
   getScopedDb,
+  getSubject,
   getUserId,
   mountFortress,
   vBody,
@@ -517,32 +518,21 @@ app.delete('/admin/service-accounts/:id', async (c) => {
   return c.json({ data: { deleted: true } });
 });
 
-// The consuming side — an endpoint a service account would call. This uses
-// the fortress.handleRequest pipeline so the api-key plugin's resolvePrincipal
-// hook authenticates the request. In a real app you'd mount this under
-// fortress or check permissions via fortress.iam.checkPermission directly.
+// The consuming side — an endpoint a service account would call. This is
+// mounted under the standard `authMiddleware`, so the api-key plugin's
+// `resolvePrincipal` hook handles `Authorization: ApiKey <key>` /
+// `X-API-Key` headers transparently. A JWT-authenticated browser session
+// would work on exactly the same route.
 //
 // curl -X POST http://localhost:3000/deploy/run -H 'Authorization: ApiKey <key>'
-app.post('/deploy/run', async (c) => {
-  // Resolve the api key header into a subject principal.
-  const authHeader = c.req.header('authorization') ?? '';
-  const rawKey = authHeader.startsWith('ApiKey ')
-    ? authHeader.slice(7).trim()
-    : c.req.header('x-api-key');
-  if (!rawKey)
-    return c.json({ error: 'Missing API key' }, 401);
-
-  const resolved = await fortress.plugins['api-key'].resolveKey(rawKey);
-  if (!resolved)
-    return c.json({ error: 'Invalid or revoked API key' }, 401);
-
-  // Permission check via the resolved subject — works for USER and SERVICE_ACCOUNT.
-  const allowed = await fortress.iam.checkPermission(resolved.subject, 'deploy', 'run');
+app.post('/deploy/run', authMiddleware, async (c) => {
+  const subject = getSubject(c);
+  const allowed = await fortress.iam.checkPermission(subject, 'deploy', 'run');
   if (!allowed)
     return c.json({ error: 'Forbidden' }, 403);
 
   // ... trigger the deploy ...
-  return c.json({ data: { deployId: 'dpl_abc123', startedBy: resolved.subject } });
+  return c.json({ data: { deployId: 'dpl_abc123', startedBy: subject } });
 });
 
 // ── Social Login (linked accounts) ──

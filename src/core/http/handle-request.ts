@@ -16,7 +16,7 @@ import type { Subject, TokenClaims } from '../types';
 import type { RouteEntry } from './match';
 import { resolveCookieConfig } from '../config';
 import { Errors, FortressError } from '../errors';
-import { validateRequest } from '../validation';
+import { coerceBySchema, validateRequest } from '../validation';
 import { serializeAuthCookies } from './cookie-serialize';
 import { dispatchEndpoint } from './dispatch';
 import { errorToResponse, withCookies } from './error-response';
@@ -27,6 +27,7 @@ import {
 } from './fortress-rbac';
 import { buildRouteTable, matchRoute } from './match';
 import { runPluginMiddleware } from './plugin-middleware';
+import { tryPluginPrincipal } from './principal';
 import { extractAccessToken } from './token-extraction';
 
 /**
@@ -85,20 +86,10 @@ export function buildHandleRequest(
       const isOauthPath = endpoint.path.startsWith('/oauth/');
 
       if (!isOauthPath) {
-        for (const plugin of plugins) {
-          if (!plugin.resolvePrincipal)
-            continue;
-          const resolved = await plugin.resolvePrincipal(request, {
-            db: fortress.config.database,
-            config: fortress.config,
-            auth: fortress.auth,
-            iam: fortress.iam,
-          });
-          if (resolved) {
-            subject = resolved.subject;
-            claims = resolved.claims;
-            break;
-          }
+        const resolved = await tryPluginPrincipal(fortress, request);
+        if (resolved) {
+          subject = resolved.subject;
+          claims = resolved.claims;
         }
       }
 
@@ -129,6 +120,7 @@ export function buildHandleRequest(
       // 4. Plugin after-auth middleware
       await runPluginMiddleware(plugins, fortress.config, 'after-auth', {
         request,
+        fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
       });
@@ -146,6 +138,7 @@ export function buildHandleRequest(
       // 6. Plugin after-rbac middleware
       await runPluginMiddleware(plugins, fortress.config, 'after-rbac', {
         request,
+        fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
       });
@@ -165,7 +158,12 @@ export function buildHandleRequest(
           parsedBody = await request.clone().json().catch(() => undefined);
         }
         const query = Object.fromEntries(url.searchParams);
-        await validateRequest(endpoint.input, { body: parsedBody, query, params });
+        // URL-sourced data is always strings. Coerce query/params to the
+        // types declared in the endpoint's JSON Schema before validation
+        // so `:id`/`?limit=2` don't trip integer/number/boolean checks.
+        const coercedQuery = coerceBySchema(endpoint.input?.query, query);
+        const coercedParams = coerceBySchema(endpoint.input?.params, params);
+        await validateRequest(endpoint.input, { body: parsedBody, query: coercedQuery, params: coercedParams });
       }
 
       // 8. Dispatch + serialize. Pass IP/UA from headers as RequestMeta so

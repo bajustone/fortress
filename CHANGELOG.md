@@ -36,6 +36,52 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`resolvePrincipal` now fires on user-owned routes, not just
+  Fortress-managed ones.** Previously, only requests dispatched through
+  `fortress.handleRequest` (`/auth/*`, `/iam/*`, plugin routes, OAuth,
+  OpenAPI) walked the `resolvePrincipal` plugin chain — so
+  `Authorization: ApiKey ...` / `X-API-Key: ...` headers authenticated
+  Fortress routes but silently 401'd on any custom route protected by the
+  Hono / Express / SvelteKit auth middleware. API keys, and every future
+  credential plugin, now work uniformly on both surfaces.
+  - New `fortress.resolvePrincipal(request)` method on the Fortress
+    instance — plugin chain + non-throwing JWT fallback. Exposed publicly
+    alongside `fortress.extractAccessToken`, so third-party adapters can
+    delegate to it in ~3 lines.
+  - New `src/core/http/principal.ts` with `tryPluginPrincipal` (plugin
+    chain only, used by `handle-request`) and `resolveRequestPrincipal`
+    (chain + JWT, used by adapter user-route middleware).
+
+### Changed
+- **Adapter request context is now subject-based, not USER-only.** All
+  three adapters now expose `fortressSubject: Subject` as the
+  authoritative principal field, with `fortressUserId` demoted to a
+  convenience alias populated only when `subject.type === 'USER'`. This
+  unblocks service-account principals resolved via api-key from using
+  *any* user-owned route, not just Fortress routes.
+  - **Hono**: `FortressEnv.Variables.fortressSubject: Subject`;
+    `fortressUserId` now optional. User-route RBAC middleware checks
+    `fortress.iam.checkPermission(subject, ...)` instead of hardcoding
+    `{ type: 'USER', id }`. New `getSubject(c)` helper.
+  - **Express**: `req.fortressSubject?: Subject`; `req.fortressUserId`
+    now populated only for USER subjects. New `getSubject(req)` helper.
+  - **SvelteKit**: `event.locals.fortress.subject?: Subject`;
+    `locals.fortress.userId` populated only for USER subjects. New
+    `getSubject(event)` helper. Auto-refresh on expired JWTs still
+    works, but plugin resolvers run first so api-key requests skip the
+    refresh path entirely.
+  - **Breaking**: `getUserId` / `getClaims` now throw 401 for
+    non-USER principals and for api-key-authenticated requests
+    (respectively). Code that accepts any principal should call
+    `getSubject` instead and branch on `subject.type`. Per the "no
+    compat burden" rule for v0.0.x, no shims are provided.
+- **`PluginRequestContext` now carries `fortressSubject`** in addition to
+  `fortressUserId` / `fortressClaims`. All three adapters pass it through
+  to the `before-auth` / `after-auth` / `after-rbac` plugin middleware
+  slots; plugin middleware wanting subject-level identity (non-USER
+  principals) can read it instead of relying on the USER-only alias.
+
 ### Added
 - **`SERVICE_ACCOUNT` is now a first-class core IAM citizen.** Previously
   `SERVICE_ACCOUNT` existed only as a `SubjectType` enum value and any role

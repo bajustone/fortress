@@ -1412,7 +1412,7 @@ apiKey({
 })
 ```
 
-Keys are owned by a `Subject` -- either a `USER` or a `SERVICE_ACCOUNT`. Incoming requests that carry `Authorization: ApiKey <key>` or `X-API-Key: <key>` are automatically resolved to their owning subject via the plugin's `resolvePrincipal` capability; no middleware setup required.
+Keys are owned by a `Subject` -- either a `USER` or a `SERVICE_ACCOUNT`. Incoming requests that carry `Authorization: ApiKey <key>` or `X-API-Key: <key>` are automatically resolved to their owning subject via the plugin's `resolvePrincipal` capability; no middleware setup required. This works on **both** Fortress-owned routes (`/auth/*`, `/iam/*`, plugin routes, OAuth, OpenAPI) and your own user-owned routes protected by the Hono / Express / SvelteKit auth middleware — every adapter calls `fortress.resolvePrincipal(request)`, which tries the plugin chain before falling back to the JWT bearer token. The resolved principal is available on the adapter request context as `fortressSubject` (Hono `c.get('fortressSubject')` / Express `req.fortressSubject` / SvelteKit `event.locals.fortress.subject`), with `fortressUserId` populated only when `subject.type === 'USER'`.
 
 **Self-service HTTP endpoints (opt-in via `routes: true`):**
 

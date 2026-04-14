@@ -3,6 +3,7 @@ import type { FortressConfig, ResolvedCookieConfig } from './config';
 import type { EndpointDefinition } from './endpoint';
 import type { AuthCookiePayload } from './http/cookie-serialize';
 import type { PluginRequestContext } from './http/plugin-middleware';
+import type { ResolvedPrincipal } from './http/principal';
 import type { IamService } from './iam/iam-service';
 import type { FortressPlugin, MiddlewareDefinition } from './plugin';
 import type { InferPlugins } from './plugin-methods-map';
@@ -13,6 +14,7 @@ import { Errors } from './errors';
 import { serializeAuthCookies as serializeAuthCookiesFn } from './http/cookie-serialize';
 import { buildHandleRequest } from './http/handle-request';
 import { runPluginMiddleware as runPluginMiddlewareFn } from './http/plugin-middleware';
+import { resolveRequestPrincipal as resolveRequestPrincipalFn } from './http/principal';
 import { extractAccessToken as extractAccessTokenFn } from './http/token-extraction';
 import { iamEndpoints } from './iam/iam-endpoints';
 import { createIamService } from './iam/iam-service';
@@ -61,6 +63,17 @@ export interface Fortress<TPlugins = Record<string, Record<string, Function>>> {
    * cookie and falling back to `Authorization: Bearer`.
    */
   extractAccessToken: (request: Request) => string | null;
+  /**
+   * Resolve the request principal by trying plugin `resolvePrincipal`
+   * hooks (e.g. `api-key`) first, then falling back to the configured JWT
+   * bearer token. Non-throwing — returns `null` when no credential is
+   * present or the JWT fails to verify.
+   *
+   * Adapter user-route middleware calls this so api-keys, cookies, and
+   * bearer tokens authenticate uniformly on user-owned routes — not just
+   * Fortress-owned routes dispatched through `handleRequest`.
+   */
+  resolvePrincipal: (request: Request) => Promise<ResolvedPrincipal | null>;
   /**
    * Serialize an auth result (or pair of tokens) into one or two
    * `Set-Cookie` header values using the resolved cookie config and the
@@ -168,6 +181,8 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     handleRequest: undefined as unknown as (request: Request) => Promise<Response>,
     runPluginMiddleware: (phase, ctx) => runPluginMiddlewareFn(plugins, config, phase, ctx),
     extractAccessToken: (request: Request): string | null => extractAccessTokenFn(request, cookies),
+    resolvePrincipal: (request: Request): Promise<ResolvedPrincipal | null> =>
+      resolveRequestPrincipalFn(instance as Fortress, request),
     serializeAuthCookies: (payload: AuthCookiePayload): string[] =>
       serializeAuthCookiesFn(payload, cookies, {
         access: config.jwt.accessTokenExpirySeconds ?? 900,

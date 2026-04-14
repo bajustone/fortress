@@ -1,7 +1,7 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { Fortress } from '../core/fortress';
 import type { MiddlewareDefinition, PluginContext } from '../core/plugin';
-import type { TokenClaims } from '../core/types';
+import type { Subject, TokenClaims } from '../core/types';
 import { FortressError } from '../core/errors';
 import {
   chainAdapterWrappers,
@@ -17,6 +17,16 @@ export interface ExpressRequest {
   headers: Record<string, string | string[] | undefined>;
   method: string;
   path: string;
+  /**
+   * The resolved principal — set for every authenticated request regardless
+   * of credential type (JWT, api-key, future OAuth client_credentials, mTLS).
+   */
+  fortressSubject?: Subject;
+  /**
+   * Convenience alias — populated **only** when the subject is a `USER`.
+   * Non-USER subjects (e.g. `SERVICE_ACCOUNT` via api-key) leave this
+   * undefined; fall back to {@link fortressSubject}.
+   */
   fortressUserId?: number;
   fortressClaims?: TokenClaims;
   fortressDb?: DatabaseAdapter;
@@ -53,17 +63,18 @@ export interface RbacOptions {
 // --- Auth middleware ---
 
 /**
- * Build the Express auth middleware. Extracts the access token via
- * `fortress.extractAccessToken` (cookie-first, `Authorization: Bearer`
- * fallback), verifies it, and attaches `fortressUserId` / `fortressClaims`
- * / `fortressDb` / `fortressGetScopedDb` to the request for downstream
- * user-route handlers.
+ * Build the Express auth middleware. Resolves the request principal via
+ * `fortress.resolvePrincipal`, which tries plugin `resolvePrincipal` hooks
+ * (api-key, future OAuth client_credentials, mTLS) first and then falls
+ * back to the JWT bearer token (cookie-first, `Authorization: Bearer`
+ * second). Populates `fortressSubject`, `fortressUserId` (USER alias),
+ * `fortressClaims`, `fortressDb`, and `fortressGetScopedDb` on the request.
  */
 export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
   return async (req, _res, next) => {
     try {
-      // Adapter the Express request into a minimal web Request just for
-      // header reading — fortress.extractAccessToken takes a real Request.
+      // Adapt the Express request into a minimal web Request so
+      // fortress.resolvePrincipal can read headers / cookies uniformly.
       const headerJar = new Headers();
       for (const [k, v] of Object.entries(req.headers)) {
         if (Array.isArray(v)) {
@@ -74,15 +85,18 @@ export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
         }
       }
       const probe = new Request('http://localhost/', { headers: headerJar });
-      const token = fortress.extractAccessToken(probe);
-      if (!token) {
-        throw new FortressError('UNAUTHORIZED', 'Missing or invalid access token', 401);
+
+      const resolved = await fortress.resolvePrincipal(probe);
+      if (!resolved) {
+        throw new FortressError('UNAUTHORIZED', 'Missing or invalid credentials', 401);
       }
 
-      const claims = await fortress.auth.verifyToken(token);
-
-      req.fortressUserId = claims.sub;
-      req.fortressClaims = claims;
+      const { subject, claims } = resolved;
+      req.fortressSubject = subject;
+      if (subject.type === 'USER')
+        req.fortressUserId = subject.id;
+      if (claims)
+        req.fortressClaims = claims;
 
       const plugins = fortress.config.plugins ?? [];
       const requestContext: Record<string, unknown> = {
@@ -96,7 +110,7 @@ export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
 
       const pluginCtx: PluginContext = { db: wrappedAdapter, config: fortress.config };
       req.fortressGetScopedDb = async (model: string): Promise<DatabaseAdapter> => {
-        const scopeRule = await collectScopeRules(plugins, claims.sub, model, pluginCtx);
+        const scopeRule = await collectScopeRules(plugins, subject.id, model, pluginCtx);
         if (!scopeRule)
           return wrappedAdapter;
         return wrapAdapterWithScopeRules(wrappedAdapter, scopeRule);
@@ -151,11 +165,11 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
         return;
       }
 
-      if (!req.fortressUserId) {
-        throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
+      if (!req.fortressSubject) {
+        throw new FortressError('UNAUTHORIZED', 'Not authenticated', 401);
       }
 
-      const allowed = await fortress.iam.checkPermission({ type: 'USER', id: req.fortressUserId }, mapping.resource, mapping.action);
+      const allowed = await fortress.iam.checkPermission(req.fortressSubject, mapping.resource, mapping.action);
       if (!allowed) {
         throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403);
       }
@@ -254,18 +268,39 @@ export function createExpressMiddleware(fortress: Fortress, options?: ExpressAda
 
 // --- Helpers ---
 
-/** Read the authenticated user ID from an Express request. Throws if the auth middleware did not run or rejected the token. */
-export function getUserId(req: ExpressRequest): number {
-  if (!req.fortressUserId) {
-    throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
+/**
+ * Read the resolved request principal. Works for every subject kind
+ * (`USER`, `SERVICE_ACCOUNT`, ...). Throws 401 if the auth middleware did
+ * not run or no credential was present.
+ */
+export function getSubject(req: ExpressRequest): Subject {
+  if (!req.fortressSubject) {
+    throw new FortressError('UNAUTHORIZED', 'Not authenticated', 401);
   }
-  return req.fortressUserId;
+  return req.fortressSubject;
 }
 
-/** Read the verified JWT claims from an Express request. */
+/**
+ * Read the authenticated user ID. Throws 401 if the request was
+ * authenticated by a non-USER subject (e.g. a service account via
+ * api-key) — use {@link getSubject} for handlers that accept any
+ * principal.
+ */
+export function getUserId(req: ExpressRequest): number {
+  if (!req.fortressSubject || req.fortressSubject.type !== 'USER') {
+    throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
+  }
+  return req.fortressSubject.id;
+}
+
+/**
+ * Read the verified JWT claims. Only populated when the request was
+ * authenticated via a JWT — api-key principals have no JWT claims and
+ * this helper throws 401.
+ */
 export function getClaims(req: ExpressRequest): TokenClaims {
   if (!req.fortressClaims) {
-    throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
+    throw new FortressError('UNAUTHORIZED', 'No JWT claims on this request', 401);
   }
   return req.fortressClaims;
 }

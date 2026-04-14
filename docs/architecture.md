@@ -519,7 +519,7 @@ Key characteristics:
 
 ### Request Principal Resolution
 
-**File:** `src/core/http/handle-request.ts` (step 3).
+**Files:** `src/core/http/principal.ts` (shared resolver helpers), `src/core/http/handle-request.ts` (fortress-owned routes), adapter user-route middleware (`src/hono/middleware/auth.ts`, `src/express/middleware.ts`, `src/sveltekit/handle.ts`).
 
 Fortress threads a single `Subject` type through the entire pipeline:
 
@@ -530,9 +530,19 @@ type Subject = { type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'; id: number };
 Every request resolves to a `Subject` (or `undefined` for public routes) via two ordered paths:
 
 1. **Plugin `resolvePrincipal`**: plugins implementing the `resolvePrincipal` capability are tried in registration order. The first to return non-null wins; its subject becomes the request principal. The api-key plugin implements this for `Authorization: ApiKey <key>` and `X-API-Key: <key>` headers. Future credential plugins (OAuth client_credentials, mTLS, signed JWT assertions) plug in at the same point without core changes.
-2. **JWT fallback**: if no plugin resolves the request and the endpoint declares `security: 'bearer'`, the core JWT verifier runs. `TokenClaims.subjectType` is read from the JWT payload (default `'USER'` for legacy tokens that don't carry the claim).
+2. **JWT fallback**: if no plugin resolves the request, the configured JWT bearer token is verified (cookie-first, `Authorization: Bearer` second). `TokenClaims.subjectType` is read from the JWT payload (default `'USER'` for legacy tokens that don't carry the claim).
 
-The resolved `subject` flows into `enforceFortressPermission` and `fortress.iam.checkPermission`, both of which are subject-aware. Downstream RBAC evaluates the same way regardless of how the principal was authenticated.
+Crucially, this two-stage resolution fires on **both** surfaces:
+
+- **Fortress-owned routes** (`/auth/*`, `/iam/*`, plugin routes, OAuth, OpenAPI) run it inside `fortress.handleRequest` via `tryPluginPrincipal`. The JWT fallback is gated by the endpoint's `security: 'bearer'` metadata.
+- **User-owned routes** (your own `app.get(...)` handlers in Hono / Express / SvelteKit) run it inside the adapter auth middleware via `fortress.resolvePrincipal(request)` — which is just `tryPluginPrincipal` + a non-throwing JWT fallback. Every adapter pinpoints the resolved subject on its framework-native request context:
+  - Hono: `c.get('fortressSubject')` (plus `c.get('fortressUserId')` as a USER-only alias)
+  - Express: `req.fortressSubject` (plus `req.fortressUserId` as a USER-only alias)
+  - SvelteKit: `event.locals.fortress.subject` (plus `event.locals.fortress.userId` as a USER-only alias)
+
+This is the fix for the gap where api-key headers authenticated `/auth/*` and `/iam/*` but silently 401'd on custom routes — every credential type now works the same way on both surfaces. Third-party adapters can wire up to the same pipeline with a single call to `fortress.resolvePrincipal(request)`.
+
+The resolved `subject` flows into `enforceFortressPermission`, `fortress.iam.checkPermission`, and the adapter-level `createRbacMiddleware` — all of which are subject-aware. Downstream RBAC evaluates the same way regardless of how the principal was authenticated.
 
 ### Permission Evaluation
 

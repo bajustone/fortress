@@ -35,6 +35,7 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { Fortress } from '../core/fortress';
 import type { PluginContext } from '../core/plugin';
+import type { Subject, TokenClaims } from '../core/types';
 import type {
   FortressLocals,
   SvelteKitAdapterOptions,
@@ -44,6 +45,7 @@ import type {
 import { Errors, FortressError } from '../core/errors';
 import { errorToResponse } from '../core/http/error-response';
 import { buildRouteTable, matchRoute } from '../core/http/match';
+import { tryPluginPrincipal } from '../core/http/principal';
 import {
   chainAdapterWrappers,
   collectScopeRules,
@@ -88,35 +90,57 @@ export function createSvelteKitHandle(
       // 3. User route — run plugin `before-auth` middleware.
       await fortress.runPluginMiddleware('before-auth', { request: event.request });
 
-      // 4. Try to extract + verify the access token. If expired and a refresh
-      //    cookie is present, auto-refresh and set new cookies before resolve().
-      const token = fortress.extractAccessToken(event.request);
+      // 4. Resolve the request principal. Plugin `resolvePrincipal` hooks
+      //    (api-key, future OAuth client_credentials, mTLS) run first so
+      //    non-JWT credentials authenticate uniformly on user routes. If
+      //    no plugin claims the request, fall back to the JWT bearer token
+      //    (cookie-first, Authorization: Bearer second) — and if the JWT
+      //    is expired, try a silent refresh using the refresh cookie so
+      //    SSR loads stay logged in across token lifetimes.
+      let subject: Subject | undefined;
       let userId: number | undefined;
-      let claims: import('../core/types').TokenClaims | undefined;
-      if (token) {
-        try {
-          claims = await fortress.auth.verifyToken(token);
-          userId = claims.sub;
-        }
-        catch {
-          // Token invalid or expired — try silent refresh.
-          const refreshToken = event.cookies.get(fortress.cookies.refreshName);
-          if (refreshToken) {
-            try {
-              const refreshed = await fortress.auth.refresh(refreshToken);
-              setAuthCookies(event, fortress, refreshed);
-              claims = await fortress.auth.verifyToken(refreshed.accessToken);
-              userId = claims.sub;
-            }
-            catch {
-              // Refresh failed too — leave locals empty; loaders decide.
+      let claims: TokenClaims | undefined;
+
+      const pluginResolved = await tryPluginPrincipal(fortress, event.request);
+      if (pluginResolved) {
+        subject = pluginResolved.subject;
+        claims = pluginResolved.claims;
+      }
+      else {
+        const token = fortress.extractAccessToken(event.request);
+        if (token) {
+          try {
+            claims = await fortress.auth.verifyToken(token);
+            subject = { type: claims.subjectType, id: claims.sub };
+          }
+          catch {
+            // Token invalid or expired — try silent refresh.
+            const refreshToken = event.cookies.get(fortress.cookies.refreshName);
+            if (refreshToken) {
+              try {
+                const refreshed = await fortress.auth.refresh(refreshToken);
+                setAuthCookies(event, fortress, refreshed);
+                claims = await fortress.auth.verifyToken(refreshed.accessToken);
+                subject = { type: claims.subjectType, id: claims.sub };
+              }
+              catch {
+                // Refresh failed too — leave locals empty; loaders decide.
+              }
             }
           }
         }
       }
 
-      if (userId !== undefined && claims) {
-        populateLocals(event as unknown as SvelteKitRequestEvent<FortressLocals>, fortress, userId, claims);
+      if (subject?.type === 'USER')
+        userId = subject.id;
+
+      if (subject) {
+        populateLocals(
+          event as unknown as SvelteKitRequestEvent<FortressLocals>,
+          fortress,
+          subject,
+          claims,
+        );
       }
       else {
         // Always set the namespace so consumer code can call `event.locals.fortress?.userId`
@@ -128,6 +152,7 @@ export function createSvelteKitHandle(
       // 5. Plugin `after-auth` middleware on user routes.
       await fortress.runPluginMiddleware('after-auth', {
         request: event.request,
+        fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
       });
@@ -136,9 +161,9 @@ export function createSvelteKitHandle(
       if (!skipPatterns.some(p => p.test(fullPath))) {
         const mapping = matchRouteMap(routeMap, event.request.method, fullPath);
         if (mapping) {
-          if (!userId)
+          if (!subject)
             throw Errors.unauthorized('Not authenticated');
-          const allowed = await fortress.iam.checkPermission({ type: 'USER', id: userId }, mapping.resource, mapping.action);
+          const allowed = await fortress.iam.checkPermission(subject, mapping.resource, mapping.action);
           if (!allowed)
             throw Errors.forbidden('Insufficient permissions');
         }
@@ -147,6 +172,7 @@ export function createSvelteKitHandle(
       // 7. Plugin `after-rbac` middleware.
       await fortress.runPluginMiddleware('after-rbac', {
         request: event.request,
+        fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
       });
@@ -170,8 +196,8 @@ export function createSvelteKitHandle(
 function populateLocals(
   event: SvelteKitRequestEvent<FortressLocals>,
   fortress: Fortress,
-  userId: number,
-  claims: import('../core/types').TokenClaims,
+  subject: Subject,
+  claims: TokenClaims | undefined,
 ): void {
   const plugins = fortress.config.plugins ?? [];
   const requestContext: Record<string, unknown> = {
@@ -186,11 +212,12 @@ function populateLocals(
   const pluginCtx: PluginContext = { db: wrapped, config: fortress.config };
 
   event.locals.fortress = {
-    userId,
+    subject,
+    userId: subject.type === 'USER' ? subject.id : undefined,
     claims,
     db: wrapped,
     getScopedDb: async (model: string): Promise<DatabaseAdapter> => {
-      const rule = await collectScopeRules(plugins, userId, model, pluginCtx);
+      const rule = await collectScopeRules(plugins, subject.id, model, pluginCtx);
       if (!rule)
         return wrapped;
       return wrapAdapterWithScopeRules(wrapped, rule);

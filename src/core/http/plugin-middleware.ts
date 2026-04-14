@@ -14,7 +14,7 @@
 
 import type { FortressConfig } from '../config';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext } from '../plugin';
-import type { TokenClaims } from '../types';
+import type { Subject, TokenClaims } from '../types';
 import { executePluginMiddleware } from '../plugin-runner';
 
 /**
@@ -27,6 +27,18 @@ import { executePluginMiddleware } from '../plugin-runner';
  */
 export interface PluginRequestContext {
   request: Request;
+  /**
+   * The resolved principal for this request, if any. Populated from a
+   * plugin `resolvePrincipal` hit or the JWT fallback. Plugins preferring
+   * subject-level identity (non-USER principals) should read this instead
+   * of `fortressUserId`.
+   */
+  fortressSubject?: Subject;
+  /**
+   * Convenience alias — set only when the resolved subject is a `USER`.
+   * Non-USER principals (e.g. `SERVICE_ACCOUNT` via api-key) leave this
+   * field undefined; consumers should fall back to `fortressSubject`.
+   */
   fortressUserId?: number;
   fortressClaims?: TokenClaims;
 }
