@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.0.32] - 2026-04-14
+
+### Added
+- docs: polish documentation
+- feat(iam)!: promote SERVICE_ACCOUNT to first-class citizen
+- feat(api-key,admin)!: opt-in HTTP routes for self-service + admin management
+- feat(webauthn)!: require ctx.userId for registration, drop body userId
+- feat(plugins)!: pass PluginRouteContext to plugin route handlers
+
 ## [0.0.31] - 2026-04-10
 
 ### Added
