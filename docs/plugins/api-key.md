@@ -208,6 +208,101 @@ interface ApiKeyInfo {
 }
 ```
 
+## Service account flow (end-to-end)
+
+A complete walkthrough of setting up a CI deploy bot as a service account, granting it permissions, and authenticating its requests. Service accounts are first-class IAM principals — see the [README IAM section](../../README.md#service-accounts) for the conceptual overview.
+
+### 1. Create the service account
+
+```ts
+const ci = await fortress.iam.createServiceAccount({
+  name: 'ci-deploy',                       // machine identifier, immutable
+  displayName: 'CI Deploy',
+  description: 'Runs production deploys from GitHub Actions',
+});
+```
+
+### 2. Grant it permissions
+
+Either bind a role or a direct permission. Both work exactly as they do for users:
+
+```ts
+const deployer = await fortress.iam.createRole('deployer', [
+  { resource: 'deploy', action: 'run' },
+  { resource: 'deploy', action: 'rollback' },
+]);
+await fortress.iam.bindRoleToServiceAccount(ci.id, deployer.id);
+```
+
+### 3. Mint an API key for the service account
+
+```ts
+const { key } = await fortress.plugins['api-key'].createKey({
+  subject: { type: 'SERVICE_ACCOUNT', id: ci.id },
+  name: 'ci-deploy-github-actions',
+});
+// store `key` in your CI secrets store NOW — it is never returned again
+```
+
+### 4. Authenticate requests using the key
+
+The client sends the key in either header. Fortress's `resolvePrincipal` plugin hook — which `api-key` implements — inspects each incoming request and turns the header into a subject principal *before* RBAC runs:
+
+```
+POST /deploy/run HTTP/1.1
+Authorization: ApiKey fortress_sk_a1b2c3d4...
+```
+
+or
+
+```
+POST /deploy/run HTTP/1.1
+X-API-Key: fortress_sk_a1b2c3d4...
+```
+
+Inside your route, the authenticated principal is the service account:
+
+```ts
+// On a fortress-managed route, routeCtx.subject is populated
+async handler(input, routeCtx) {
+  // routeCtx.subject is { type: 'SERVICE_ACCOUNT', id: ci.id }
+  const allowed = await fortress.iam.checkPermission(
+    routeCtx.subject!,
+    'deploy',
+    'run',
+  );
+  if (!allowed) throw Errors.forbidden();
+  // ... run the deploy
+}
+```
+
+Fortress-managed routes (like the `/iam/service-accounts/*` admin endpoints) automatically enforce the subject's permissions via `enforceFortressPermission`.
+
+### 5. Kill-switch: deactivate when compromised
+
+If a key leaks, you have two layers of defense. Revoke the individual key, or deactivate the entire service account — the latter instantly stops every key the account owns from resolving, and drives `checkPermission` to return `false` for that subject:
+
+```ts
+// Option A: revoke just this key
+await fortress.plugins['api-key'].revokeKey({
+  subject: { type: 'SERVICE_ACCOUNT', id: ci.id },
+  id: keyId,
+});
+
+// Option B: kill-switch the whole service account
+await fortress.iam.updateServiceAccount(ci.id, { isActive: false });
+```
+
+### 6. Decommission: delete the service account
+
+`deleteServiceAccount` is a hard delete with cascade — the account row, all role bindings, all direct permission bindings, and every API key owned by the account are removed in one operation.
+
+```ts
+await fortress.iam.deleteServiceAccount(ci.id);
+```
+
+---
+
 ## How It Works
 
 1. **Key generation** -- `crypto.getRandomValues` produces 32 random bytes, hex-encoded and prepended with `{prefix}_sk_` to form the raw key.

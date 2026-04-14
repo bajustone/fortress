@@ -388,57 +388,73 @@ Group names are included in JWT claims (`groups` array), so they can be checked 
 
 ### Service Accounts
 
-Service accounts are first-class IAM principals for CI/CD, M2M communication, devices, and anything that needs permissions without a human user behind it. They hold roles and direct permissions just like users, but have no sessions, passwords, or group memberships. Authentication is via the `api-key` plugin using `Authorization: ApiKey <key>` or `X-API-Key: <key>` headers.
+Service accounts are first-class IAM principals for CI/CD, M2M communication, devices, and anything that needs permissions without a human user. They hold roles and direct permissions the same way users do — but have no sessions, no passwords, and no group memberships. They authenticate via the `api-key` plugin using `Authorization: ApiKey <key>` or `X-API-Key: <key>` headers.
+
+Why you'd use one: a regular user row represents a human who signs in. A service account represents a process. It can be deactivated or deleted without affecting any human's audit trail, its credentials are long-lived API keys (not JWT sessions), and the `name` is an immutable machine identifier — perfect for `ci-deploy` or `grafana-reader`.
+
+**Create a service account.** The `name` is immutable after creation; everything else can be updated.
 
 ```typescript
-// Create a service account
 const ci = await fortress.iam.createServiceAccount({
   name: 'ci-deploy',
   displayName: 'CI Deploy',
   description: 'Runs production deploys from GitHub Actions',
 });
+```
 
-// Grant it a role — just like a user
+**Grant permissions.** Role bindings and direct bindings work the same as they do for users:
+
+```typescript
+// Via a role
 const deployer = await fortress.iam.createRole('deployer', [
   { resource: 'deploy', action: 'run' },
 ]);
 await fortress.iam.bindRoleToServiceAccount(ci.id, deployer.id);
 
-// Or bind a permission directly
+// Or a direct permission binding
 await fortress.iam.bindPermissionToServiceAccount(ci.id, {
   resource: 'audit',
   action: 'read',
 });
+```
 
-// Mint an api key for the service account (requires the `api-key` plugin)
+**Mint an API key and authenticate requests.** Requires the `api-key` plugin ([docs](./docs/plugins/api-key.md)). The raw key is returned exactly once — Fortress stores only the SHA-256 hash.
+
+```typescript
 const { key } = await fortress.plugins['api-key'].createKey({
   subject: { type: 'SERVICE_ACCOUNT', id: ci.id },
   name: 'ci-deploy-key',
 });
-// Store `key` once — it is never retrievable again.
+// store `key` immediately — it is never retrievable again
+```
 
-// Incoming requests authenticate via `Authorization: ApiKey <key>` (or
-// `X-API-Key: <key>`). RBAC resolves the service account's permissions
-// end-to-end via `fortress.iam.checkPermission({ type: 'SERVICE_ACCOUNT', id }, ...)`.
+Incoming requests authenticate by sending the key in either header:
 
-// Deactivate a service account (permissions immediately evaluate to none,
-// and any live api keys stop authenticating)
+```
+Authorization: ApiKey fortress_sk_a1b2c3...
+X-API-Key: fortress_sk_a1b2c3...
+```
+
+The api-key plugin resolves the key to its owning service account and that subject flows through RBAC end-to-end — no middleware setup required.
+
+**Check a permission.** `checkPermission` takes a discriminated `Subject`, so users and service accounts share the same API:
+
+```typescript
+await fortress.iam.checkPermission({ type: 'USER', id: userId }, 'post', 'read');
+await fortress.iam.checkPermission({ type: 'SERVICE_ACCOUNT', id: ci.id }, 'deploy', 'run');
+```
+
+**Deactivate or delete.** Flipping `isActive` to `false` is a kill-switch: the api key stops authenticating and any permission check returns `false` immediately. Hard deletes cascade through role bindings, direct permission bindings, and every API key owned by the account.
+
+```typescript
+// Kill-switch
 await fortress.iam.updateServiceAccount(ci.id, { isActive: false });
 
-// Delete a service account (hard delete — cascades to role bindings,
-// direct permission bindings, and owned api keys)
+// Hard delete with cascade
 await fortress.iam.deleteServiceAccount(ci.id);
 ```
 
-Subject types: every permission check accepts a discriminated `Subject`:
-
-```typescript
-// Check a user's permission
-await fortress.iam.checkPermission({ type: 'USER', id: userId }, 'post', 'read');
-
-// Check a service account's permission
-await fortress.iam.checkPermission({ type: 'SERVICE_ACCOUNT', id: ci.id }, 'deploy', 'run');
-```
+**Tenancy.** Service accounts are global at the table level but hold tenant-scoped grants via `roleBindings.tenantId` — a single account can carry both tenant-scoped and global bindings. See [docs/plugins/tenancy.md](./docs/plugins/tenancy.md#service-accounts-and-tenancy).
 
 ### Direct Permissions
 

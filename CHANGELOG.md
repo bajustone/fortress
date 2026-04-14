@@ -139,6 +139,60 @@
   - The `POST /iam/admin/bootstrap` body schema no longer marks `userId`
     as required.
 
+### Migration summary (SERVICE_ACCOUNT / Subject release)
+
+If you're upgrading from the previous release, the minimum set of edits:
+
+```ts
+// 1. Permission checks: wrap userId in a Subject
+- fortress.iam.checkPermission(userId, 'post', 'read');
++ fortress.iam.checkPermission({ type: 'USER', id: userId }, 'post', 'read');
+
+// 2. getUserPermissions → getPermissionsForSubject
+- fortress.iam.getUserPermissions(userId, tenantId);
++ fortress.iam.getPermissionsForSubject({ type: 'USER', id: userId }, tenantId);
+
+// 3. api-key plugin: userId → subject
+- fortress.plugins['api-key'].createKey({ userId, name });
++ fortress.plugins['api-key'].createKey({ subject: { type: 'USER', id: userId }, name });
+// Same shape change for listKeys/revokeKey/rotateKey.
+
+// 4. api-key plugin config
+- apiKey({ maxKeysPerUser: 5 });
++ apiKey({ maxKeysPerSubject: 5 });
+
+// 5. resolveKey return shape
+- const { userId } = await fortress.plugins['api-key'].resolveKey(raw);
++ const { subject } = await fortress.plugins['api-key'].resolveKey(raw);
+
+// 6. IAM observer registration
+- fortress.iam.setIamObserver(listener);
++ fortress.iam.addIamObserver(listener);
+```
+
+And one schema migration for installs that manage DDL manually:
+
+```sql
+-- api_key: polymorphic ownership (USER | SERVICE_ACCOUNT)
+ALTER TABLE fortress_api_key ADD COLUMN subject_type varchar(20) NOT NULL DEFAULT 'USER';
+ALTER TABLE fortress_api_key RENAME COLUMN user_id TO subject_id;
+ALTER TABLE fortress_api_key DROP CONSTRAINT IF EXISTS fortress_api_key_user_id_fkey;
+CREATE INDEX api_key_subject_idx ON fortress_api_key (subject_type, subject_id);
+
+-- new service_accounts table (Postgres; adjust types for SQLite/MySQL)
+CREATE TABLE fortress_service_account (
+  id serial PRIMARY KEY,
+  name varchar(100) NOT NULL UNIQUE,
+  display_name varchar(255),
+  description text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp NOT NULL DEFAULT NOW(),
+  updated_at timestamp NOT NULL DEFAULT NOW()
+);
+```
+
+Full per-field details below.
+
 ### Changed (breaking)
 - **`IamService.checkPermission` and `getUserPermissions` are now
   subject-aware.** The first argument is a `Subject`, not a bare `userId`.

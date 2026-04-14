@@ -450,6 +450,101 @@ app.post('/auth/api-keys/:id/rotate', async (c) => {
   return c.json({ data: result });
 });
 
+// ── Service Accounts ──
+//
+// Service accounts are first-class IAM principals — no sessions or passwords,
+// authenticated by long-lived api keys. Typical use: CI/CD, devices, M2M.
+// These endpoints are admin-facing (the admin user creates service accounts
+// and mints keys for them). Once a key is issued, the service account sends
+// it in `Authorization: ApiKey <key>` or `X-API-Key: <key>` — see
+// `/deploy/run` below for the consuming side.
+
+// curl -X POST http://localhost:3000/admin/service-accounts \
+//   -H 'Authorization: Bearer <admin-token>' \
+//   -H 'Content-Type: application/json' \
+//   -d '{"name":"ci-deploy","displayName":"CI Deploy"}'
+app.post('/admin/service-accounts', async (c) => {
+  const { name, displayName, description } = await c.req.json();
+  const sa = await fortress.iam.createServiceAccount({ name, displayName, description });
+  return c.json({ data: sa }, 201);
+});
+
+// Grant a service account a role.
+// curl -X POST http://localhost:3000/admin/service-accounts/1/roles \
+//   -H 'Authorization: Bearer <admin-token>' -H 'Content-Type: application/json' \
+//   -d '{"roleId":42}'
+app.post('/admin/service-accounts/:id/roles', async (c) => {
+  const saId = Number(c.req.param('id'));
+  const { roleId, tenantId } = await c.req.json();
+  await fortress.iam.bindRoleToServiceAccount(saId, Number(roleId), tenantId);
+  return c.json({ data: { bound: true } });
+});
+
+// Mint an api key for a service account. The raw key is returned exactly once;
+// store it in your CI secrets store immediately.
+// curl -X POST http://localhost:3000/admin/service-accounts/1/keys \
+//   -H 'Authorization: Bearer <admin-token>' -H 'Content-Type: application/json' \
+//   -d '{"name":"ci-deploy-github-actions"}'
+app.post('/admin/service-accounts/:id/keys', async (c) => {
+  const saId = Number(c.req.param('id'));
+  const { name, scopes, expiresAt } = await c.req.json();
+  const result = await fortress.plugins['api-key'].createKey({
+    subject: { type: 'SERVICE_ACCOUNT', id: saId },
+    name,
+    scopes,
+    expiresAt,
+  });
+  return c.json({ data: result }, 201);
+});
+
+// Deactivate (kill-switch) or delete a service account.
+// curl -X PATCH http://localhost:3000/admin/service-accounts/1 \
+//   -H 'Authorization: Bearer <admin-token>' -H 'Content-Type: application/json' \
+//   -d '{"isActive":false}'
+app.patch('/admin/service-accounts/:id', async (c) => {
+  const saId = Number(c.req.param('id'));
+  const patch = await c.req.json();
+  const updated = await fortress.iam.updateServiceAccount(saId, patch);
+  return c.json({ data: updated });
+});
+
+// Hard delete (cascades to role bindings, direct permission bindings, and keys).
+// curl -X DELETE http://localhost:3000/admin/service-accounts/1 \
+//   -H 'Authorization: Bearer <admin-token>'
+app.delete('/admin/service-accounts/:id', async (c) => {
+  const saId = Number(c.req.param('id'));
+  await fortress.iam.deleteServiceAccount(saId);
+  return c.json({ data: { deleted: true } });
+});
+
+// The consuming side — an endpoint a service account would call. This uses
+// the fortress.handleRequest pipeline so the api-key plugin's resolvePrincipal
+// hook authenticates the request. In a real app you'd mount this under
+// fortress or check permissions via fortress.iam.checkPermission directly.
+//
+// curl -X POST http://localhost:3000/deploy/run -H 'Authorization: ApiKey <key>'
+app.post('/deploy/run', async (c) => {
+  // Resolve the api key header into a subject principal.
+  const authHeader = c.req.header('authorization') ?? '';
+  const rawKey = authHeader.startsWith('ApiKey ')
+    ? authHeader.slice(7).trim()
+    : c.req.header('x-api-key');
+  if (!rawKey)
+    return c.json({ error: 'Missing API key' }, 401);
+
+  const resolved = await fortress.plugins['api-key'].resolveKey(rawKey);
+  if (!resolved)
+    return c.json({ error: 'Invalid or revoked API key' }, 401);
+
+  // Permission check via the resolved subject — works for USER and SERVICE_ACCOUNT.
+  const allowed = await fortress.iam.checkPermission(resolved.subject, 'deploy', 'run');
+  if (!allowed)
+    return c.json({ error: 'Forbidden' }, 403);
+
+  // ... trigger the deploy ...
+  return c.json({ data: { deployId: 'dpl_abc123', startedBy: resolved.subject } });
+});
+
 // ── Social Login (linked accounts) ──
 
 // curl http://localhost:3000/auth/social/accounts -H 'Authorization: Bearer <token>'
