@@ -31,6 +31,7 @@ All fields on `AdminPluginOptions` are optional:
 |---|---|---|---|
 | `adminUserIds` | `number[]` | `[]` | User IDs that bypass all permission checks (superadmins). These users can access any fortress admin endpoint without being assigned the corresponding permissions. |
 | `resource` | `string` | `'fortress'` | Resource name used in permission declarations. Change this if `fortress` conflicts with your application's resource naming. |
+| `apiKeyRoutes` | `boolean` | `false` | Mount the admin-side api-key management endpoints under `/admin/users/:userId/api-keys/*` and `/admin/service-accounts/:id/api-keys/*`. Requires the `api-key` plugin to also be registered. See [API Key Management](#api-key-management) below. |
 
 ## Bootstrap
 
@@ -200,6 +201,67 @@ await fortress.plugins.admin.syncResources({ direction: 'pull' });
 await fortress.plugins.admin.syncResources({ direction: 'push', filePath: './custom-resources.json' });
 ```
 
+### Service account management
+
+Service accounts are non-human IAM principals used for CI/CD, M2M, devices, etc. The admin plugin proxies the core `/iam/service-accounts/*` endpoints (CRUD + role bindings + direct permission bindings) so they run through the admin plugin's permission gating when the admin plugin is registered alongside core fortress.
+
+```ts
+// Create a service account
+const sa = await fortress.plugins.admin.createServiceAccount({
+  name: 'ci-deploy',
+  displayName: 'CI Deploy',
+  description: 'Runs production deploys from GitHub Actions',
+});
+
+// List / get / update / delete
+const { serviceAccounts, total } = await fortress.plugins.admin.listServiceAccounts({ limit: 20 });
+const found = await fortress.plugins.admin.getServiceAccount({ id: sa.id });
+await fortress.plugins.admin.updateServiceAccount({ id: sa.id, isActive: false });
+await fortress.plugins.admin.deleteServiceAccount({ id: sa.id });
+
+// Bind / unbind roles and direct permissions (same shape as the user variants)
+await fortress.plugins.admin.bindRoleToServiceAccount({ serviceAccountId: sa.id, id: roleId });
+await fortress.plugins.admin.bindPermissionToServiceAccount({
+  serviceAccountId: sa.id,
+  permission: { resource: 'deploy', action: 'run' },
+});
+```
+
+See the [IAM service account docs](../../README.md#service-accounts) for the conceptual overview and `checkPermission({ type: 'SERVICE_ACCOUNT', id }, ...)` examples.
+
+### API key management
+
+When `apiKeyRoutes: true` is passed to the admin plugin (and the `api-key` plugin is also registered), six admin HTTP routes are mounted under `/admin/users/:userId/api-keys/*` and `/admin/service-accounts/:id/api-keys/*`. All are guarded by the `apiKey:manage` permission, which bootstrap auto-registers into the `fortress-admin` role when the flag is on.
+
+```ts
+import { createFortress } from '@bajustone/fortress';
+import { apiKey } from '@bajustone/fortress/plugins/api-key';
+import { admin } from '@bajustone/fortress/plugins/admin';
+
+const fortress = createFortress({
+  jwt: { secret: '...' },
+  database: adapter,
+  plugins: [
+    apiKey({ prefix: 'myapp' }),
+    admin({ apiKeyRoutes: true }),
+  ],
+});
+```
+
+**Bootstrapping a service account's first credential.** A fresh service account has no login path — it can't self-mint. The `POST /admin/service-accounts/:id/api-keys` endpoint is the only supported way to issue its initial key:
+
+```bash
+curl -X POST http://localhost:3000/admin/service-accounts/42/api-keys \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"ci-deploy-github-actions"}'
+# Returns { "key": "myapp_sk_...", "id": 7 } — store the raw key immediately.
+```
+
+From then on, the service account authenticates incoming requests with `Authorization: ApiKey myapp_sk_...` or `X-API-Key: myapp_sk_...` — the api-key plugin's `resolvePrincipal` hook turns the header into a subject principal and RBAC flows through as usual.
+
+Admin-minted keys respect the same configured knobs (`prefix`, `maxKeysPerSubject`, `defaultExpirySeconds`) as self-service keys — the admin plugin re-enters the api-key plugin's `methods(ctx)` factory to mint, so there's no duplicate config.
+
 ## Endpoints
 
 All endpoints require bearer authentication and the corresponding `fortress:*` permission. The bootstrap endpoint only requires authentication (no permission check).
@@ -261,6 +323,36 @@ All endpoints require bearer authentication and the corresponding `fortress:*` p
 | DELETE | `/iam/permissions/bind/user` | `fortress:managePermissions` |
 | DELETE | `/iam/permissions/bind/group` | `fortress:managePermissions` |
 
+### Service account endpoints (core IAM, proxied through admin)
+
+These come from core IAM — the admin plugin re-registers them on its own `routes` array so they dispatch through the admin plugin's permission gating.
+
+| Method | Path | Permission |
+|---|---|---|
+| POST | `/iam/service-accounts` | `fortress:createServiceAccount` |
+| GET | `/iam/service-accounts` | `fortress:viewServiceAccounts` |
+| GET | `/iam/service-accounts/:id` | `fortress:viewServiceAccounts` |
+| PATCH | `/iam/service-accounts/:id` | `fortress:manageServiceAccount` |
+| DELETE | `/iam/service-accounts/:id` | `fortress:manageServiceAccount` |
+| GET | `/iam/service-accounts/:id/permissions` | `fortress:viewPermissions` |
+| POST | `/iam/roles/:id/bind/service-account` | `fortress:bindRole` |
+| DELETE | `/iam/roles/:id/bind/service-account` | `fortress:unbindRole` |
+| POST | `/iam/permissions/bind/service-account` | `fortress:managePermissions` |
+| DELETE | `/iam/permissions/bind/service-account` | `fortress:managePermissions` |
+
+### API key admin endpoints (opt-in via `apiKeyRoutes: true`)
+
+Mounted only when `admin({ apiKeyRoutes: true })`. All six require the `apiKey:manage` permission, which bootstrap auto-registers. Requires the `api-key` plugin to also be registered.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/admin/users/:userId/api-keys` | Mint a key on behalf of any user. |
+| GET | `/admin/users/:userId/api-keys` | List any user's non-revoked keys. |
+| DELETE | `/admin/users/:userId/api-keys/:id` | Revoke any user's key (ownership is not enforced). |
+| POST | `/admin/service-accounts/:id/api-keys` | Mint a key on behalf of a service account. **This is the only HTTP path for bootstrapping a fresh service account's first credential.** |
+| GET | `/admin/service-accounts/:id/api-keys` | List a service account's non-revoked keys. |
+| DELETE | `/admin/service-accounts/:id/api-keys/:keyId` | Revoke a service account's key. |
+
 ### Resource endpoints
 
 | Method | Path | Permission |
@@ -292,14 +384,18 @@ The admin plugin uses all fortress permissions declared across admin and core IA
 | `fortress:createRole` | Create role |
 | `fortress:deleteRole` | Delete role |
 | `fortress:manageRoles` | Update role, add permission to role |
-| `fortress:bindRole` | Bind role to user or group |
+| `fortress:bindRole` | Bind role to user, group, or service account |
 | `fortress:unbindRole` | Unbind role |
 | `fortress:viewGroups` | List groups, get group, list group members |
 | `fortress:createGroup` | Create group |
 | `fortress:manageGroup` | Update group, delete group, add/remove group members |
-| `fortress:viewPermissions` | List permissions, get user permissions, check permission |
+| `fortress:viewPermissions` | List permissions, get user/service-account permissions, check permission |
 | `fortress:managePermissions` | Create/delete permissions, bind/unbind permissions, resource sync |
 | `fortress:viewResources` | List available resources |
+| `fortress:createServiceAccount` | Create a service account |
+| `fortress:viewServiceAccounts` | List and get service accounts |
+| `fortress:manageServiceAccount` | Update / delete a service account |
+| `apiKey:manage` | *(only when `apiKeyRoutes: true`)* Admin mint/list/revoke of any user's or service account's api keys |
 
 ## How It Works
 

@@ -6,6 +6,7 @@
 - docs: polish documentation
 - feat(iam)!: promote SERVICE_ACCOUNT to first-class citizen
 - feat(api-key,admin)!: opt-in HTTP routes for self-service + admin management
+- feat(admin): HTTP endpoints to mint api keys for any subject (closes the SERVICE_ACCOUNT bootstrap gap — `POST /admin/users/:userId/api-keys` and `POST /admin/service-accounts/:id/api-keys`, plus GET/DELETE for service accounts)
 - feat(webauthn)!: require ctx.userId for registration, drop body userId
 - feat(plugins)!: pass PluginRouteContext to plugin route handlers
 

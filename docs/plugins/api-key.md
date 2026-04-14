@@ -236,6 +236,8 @@ await fortress.iam.bindRoleToServiceAccount(ci.id, deployer.id);
 
 ### 3. Mint an API key for the service account
 
+Programmatically:
+
 ```ts
 const { key } = await fortress.plugins['api-key'].createKey({
   subject: { type: 'SERVICE_ACCOUNT', id: ci.id },
@@ -243,6 +245,17 @@ const { key } = await fortress.plugins['api-key'].createKey({
 });
 // store `key` in your CI secrets store NOW — it is never returned again
 ```
+
+Or via HTTP, using the admin plugin's mint endpoint — the only supported HTTP path for bootstrapping a service account's first credential (a fresh SA has no login flow, so it can't self-mint via the `/api-key/keys` self-service route):
+
+```bash
+curl -X POST http://localhost:3000/admin/service-accounts/$SA_ID/api-keys \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"ci-deploy-github-actions"}'
+```
+
+This requires `admin({ apiKeyRoutes: true })` registered alongside `apiKey()`, and the caller must hold the `apiKey:manage` permission (auto-registered by bootstrap). See [docs/plugins/admin.md — API key management](./admin.md#api-key-management) for the full admin surface.
 
 ### 4. Authenticate requests using the key
 

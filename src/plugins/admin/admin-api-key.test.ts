@@ -168,5 +168,181 @@ describe('admin plugin — api-key routes', () => {
       }));
       expect(res.status).toBe(404);
     });
+
+    it('admin POST /admin/users/:userId/api-keys mints a key for any user', async () => {
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/users/${s.targetUserId}/api-keys`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${s.adminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'admin-minted' }),
+      }));
+      expect(res.status).toBe(201);
+      const body = await res.json() as { key: string; id: number };
+      expect(body.key).toMatch(/^test_sk_/);
+      expect(body.id).toBeDefined();
+
+      // The minted key shows up in the target user's self-service list.
+      const targetKeys = await s.apiKeyMethods.listKeys({
+        subject: { type: 'USER', id: s.targetUserId },
+      });
+      expect(targetKeys.map(k => k.id)).toContain(body.id);
+
+      // And resolves back to the target user — not the admin who minted it.
+      const resolved = await s.apiKeyMethods.resolveKey(body.key);
+      expect(resolved!.subject).toEqual({ type: 'USER', id: s.targetUserId });
+    });
+
+    it('admin POST /admin/users/:userId/api-keys returns 404 for a non-existent user', async () => {
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/users/999999/api-keys`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${s.adminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'orphan' }),
+      }));
+      expect(res.status).toBe(404);
+    });
+
+    it('non-admin POST /admin/users/:userId/api-keys returns 403', async () => {
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/users/${s.targetUserId}/api-keys`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${s.nonAdminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'nope' }),
+      }));
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('apiKeyRoutes: true — service accounts', () => {
+    let s: Setup;
+
+    beforeEach(async () => {
+      s = await setup({ apiKeyRoutes: true });
+    });
+
+    it('admin POST /admin/service-accounts/:id/api-keys bootstraps the first key', async () => {
+      const sa = await s.fortress.iam.createServiceAccount({
+        name: 'ci-deploy',
+        displayName: 'CI Deploy',
+      });
+
+      // A fresh service account has no way to self-mint — this endpoint
+      // is the only path to its first credential.
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/service-accounts/${sa.id}/api-keys`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${s.adminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'ci-deploy-github-actions' }),
+      }));
+      expect(res.status).toBe(201);
+      const body = await res.json() as { key: string; id: number };
+      expect(body.key).toMatch(/^test_sk_/);
+
+      // The minted key resolves back to the service account as the principal.
+      const resolved = await s.apiKeyMethods.resolveKey(body.key);
+      expect(resolved!.subject).toEqual({ type: 'SERVICE_ACCOUNT', id: sa.id });
+    });
+
+    it('admin POST /admin/service-accounts/:id/api-keys returns 404 for a non-existent SA', async () => {
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/service-accounts/999999/api-keys`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${s.adminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'orphan' }),
+      }));
+      expect(res.status).toBe(404);
+    });
+
+    it('non-admin POST /admin/service-accounts/:id/api-keys returns 403', async () => {
+      const sa = await s.fortress.iam.createServiceAccount({ name: 'forbidden-sa' });
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/service-accounts/${sa.id}/api-keys`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${s.nonAdminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'nope' }),
+      }));
+      expect(res.status).toBe(403);
+    });
+
+    it('admin GET /admin/service-accounts/:id/api-keys lists the SA keys', async () => {
+      const sa = await s.fortress.iam.createServiceAccount({ name: 'listable-sa' });
+      await s.apiKeyMethods.createKey({
+        subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+        name: 'Key A',
+      });
+      await s.apiKeyMethods.createKey({
+        subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+        name: 'Key B',
+      });
+
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/service-accounts/${sa.id}/api-keys`, {
+        headers: { authorization: `Bearer ${s.adminToken}` },
+      }));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { keys: { id: number; name: string }[] };
+      expect(body.keys.map(k => k.name).sort()).toEqual(['Key A', 'Key B']);
+    });
+
+    it('admin DELETE /admin/service-accounts/:id/api-keys/:keyId revokes the key', async () => {
+      const sa = await s.fortress.iam.createServiceAccount({ name: 'revokable-sa' });
+      const { key, id } = await s.apiKeyMethods.createKey({
+        subject: { type: 'SERVICE_ACCOUNT', id: sa.id },
+        name: 'To Revoke',
+      });
+      expect(await s.apiKeyMethods.resolveKey(key)).not.toBeNull();
+
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/service-accounts/${sa.id}/api-keys/${id}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${s.adminToken}` },
+      }));
+      expect(res.status).toBe(200);
+
+      expect(await s.apiKeyMethods.resolveKey(key)).toBeNull();
+    });
+
+    it('bootstrap → mint → authenticate: the full lifecycle', async () => {
+      // 1. Admin creates a service account.
+      const sa = await s.fortress.iam.createServiceAccount({
+        name: 'lifecycle-sa',
+        displayName: 'Lifecycle SA',
+      });
+
+      // 2. Admin binds a role that grants a fortress permission.
+      const role = await s.fortress.iam.createRole('sa-viewer', [
+        { resource: 'fortress', action: 'viewServiceAccounts' },
+      ]);
+      await s.fortress.iam.bindRoleToServiceAccount(sa.id, role.id);
+
+      // 3. Admin mints the first api key via the new admin endpoint.
+      const mintRes = await s.fortress.handleRequest(new Request(`http://localhost/admin/service-accounts/${sa.id}/api-keys`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${s.adminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'lifecycle-key' }),
+      }));
+      expect(mintRes.status).toBe(201);
+      const { key } = await mintRes.json() as { key: string; id: number };
+
+      // 4. The service account uses the minted key to hit a fortress route
+      //    that requires the bound permission — the request should succeed.
+      const authedRes = await s.fortress.handleRequest(new Request('http://localhost/iam/service-accounts', {
+        headers: { authorization: `ApiKey ${key}` },
+      }));
+      expect(authedRes.status).toBe(200);
+    });
   });
 });

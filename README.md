@@ -1407,12 +1407,14 @@ import { apiKey } from '@bajustone/fortress/plugins/api-key';
 apiKey({
   prefix: 'fortress',              // default: 'fortress' (key format: fortress_sk_<hex>)
   defaultExpirySeconds: null,       // default: null (never expires)
-  maxKeysPerUser: 10,               // default: 10
+  maxKeysPerSubject: 10,            // default: 10 (applies to USER and SERVICE_ACCOUNT alike)
   routes: true,                     // default: false -- mount HTTP endpoints (see below)
 })
 ```
 
-**HTTP endpoints (opt-in via `routes: true`):**
+Keys are owned by a `Subject` -- either a `USER` or a `SERVICE_ACCOUNT`. Incoming requests that carry `Authorization: ApiKey <key>` or `X-API-Key: <key>` are automatically resolved to their owning subject via the plugin's `resolvePrincipal` capability; no middleware setup required.
+
+**Self-service HTTP endpoints (opt-in via `routes: true`):**
 
 ```
 POST   /api-key/keys                 create a key for the authenticated caller
@@ -1422,11 +1424,10 @@ POST   /api-key/keys/:id/rotate      rotate one of the caller's keys
 ```
 
 All four require a bearer token. The authenticated caller can only manage
-their own keys -- a body-supplied `userId` is ignored in favor of the JWT
-subject, so clients cannot forge keys for other users.
+their own keys -- a body-supplied `subject` is ignored in favor of the JWT
+subject, so clients cannot forge keys for other subjects.
 
-For admin management (operating on any user's keys), register the `admin`
-plugin with `apiKeyRoutes: true`:
+**Admin HTTP endpoints** (for operating on *any* user's or service account's keys — register the `admin` plugin with `apiKeyRoutes: true`):
 
 ```typescript
 import { admin } from '@bajustone/fortress/plugins/admin';
@@ -1434,41 +1435,57 @@ import { admin } from '@bajustone/fortress/plugins/admin';
 admin({ apiKeyRoutes: true })
 ```
 
-This mounts:
+This mounts six endpoints, all guarded by the `apiKey:manage` permission (auto-registered into the `fortress-admin` role by bootstrap when `apiKeyRoutes` is enabled):
 
 ```
-GET    /admin/users/:userId/api-keys        list any user's keys
-DELETE /admin/users/:userId/api-keys/:id    revoke any user's key
+# User-scoped admin routes
+POST   /admin/users/:userId/api-keys               mint a key for any user
+GET    /admin/users/:userId/api-keys               list any user's keys
+DELETE /admin/users/:userId/api-keys/:id           revoke any user's key
+
+# Service-account-scoped admin routes
+POST   /admin/service-accounts/:id/api-keys        mint a key for a service account
+GET    /admin/service-accounts/:id/api-keys        list a service account's keys
+DELETE /admin/service-accounts/:id/api-keys/:keyId revoke a service account's key
 ```
 
-Both are guarded by the `apiKey:manage` permission, which the admin
-plugin's `POST /iam/admin/bootstrap` auto-registers into the
-`fortress-admin` role when `apiKeyRoutes` is enabled.
+The `POST /admin/service-accounts/:id/api-keys` endpoint is the primary path for **bootstrapping a service account's first credential** -- a fresh service account has no login flow, so an admin must mint its initial key. Admin-minted keys go through the same configured `maxKeysPerSubject` / `prefix` / `defaultExpirySeconds` knobs as self-service keys.
 
 **Programmatic methods** (always available, regardless of the `routes` flag):
 
 ```typescript
-// Create a key
+// Create a key (same shape for USER and SERVICE_ACCOUNT)
 const key = await fortress.plugins['api-key'].createKey({
-  userId,
+  subject: { type: 'USER', id: userId },
   name: 'CI Pipeline',
   scopes: ['post:read', 'post:create'],
   expiresAt: new Date('2025-12-31'),  // optional
 });
 // key.key -- raw key, ONLY returned at creation (e.g., "fortress_sk_a1b2c3...")
 
-// List active keys (never includes the raw key)
-const keys = await fortress.plugins['api-key'].listKeys({ userId });
+// List active keys owned by a subject
+const keys = await fortress.plugins['api-key'].listKeys({
+  subject: { type: 'USER', id: userId },
+});
 
-// Revoke a key (soft delete)
-await fortress.plugins['api-key'].revokeKey({ userId, id: keyId });
+// Revoke a key (caller must own it)
+await fortress.plugins['api-key'].revokeKey({
+  subject: { type: 'USER', id: userId },
+  id: keyId,
+});
 
 // Rotate a key (revoke + create new with same name, scopes, and expiry)
-const newKey = await fortress.plugins['api-key'].rotateKey({ userId, id: keyId });
+const newKey = await fortress.plugins['api-key'].rotateKey({
+  subject: { type: 'USER', id: userId },
+  id: keyId,
+});
 
-// Resolve a key from a raw token (for middleware/auth)
+// Resolve a raw key to its owning subject (used by resolvePrincipal internally;
+// exposed for custom middleware)
 const resolved = await fortress.plugins['api-key'].resolveKey('fortress_sk_a1b2c3...');
-// resolved.userId, resolved.scopes -- or null if invalid/expired/revoked
+// resolved.subject = { type: 'USER' | 'SERVICE_ACCOUNT', id: number }
+// resolved.scopes = string[] | null
+// Returns null for unknown, revoked, expired, or inactive-subject keys.
 ```
 
 ---

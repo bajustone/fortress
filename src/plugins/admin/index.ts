@@ -15,6 +15,7 @@ import type { ResourceFile } from '../../core/iam/resource-sync';
 import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
 import type { FortressUser, Group, Permission, PermissionInput, Role, SubjectType } from '../../core/types';
 import type { ApiKeyInfo } from '../api-key/core';
+import type { ApiKeyMethods } from '../api-key/index';
 import { authEndpoints } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
 import { iamEndpoints } from '../../core/iam/iam-endpoints';
@@ -28,12 +29,17 @@ export interface AdminPluginOptions {
   resource?: string;
   /**
    * Mount admin-side api-key management routes under
-   * `/admin/users/:userId/api-keys/*`. Default `false`.
+   * `/admin/users/:userId/api-keys/*` and
+   * `/admin/service-accounts/:id/api-keys/*`. Default `false`.
    *
-   * When enabled, the admin plugin exposes GET and DELETE endpoints for any
-   * user's API keys, guarded by the `apiKey:manage` permission (auto-registered
-   * into the `fortress-admin` role via bootstrap). Requires the `api-key`
-   * plugin to also be registered, since the `api_key` model lives there.
+   * When enabled, the admin plugin exposes POST, GET, and DELETE endpoints
+   * for any user's or service account's API keys, guarded by the
+   * `apiKey:manage` permission (auto-registered into the `fortress-admin`
+   * role via bootstrap). The POST endpoints are the only supported path
+   * for bootstrapping a service account's first key — a fresh service
+   * account has no credential of its own, so an admin must mint the
+   * initial key on its behalf. Requires the `api-key` plugin to also be
+   * registered, since the `api_key` model lives there.
    */
   apiKeyRoutes?: boolean;
 }
@@ -656,7 +662,56 @@ const apiKeyInfoSchema = {
   required: ['id', 'name', 'keyPrefix', 'createdAt'] as string[],
 };
 
+const createKeyBodySchema = {
+  type: 'object' as const,
+  properties: {
+    name: strSchema('Human-readable key label'),
+    scopes: { type: 'array' as const, items: { type: 'string' as const }, description: 'Optional permission scopes attached to the key' },
+    expiresAt: { type: 'string' as const, description: 'Optional expiry (ISO 8601 string)' },
+  },
+  required: ['name'] as string[],
+};
+
+const createKeyResponseSchema = {
+  type: 'object' as const,
+  properties: {
+    key: strSchema('Raw API key — shown exactly once, store it immediately'),
+    id: intSchema('Database id of the key'),
+  },
+  required: ['key', 'id'] as string[],
+};
+
 const adminApiKeyEndpoints: EndpointDefinition[] = [
+  // ── User-scoped admin api-key management ──────────────────────
+
+  {
+    method: 'POST',
+    path: '/admin/users/:userId/api-keys',
+    handler: 'adminCreateUserApiKey',
+    meta: {
+      summary: 'Mint an API key for any user',
+      description: 'Create a new API key owned by any user, bypassing the self-service `maxKeysPerSubject` check is NOT done — the same limit applies. The raw key is returned exactly once and cannot be retrieved later. Requires the `apiKey:manage` permission. Typical use: provisioning keys during tenant onboarding or replacing a lost key on a user\'s behalf.',
+      tags: ['Admin', 'API Keys'],
+      security: ['bearer'],
+      permission: { resource: 'apiKey', action: 'manage' },
+    },
+    input: {
+      params: {
+        type: 'object',
+        properties: { userId: intSchema('Target user ID') },
+        required: ['userId'],
+      },
+      body: createKeyBodySchema,
+    },
+    responses: {
+      201: { description: 'Key created', schema: createKeyResponseSchema },
+      400: { description: 'Bad request', schema: errorRef },
+      401: { description: 'Not authenticated', schema: errorRef },
+      403: { description: 'Forbidden', schema: errorRef },
+      404: { description: 'User not found', schema: errorRef },
+    },
+  },
+
   {
     method: 'GET',
     path: '/admin/users/:userId/api-keys',
@@ -710,6 +765,110 @@ const adminApiKeyEndpoints: EndpointDefinition[] = [
           id: intSchema('Key id to revoke'),
         },
         required: ['userId', 'id'],
+      },
+    },
+    responses: {
+      200: {
+        description: 'Revoked',
+        schema: {
+          type: 'object',
+          properties: { ok: boolSchema('Success') },
+          required: ['ok'],
+        },
+      },
+      401: { description: 'Not authenticated', schema: errorRef },
+      403: { description: 'Forbidden', schema: errorRef },
+      404: { description: 'Not found', schema: errorRef },
+    },
+  },
+
+  // ── Service-account-scoped admin api-key management ───────────
+  //
+  // Service accounts have no login path — they can't self-mint their
+  // first key. These endpoints are the only supported way to bootstrap
+  // a service account's credentials.
+
+  {
+    method: 'POST',
+    path: '/admin/service-accounts/:id/api-keys',
+    handler: 'adminCreateServiceAccountApiKey',
+    meta: {
+      summary: 'Mint an API key for a service account',
+      description: 'Create a new API key owned by a service account. This is the primary entry point for bootstrapping a service account\'s credentials — a fresh service account has no way to authenticate until an admin mints its first key. The raw key is returned exactly once and cannot be retrieved later. Requires the `apiKey:manage` permission.',
+      tags: ['Admin', 'API Keys', 'Service Accounts'],
+      security: ['bearer'],
+      permission: { resource: 'apiKey', action: 'manage' },
+    },
+    input: {
+      params: {
+        type: 'object',
+        properties: { id: intSchema('Target service account ID') },
+        required: ['id'],
+      },
+      body: createKeyBodySchema,
+    },
+    responses: {
+      201: { description: 'Key created', schema: createKeyResponseSchema },
+      400: { description: 'Bad request', schema: errorRef },
+      401: { description: 'Not authenticated', schema: errorRef },
+      403: { description: 'Forbidden', schema: errorRef },
+      404: { description: 'Service account not found', schema: errorRef },
+    },
+  },
+
+  {
+    method: 'GET',
+    path: '/admin/service-accounts/:id/api-keys',
+    handler: 'adminListServiceAccountApiKeys',
+    meta: {
+      summary: 'List a service account\'s API keys',
+      description: 'Return the active (non-revoked) API keys owned by a service account. Raw keys and hashes are never returned. Requires the `apiKey:manage` permission.',
+      tags: ['Admin', 'API Keys', 'Service Accounts'],
+      security: ['bearer'],
+      permission: { resource: 'apiKey', action: 'manage' },
+    },
+    input: {
+      params: {
+        type: 'object',
+        properties: { id: intSchema('Target service account ID') },
+        required: ['id'],
+      },
+    },
+    responses: {
+      200: {
+        description: 'Keys',
+        schema: {
+          type: 'object',
+          properties: {
+            keys: { type: 'array', items: apiKeyInfoSchema },
+          },
+          required: ['keys'],
+        },
+      },
+      401: { description: 'Not authenticated', schema: errorRef },
+      403: { description: 'Forbidden', schema: errorRef },
+    },
+  },
+
+  {
+    method: 'DELETE',
+    path: '/admin/service-accounts/:id/api-keys/:keyId',
+    handler: 'adminRevokeServiceAccountApiKey',
+    meta: {
+      summary: 'Revoke a service account\'s API key',
+      description: 'Revoke any API key by id, bypassing the self-service ownership check. Requires the `apiKey:manage` permission.',
+      tags: ['Admin', 'API Keys', 'Service Accounts'],
+      security: ['bearer'],
+      permission: { resource: 'apiKey', action: 'manage' },
+    },
+    input: {
+      params: {
+        type: 'object',
+        properties: {
+          id: intSchema('Target service account ID (for URL namespacing; ownership is not enforced)'),
+          keyId: intSchema('Key id to revoke'),
+        },
+        required: ['id', 'keyId'],
       },
     },
     responses: {
@@ -1208,12 +1367,143 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         return { ok: true };
       },
 
+      // ── Service-account IAM proxies ────────────────────────────
+      //
+      // The admin plugin re-exports `iamEndpoints` on its own `routes` so
+      // that IAM routes get dispatched through `dispatchPlugin`. That
+      // means every IAM handler referenced by those endpoint definitions
+      // must exist on this plugin's methods object — thin proxies that
+      // delegate to `ctx.iam`. Without these, hitting any
+      // `/iam/service-accounts/*` route through an instance that has the
+      // admin plugin registered returns a 404 from the dispatcher.
+
+      async createServiceAccount(body: Record<string, unknown>): Promise<unknown> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.createServiceAccount({
+          name: String(body.name ?? ''),
+          displayName: body.displayName as string | undefined,
+          description: body.description as string | undefined,
+        });
+      },
+
+      async listServiceAccounts(body: Record<string, unknown>): Promise<unknown> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.listServiceAccounts({
+          limit: body.limit != null ? Number(body.limit) : undefined,
+          offset: body.offset != null ? Number(body.offset) : undefined,
+        });
+      },
+
+      async getServiceAccount(body: Record<string, unknown>): Promise<unknown> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.getServiceAccount(requireInt(body.id, 'id'));
+      },
+
+      async updateServiceAccount(body: Record<string, unknown>): Promise<unknown> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.updateServiceAccount(requireInt(body.id, 'id'), {
+          displayName: body.displayName as string | null | undefined,
+          description: body.description as string | null | undefined,
+          isActive: body.isActive as boolean | undefined,
+        });
+      },
+
+      async deleteServiceAccount(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.deleteServiceAccount(requireInt(body.id, 'id'));
+        return { ok: true };
+      },
+
+      async getServiceAccountPermissions(body: Record<string, unknown>): Promise<Permission[]> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        return ctx.iam.getPermissionsForSubject(
+          { type: 'SERVICE_ACCOUNT', id: requireInt(body.id, 'id') },
+          body.tenantId as string | undefined,
+        );
+      },
+
+      async bindRoleToServiceAccount(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.bindRoleToServiceAccount(
+          requireInt(body.serviceAccountId, 'serviceAccountId'),
+          requireInt(body.id, 'id'),
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async unbindRoleFromServiceAccount(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.unbindRoleFromServiceAccount(
+          requireInt(body.serviceAccountId, 'serviceAccountId'),
+          requireInt(body.id, 'id'),
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async bindPermissionToServiceAccount(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.bindPermissionToServiceAccount(
+          requireInt(body.serviceAccountId, 'serviceAccountId'),
+          body.permission as PermissionInput,
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
+      async unbindPermissionFromServiceAccount(body: Record<string, unknown>): Promise<{ ok: boolean }> {
+        if (!ctx.iam)
+          throw Errors.database('IAM service not available');
+        await ctx.iam.unbindPermissionFromServiceAccount(
+          requireInt(body.serviceAccountId, 'serviceAccountId'),
+          requireInt(body.permissionId, 'permissionId'),
+          body.tenantId as string | undefined,
+        );
+        return { ok: true };
+      },
+
       // ── Admin api-key management ───────────────────────────────
       //
-      // These delegate to the shared helpers in `api-key/core.ts`. They're
-      // available as programmatic methods regardless of the
-      // `apiKeyRoutes` flag — only the HTTP mounting is gated. Requires
-      // the `api-key` plugin to be registered (for the `api_key` model).
+      // Read/delete delegate to the stateless helpers in `api-key/core.ts`.
+      // Create re-enters the api-key plugin's `methods` factory so the
+      // configured knobs (prefix, maxKeysPerSubject, defaultExpirySeconds)
+      // apply to admin-minted keys exactly as they do to self-service
+      // keys — no duplicate config. All of these are available as
+      // programmatic methods regardless of the `apiKeyRoutes` flag — only
+      // the HTTP mounting is gated. Requires the `api-key` plugin to be
+      // registered (for the `api_key` model).
+
+      async adminCreateUserApiKey(
+        body: Record<string, unknown>,
+      ): Promise<{ key: string; id: number }> {
+        const userId = requireInt(body.userId, 'userId');
+        // Verify the user exists so we never mint an orphan key.
+        const user = await ctx.db.findOne<{ id: number }>({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: userId }],
+        });
+        if (!user)
+          throw Errors.notFound('User not found');
+        const apiKeyMethods = getApiKeyMethods(ctx);
+        // Intentionally no routeCtx — we want `input.subject` to target
+        // the named user, not the admin who's calling us.
+        return apiKeyMethods.createKey({
+          subject: { type: 'USER', id: userId },
+          name: String(body.name ?? ''),
+          scopes: Array.isArray(body.scopes) ? (body.scopes as string[]).map(String) : undefined,
+          expiresAt: body.expiresAt as string | Date | undefined,
+        });
+      },
 
       async adminListUserApiKeys(
         body: Record<string, unknown>,
@@ -1229,6 +1519,48 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         body: Record<string, unknown>,
       ): Promise<{ ok: boolean }> {
         await revokeKeyAsAdmin(ctx.db, requireInt(body.id, 'id'));
+        return { ok: true };
+      },
+
+      // ── Service-account-scoped admin api-key handlers ─────────
+
+      async adminCreateServiceAccountApiKey(
+        body: Record<string, unknown>,
+      ): Promise<{ key: string; id: number }> {
+        const serviceAccountId = requireInt(body.id, 'id');
+        // Verify the service account exists so we never mint an orphan
+        // key. Inactive service accounts are allowed here — the key will
+        // just fail to authenticate until the account is reactivated,
+        // which is occasionally useful for pre-provisioning.
+        const sa = await ctx.db.findOne<{ id: number }>({
+          model: 'service_account',
+          where: [{ field: 'id', operator: '=', value: serviceAccountId }],
+        });
+        if (!sa)
+          throw Errors.notFound('Service account not found');
+        const apiKeyMethods = getApiKeyMethods(ctx);
+        return apiKeyMethods.createKey({
+          subject: { type: 'SERVICE_ACCOUNT', id: serviceAccountId },
+          name: String(body.name ?? ''),
+          scopes: Array.isArray(body.scopes) ? (body.scopes as string[]).map(String) : undefined,
+          expiresAt: body.expiresAt as string | Date | undefined,
+        });
+      },
+
+      async adminListServiceAccountApiKeys(
+        body: Record<string, unknown>,
+      ): Promise<{ keys: ApiKeyInfo[] }> {
+        const keys = await listKeysForSubject(ctx.db, {
+          type: 'SERVICE_ACCOUNT',
+          id: requireInt(body.id, 'id'),
+        });
+        return { keys };
+      },
+
+      async adminRevokeServiceAccountApiKey(
+        body: Record<string, unknown>,
+      ): Promise<{ ok: boolean }> {
+        await revokeKeyAsAdmin(ctx.db, requireInt(body.keyId, 'keyId'));
         return { ok: true };
       },
 
@@ -1248,6 +1580,25 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
 }
 
 // --- Helpers ---
+
+/**
+ * Look up the api-key plugin on the fortress config and return its
+ * methods bound to the current context. Used by the admin plugin's
+ * create-key handlers so admin-minted keys go through the same
+ * configured knobs (prefix, limits, default expiry) as self-service
+ * keys — no duplicate config.
+ *
+ * Rerunning the api-key plugin's `methods` factory is cheap and safe:
+ * it just returns a fresh object literal, and the plugin's internal
+ * `observerRegistered` flag prevents the IAM cascade observer from
+ * being attached twice.
+ */
+function getApiKeyMethods(ctx: PluginContext): ApiKeyMethods {
+  const apiKeyPlugin = (ctx.config.plugins ?? []).find(p => p.name === 'api-key');
+  if (!apiKeyPlugin?.methods)
+    throw Errors.database('api-key plugin is not registered');
+  return apiKeyPlugin.methods(ctx) as unknown as ApiKeyMethods;
+}
 
 /**
  * Extract userId from a framework-agnostic request object.
