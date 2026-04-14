@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.34] - 2026-04-14
+
+### Added
+- more tests
+
+### Fixed
+- fix(validation): coerce URL-sourced query/params to their declared types
+
 ## [0.0.33] - 2026-04-14
 
 ### Added
