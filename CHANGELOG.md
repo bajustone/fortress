@@ -41,6 +41,28 @@
   - The `POST /iam/admin/bootstrap` body schema no longer marks `userId`
     as required.
 
+### Changed (breaking)
+- **`POST /webauthn/register/options` and `POST /webauthn/register/verify`
+  no longer accept `userId` in the request body.** The passkey is always
+  registered against the authenticated caller (`ctx.userId`). Clients
+  passing a different `userId` in the body were enabling a
+  privilege-escalation bug — any bearer-authenticated user could register
+  a credential on another user's account. Programmatic callers of
+  `fortress.plugins.webauthn.generateRegistrationOptions` /
+  `verifyRegistration` must now supply a `PluginRouteContext` as the
+  second argument instead of `{ userId }` in the first.
+  Before:
+  ```ts
+  await fortress.plugins.webauthn.generateRegistrationOptions({ userId });
+  ```
+  After:
+  ```ts
+  await fortress.plugins.webauthn.generateRegistrationOptions(
+    {},
+    { userId, request: new Request('http://localhost') },
+  );
+  ```
+
 ### Added
 - **`validateRequest` is now a public export** from `@bajustone/fortress`.
   Framework-agnostic validation primitive that walks an `EndpointInput`,

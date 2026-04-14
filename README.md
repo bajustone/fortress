@@ -1765,14 +1765,20 @@ webauthn({
 **Methods:**
 
 ```typescript
-// Registration: generate options for navigator.credentials.create()
-const { options } = await fortress.plugins['webauthn'].generateRegistrationOptions({ userId });
+// Registration: generate options for navigator.credentials.create().
+// Over HTTP (POST /webauthn/register/options), the dispatcher builds the
+// PluginRouteContext from the bearer token — the caller never supplies a
+// userId. For programmatic calls, construct a minimal ctx by hand:
+const { options } = await fortress.plugins['webauthn'].generateRegistrationOptions(
+  {},
+  { userId, request: new Request('http://localhost') },
+);
 
-// Verify registration response and store credential
-const result = await fortress.plugins['webauthn'].verifyRegistration({
-  userId,
-  response: registrationResponseFromBrowser,
-});
+// Verify registration response and store credential for the authenticated caller
+const result = await fortress.plugins['webauthn'].verifyRegistration(
+  { response: registrationResponseFromBrowser },
+  { userId, request: new Request('http://localhost') },
+);
 
 // Authentication: generate options for navigator.credentials.get()
 const { options: authOpts } = await fortress.plugins['webauthn'].generateAuthenticationOptions({});

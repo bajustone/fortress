@@ -1,9 +1,23 @@
 import type { Fortress } from '../../core/fortress';
+import type { PluginRouteContext } from '../../core/plugin';
 import type { WebAuthnMethods } from './index';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
 import { webauthn } from './index';
+
+// Minimal PluginRouteContext for tests that invoke plugin methods directly.
+// The dispatcher constructs the real ctx for HTTP calls; unit tests stub
+// just the userId (and a placeholder Request) since the handlers only read
+// routeCtx.userId.
+function httpCtx(uid: number | undefined): PluginRouteContext {
+  return {
+    userId: uid,
+    claims: undefined,
+    meta: undefined,
+    request: new Request('http://localhost/webauthn/register'),
+  };
+}
 
 const SECRET = 'webauthn-test-secret-at-least-32chars';
 const MOCK_CHALLENGE = 'dGVzdC1jaGFsbGVuZ2U'; // base64url of "test-challenge"
@@ -92,7 +106,7 @@ describe('webauthn plugin', () => {
 
   describe('generateRegistrationOptions', () => {
     it('returns registration options', async () => {
-      const result = await methods.generateRegistrationOptions({ userId });
+      const result = await methods.generateRegistrationOptions({}, httpCtx(userId));
 
       expect(result.options).toBeDefined();
       expect(result.options.challenge).toBe(MOCK_CHALLENGE);
@@ -100,22 +114,28 @@ describe('webauthn plugin', () => {
     });
 
     it('throws if user not found', async () => {
-      await expect(methods.generateRegistrationOptions({ userId: 9999 }))
+      await expect(methods.generateRegistrationOptions({}, httpCtx(9999)))
         .rejects
         .toThrow('User not found');
     });
 
+    it('throws UNAUTHORIZED when ctx.userId is missing', async () => {
+      await expect(methods.generateRegistrationOptions({}, httpCtx(undefined)))
+        .rejects
+        .toThrow('User not authenticated');
+    });
+
     it('passes excludeCredentials for existing credentials', async () => {
       // Register a credential first
-      await methods.generateRegistrationOptions({ userId });
-      await methods.verifyRegistration({
-        userId,
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
-      });
+      await methods.generateRegistrationOptions({}, httpCtx(userId));
+      await methods.verifyRegistration(
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        httpCtx(userId),
+      );
 
       // Generate options again - should exclude the existing credential
       (simplewebauthn.generateRegistrationOptions).mockClear();
-      await methods.generateRegistrationOptions({ userId });
+      await methods.generateRegistrationOptions({}, httpCtx(userId));
 
       const call = (simplewebauthn.generateRegistrationOptions).mock.calls[0][0];
       expect(call.excludeCredentials).toHaveLength(1);
@@ -125,12 +145,12 @@ describe('webauthn plugin', () => {
 
   describe('verifyRegistration', () => {
     it('stores credential on successful verification', async () => {
-      await methods.generateRegistrationOptions({ userId });
+      await methods.generateRegistrationOptions({}, httpCtx(userId));
 
-      const result = await methods.verifyRegistration({
-        userId,
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
-      });
+      const result = await methods.verifyRegistration(
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        httpCtx(userId),
+      );
 
       expect(result.verified).toBe(true);
       expect(result.credentialId).toBe(MOCK_CREDENTIAL_ID);
@@ -139,34 +159,41 @@ describe('webauthn plugin', () => {
     });
 
     it('throws when no pending challenge', async () => {
-      await expect(methods.verifyRegistration({
-        userId,
-        response: {} as any,
-      })).rejects.toThrow('No pending registration challenge');
+      await expect(methods.verifyRegistration(
+        { response: {} as any },
+        httpCtx(userId),
+      )).rejects.toThrow('No pending registration challenge');
+    });
+
+    it('throws UNAUTHORIZED when ctx.userId is missing', async () => {
+      await expect(methods.verifyRegistration(
+        { response: {} as any },
+        httpCtx(undefined),
+      )).rejects.toThrow('User not authenticated');
     });
 
     it('throws on failed verification', async () => {
-      await methods.generateRegistrationOptions({ userId });
+      await methods.generateRegistrationOptions({}, httpCtx(userId));
 
       (simplewebauthn.verifyRegistrationResponse).mockResolvedValueOnce({
         verified: false,
       });
 
-      await expect(methods.verifyRegistration({
-        userId,
-        response: {} as any,
-      })).rejects.toThrow('Registration verification failed');
+      await expect(methods.verifyRegistration(
+        { response: {} as any },
+        httpCtx(userId),
+      )).rejects.toThrow('Registration verification failed');
     });
   });
 
   describe('generateAuthenticationOptions', () => {
     it('returns options with allowCredentials when userId provided', async () => {
       // Register a credential first
-      await methods.generateRegistrationOptions({ userId });
-      await methods.verifyRegistration({
-        userId,
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
-      });
+      await methods.generateRegistrationOptions({}, httpCtx(userId));
+      await methods.verifyRegistration(
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        httpCtx(userId),
+      );
 
       (simplewebauthn.generateAuthenticationOptions).mockClear();
       await methods.generateAuthenticationOptions({ userId });
@@ -188,11 +215,11 @@ describe('webauthn plugin', () => {
   describe('verifyAuthentication', () => {
     async function registerAndPrepareAuth(): Promise<void> {
       // Register credential
-      await methods.generateRegistrationOptions({ userId });
-      await methods.verifyRegistration({
-        userId,
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
-      });
+      await methods.generateRegistrationOptions({}, httpCtx(userId));
+      await methods.verifyRegistration(
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        httpCtx(userId),
+      );
 
       // Generate auth options
       await methods.generateAuthenticationOptions({ userId });
@@ -308,11 +335,11 @@ describe('webauthn plugin', () => {
       });
 
       // Register a credential
-      await m.generateRegistrationOptions({ userId: user.id });
-      await m.verifyRegistration({
-        userId: user.id,
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
-      });
+      await m.generateRegistrationOptions({}, httpCtx(user.id));
+      await m.verifyRegistration(
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        httpCtx(user.id),
+      );
 
       // Login should be intercepted
       const result = await f.auth.login('bob@example.com', 'password-123');
@@ -335,6 +362,57 @@ describe('webauthn plugin', () => {
 
       const result = await f.auth.login('bob@example.com', 'password-123');
       expect(result.accessToken).toBeTruthy();
+    });
+  });
+
+  describe('http dispatch (privilege-escalation regression)', () => {
+    // Sanity guard: a caller hitting POST /webauthn/register/options with a
+    // valid bearer token for user A must register a credential against user A,
+    // even if the request body tries to smuggle user B's id. Verified by
+    // inspecting which userId ends up stamped on the stored challenge row.
+    it('uses the authenticated caller id, ignoring any body userId', async () => {
+      // Create two users; alice is the attacker, bob is the victim.
+      const alice = await fortress.auth.createUser({
+        email: 'attacker@example.com',
+        name: 'Alice',
+        password: 'password-123',
+      });
+      const bob = await fortress.auth.createUser({
+        email: 'victim@example.com',
+        name: 'Bob',
+        password: 'password-123',
+      });
+
+      const login = await fortress.auth.login('attacker@example.com', 'password-123');
+      if (login.status !== 'success')
+        throw new Error('expected login success');
+
+      // Attempt: call /webauthn/register/options with alice's bearer token but
+      // a body claiming to register for bob. The dispatcher should ignore the
+      // body field entirely (it's not even in the schema now) and stamp the
+      // challenge against alice.
+      const res = await fortress.handleRequest(new Request('http://localhost/webauthn/register/options', {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${login.accessToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ userId: bob.id }),
+      }));
+      expect(res.status).toBe(200);
+
+      // The stored challenge row must belong to alice, never bob.
+      const adapter = fortress.config.database;
+      const aliceChallenge = await adapter.findOne<{ userId: number | null }>({
+        model: 'webauthn_challenge',
+        where: [{ field: 'userId', operator: '=', value: alice.id }],
+      });
+      const bobChallenge = await adapter.findOne<{ userId: number | null }>({
+        model: 'webauthn_challenge',
+        where: [{ field: 'userId', operator: '=', value: bob.id }],
+      });
+      expect(aliceChallenge).not.toBeNull();
+      expect(bobChallenge).toBeNull();
     });
   });
 });

@@ -50,8 +50,8 @@ The plugin defines four routes that are auto-mounted via `mountFortress`:
 
 | Method | Path | Auth Required | Description |
 |---|---|---|---|
-| POST | `/webauthn/register/options` | Yes (bearer) | Generate registration options for a new passkey. |
-| POST | `/webauthn/register/verify` | Yes (bearer) | Verify the registration response and store the credential. |
+| POST | `/webauthn/register/options` | Yes (bearer) | Generate registration options for a new passkey against the authenticated caller. Body: `{}`. |
+| POST | `/webauthn/register/verify` | Yes (bearer) | Verify the registration response and store the credential for the authenticated caller. Body: `{ response }`. |
 | POST | `/webauthn/authenticate/options` | No | Generate authentication options. Optionally pass `userId` for non-discoverable flow. |
 | POST | `/webauthn/authenticate/verify` | No | Verify the authentication assertion and return tokens (if passwordless). |
 
@@ -59,35 +59,42 @@ The plugin defines four routes that are auto-mounted via `mountFortress`:
 
 | Method | Signature | Returns |
 |---|---|---|
-| `generateRegistrationOptions` | `(input: { userId: number })` | `Promise<{ options: PublicKeyCredentialCreationOptionsJSON }>` |
-| `verifyRegistration` | `(input: { userId: number; response: RegistrationResponseJSON })` | `Promise<{ verified, credentialId, credentialDeviceType, credentialBackedUp }>` |
+| `generateRegistrationOptions` | `(input: Record<string, unknown>, ctx: PluginRouteContext)` | `Promise<{ options: PublicKeyCredentialCreationOptionsJSON }>` |
+| `verifyRegistration` | `(input: { response: RegistrationResponseJSON }, ctx: PluginRouteContext)` | `Promise<{ verified, credentialId, credentialDeviceType, credentialBackedUp }>` |
 | `generateAuthenticationOptions` | `(input: { userId?: number })` | `Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>` |
 | `verifyAuthentication` | `(input: { response: AuthenticationResponseJSON })` | `Promise<{ verified, userId, accessToken?, refreshToken? }>` |
 
+> **Registration methods require `PluginRouteContext`.** The target user is always the verified caller (`ctx.userId`) — there is no body-supplied `userId` field. When a browser hits `POST /webauthn/register/options` or `/webauthn/register/verify`, `fortress.handleRequest` constructs the `ctx` automatically from the bearer token. Programmatic callers must build one by hand (see below).
+
 ### generateRegistrationOptions
 
-Generates options for `navigator.credentials.create()`. Existing credentials for the user are included in `excludeCredentials` to prevent duplicate registration:
+Generates options for `navigator.credentials.create()`. Existing credentials for the authenticated caller are included in `excludeCredentials` to prevent duplicate registration:
 
 ```ts
-const { options } = await fortress.plugins['webauthn'].generateRegistrationOptions({ userId });
+// Programmatic (server-side, no HTTP request)
+const { options } = await fortress.plugins['webauthn'].generateRegistrationOptions(
+  {},
+  { userId, request: new Request('http://localhost') },
+);
 // Pass options to the browser: navigator.credentials.create({ publicKey: options })
 ```
 
-Throws `NotFound` if the user does not exist.
+Throws `Unauthorized` if `ctx.userId` is missing, or `NotFound` if the user does not exist.
 
 ### verifyRegistration
 
-Verifies the authenticator's response and stores the new credential:
+Verifies the authenticator's response and stores the new credential against the authenticated caller:
 
 ```ts
-const result = await fortress.plugins['webauthn'].verifyRegistration({
-  userId,
-  response: registrationResponseFromBrowser,
-});
+const result = await fortress.plugins['webauthn'].verifyRegistration(
+  { response: registrationResponseFromBrowser },
+  { userId, request: new Request('http://localhost') },
+);
 // result.verified, result.credentialId, result.credentialDeviceType, result.credentialBackedUp
 ```
 
 Throws:
+- `Unauthorized` -- `ctx.userId` is missing.
 - `BadRequest` -- No pending challenge, challenge expired, or verification failed.
 
 ### generateAuthenticationOptions
@@ -139,18 +146,28 @@ const fortress = createFortress({
 });
 
 // --- Registration (browser + server) ---
+// Most apps let the browser hit POST /webauthn/register/options and
+// /webauthn/register/verify directly — the dispatcher constructs the
+// PluginRouteContext from the bearer token so the passkey is always
+// registered against the verified caller.
+//
+// Calling programmatically (e.g. from a custom Hono route or CLI tool)
+// requires building a PluginRouteContext by hand:
 
 // Server: generate options
-const { options } = await fortress.plugins['webauthn'].generateRegistrationOptions({ userId });
+const { options } = await fortress.plugins['webauthn'].generateRegistrationOptions(
+  {},
+  { userId, request: new Request('http://localhost') },
+);
 
 // Browser: create credential
 // const credential = await navigator.credentials.create({ publicKey: options });
 
 // Server: verify and store
-const result = await fortress.plugins['webauthn'].verifyRegistration({
-  userId,
-  response: credentialResponseFromBrowser,
-});
+const result = await fortress.plugins['webauthn'].verifyRegistration(
+  { response: credentialResponseFromBrowser },
+  { userId, request: new Request('http://localhost') },
+);
 
 // --- Authentication (browser + server) ---
 

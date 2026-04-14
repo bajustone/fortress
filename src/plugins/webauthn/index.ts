@@ -16,7 +16,7 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
 } from '@simplewebauthn/server';
-import type { FortressPlugin } from '../../core/plugin';
+import type { FortressPlugin, PluginRouteContext } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import {
   generateAuthenticationOptions as generateAuthOptions,
@@ -55,8 +55,14 @@ export interface WebAuthnConfig {
 // ── Method Types ────────────────────────────────────────────────────
 
 export interface WebAuthnMethods {
-  generateRegistrationOptions: (input: { userId: number }) => Promise<{ options: PublicKeyCredentialCreationOptionsJSON }>;
-  verifyRegistration: (input: { userId: number; response: RegistrationResponseJSON }) => Promise<{
+  generateRegistrationOptions: (
+    input: Record<string, unknown>,
+    ctx: PluginRouteContext,
+  ) => Promise<{ options: PublicKeyCredentialCreationOptionsJSON }>;
+  verifyRegistration: (
+    input: { response: RegistrationResponseJSON },
+    ctx: PluginRouteContext,
+  ) => Promise<{
     verified: boolean;
     credentialId: string;
     credentialDeviceType: string;
@@ -124,27 +130,27 @@ function uint8ArrayToBase64url(bytes: Uint8Array): string {
 const webauthnRoutes = [
   endpoint('POST', '/webauthn/register/options')
     .summary('Generate WebAuthn registration options')
-    .description('Generate public key credential creation options for registering a new passkey. Requires authentication.')
+    .description('Generate public key credential creation options for registering a new passkey against the authenticated caller.')
     .tags('WebAuthn')
     .security('bearer')
-    .body(obj({ userId: int('User ID to register the credential for') }, 'userId'))
+    .body(obj({}))
     .response(200, 'Registration options', obj({
       options: record('PublicKeyCredentialCreationOptions JSON'),
     }, 'options'))
     .response(400, 'Bad request')
+    .response(401, 'Not authenticated')
     .response(404, 'User not found')
     .handler('generateRegistrationOptions')
     .build(),
 
   endpoint('POST', '/webauthn/register/verify')
     .summary('Verify WebAuthn registration')
-    .description('Verify the registration response from the authenticator and store the new credential.')
+    .description('Verify the registration response from the authenticator and store the new credential for the authenticated caller.')
     .tags('WebAuthn')
     .security('bearer')
     .body(obj({
-      userId: int('User ID'),
       response: record('RegistrationResponseJSON from navigator.credentials.create()'),
-    }, 'userId', 'response'))
+    }, 'response'))
     .response(200, 'Registration verified', obj({
       verified: bool('Whether registration was successful'),
       credentialId: str('Base64url-encoded credential ID'),
@@ -267,8 +273,13 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
         },
 
     methods: ctx => ({
-      async generateRegistrationOptions(input: { userId: number }): Promise<{ options: PublicKeyCredentialCreationOptionsJSON }> {
-        const { userId } = input;
+      async generateRegistrationOptions(
+        _input: Record<string, unknown>,
+        routeCtx: PluginRouteContext,
+      ): Promise<{ options: PublicKeyCredentialCreationOptionsJSON }> {
+        const userId = routeCtx?.userId;
+        if (userId == null)
+          throw Errors.unauthorized('User not authenticated');
 
         const user = await ctx.db.findOne<FortressUser>({
           model: 'user',
@@ -320,13 +331,19 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
         return { options };
       },
 
-      async verifyRegistration(input: { userId: number; response: RegistrationResponseJSON }): Promise<{
+      async verifyRegistration(
+        input: { response: RegistrationResponseJSON },
+        routeCtx: PluginRouteContext,
+      ): Promise<{
         verified: boolean;
         credentialId: string;
         credentialDeviceType: string;
         credentialBackedUp: boolean;
       }> {
-        const { userId, response } = input;
+        const userId = routeCtx?.userId;
+        if (userId == null)
+          throw Errors.unauthorized('User not authenticated');
+        const { response } = input;
 
         // Find the pending challenge
         const challengeRecord = await ctx.db.findOne<ChallengeRecord>({
