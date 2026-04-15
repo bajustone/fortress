@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.35] - 2026-04-15
+
+### Added
+- feat(observability): pluggable logger, auth/permission observers, optional OTel adapter
+
 ## [0.0.34] - 2026-04-14
 
 ### Added
