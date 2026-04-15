@@ -13,6 +13,7 @@ Published on [JSR](https://jsr.io/@bajustone/fortress). Runs on Bun, Deno, Node.
 - **IAM** with resource+action permissions, conditions, deny rules, groups, and roles
 - **Session management** with device tracking, revocation, and admin impersonation
 - **Plugin system** with 15 plugins for admin CRUD, 2FA, OAuth, tenancy, audit logging, and more
+- **Observability**: pluggable logger (pino/Fastify/console), auth+IAM+permission-check observers, opt-in OpenTelemetry adapter via `@bajustone/fortress/otel`
 - **Database-agnostic** via a generic CRUD adapter interface
 - **Framework-agnostic** with first-class Hono and Express middleware
 
@@ -2016,6 +2017,103 @@ throw Errors.validationError([{ message: 'Name is required', path: [{ key: 'name
 ```
 
 The `errorHandler` middleware (Hono and Express) automatically converts `FortressError` instances to HTTP responses with the correct status code and JSON body.
+
+## Observability
+
+Fortress has three layered observability surfaces — none of them write to stderr or import OpenTelemetry unless you opt in.
+
+### Pluggable logger
+
+Pass any `pino()` instance, Fastify `app.log`, or hand-rolled structural logger via `config.logger`. The default is a silent no-op.
+
+```typescript
+import pino from 'pino';
+import { createFortress } from '@bajustone/fortress';
+
+const fortress = createFortress({
+  jwt: { secret: process.env.JWT_SECRET! },
+  database: db,
+  logger: pino({ level: 'info' }),
+});
+```
+
+Fortress routes these events to the logger when they happen:
+- Plugin token-claim overwrite warnings (dev only)
+- Refresh token fingerprint mismatch (warn mode)
+- Unhandled errors in `fortress.handleRequest` and the Express error handler
+- Observer failures (see below)
+
+### Auth / IAM / permission-check observers
+
+Three independent listener lists on the Fortress services. Each `add…Observer` call returns an `() => void` unsubscribe function.
+
+```typescript
+// Auth lifecycle (async, cold path) — login/logout/register/refresh/token-reuse
+const offAuth = fortress.auth.addAuthObserver(async (event) => {
+  if (event.eventType === 'LOGIN_FAILURE') {
+    await siem.log(event);
+  }
+});
+
+// IAM mutations (async, cold path) — role/permission/binding changes
+fortress.iam.addIamObserver(async (event) => {
+  if (event.eventType.startsWith('ROLE_')) {
+    await notifySlack(event);
+  }
+});
+
+// Permission checks (SYNCHRONOUS, hot path) — per-check duration + cache hit flag
+fortress.iam.addPermissionCheckObserver((event) => {
+  // Keep this fast — runs on every check.
+  if (!event.allowed) {
+    metrics.increment('auth.denies');
+  }
+});
+```
+
+Listener exceptions never break the auth/IAM operation — they're routed to `logger.error` and the remaining listeners continue.
+
+### OpenTelemetry adapter (opt-in)
+
+Import from the `/otel` sub-path and pass the result to `config.observability`. The adapter dynamically imports `@opentelemetry/api`, so runtimes that don't import `/otel` never resolve the peer dep — Cloudflare Workers, Deno without OTel, and embedded deployments stay clean.
+
+```typescript
+import { createFortress } from '@bajustone/fortress';
+import { createOtelTelemetry } from '@bajustone/fortress/otel';
+
+const observability = await createOtelTelemetry({ name: 'my-app-auth' });
+const fortress = createFortress({
+  jwt: { secret: process.env.JWT_SECRET! },
+  database: db,
+  observability,
+});
+```
+
+When a global OTel `MeterProvider` / `TracerProvider` is registered (e.g., via `NodeSDK` or `BasicTracerProvider`), Fortress emits:
+
+| Metric | Type | Unit | Attributes |
+|---|---|---|---|
+| `fortress.auth.events.total` | counter | — | `event`, `outcome`, `method` |
+| `fortress.iam.events.total` | counter | — | `event` |
+| `fortress.iam.permission_check.duration` | histogram | s | `subject_type`, `result`, `cached` |
+| `fortress.iam.permission_check.cache.hits` | counter | — | — |
+| `fortress.iam.permission_check.cache.misses` | counter | — | — |
+| `db.client.operation.duration` | histogram | s | `db.system.name`, `db.operation.name`, `db.collection.name` |
+
+The DB histogram uses the **stable OTel semantic-convention name** — Grafana dashboards built for `db.client.operation.duration` automatically pick up Fortress's auth/IAM queries.
+
+Fortress also emits one span:
+- `fortress.iam.permission_check.deny` — fired only on denied checks (security-interesting). Allowed checks are metric-only to keep the hot path cheap.
+
+User IDs, emails, tenant IDs, and raw resource IDs are deliberately **not** on any metric attribute — they'd cause cardinality explosions. They go on spans and logs instead. HTTP request duration is not emitted by Fortress either; that's the host framework's job (`@opentelemetry/instrumentation-http`, `@opentelemetry/instrumentation-hono`, etc.).
+
+**Install the peer dep** alongside the Fortress import:
+
+```bash
+bun add @opentelemetry/api
+# plus whatever SDK you're using:
+bun add @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http
+```
 
 ## Testing
 

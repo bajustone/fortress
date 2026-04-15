@@ -35,6 +35,7 @@
     ".": "./src/index.ts",
     "./crypto": "./src/core/auth/password.ts",
     "./jwt": "./src/core/auth/jwt.ts",
+    "./otel": "./src/otel/index.ts",
     "./testing": "./src/testing/index.ts",
     "./drizzle": "./src/drizzle/index.ts",
     "./drizzle/pg": "./src/drizzle/pg/index.ts",

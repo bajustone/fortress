@@ -6,6 +6,7 @@
  * `fortress.handleRequest` and re-exportable by adapters.
  */
 
+import type { FortressLogger } from '../observability/logger';
 import { FortressError } from '../errors';
 
 /** JSON shape of an internal/unknown error response. */
@@ -19,9 +20,10 @@ interface InternalErrorBody {
  * Convert any caught error into a JSON `Response`. {@link FortressError}
  * instances are mapped to their declared status code, with `Retry-After`
  * set for `RATE_LIMITED`. Unknown errors return a sanitized 500 with no
- * stack trace; the original error message is logged via `console.error`.
+ * stack trace; the original error is routed to the caller-supplied
+ * {@link FortressLogger} at `error` level.
  */
-export function errorToResponse(err: unknown): Response {
+export function errorToResponse(err: unknown, logger?: FortressLogger): Response {
   if (err instanceof FortressError) {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (err.code === 'RATE_LIMITED' && err.retryAfter !== undefined) {
@@ -33,7 +35,10 @@ export function errorToResponse(err: unknown): Response {
     });
   }
 
-  console.error('[fortress] Unhandled error:', err instanceof Error ? err.message : 'Unknown error');
+  logger?.error(
+    { err, message: err instanceof Error ? err.message : 'Unknown error' },
+    'unhandled error in fortress.handleRequest',
+  );
   const body: InternalErrorBody = {
     code: 'INTERNAL_ERROR',
     message: 'Internal server error',

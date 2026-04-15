@@ -1579,15 +1579,19 @@ const fortress = createFortress({
 // fortress.config — Readonly<FortressConfig>
 ```
 
-**Initialization** (`fortress.ts:46`):
+**Initialization** (`fortress.ts`):
 1. Validates JWT secret strength (minimum 32 bytes for HS256)
-2. Checks plugin name uniqueness
-3. Processes plugins via `processPlugins()` — creates methods map
-4. Creates `InternalAdapter` wrapping the provided `DatabaseAdapter`
-5. Creates `AuthService` with plugin hooks wired in
-6. Creates `IamService` with permission cache
-7. Wires IAM events → audit-log plugin (if registered)
-8. Returns frozen `Fortress` instance
+2. Resolves `config.logger` → `SILENT_LOGGER` default
+3. Resolves `config.observability` → `NO_OP_TELEMETRY` default
+4. Wraps the raw `DatabaseAdapter` with `instrumentAdapter` to emit `db.client.operation.duration` metrics
+5. Checks plugin name uniqueness
+6. Creates `AuthService` with plugin hooks + auth observer list wired in
+7. Creates `IamService` with permission cache + iam observer list + sync permission-check observer list
+8. Creates metric instruments (counters + histograms) off the resolved telemetry provider
+9. Registers internal observers that translate `AuthEvent` / `IamEvent` / `PermissionCheckEvent` into counter/histogram updates
+10. Processes plugins via `processPlugins()` — creates methods map
+11. Wires IAM events → audit-log plugin (if registered)
+12. Returns frozen `Fortress` instance (now also exposing `fortress.logger` and `fortress.telemetry`)
 
 **`getPluginMethods<T>(fortress, pluginName)`** (`fortress.ts:36`): Type-safe extraction of plugin methods. Used when you need plugin methods in a context where the generic type isn't available.
 

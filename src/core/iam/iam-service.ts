@@ -1,5 +1,8 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressConfig } from '../config';
+import type { Unsubscribe } from '../observability/listener-list';
+import type { FortressLogger } from '../observability/logger';
+import type { TelemetryProvider } from '../observability/types';
 import type {
   CreateServiceAccountInput,
   FortressUser,
@@ -16,6 +19,8 @@ import type { EvaluationMode } from './permission-evaluator';
 import type { ResourceFile } from './resource-sync';
 import { Errors } from '../errors';
 import { createInternalAdapter } from '../internal-adapter';
+import { createListenerList } from '../observability/listener-list';
+import { SILENT_LOGGER } from '../observability/logger';
 import { createPermissionCache, subjectCacheKey } from './permission-cache';
 import { evaluatePermissions } from './permission-evaluator';
 import { loadResourceFile, pullResources, pushResources, writeResourceFile } from './resource-sync';
@@ -28,7 +33,31 @@ export interface IamEvent {
   metadata?: Record<string, unknown>;
 }
 
-export type IamEventListener = (event: IamEvent) => Promise<void>;
+export type IamEventListener = (event: IamEvent) => void | Promise<void>;
+
+/**
+ * High-frequency event fired on every permission check. Emitted by a
+ * separate observer list from {@link IamEvent} so audit-log consumers
+ * (which subscribe to mutations) aren't spammed with per-check traffic.
+ *
+ * Listeners are invoked **synchronously**. The type signature intentionally
+ * returns `void` (not `Promise<void>`) to discourage awaiting expensive
+ * work on the hot path. If an observer needs async work it should fire
+ * and forget with `void asyncWork()`.
+ */
+export interface PermissionCheckEvent {
+  subjectType: 'USER' | 'SERVICE_ACCOUNT' | 'GROUP';
+  subjectId: number;
+  resource: string;
+  action: string;
+  allowed: boolean;
+  cached: boolean;
+  /** Pre-divided monotonic duration in seconds; ready to feed into a histogram. */
+  durationSeconds: number;
+  tenantId?: string;
+}
+
+export type PermissionCheckListener = (event: PermissionCheckEvent) => void;
 
 export interface IamService {
   checkPermission: (subject: Subject, resource: string, action: string, context?: PermissionContext) => Promise<boolean>;
@@ -51,11 +80,20 @@ export interface IamService {
   syncResources: (direction: 'push' | 'pull', filePath?: string) => Promise<void>;
   clearPermissionCache: () => void;
   /**
-   * Register a listener for IAM events. Multiple listeners are supported —
-   * each is invoked in registration order. Replaces the earlier single-slot
-   * `setIamObserver` so plugins (audit-log, api-key cascade, …) can coexist.
+   * Register a listener for IAM mutation events. Multiple listeners are
+   * supported — each is invoked in registration order. Observer failures
+   * are routed to the configured logger at `error` level and never break
+   * IAM operations. Returns an unsubscribe function.
    */
-  addIamObserver: (listener: IamEventListener) => void;
+  addIamObserver: (listener: IamEventListener) => Unsubscribe;
+
+  /**
+   * Register a listener for individual permission checks. Fires on every
+   * `checkPermission` call with latency and cache-hit information. The
+   * listener signature is synchronous — see {@link PermissionCheckEvent}
+   * for rationale. Returns an unsubscribe function.
+   */
+  addPermissionCheckObserver: (listener: PermissionCheckListener) => Unsubscribe;
 
   // ── Admin CRUD ─────────────────────────────────────────────────
   getRole: (roleId: number) => Promise<Role & { permissions: Permission[] }>;
@@ -82,19 +120,35 @@ export interface IamService {
   unbindPermissionFromServiceAccount: (serviceAccountId: number, permissionId: number, tenantId?: string) => Promise<void>;
 }
 
+export interface IamServiceDeps {
+  logger: FortressLogger;
+  telemetry: TelemetryProvider;
+}
+
 export function createIamService(
   db: DatabaseAdapter,
   config: FortressConfig,
+  deps?: IamServiceDeps,
 ): IamService {
   const evaluationMode: EvaluationMode = config.rbac?.evaluationMode ?? 'allow-only';
   const resourceFile = config.rbac?.resourceFile ?? './fortress.resources.json';
   const adapter = createInternalAdapter(db);
-  const observers: IamEventListener[] = [];
+  const logger = deps?.logger;
+  const telemetry = deps?.telemetry;
+
+  const iamEventListeners = createListenerList<IamEvent>({
+    kind: 'async',
+    eventLabel: 'iam',
+    logger: () => logger ?? SILENT_LOGGER,
+  });
+  const permissionCheckListeners = createListenerList<PermissionCheckEvent>({
+    kind: 'sync',
+    eventLabel: 'iam.permission_check',
+    logger: () => logger ?? SILENT_LOGGER,
+  });
 
   function emit(event: IamEvent): void {
-    for (const observer of observers) {
-      observer(event).catch(() => { /* observer failures must not break IAM operations */ });
-    }
+    iamEventListeners.emit(event);
   }
   const cacheConfig = config.rbac?.cache;
   const cache = cacheConfig
@@ -111,9 +165,11 @@ export function createIamService(
       action: string,
       context?: PermissionContext,
     ): Promise<boolean> {
+      const start = performance.now();
       const tenantId = context?.tenantId;
       const cacheKey = subjectCacheKey(subject);
       let permissions: Permission[];
+      let cached = false;
 
       if (tenantId) {
         // Tenant-scoped: bypass cache (tenant varies per request)
@@ -121,11 +177,15 @@ export function createIamService(
       }
       else {
         // Global: use cache
-        permissions = cache?.get(cacheKey) ?? await (async () => {
-          const perms = await adapter.getSubjectPermissions(subject);
-          cache?.set(cacheKey, perms);
-          return perms;
-        })();
+        const fromCache = cache?.get(cacheKey);
+        if (fromCache !== undefined) {
+          permissions = fromCache;
+          cached = true;
+        }
+        else {
+          permissions = await adapter.getSubjectPermissions(subject);
+          cache?.set(cacheKey, permissions);
+        }
       }
 
       // Enrich context with subject info. USER subjects still populate
@@ -138,7 +198,36 @@ export function createIamService(
           : { subjectType: subject.type, subjectId: subject.id, ...context?.user },
       };
 
-      return evaluatePermissions(permissions, resource, action, evaluationMode, enrichedContext);
+      const allowed = evaluatePermissions(permissions, resource, action, evaluationMode, enrichedContext);
+      const durationSeconds = (performance.now() - start) / 1000;
+
+      // Span only on deny — allow is metric fodder, deny is security-interesting.
+      if (!allowed && telemetry) {
+        const span = telemetry.tracer.startSpan('fortress.iam.permission_check.deny', {
+          'subject.type': subject.type,
+          'subject.id': subject.id,
+          'resource': resource,
+          'action': action,
+          'cached': cached,
+        });
+        span.end();
+      }
+
+      // Observer — only allocate the event object if somebody listens.
+      if (permissionCheckListeners.size() > 0) {
+        permissionCheckListeners.emit({
+          subjectType: subject.type,
+          subjectId: subject.id,
+          resource,
+          action,
+          allowed,
+          cached,
+          durationSeconds,
+          tenantId,
+        });
+      }
+
+      return allowed;
     },
 
     async getPermissionsForSubject(subject: Subject, tenantId?: string): Promise<Permission[]> {
@@ -311,8 +400,12 @@ export function createIamService(
       cache?.invalidateAll();
     },
 
-    addIamObserver(listener: IamEventListener): void {
-      observers.push(listener);
+    addIamObserver(listener: IamEventListener): Unsubscribe {
+      return iamEventListeners.add(listener);
+    },
+
+    addPermissionCheckObserver(listener: PermissionCheckListener): Unsubscribe {
+      return permissionCheckListeners.add(listener);
     },
 
     async syncResources(direction: 'push' | 'pull', filePath?: string): Promise<void> {

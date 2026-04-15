@@ -56,6 +56,23 @@ import { createTestAdapter } from '../../src/testing';
 
 const db = createTestAdapter();
 
+// ── Observability (optional but demonstrated) ─────────────────────────────
+// A minimal console-backed logger satisfies the FortressLogger interface.
+// Drop in `pino()` or `fastify.log` for production.
+const logger = {
+  level: 'info',
+  fatal: (...args: unknown[]): void => console.error('[fortress:fatal]', ...args),
+  error: (...args: unknown[]): void => console.error('[fortress:error]', ...args),
+  warn: (...args: unknown[]): void => console.warn('[fortress:warn]', ...args),
+  // eslint-disable-next-line no-console -- example-only; real apps pass pino()
+  info: (...args: unknown[]): void => console.info('[fortress:info]', ...args),
+  // eslint-disable-next-line no-console -- example-only; real apps pass pino()
+  debug: (...args: unknown[]): void => console.debug('[fortress:debug]', ...args),
+  // eslint-disable-next-line no-console -- example-only; real apps pass pino()
+  trace: (...args: unknown[]): void => console.debug('[fortress:trace]', ...args),
+  silent: (): void => {},
+};
+
 const fortress = createFortress({
   jwt: {
     secret: 'dev-secret-minimum-32-bytes-long!',
@@ -65,6 +82,14 @@ const fortress = createFortress({
   },
   database: db,
   passwordPolicy: { minLength: 10 },
+  logger,
+  // To wire OpenTelemetry metrics/spans, install @opentelemetry/api and:
+  //
+  //   import { createOtelTelemetry } from '../../src/otel';
+  //   observability: await createOtelTelemetry({ name: 'fortress-example' }),
+  //
+  // The adapter is the ONLY file in the repo that imports @opentelemetry/api
+  // (dynamically), so this example stays workerd/Deno-clean when not used.
 
   // Plugin order matters — hooks run in array order
   plugins: [
@@ -182,6 +207,27 @@ const fortress = createFortress({
       ),
     }),
   ],
+});
+
+// ── Demonstrate the observer surfaces ─────────────────────────────────────
+// Auth observer: fires on login/failure/logout/register/refresh/token-reuse.
+fortress.auth.addAuthObserver((event) => {
+  logger.info({ event }, `auth.${event.eventType}`);
+});
+
+// IAM observer: fires on role/permission/binding mutations.
+fortress.iam.addIamObserver((event) => {
+  logger.info({ event }, `iam.${event.eventType}`);
+});
+
+// Permission check observer: SYNCHRONOUS, hot path. Keep it bounded.
+fortress.iam.addPermissionCheckObserver((event) => {
+  if (!event.allowed) {
+    logger.warn(
+      { resource: event.resource, action: event.action, cached: event.cached },
+      'permission denied',
+    );
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

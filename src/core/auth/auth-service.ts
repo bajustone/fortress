@@ -1,5 +1,8 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressConfig, PasswordHasher } from '../config';
+import type { Unsubscribe } from '../observability/listener-list';
+import type { FortressLogger } from '../observability/logger';
+import type { TelemetryProvider } from '../observability/types';
 import type {
   AfterHookContext,
   FortressPlugin,
@@ -17,12 +20,37 @@ import type {
   SessionInfo,
   TokenClaims,
 } from '../types';
-import { Errors } from '../errors';
+import { Errors, FortressError } from '../errors';
 import { createInternalAdapter } from '../internal-adapter';
+import { createListenerList } from '../observability/listener-list';
+import { SILENT_LOGGER } from '../observability/logger';
 import { signAccessToken, verifyAccessToken } from './jwt';
 import { createDefaultHasher } from './password';
 import { validatePassword } from './password-policy';
 import { generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
+
+/**
+ * Lifecycle event emitted by the auth service. Mirrors the IAM observer
+ * pattern (`addIamObserver`) so consumers — audit log, SIEM webhooks,
+ * telemetry plugins, Datadog adapters — can subscribe to auth events
+ * without reimplementing every hook individually.
+ */
+export interface AuthEvent {
+  eventType:
+    | 'LOGIN_SUCCESS' | 'LOGIN_FAILURE'
+    | 'LOGOUT' | 'REGISTER'
+    | 'TOKEN_REFRESH' | 'TOKEN_REUSE_DETECTED' | 'TOKEN_FINGERPRINT_MISMATCH';
+  actorId?: number;
+  identifier?: string;
+  method?: 'password' | 'oauth' | 'magic_link' | 'webauthn' | '2fa' | 'api_key';
+  ipAddress?: string;
+  userAgent?: string;
+  outcome?: 'success' | 'failure';
+  error?: { message: string; code?: string };
+  metadata?: Record<string, unknown>;
+}
+
+export type AuthEventListener = (event: AuthEvent) => void | Promise<void>;
 
 interface ResolvedConfig {
   secret: string | string[];
@@ -67,16 +95,37 @@ export interface AuthService {
   getUserById: (userId: number) => Promise<FortressUser>;
   updateUser: (userId: number, data: { name?: string; email?: string; isActive?: boolean; password?: string }) => Promise<FortressUser>;
   deleteUser: (userId: number) => Promise<void>;
+
+  /**
+   * Register a listener for auth lifecycle events. Multiple listeners are
+   * supported — each is invoked in registration order. Listener failures
+   * never break auth operations; they are routed to the configured logger
+   * at `error` level. Returns an unsubscribe function.
+   */
+  addAuthObserver: (listener: AuthEventListener) => Unsubscribe;
+}
+
+export interface AuthServiceDeps {
+  logger: FortressLogger;
+  telemetry: TelemetryProvider;
 }
 
 export function createAuthService(
   db: DatabaseAdapter,
   config: FortressConfig,
   plugins: readonly FortressPlugin[] = [],
+  deps?: AuthServiceDeps,
 ): AuthService {
   const resolved = resolveConfig(config);
   const hasher: PasswordHasher = config.passwordHasher ?? createDefaultHasher();
   const adapter = createInternalAdapter(db);
+  const logger = deps?.logger;
+
+  const authEventListeners = createListenerList<AuthEvent>({
+    kind: 'async',
+    eventLabel: 'auth',
+    logger: () => logger ?? SILENT_LOGGER,
+  });
 
   async function runBeforeHooks<T extends Record<string, unknown>>(
     hookName: 'beforeLogin' | 'beforeRegister' | 'beforeTokenRefresh' | 'beforeLogout',
@@ -134,8 +183,9 @@ export function createAuthService(
         if (process.env.NODE_ENV !== 'production') {
           for (const key of Object.keys(claims)) {
             if (key in customClaims) {
-              console.warn(
-                `[fortress] Plugin '${plugin.name}' overwrites token claim '${key}' set by a previous plugin`,
+              logger?.warn(
+                { plugin: plugin.name, claim: key },
+                `plugin overwrites token claim '${key}'`,
               );
             }
           }
@@ -233,6 +283,21 @@ export function createAuthService(
       }
       catch (error) {
         await runOnLoginFailureHooks(identifier, error as Error);
+        if (authEventListeners.size() > 0) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          authEventListeners.emit({
+            eventType: 'LOGIN_FAILURE',
+            identifier,
+            method: 'password',
+            ipAddress: meta?.ipAddress,
+            userAgent: meta?.userAgent,
+            outcome: 'failure',
+            error: {
+              message: err.message,
+              code: err instanceof FortressError ? err.code : undefined,
+            },
+          });
+        }
         throw error;
       }
 
@@ -248,6 +313,18 @@ export function createAuthService(
 
       const afterCtx: AfterHookContext = { db, config, meta, responseHeaders: new Headers() };
       response = await runAfterLoginHooks(afterCtx, response);
+
+      if (authEventListeners.size() > 0) {
+        authEventListeners.emit({
+          eventType: 'LOGIN_SUCCESS',
+          actorId: user.id,
+          identifier,
+          method: 'password',
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          outcome: 'success',
+        });
+      }
 
       return response;
     },
@@ -274,6 +351,15 @@ export function createAuthService(
           where: [{ field: 'tokenFamily', operator: '=', value: stored.tokenFamily }],
           data: { isRevoked: true },
         });
+        if (authEventListeners.size() > 0) {
+          authEventListeners.emit({
+            eventType: 'TOKEN_REUSE_DETECTED',
+            actorId: stored.userId,
+            ipAddress: meta?.ipAddress,
+            userAgent: meta?.userAgent,
+            metadata: { tokenFamily: stored.tokenFamily },
+          });
+        }
         throw Errors.tokenReuse();
       }
 
@@ -299,10 +385,19 @@ export function createAuthService(
           }
           else {
             // Warn mode: log but allow
-            console.warn(
-              '[fortress] Refresh token fingerprint mismatch for token family:',
-              stored.tokenFamily,
+            logger?.warn(
+              { tokenFamily: stored.tokenFamily },
+              'refresh token fingerprint mismatch',
             );
+            if (authEventListeners.size() > 0) {
+              authEventListeners.emit({
+                eventType: 'TOKEN_FINGERPRINT_MISMATCH',
+                actorId: stored.userId,
+                ipAddress: meta?.ipAddress,
+                userAgent: meta?.userAgent,
+                metadata: { tokenFamily: stored.tokenFamily },
+              });
+            }
           }
         }
       }
@@ -371,6 +466,16 @@ export function createAuthService(
       const afterCtx: AfterHookContext = { db, config, meta, responseHeaders: new Headers() };
       result = await runAfterRefreshHooks(afterCtx, result);
 
+      if (authEventListeners.size() > 0) {
+        authEventListeners.emit({
+          eventType: 'TOKEN_REFRESH',
+          actorId: user.id,
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          outcome: 'success',
+        });
+      }
+
       return result;
     },
 
@@ -380,11 +485,29 @@ export function createAuthService(
 
       const tokenHash = await hashToken(refreshToken);
 
+      // Look up the user the token belongs to so the LOGOUT event can
+      // carry an actorId. If lookup fails (token unknown), emit with
+      // actorId undefined — observers still fire.
+      let actorId: number | undefined;
+      if (authEventListeners.size() > 0) {
+        const stored = await adapter.findRefreshTokenByHash(tokenHash);
+        if (stored) {
+          actorId = stored.userId;
+        }
+      }
+
       await db.update({
         model: 'refresh_token',
         where: [{ field: 'tokenHash', operator: '=', value: tokenHash }],
         data: { isRevoked: true },
       });
+
+      if (authEventListeners.size() > 0) {
+        authEventListeners.emit({
+          eventType: 'LOGOUT',
+          actorId,
+        });
+      }
     },
 
     async me(userId: number): Promise<FortressUser> {
@@ -447,6 +570,16 @@ export function createAuthService(
         if (plugin.hooks?.afterRegister) {
           await plugin.hooks.afterRegister(afterCtx, user);
         }
+      }
+
+      if (authEventListeners.size() > 0) {
+        authEventListeners.emit({
+          eventType: 'REGISTER',
+          actorId: user.id,
+          identifier: data.email,
+          method: 'password',
+          outcome: 'success',
+        });
       }
 
       return user;
@@ -721,6 +854,10 @@ export function createAuthService(
         model: 'user',
         where: [{ field: 'id', operator: '=', value: userId }],
       });
+    },
+
+    addAuthObserver(listener: AuthEventListener): Unsubscribe {
+      return authEventListeners.add(listener);
     },
   };
 }

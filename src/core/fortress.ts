@@ -1,10 +1,12 @@
-import type { AuthService } from './auth/auth-service';
+import type { AuthEvent, AuthService } from './auth/auth-service';
 import type { FortressConfig, ResolvedCookieConfig } from './config';
 import type { EndpointDefinition } from './endpoint';
 import type { AuthCookiePayload } from './http/cookie-serialize';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { ResolvedPrincipal } from './http/principal';
-import type { IamService } from './iam/iam-service';
+import type { IamEvent, IamService, PermissionCheckEvent } from './iam/iam-service';
+import type { FortressLogger } from './observability/logger';
+import type { TelemetryProvider } from './observability/types';
 import type { FortressPlugin, MiddlewareDefinition } from './plugin';
 import type { InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
@@ -18,6 +20,9 @@ import { resolveRequestPrincipal as resolveRequestPrincipalFn } from './http/pri
 import { extractAccessToken as extractAccessTokenFn } from './http/token-extraction';
 import { iamEndpoints } from './iam/iam-endpoints';
 import { createIamService } from './iam/iam-service';
+import { instrumentAdapter } from './observability/db-instrumentation';
+import { SILENT_LOGGER } from './observability/logger';
+import { NO_OP_TELEMETRY } from './observability/types';
 import { processPlugins } from './plugin-runner';
 
 /**
@@ -40,6 +45,10 @@ export interface Fortress<TPlugins = Record<string, Record<string, Function>>> {
   endpoints: EndpointDefinition[];
   /** Resolved auth-cookie names and attributes (NODE_ENV-aware). */
   cookies: ResolvedCookieConfig;
+  /** Resolved logger (defaults to a silent no-op when `config.logger` is unset). */
+  logger: FortressLogger;
+  /** Resolved telemetry provider (defaults to a no-op when `config.observability` is unset). */
+  telemetry: TelemetryProvider;
   /**
    * Handle a Fortress-managed request and return a web-standard `Response`.
    * Composes plugin middleware, token verification, default-deny RBAC,
@@ -130,7 +139,19 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   }
 
   const plugins = config.plugins ?? [];
-  const db = config.database;
+
+  // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
+  // zero-allocation singletons — if the caller doesn't opt in, Fortress
+  // never writes to stderr and every metric/span call is a no-op.
+  const logger = config.logger ?? SILENT_LOGGER;
+  const telemetry = config.observability ?? NO_OP_TELEMETRY;
+
+  // Wrap the adapter with DB instrumentation. When `telemetry` is the
+  // no-op default, the wrapper records into a no-op histogram — essentially
+  // free. When a real OTel adapter is wired, every Fortress-internal query
+  // (and every plugin query that also uses this adapter) emits the stable
+  // `db.client.operation.duration` metric with standard attributes.
+  const db = instrumentAdapter(config.database, telemetry);
 
   // Validate plugin name uniqueness
   const pluginNames = new Set<string>();
@@ -141,13 +162,63 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     pluginNames.add(plugin.name);
   }
 
-  const auth = createAuthService(db, config, plugins);
-  const iam = createIamService(db, config);
-  const pluginMethods = processPlugins(plugins, db, config, auth, iam);
+  const auth = createAuthService(db, config, plugins, { logger, telemetry });
+  const iam = createIamService(db, config, { logger, telemetry });
+  const pluginMethods = processPlugins(plugins, db, config, auth, iam, logger);
+
+  // --- Wire built-in telemetry observers ------------------------------
+  //
+  // Translate AuthEvent / IamEvent / PermissionCheckEvent into metric
+  // updates. Attribute keys follow the Prometheus `.total` convention
+  // for counters and seconds for durations. User IDs are NEVER placed
+  // on metric attributes (cardinality bomb) — they go on spans/logs.
+  const authEventCounter = telemetry.meter.createCounter('fortress.auth.events.total', {
+    description: 'Auth lifecycle events (login, register, refresh, logout, token reuse)',
+  });
+  const iamEventCounter = telemetry.meter.createCounter('fortress.iam.events.total', {
+    description: 'IAM mutation events (role/permission/binding/group changes)',
+  });
+  const permissionCheckDuration = telemetry.meter.createHistogram('fortress.iam.permission_check.duration', {
+    unit: 's',
+    description: 'Permission check latency',
+    boundaries: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1],
+  });
+  const cacheHitCounter = telemetry.meter.createCounter('fortress.iam.permission_check.cache.hits', {
+    description: 'Permission check resolved from cache',
+  });
+  const cacheMissCounter = telemetry.meter.createCounter('fortress.iam.permission_check.cache.misses', {
+    description: 'Permission check that hit the database',
+  });
+
+  auth.addAuthObserver((event: AuthEvent) => {
+    authEventCounter.add(1, {
+      event: event.eventType,
+      outcome: event.outcome ?? 'n/a',
+      method: event.method ?? 'n/a',
+    });
+  });
+
+  iam.addIamObserver((event: IamEvent) => {
+    iamEventCounter.add(1, { event: event.eventType });
+  });
+
+  iam.addPermissionCheckObserver((event: PermissionCheckEvent) => {
+    permissionCheckDuration.record(event.durationSeconds, {
+      subject_type: event.subjectType,
+      result: event.allowed ? 'allow' : 'deny',
+      cached: event.cached ? 'true' : 'false',
+    });
+    if (event.cached) {
+      cacheHitCounter.add(1);
+    }
+    else {
+      cacheMissCounter.add(1);
+    }
+  });
 
   // Wire IAM events → audit log if the plugin is registered
   if (pluginMethods['audit-log']?.logCustomEvent) {
-    const logCustomEvent = pluginMethods['audit-log'].logCustomEvent as (event: import('./iam/iam-service').IamEvent) => Promise<void>;
+    const logCustomEvent = pluginMethods['audit-log'].logCustomEvent as (event: IamEvent) => Promise<void>;
     iam.addIamObserver(event => logCustomEvent(event));
   }
 
@@ -178,6 +249,8 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     config,
     endpoints,
     cookies,
+    logger,
+    telemetry,
     handleRequest: undefined as unknown as (request: Request) => Promise<Response>,
     runPluginMiddleware: (phase, ctx) => runPluginMiddlewareFn(plugins, config, phase, ctx),
     extractAccessToken: (request: Request): string | null => extractAccessTokenFn(request, cookies),

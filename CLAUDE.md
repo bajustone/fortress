@@ -22,16 +22,20 @@ bun run publish:dry      # Validate JSR publishing (dry run)
 See `docs/architecture.md` for the full technical design.
 
 **Core (always included):**
-- `src/core/auth/` — JWT (jose), password hashing (pluggable), refresh tokens (SHA256, family rotation)
+- `src/core/auth/` — JWT (jose), password hashing (pluggable), refresh tokens (SHA256, family rotation). Emits `AuthEvent` via `auth.addAuthObserver` at LOGIN_SUCCESS/FAILURE/LOGOUT/REGISTER/TOKEN_REFRESH/TOKEN_REUSE_DETECTED/TOKEN_FINGERPRINT_MISMATCH sites.
 - `src/core/auth/auth-endpoints.ts` — Declarative auth endpoint definitions with OpenAPI metadata
-- `src/core/iam/` — resource+action permissions, conditions, deny rules, groups, roles
+- `src/core/iam/` — resource+action permissions, conditions, deny rules, groups, roles. Emits `IamEvent` via `iam.addIamObserver` for mutations; emits `PermissionCheckEvent` via `iam.addPermissionCheckObserver` synchronously on every `checkPermission`.
 - `src/core/iam/iam-endpoints.ts` — Declarative IAM endpoint definitions with OpenAPI metadata
 - `src/core/iam/permission-cache.ts` — LRU permission cache with TTL and invalidation
+- `src/core/observability/` — `FortressLogger` (pino-structural), `TelemetryProvider` (tracer+meter, zero OTel imports), `createListenerList` helper (shared error-routing observer utility), `instrumentAdapter` (wraps `DatabaseAdapter` with `db.client.operation.duration` histogram).
 - `src/core/endpoint.ts` — `EndpointDefinition`, `EndpointMeta`, `EndpointInput`, `EndpointResponse`
 - `src/core/json-schema.ts` + `src/core/schema-builder.ts` — JSON Schema types and fluent builder DSL
 - `src/core/errors.ts` — single `FortressError` class + `Errors` factory
 - `src/core/plugin.ts` — `FortressPlugin` interface (8 capabilities)
-- `src/core/config.ts` — `FortressConfig` type
+- `src/core/config.ts` — `FortressConfig` type (including optional `logger` and `observability` fields)
+
+**OpenTelemetry adapter (`src/otel/`):**
+- `src/otel/index.ts` — `createOtelTelemetry()` — the **only file in the repo that imports `@opentelemetry/api`** (dynamically). Exported as the `@bajustone/fortress/otel` sub-path so runtimes that don't opt in never resolve the peer dep. Returns a `TelemetryProvider` that feeds `FortressConfig.observability`.
 
 **HTTP entry points (`src/core/http/`):**
 - `src/core/http/handle-request.ts` — `fortress.handleRequest(request): Promise<Response>` framework-agnostic dispatcher
@@ -82,6 +86,7 @@ See `docs/architecture.md` for the full technical design.
 10. **Endpoint Definitions** — Declarative `EndpointDefinition` with OpenAPI metadata enables framework-agnostic route mounting and automatic OpenAPI spec generation.
 11. **Framework-agnostic `fortress.handleRequest`** — every Fortress instance exposes a web-standard `(request: Request) => Promise<Response>` entry point that runs the full pipeline (plugin middleware → token verification → fortress RBAC → validation → endpoint dispatch → cookie attachment). All adapters delegate to it; new adapters are ~10-line wrappers.
 12. **Cookie defaults via `FortressConfig.cookies`** — `__Host-` prefixed `httpOnly`/`Secure`/`SameSite=Lax` in production, auto-relaxed (drops `__Host-` and `Secure`) in development so localhost over HTTP works. Login/refresh responses get `Set-Cookie` headers automatically.
+13. **Observability is layered and zero-default** — `FortressLogger` (pino-structural, `SILENT_LOGGER` default), `AuthEvent`/`IamEvent`/`PermissionCheckEvent` observers (sync for permission checks, async for others, all return unsubscribe fns, failures routed to `logger.error`), and an optional `TelemetryProvider` (tracer+meter) wired via `config.observability`. The `@bajustone/fortress/otel` sub-path is the only file that imports `@opentelemetry/api` (dynamically) — runtimes that don't opt in never resolve the peer dep. Metrics follow OTel semantic conventions: `db.client.operation.duration` for DB, seconds for durations, no user IDs on metric attributes (cardinality rules).
 
 ## Testing
 

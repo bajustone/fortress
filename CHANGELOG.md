@@ -44,6 +44,64 @@
 
 ## [Unreleased]
 
+### Added
+- **Pluggable logger via `FortressConfig.logger`.** Accepts any object
+  structurally compatible with `FortressLogger` — a `pino()` instance,
+  Fastify's `app.log`, or a hand-rolled `console` wrapper. Default is
+  `SILENT_LOGGER` so Fortress never writes to stderr unless the caller
+  opts in. Replaces the five hardcoded `console.warn`/`console.error`
+  call sites in `plugin-runner.ts`, `auth-service.ts`,
+  `http/error-response.ts`, and `express/middleware.ts`.
+- **`AuthEvent` + `AuthService.addAuthObserver`.** Mirrors the existing
+  `addIamObserver` pattern. Emits `LOGIN_SUCCESS`, `LOGIN_FAILURE`,
+  `LOGOUT`, `REGISTER`, `TOKEN_REFRESH`, `TOKEN_REUSE_DETECTED`, and
+  `TOKEN_FINGERPRINT_MISMATCH` with optional actor, IP, user-agent,
+  method, and outcome metadata. Observers can subscribe at init time
+  from any plugin's `methods(ctx)` factory without re-implementing
+  every auth hook.
+- **`PermissionCheckEvent` + `IamService.addPermissionCheckObserver`.**
+  Synchronous high-frequency listener for `checkPermission`, carrying
+  `cached` / `durationSeconds` / `allowed` / `subjectType` /
+  `subjectId` / `resource` / `action`. Separate from `IamEvent` so
+  audit-log (which subscribes to IAM mutations) isn't spammed with
+  per-check traffic. Listener signature is intentionally `void`, not
+  `Promise<void>`, to discourage awaiting expensive work on the hot path.
+- **Unsubscribe functions on every observer adder.** `addAuthObserver`,
+  `addIamObserver`, and `addPermissionCheckObserver` all return a
+  `() => void` unsubscribe callback. Existing callers of
+  `addIamObserver` that ignored the `void` return type still compile
+  unchanged.
+- **Observer error routing.** Observer failures are now logged at
+  `error` level via the configured `FortressLogger` instead of being
+  silently swallowed. Auth/IAM operations still never throw from an
+  observer bug.
+- **`FortressConfig.observability` + OpenTelemetry adapter sub-path.**
+  New opt-in `@bajustone/fortress/otel` sub-path export with a single
+  `createOtelTelemetry({ name })` factory. The core package never
+  statically imports `@opentelemetry/api` — the adapter uses
+  `await import('@opentelemetry/api')` for true dynamic loading, so
+  runtimes that don't opt in (Cloudflare Workers, Deno without OTel)
+  never resolve the peer dep. `@opentelemetry/api` is declared as an
+  optional peer dependency with `peerDependenciesMeta.optional: true`.
+- **Built-in metrics via the telemetry provider.** When a non-noop
+  `observability` provider is wired, Fortress emits:
+  - `fortress.auth.events.total` counter (attrs: `event`, `outcome`, `method`)
+  - `fortress.iam.events.total` counter (attrs: `event`)
+  - `fortress.iam.permission_check.duration` histogram in seconds
+    (attrs: `subject_type`, `result`, `cached`)
+  - `fortress.iam.permission_check.cache.hits` + `.cache.misses` counters
+  - `db.client.operation.duration` histogram in seconds — **the stable
+    OpenTelemetry semantic-convention metric name**, not a
+    Fortress-specific name — with `db.system.name`, `db.operation.name`,
+    and `db.collection.name` attributes. Every Fortress-internal DB
+    operation (and plugin queries going through the wrapped adapter)
+    flows into it.
+  - Plus a `fortress.iam.permission_check.deny` span emitted only on
+    denied checks (security-interesting). Allowed checks are metric
+    fodder — no span emitted, keeping the hot path cheap.
+- **`fortress.logger` and `fortress.telemetry` exposed on the instance.**
+  Adapters and plugins can read them after construction.
+
 ### Fixed
 - **`resolvePrincipal` now fires on user-owned routes, not just
   Fortress-managed ones.** Previously, only requests dispatched through

@@ -191,9 +191,12 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
  *
  * Stays synchronous so it composes naturally with Express's `(err, req,
  * res, next)` signature. Shares the response *shape* with core's
- * `errorToResponse` via {@link FortressError.toJSON}.
+ * `errorToResponse` via {@link FortressError.toJSON}. When a `Fortress`
+ * instance is provided, unhandled errors are routed to its configured
+ * {@link FortressLogger}; otherwise they're silently swallowed (matching
+ * the silent-by-default posture of the library).
  */
-export function createErrorHandler(): (err: unknown, req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => void {
+export function createErrorHandler(fortress?: Fortress): (err: unknown, req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => void {
   return (err, _req, res, _next) => {
     if (err instanceof FortressError) {
       if (err.code === 'RATE_LIMITED' && err.retryAfter) {
@@ -203,7 +206,10 @@ export function createErrorHandler(): (err: unknown, req: ExpressRequest, res: E
       return;
     }
 
-    console.error('Unhandled error:', err instanceof Error ? err.message : 'Unknown error');
+    fortress?.logger.error(
+      { err, message: err instanceof Error ? err.message : 'Unknown error' },
+      'unhandled error in express middleware',
+    );
     res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Internal server error', statusCode: 500 });
   };
 }
@@ -257,7 +263,7 @@ export function createExpressMiddleware(fortress: Fortress, options?: ExpressAda
   return {
     authMiddleware: createAuthMiddleware(fortress),
     rbacMiddleware: createRbacMiddleware(fortress, options),
-    errorHandler: createErrorHandler(),
+    errorHandler: createErrorHandler(fortress),
     pluginMiddleware: {
       beforeAuth: createExpressPluginMiddleware(fortress, 'before-auth'),
       afterAuth: createExpressPluginMiddleware(fortress, 'after-auth'),

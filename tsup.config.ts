@@ -8,11 +8,12 @@ export default defineConfig({
     testing: 'src/testing/index.ts',
     crypto: 'src/core/auth/password.ts',
     jwt: 'src/core/auth/jwt.ts',
+    otel: 'src/otel/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,
   splitting: false,
   clean: true,
   outDir: 'dist',
-  external: ['drizzle-orm', 'hono', 'better-sqlite3', 'bun:sqlite'],
+  external: ['drizzle-orm', 'hono', 'better-sqlite3', 'bun:sqlite', '@opentelemetry/api'],
 });

@@ -3,6 +3,7 @@ import type { ScopeRule, WhereClause } from '../adapters/database/types';
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
 import type { IamService } from './iam/iam-service';
+import type { FortressLogger } from './observability/logger';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext } from './plugin';
 
 /**
@@ -15,9 +16,10 @@ export function processPlugins(
   config: FortressConfig,
   auth?: AuthService,
   iam?: IamService,
+  logger?: FortressLogger,
   // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
 ): Record<string, Record<string, Function>> {
-  const ctx: PluginContext = { db, config, auth, iam };
+  const ctx: PluginContext = { db, config, auth, iam, logger };
   // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
   const result: Record<string, Record<string, Function>> = {};
 
@@ -65,8 +67,9 @@ export async function mergeTokenClaims(
       if (process.env.NODE_ENV !== 'production') {
         for (const key of Object.keys(claims)) {
           if (key in merged) {
-            console.warn(
-              `[fortress] Plugin '${plugin.name}' overwrites token claim '${key}' set by a previous plugin`,
+            ctx.logger?.warn(
+              { plugin: plugin.name, claim: key },
+              `plugin overwrites token claim '${key}'`,
             );
           }
         }

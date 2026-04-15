@@ -79,6 +79,16 @@
         "types": "./dist/jwt.d.cts",
         "default": "./dist/jwt.cjs"
       }
+    },
+    "./otel": {
+      "import": {
+        "types": "./dist/otel.d.ts",
+        "default": "./dist/otel.js"
+      },
+      "require": {
+        "types": "./dist/otel.d.cts",
+        "default": "./dist/otel.cjs"
+      }
     }
   },
   "files": ["dist", "src", "README.md", "LICENSE"],
@@ -97,6 +107,8 @@
   },
   "devDependencies": {
     "@antfu/eslint-config": "^8.0.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-metrics": "^2.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/bun": "^1.3.11",
     "@types/node": "^25.5.2",
@@ -112,12 +124,16 @@
     "vitest": "^4.1.2"
   },
   "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0",
     "@sveltejs/kit": "^2.0.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.10",
     "typescript": "^5.0.0"
   },
   "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    },
     "@sveltejs/kit": {
       "optional": true
     },

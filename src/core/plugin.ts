@@ -3,6 +3,7 @@ import type { ScopeRule } from '../adapters/database/types';
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
 import type { IamService } from './iam/iam-service';
+import type { FortressLogger } from './observability/logger';
 import type {
   AuthResponse,
   AuthTokenPair,
@@ -128,6 +129,8 @@ export interface PluginContext {
   auth?: AuthService;
   /** IAM service reference. Optional at init time; available at runtime. */
   iam?: IamService;
+  /** Resolved logger (silent no-op if `config.logger` is unset). */
+  logger?: FortressLogger;
 }
 
 /** @deprecated Use EndpointDefinition from './endpoint' instead. Kept as alias for backward compatibility. */

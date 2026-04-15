@@ -1,5 +1,7 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { PasswordPolicyConfig } from './auth/password-policy';
+import type { FortressLogger } from './observability/logger';
+import type { TelemetryProvider } from './observability/types';
 import type { FortressPlugin } from './plugin';
 
 /** Pluggable password hashing contract — implement to swap fortress's default Argon2id WASM hasher. */
@@ -55,6 +57,20 @@ export interface FortressConfig {
   plugins?: readonly FortressPlugin[];
   /** Auth-cookie naming and attributes used by `fortress.handleRequest` and framework adapters. */
   cookies?: CookieConfig;
+  /**
+   * Optional pluggable logger. Accepts any object that conforms structurally
+   * to {@link FortressLogger} — a `pino()` instance, Fastify's `app.log`,
+   * or a hand-rolled `console` wrapper. Defaults to a silent no-op so
+   * Fortress never writes to stderr unless the caller opts in.
+   */
+  logger?: FortressLogger;
+  /**
+   * Optional telemetry provider (tracer + meter). Wire this to the
+   * OpenTelemetry adapter with `createOtelTelemetry` from the
+   * `@bajustone/fortress/otel` sub-path, or provide any custom
+   * implementation. Defaults to a zero-alloc no-op provider.
+   */
+  observability?: TelemetryProvider;
 }
 
 /** Cookie attributes resolved against the runtime environment (NODE_ENV-aware). */

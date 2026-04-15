@@ -198,7 +198,7 @@ export function buildHandleRequest(
       return response;
     }
     catch (err) {
-      return errorToResponse(err);
+      return errorToResponse(err, fortress.logger);
     }
   };
 }
