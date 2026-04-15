@@ -48,6 +48,14 @@ export function buildHandleRequest(
   const pluginPathPrefixes = getPluginPathPrefixes(plugins);
 
   return async function handleRequest(request: Request): Promise<Response> {
+    // Outer span for the whole pipeline. No-op when `config.observability`
+    // is unset — `NO_OP_TELEMETRY` returns a shared singleton span.
+    // Attributes are set progressively as they become available; the final
+    // `http.status_code` lands in the finally block.
+    const span = fortress.telemetry.tracer.startSpan('fortress.handleRequest', {
+      'http.method': request.method,
+    });
+    let response: Response | undefined;
     try {
       const url = new URL(request.url);
       const pathname = url.pathname;
@@ -67,6 +75,11 @@ export function buildHandleRequest(
         throw Errors.notFound(`No endpoint matches ${request.method} ${pathname}`);
       }
       const { endpoint, params } = matched;
+      // Upgrade span attributes now that we know the matched route.
+      // `endpoint.path` is parameterized (e.g. `/iam/roles/:id`) so it's
+      // low-cardinality and safe to put on a span/metric attribute.
+      span.setAttribute('http.route', endpoint.path);
+      span.setAttribute('fortress.handler', endpoint.handler);
 
       // 3. Principal resolution. Three paths, tried in order:
       //
@@ -116,6 +129,10 @@ export function buildHandleRequest(
       // that RBAC-check via `subject` now.
       if (subject?.type === 'USER')
         userId = subject.id;
+
+      if (subject) {
+        span.setAttribute('fortress.subject_type', subject.type);
+      }
 
       // 4. Plugin after-auth middleware
       await runPluginMiddleware(plugins, fortress.config, 'after-auth', {
@@ -175,7 +192,7 @@ export function buildHandleRequest(
           ?? undefined,
         userAgent: request.headers.get('user-agent') ?? undefined,
       };
-      const response = await dispatchEndpoint(fortress, request, endpoint, params, {
+      const dispatched = await dispatchEndpoint(fortress, request, endpoint, params, {
         subject,
         userId,
         claims,
@@ -187,18 +204,40 @@ export function buildHandleRequest(
       //    fields. We avoid touching streamed/HTML responses.
       const cookies = await maybeBuildAuthCookies(
         endpoint.handler,
-        response,
+        dispatched,
         fortress,
         request,
       );
-      if (cookies.length > 0) {
-        return withCookies(cookies.response, cookies.setCookies);
-      }
-
+      response = cookies.length > 0
+        ? withCookies(cookies.response, cookies.setCookies)
+        : dispatched;
       return response;
     }
     catch (err) {
-      return errorToResponse(err, fortress.logger);
+      response = errorToResponse(err, fortress.logger);
+      span.recordException(err);
+      span.setStatus({
+        code: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return response;
+    }
+    finally {
+      if (response) {
+        span.setAttribute('http.status_code', response.status);
+        if (response.status >= 200 && response.status < 400) {
+          span.setStatus({ code: 'ok' });
+        }
+        else if (response.status >= 400) {
+          // 4xx/5xx without an exception (e.g. a FortressError already
+          // serialized). Mark the span as error so traces highlight it.
+          span.setStatus({
+            code: 'error',
+            message: `HTTP ${response.status}`,
+          });
+        }
+      }
+      span.end();
     }
   };
 }

@@ -162,7 +162,16 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     pluginNames.add(plugin.name);
   }
 
-  const auth = createAuthService(db, config, plugins, { logger, telemetry });
+  // Token-verify histogram is built before the auth service so it can be
+  // passed in via deps. Kept here (not inside auth-service) so the metric
+  // catalog lives in one place.
+  const tokenVerifyDuration = telemetry.meter.createHistogram('fortress.auth.token_verify.duration', {
+    unit: 's',
+    description: 'JWT access token verification latency',
+    boundaries: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1],
+  });
+
+  const auth = createAuthService(db, config, plugins, { logger, telemetry, tokenVerifyDuration });
   const iam = createIamService(db, config, { logger, telemetry });
   const pluginMethods = processPlugins(plugins, db, config, auth, iam, logger);
 

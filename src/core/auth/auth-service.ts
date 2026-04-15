@@ -2,7 +2,7 @@ import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressConfig, PasswordHasher } from '../config';
 import type { Unsubscribe } from '../observability/listener-list';
 import type { FortressLogger } from '../observability/logger';
-import type { TelemetryProvider } from '../observability/types';
+import type { Histogram, TelemetryProvider } from '../observability/types';
 import type {
   AfterHookContext,
   FortressPlugin,
@@ -50,6 +50,13 @@ export interface AuthEvent {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Async auth event listener. May return a Promise — if you `return` it, any
+ * rejection is routed to `config.logger.error`. Firing work via
+ * `void asyncWork()` inside a sync body is an explicit opt-out of that
+ * safety net; rejections will escape to the runtime's unhandled-rejection
+ * handler instead.
+ */
 export type AuthEventListener = (event: AuthEvent) => void | Promise<void>;
 
 interface ResolvedConfig {
@@ -108,6 +115,13 @@ export interface AuthService {
 export interface AuthServiceDeps {
   logger: FortressLogger;
   telemetry: TelemetryProvider;
+  /**
+   * Optional histogram instrument for token-verify latency. Provided by
+   * `createFortress` from the resolved telemetry provider — pulled in as a
+   * dep rather than built inside `auth-service` so the metric catalog
+   * stays centralized in one file.
+   */
+  tokenVerifyDuration?: Histogram;
 }
 
 export function createAuthService(
@@ -120,6 +134,7 @@ export function createAuthService(
   const hasher: PasswordHasher = config.passwordHasher ?? createDefaultHasher();
   const adapter = createInternalAdapter(db);
   const logger = deps?.logger;
+  const tokenVerifyDuration = deps?.tokenVerifyDuration;
 
   const authEventListeners = createListenerList<AuthEvent>({
     kind: 'async',
@@ -586,7 +601,22 @@ export function createAuthService(
     },
 
     async verifyToken(token: string): Promise<TokenClaims> {
-      return verifyAccessToken(token, resolved.secret);
+      const start = performance.now();
+      try {
+        const claims = await verifyAccessToken(token, resolved.secret);
+        tokenVerifyDuration?.record(
+          (performance.now() - start) / 1000,
+          { result: 'ok' },
+        );
+        return claims;
+      }
+      catch (err) {
+        tokenVerifyDuration?.record(
+          (performance.now() - start) / 1000,
+          { result: 'invalid' },
+        );
+        throw err;
+      }
     },
 
     async signToken(claims: Omit<TokenClaims, 'iat' | 'exp'>): Promise<string> {

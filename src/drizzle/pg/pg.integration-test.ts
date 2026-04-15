@@ -717,7 +717,9 @@ describe('pg: plugins', () => {
     });
 
     const methods = fortress.plugins['api-key'] as any;
-    const { key } = await methods.createKey(user.id, {
+    const userSubject = { type: 'USER' as const, id: user.id };
+    const { key } = await methods.createKey({
+      subject: userSubject,
       name: 'Test Key',
       expiresAt: new Date(Date.now() + 3600000),
     });
@@ -726,9 +728,10 @@ describe('pg: plugins', () => {
 
     const resolved = await methods.resolveKey(key);
     expect(resolved).not.toBeNull();
-    expect(resolved.userId).toBe(user.id);
+    expect(resolved.subject.type).toBe('USER');
+    expect(resolved.subject.id).toBe(user.id);
 
-    const keys = await methods.listKeys(user.id);
+    const keys = await methods.listKeys({ subject: userSubject });
     expect(keys).toHaveLength(1);
     expect(keys[0].expiresAt).toBeInstanceOf(Date);
     expect(keys[0].createdAt).toBeInstanceOf(Date);

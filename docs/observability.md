@@ -149,6 +149,31 @@ fortress.iam.addPermissionCheckObserver((event) => {
 
 **Why separate from `addIamObserver`?** Permission checks fire thousands of times per minute in a busy app. Mixing them with mutation events would spam the audit-log plugin.
 
+### Error-routing gotcha (async observers only)
+
+The auth and IAM observer lists route listener failures to `logger.error` so one bad listener can't break the caller. But the safety net only engages when the listener **returns** the promise. Consider the two shapes:
+
+```typescript
+// ✅ Routed — the listener returns the promise, the list attaches .catch
+fortress.auth.addAuthObserver(async (event) => {
+  await siem.log(event); // a rejection here ends up at logger.error
+});
+
+// ✅ Routed — equivalent; the async function returns an implicit promise
+fortress.auth.addAuthObserver(event => siem.log(event));
+
+// ❌ Not routed — the listener returns `undefined`, the list has no handle
+//   on the inflight promise, and a rejection escapes to the runtime's
+//   unhandled-rejection handler.
+fortress.auth.addAuthObserver((event) => {
+  void siem.log(event);
+});
+```
+
+`void asyncWork()` is an explicit opt-out of the safety net. It's sometimes what you want — you accept the risk because you don't want the listener to wait on a cross-network call — but if you want rejections surfaced in your logger, return the promise. Fortress does not install a process-level `unhandledRejection` handler on your behalf.
+
+The permission-check observer is synchronous (returns `void`, not `Promise<void>`), so this gotcha doesn't apply to it — there's no async work to lose track of.
+
 ## 3. OpenTelemetry Adapter (opt-in)
 
 The `@bajustone/fortress/otel` sub-path ships a single factory: `createOtelTelemetry()`. It's the **only file in the repository that imports `@opentelemetry/api`**, and the import is dynamic (`await import('@opentelemetry/api')`). Runtimes that don't import the `/otel` sub-path never resolve the peer dep.

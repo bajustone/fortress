@@ -18,6 +18,14 @@ export interface ListenerList<E> {
  *   returned by listeners are attached a `.catch` that routes failures to
  *   the logger at `error` level — observer bugs never break the caller.
  *
+ *   **Error-routing gotcha (async kind):** the safety net only engages
+ *   when the listener *returns* the promise. A listener that fires work
+ *   via `void asyncWork()` inside a sync body returns `undefined`, so the
+ *   listener list cannot observe a later rejection — it escapes to the
+ *   runtime's unhandled-rejection handler. If you want the safety net,
+ *   `return asyncWork()` or make the whole body `async`. `void asyncWork()`
+ *   is an explicit opt-out.
+ *
  * The `logger` parameter is a thunk so the list can resolve the current
  * logger lazily — allowing callers to construct the list before the final
  * logger is available in the closure.

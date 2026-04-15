@@ -33,6 +33,13 @@ export interface IamEvent {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Async IAM event listener. May return a Promise — if you `return` it, any
+ * rejection is routed to `config.logger.error`. Firing work via
+ * `void asyncWork()` inside a sync body is an explicit opt-out of that
+ * safety net; rejections will escape to the runtime's unhandled-rejection
+ * handler instead.
+ */
 export type IamEventListener = (event: IamEvent) => void | Promise<void>;
 
 /**

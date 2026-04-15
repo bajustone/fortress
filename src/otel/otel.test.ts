@@ -150,6 +150,30 @@ describe('createOtelTelemetry', () => {
     expect(hasDbAttrs).toBe(true);
   });
 
+  it('emits fortress.auth.token_verify.duration on verifyToken calls', async () => {
+    const login = await fortress.auth.login('otel@example.com', 'password-123');
+    expect(login.accessToken).toBeTruthy();
+    // Successful verify
+    await fortress.auth.verifyToken(login.accessToken as string);
+    // Failed verify
+    await expect(fortress.auth.verifyToken('not.a.jwt')).rejects.toThrow();
+
+    const all = await collectMetrics();
+    const verify = findMetric(all, 'fortress.auth.token_verify.duration');
+    expect(verify).toBeDefined();
+
+    const ok = verify!.dataPoints.find((p) => {
+      const attrs = p.attributes as Record<string, string>;
+      return attrs.result === 'ok';
+    });
+    const invalid = verify!.dataPoints.find((p) => {
+      const attrs = p.attributes as Record<string, string>;
+      return attrs.result === 'invalid';
+    });
+    expect(ok).toBeDefined();
+    expect(invalid).toBeDefined();
+  });
+
   it('createOtelTelemetry returns a zero-overhead provider when no SDK is registered', async () => {
     // Shut down the SDK so there's no global provider.
     await provider.shutdown();
