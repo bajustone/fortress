@@ -40,17 +40,26 @@ const fortress = createFortress({
 
 ## Configuration
 
-All fields on `RateLimitConfig` are optional. Each built-in endpoint block is opt-in — omit it to disable rate-limiting for that endpoint.
-
 ### Endpoint blocks
 
-| Block | Applied at | Default when enabled |
-|---|---|---|
-| `login` | `beforeLogin` hook | `{ maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 }` |
-| `register` | `beforeRegister` hook | `{ maxPerIp: 3, windowSeconds: 3600 }` |
-| `refresh` | `beforeTokenRefresh` hook | `{ maxPerIp: 60, maxPerUser: 60, windowSeconds: 60 }` |
-| `oauthToken` | Path middleware on `POST /oauth/token` (before-auth) | `{ maxPerIp: 60, windowSeconds: 60 }` |
-| `apiKeyIssue` | Path middleware on `POST /api-key/keys` (after-auth) | `{ maxPerIp: 10, maxPerUser: 10, windowSeconds: 3600 }` |
+| Block | Default state | Applied at | Default values |
+|---|---|---|---|
+| `login` | **Always on** | `beforeLogin` hook | `{ maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 }` |
+| `register` | **Always on** | `beforeRegister` hook | `{ maxPerIp: 3, windowSeconds: 3600 }` |
+| `refresh` | Opt-in | `beforeTokenRefresh` hook | `{ maxPerIp: 60, maxPerUser: 60, windowSeconds: 60 }` |
+| `oauthToken` | Opt-in | Path middleware on `POST /oauth/token` (before-auth) | `{ maxPerIp: 60, windowSeconds: 60 }` |
+| `apiKeyIssue` | Opt-in | Path middleware on `POST /api-key/keys` (after-auth) | `{ maxPerIp: 10, maxPerUser: 10, windowSeconds: 3600 }` |
+
+**Gate blocks (`login`, `register`) default on.** They're the first line of defense against credential stuffing and mass registration; leaving them opt-in would let a version bump silently remove DoS protection. To turn one off explicitly:
+
+```ts
+rateLimit({
+  login: { disabled: true },
+  register: { disabled: true },
+})
+```
+
+**Other endpoints are opt-in** — present the block to enable it (with defaults merged), omit to disable.
 
 ### Rule shape (`rules` + `paths`)
 
@@ -80,7 +89,18 @@ rateLimit({
 })
 ```
 
-`position: 'before-auth'` (default) matches any request against the IP. `after-auth` runs after principal resolution so `maxPerUser` can apply. Path bindings only fire for routes dispatched through `fortress.handleRequest` — use the programmatic `check()` or a framework wrapper for your own routes.
+`position: 'before-auth'` (default) matches any request against the IP. `after-auth` runs after principal resolution so `maxPerUser` can apply. Path bindings only fire for routes dispatched through `fortress.handleRequest`.
+
+### `paths` vs the per-framework wrapper
+
+The config-driven `paths` list and the per-framework wrappers (`honoRateLimit` / `expressRateLimit` / `svelteKitRateLimit`) both apply a named rule to a route. Pick by deployment shape:
+
+| Use this… | …when |
+|---|---|
+| `honoRateLimit(fortress, 'api')` / `expressRateLimit(...)` / `svelteKitRateLimit(...)` | You have a framework middleware layer and want to limit routes the framework serves (either your own or Fortress-mounted). |
+| `paths: [{ match: '/foo/*', rule: 'api' }]` | Serverless / framework-less deployments that call `fortress.handleRequest` directly, or when you prefer declarative config co-located with the rest of the rate-limit setup. |
+
+Both target the same store. **Don't stack both on the same path** — each match increments the counter, so double-wrapping halves the effective limit.
 
 ## Rate-limiting your own routes
 

@@ -582,4 +582,107 @@ describe('rate-limit plugin', () => {
       await methods.check('b', { ip: '3.3.3.3' });
     });
   });
+
+  describe('gate-block defaults (login/register always-on)', () => {
+    it('login is rate-limited with defaults even when the config block is omitted', async () => {
+      // Registering the plugin with NO login config must still enforce the
+      // default per-IP login limit (10 / 15min). Guards against the 0.0.37
+      // silent-upgrade regression where opt-in meant "missing block = no limit."
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [rateLimit({})],
+      });
+
+      await fortress.auth.createUser({
+        email: 'default@example.com',
+        name: 'Default',
+        password: 'valid-password-123',
+      });
+
+      const meta = { ipAddress: '8.8.8.8' };
+      // Burn through the per-IP default of 10.
+      for (let i = 0; i < 10; i++) {
+        try {
+          await fortress.auth.login('default@example.com', 'wrong', meta);
+        }
+        catch { /* UNAUTHORIZED — expected */ }
+      }
+
+      // 11th attempt hits the rate-limit default.
+      try {
+        await fortress.auth.login('default@example.com', 'wrong', meta);
+        expect.fail('Should have thrown RATE_LIMITED');
+      }
+      catch (e: any) {
+        expect(e.code).toBe('RATE_LIMITED');
+      }
+    });
+
+    it('login: { disabled: true } fully turns the hook off', async () => {
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [rateLimit({ login: { disabled: true } })],
+      });
+
+      await fortress.auth.createUser({
+        email: 'off@example.com',
+        name: 'Off',
+        password: 'valid-password-123',
+      });
+
+      // Past the default per-IP limit of 10 — no RATE_LIMITED should fire.
+      // Password hashing dominates the clock here, so keep the loop small.
+      const meta = { ipAddress: '4.4.4.4' };
+      for (let i = 0; i < 15; i++) {
+        try {
+          await fortress.auth.login('off@example.com', 'wrong', meta);
+        }
+        catch (e: any) {
+          // The only error we should see is UNAUTHORIZED for wrong password.
+          expect(e.code).toBe('UNAUTHORIZED');
+        }
+      }
+    }, 20000);
+
+    it('register is rate-limited with defaults when the config block is omitted', async () => {
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [rateLimit({})],
+      });
+
+      // Default `register.maxPerIp` is 3 per hour. createUser doesn't pass
+      // meta so all hits share the 'unknown' IP key — fine for the test.
+      await fortress.auth.createUser({ email: 'a@t.com', name: 'A', password: 'password-123' });
+      await fortress.auth.createUser({ email: 'b@t.com', name: 'B', password: 'password-123' });
+      await fortress.auth.createUser({ email: 'c@t.com', name: 'C', password: 'password-123' });
+
+      try {
+        await fortress.auth.createUser({ email: 'd@t.com', name: 'D', password: 'password-123' });
+        expect.fail('Should have thrown RATE_LIMITED');
+      }
+      catch (e: any) {
+        expect(e.code).toBe('RATE_LIMITED');
+      }
+    });
+
+    it('register: { disabled: true } fully turns the hook off', async () => {
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [rateLimit({ register: { disabled: true } })],
+      });
+
+      // Well past the default register limit — should all succeed.
+      for (let i = 0; i < 10; i++) {
+        await fortress.auth.createUser({
+          email: `reg-off-${i}@t.com`,
+          name: `U${i}`,
+          password: 'password-123',
+        });
+      }
+    });
+  });
 });

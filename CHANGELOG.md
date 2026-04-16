@@ -2,11 +2,12 @@
 
 ## [0.0.39] - 2026-04-16
 
-### Added
-- slow types shouldn't be here
+### Changed
+- rate-limit: `login` and `register` are now **always on with defaults** when the plugin is registered — reverts the 0.0.37 opt-in change, which risked silent loss of auth DoS protection on upgrade. To turn either off explicitly, pass `login: { disabled: true }` / `register: { disabled: true }`. Other endpoint blocks (`refresh`, `oauthToken`, `apiKeyIssue`) remain opt-in.
 
-### Fixed
-- fix: remove allow slow types
+### Docs
+- Clarify `paths` config vs the per-framework wrappers (`honoRateLimit` / `expressRateLimit` / `svelteKitRateLimit`). Both target the same store; the wrapper is for framework-mounted routes, `paths` is for serverless / declarative-only setups. Don't stack both on the same path — each match increments the counter, halving the effective limit.
+- Spell out that `fortress.call.*` runs the full middleware pipeline — plugin middleware, rate limits, principal resolution, RBAC, validation, auth/IAM observers, OTel spans. Tests that need to bypass those should call the service layer directly (`fortress.auth.*`, `fortress.iam.*`).
 
 ## [0.0.38] - 2026-04-16
 

@@ -160,10 +160,19 @@ catch (err) {
 ```
 
 Under the hood, each call serializes to a `Request` and delegates to
-`fortress.handleRequest`, so plugin middleware, token verification, RBAC,
-and validation all run — the same pipeline a network client would hit.
-This is the foundation an over-the-wire client SDK will sit on top of:
-same type surface, different transport.
+`fortress.handleRequest`, so **everything runs** — plugin middleware,
+rate limits, token verification, RBAC, JSON Schema validation, auth /
+IAM observers, OpenTelemetry spans. Same pipeline a network client
+would hit; same behavioral guarantees in tests as in production. This
+is the foundation an over-the-wire client SDK will sit on top of: same
+type surface, different transport.
+
+> **Bypassing hooks in tests.** If a test fixture needs to create a
+> user or log in *without* tripping rate limits, emitting audit
+> entries, or running observers, use the service layer directly —
+> `fortress.auth.createUser(...)`, `fortress.auth.login(...)`,
+> `fortress.iam.createRole(...)`. Inputs still validate; the
+> middleware chain is skipped.
 
 ## Configuration
 
@@ -1260,10 +1269,15 @@ Sliding-window rate limiting across every Fortress sensitive endpoint (login, re
 import { rateLimit } from '@bajustone/fortress/plugins/rate-limit';
 import { honoRateLimit } from '@bajustone/fortress/plugins/rate-limit/hono';
 
-// 1. Configure built-in endpoint blocks + named rules for your routes.
+// 1. login + register are always on with safe defaults (credential-stuffing
+//    / mass-registration protection). Configure to tune; opt out with
+//    { disabled: true }. Other blocks (refresh, oauthToken, apiKeyIssue)
+//    are opt-in.
 rateLimit({
-  login:       { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 },
-  register:    { maxPerIp: 3,  windowSeconds: 3600 },
+  // Overrides of the always-on defaults (omit these two to use defaults as-is):
+  // login:    { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 },
+  // register: { maxPerIp: 3,  windowSeconds: 3600 },
+
   refresh:     { maxPerIp: 60, windowSeconds: 60 },
   oauthToken:  { maxPerIp: 60, windowSeconds: 60 },
   apiKeyIssue: { maxPerIp: 10, maxPerUser: 10, windowSeconds: 3600 },
@@ -1275,14 +1289,17 @@ rateLimit({
   store: customStore,  // optional: custom RateLimitStore (default: in-memory)
 })
 
-// 2. Mount the framework wrapper on your own routes.
+// 2. Mount the framework wrapper on your own routes (or any Fortress path
+//    the framework serves). Hono / Express / SvelteKit ship out of the box.
 app.use('/api/*', honoRateLimit(fortress, 'api'));
 
 // 3. Or call programmatically (any framework / context):
 await fortress.plugins['rate-limit'].check('api', { ip, userId });
 ```
 
-Framework wrappers ship for Hono (`honoRateLimit`), Express (`expressRateLimit`), and SvelteKit (`svelteKitRateLimit`). IPv6 addresses are normalized to `/64` prefixes to prevent bypass via address rotation.
+Two ways to apply a rule: **framework wrappers** (`honoRateLimit` / `expressRateLimit` / `svelteKitRateLimit`) for framework-mounted routes, and **config-driven `paths`** for serverless / framework-less deployments that call `fortress.handleRequest` directly. Don't stack both on the same path — each match increments the counter.
+
+IPv6 addresses are normalized to `/64` prefixes to prevent bypass via address rotation.
 
 When rate-limited, a `FortressError` with code `RATE_LIMITED` and a `retryAfter` value (in seconds) is thrown — adapters render it as a 429 with `Retry-After`.
 

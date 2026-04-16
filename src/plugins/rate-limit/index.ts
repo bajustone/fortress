@@ -48,11 +48,24 @@ export interface SimpleRateLimit {
   windowSeconds?: number;
 }
 
+/** Sentinel passed to the `login` / `register` blocks to opt out of the always-on defaults. */
+export interface DisabledBlock {
+  disabled: true;
+}
+
 export interface RateLimitConfig {
-  /** Limit for `POST /auth/login`. */
-  login?: LoginRateLimit;
-  /** Limit for `POST /auth/register`. */
-  register?: { maxPerIp?: number; windowSeconds?: number };
+  /**
+   * Limit for `POST /auth/login`. **Always on with defaults** when the plugin
+   * is registered — pass `{ disabled: true }` to turn it off. This is a gate
+   * plugin; leaving the default protects against silent loss of auth DoS
+   * protection on upgrade.
+   */
+  login?: LoginRateLimit | DisabledBlock;
+  /**
+   * Limit for `POST /auth/register`. Same default-on / explicit-disable
+   * behavior as `login` — both are security-critical gates.
+   */
+  register?: { maxPerIp?: number; windowSeconds?: number } | DisabledBlock;
   /** Limit for `POST /auth/refresh` (runs in `beforeTokenRefresh` hook). */
   refresh?: SimpleRateLimit;
   /** Limit for OAuth `POST /oauth/token` (IP-scoped; client_id lives in the form body). */
@@ -79,6 +92,22 @@ export interface RateLimitConfig {
   store?: RateLimitStore;
 }
 
+/**
+ * Declarative rate-limit binding for a Fortress-dispatched path. Only fires
+ * for routes that flow through `fortress.handleRequest`.
+ *
+ * **When to use `paths` vs the framework wrappers**:
+ * - Framework wrappers (`honoRateLimit` / `expressRateLimit` /
+ *   `svelteKitRateLimit`) — use when you have a middleware layer around your
+ *   routes. Mount on any path, Fortress-owned or user-owned.
+ * - `paths` — use in serverless / framework-less deployments that call
+ *   `fortress.handleRequest` directly, or when you prefer declarative config
+ *   co-located with the rest of the rate-limit setup.
+ *
+ * Both target the same store. **Don't stack both on the same path** — each
+ * match increments the counter, so double-wrapping halves the effective
+ * limit.
+ */
 export interface PathBinding {
   /** Path glob (supports `*` and `:param`). */
   match: string;
@@ -178,13 +207,24 @@ async function runRule(
  * app.use('/api/*', honoRateLimit(fortress, 'api'));
  * ```
  */
+/** True when the user passed `{ disabled: true }` to opt out of a gate block. */
+function isDisabled(
+  block: LoginRateLimit | { maxPerIp?: number; windowSeconds?: number } | DisabledBlock | undefined,
+): block is DisabledBlock {
+  return !!block && 'disabled' in block && block.disabled === true;
+}
+
 export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
   const store = config.store ?? createMemoryStore();
 
-  // Merge defaults only when the endpoint block is present — that way config
-  // keys stay opt-in. Passing `{}` for a block enables it with defaults.
-  const loginCfg = config.login ? { ...DEFAULT_LOGIN, ...config.login } : undefined;
-  const registerCfg = config.register ? { ...DEFAULT_REGISTER, ...config.register } : undefined;
+  // Gate blocks — always on with defaults; `{ disabled: true }` opts out.
+  const loginCfg = isDisabled(config.login)
+    ? undefined
+    : { ...DEFAULT_LOGIN, ...(config.login as LoginRateLimit | undefined) };
+  const registerCfg = isDisabled(config.register)
+    ? undefined
+    : { ...DEFAULT_REGISTER, ...(config.register as { maxPerIp?: number; windowSeconds?: number } | undefined) };
+  // Opt-in blocks — stay off unless the block is present.
   const refreshCfg = config.refresh ? { ...DEFAULT_REFRESH, ...config.refresh } : undefined;
   const oauthTokenCfg = config.oauthToken ? { ...DEFAULT_OAUTH_TOKEN, ...config.oauthToken } : undefined;
   const apiKeyIssueCfg = config.apiKeyIssue ? { ...DEFAULT_API_KEY_ISSUE, ...config.apiKeyIssue } : undefined;

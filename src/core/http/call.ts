@@ -25,6 +25,21 @@
  * pass it via the optional second argument: `call.me({}, { headers:
  * { authorization: 'Bearer …' } })`. The in-process client does not share
  * state with any active session; it is purely a typed wire formatter.
+ *
+ * **Runs the full pipeline.** Because each call lands in
+ * `fortress.handleRequest`, the following all fire: plugin middleware (incl.
+ * rate limits), principal resolution, RBAC, JSON Schema / Standard Schema
+ * validation, auth observers, IAM observers, OpenTelemetry spans, and any
+ * `wrapAdapter` hooks. This is intentional — it's the same code path a
+ * network client would hit, so tests that exercise `fortress.call.*` give
+ * the same behavioral guarantees as production traffic.
+ *
+ * **Bypassing hooks in tests.** If a test fixture needs to create users or
+ * log in *without* tripping rate limits, emitting audit entries, or running
+ * observers, call the service layer directly — `fortress.auth.createUser`,
+ * `fortress.auth.login`, `fortress.iam.createRole` — instead of the typed
+ * call surface. The service layer still validates inputs but skips the
+ * middleware chain.
  */
 
 import type { EndpointDefinition } from '../endpoint';
