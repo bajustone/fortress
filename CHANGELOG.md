@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.37] - 2026-04-16
+
+### Added
+- feat(rate-limit)!: whole-app coverage via check() + framework wrappers
+
 ## Unreleased
 
 ### Added
