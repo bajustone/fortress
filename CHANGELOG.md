@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.36] - 2026-04-16
+
+### Added
+- feat(endpoints): typed in-process client via fortress.call.*
+- feat(observability): outer request span, token-verify histogram, DB spans
+
 ## [0.0.36] - 2026-04-15
 
 ### Added
