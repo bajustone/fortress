@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.39] - 2026-04-16
+
+### Added
+- slow types shouldn't be here
+
+### Fixed
+- fix: remove allow slow types
+
 ## [0.0.38] - 2026-04-16
 
 ### Fixed
