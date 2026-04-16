@@ -1,14 +1,110 @@
+import type { EndpointDefinition } from '../endpoint';
+import type { FortressSchema } from '../json-schema';
 import { arr, bool, defineComponents, endpoint, enums, int, nullable, nullType, obj, oneOf, record, str, strFormat } from '../schema-builder';
 
-// ── Component schemas (typed registry) ──────────────────────────────
-//
-// Each component is declared as a local `const` so TypeScript can infer its
-// type. Self-references inside composite components (e.g. `user` inside
-// `AuthResponse`) use the 2-arg `ref(name, schema)` overload — the name is
-// what ends up in the OpenAPI `$ref`, the schema argument only carries the
-// TS type and is never read at runtime.
+// Sentinel for "no body / query / params" that matches EndpointDefinition's
+// defaults so the intersection-based InferEndpointCallInput collapses cleanly.
 
-const User = obj(
+interface EmptyInput {}
+
+// ── Wire-format shapes (what endpoint handlers serialize to JSON) ──────
+//
+// These mirror the domain types in `src/core/types.ts` but use `string`
+// everywhere the domain uses `Date` (ISO 8601 on the wire). Declared here
+// explicitly so JSR's fast-check doesn't walk through the deeply-inferred
+// types produced by `obj(...)` / `oneOf(...)`.
+
+/** Wire shape of a fortress user — domain `Date` fields are ISO strings on the wire. */
+export interface UserWire {
+  id: number;
+  email: string;
+  name: string;
+  isActive: boolean;
+  emailVerified?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Wire shape of a successful sign-in. */
+export interface AuthResponseSuccessWire {
+  status: 'success';
+  user: UserWire;
+  accessToken: string;
+  refreshToken: string;
+  pluginData?: Record<string, unknown>;
+}
+
+/** Wire shape of a pending sign-in (2FA, email verification, etc.). */
+export interface AuthResponsePendingWire {
+  status: 'pending';
+  user: UserWire;
+  accessToken: null;
+  refreshToken: null;
+  pluginData?: Record<string, unknown>;
+}
+
+/** Wire shape of an impersonation sign-in (no refresh token). */
+export interface AuthResponseImpersonationWire {
+  status: 'impersonation';
+  user: UserWire;
+  accessToken: string;
+  refreshToken: null;
+  pluginData?: Record<string, unknown>;
+}
+
+/** Discriminated union of every auth-flow wire outcome. */
+export type AuthResponseWire
+  = | AuthResponseSuccessWire
+    | AuthResponsePendingWire
+    | AuthResponseImpersonationWire;
+
+/** Wire shape of a refreshed access/refresh token pair. */
+export interface AuthTokenPairWire {
+  accessToken: string;
+  refreshToken: string;
+}
+
+/** Wire shape of a persisted refresh-token session. */
+export interface SessionInfoWire {
+  id: number;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  deviceName?: string | null;
+  createdAt: string;
+  lastActiveAt?: string | null;
+}
+
+/** Wire shape of the create-user input body. */
+export interface CreateUserInputWire {
+  email: string;
+  name: string;
+  password?: string;
+  isActive?: boolean;
+}
+
+/** Wire shape of a structured error response. */
+export interface ErrorResponseWire {
+  code: string;
+  message: string;
+  statusCode: number;
+}
+
+/** Wire shape of a login identifier. */
+export interface LoginIdentifierWire {
+  id: number;
+  userId: number;
+  type: 'email' | 'phone' | 'username';
+  value: string;
+}
+
+/** Empty `{ ok: boolean }` ack. */
+export interface OkResponseWire {
+  ok: boolean;
+}
+
+// ── Component schemas (typed registry) ──────────────────────────────────
+
+const User: FortressSchema<UserWire> = obj(
   {
     id: int('User ID'),
     email: strFormat('email', 'User email'),
@@ -24,9 +120,9 @@ const User = obj(
   'isActive',
   'createdAt',
   'updatedAt',
-);
+) as FortressSchema<UserWire>;
 
-const AuthResponse = oneOf(
+const AuthResponse: FortressSchema<AuthResponseWire> = oneOf(
   obj(
     {
       status: enums('success'),
@@ -66,18 +162,18 @@ const AuthResponse = oneOf(
     'accessToken',
     'refreshToken',
   ),
-);
+) as FortressSchema<AuthResponseWire>;
 
-const AuthTokenPair = obj(
+const AuthTokenPair: FortressSchema<AuthTokenPairWire> = obj(
   {
     accessToken: str('JWT access token'),
     refreshToken: str('New refresh token'),
   },
   'accessToken',
   'refreshToken',
-);
+) as FortressSchema<AuthTokenPairWire>;
 
-const SessionInfo = obj(
+const SessionInfo: FortressSchema<SessionInfoWire> = obj(
   {
     id: int('Token ID'),
     ipAddress: nullable(str('Client IP address')),
@@ -88,9 +184,9 @@ const SessionInfo = obj(
   },
   'id',
   'createdAt',
-);
+) as FortressSchema<SessionInfoWire>;
 
-const CreateUserInput = obj(
+const CreateUserInput: FortressSchema<CreateUserInputWire> = obj(
   {
     email: strFormat('email', 'User email'),
     name: str('Display name'),
@@ -99,9 +195,9 @@ const CreateUserInput = obj(
   },
   'email',
   'name',
-);
+) as FortressSchema<CreateUserInputWire>;
 
-const ErrorResponse = obj(
+const ErrorResponse: FortressSchema<ErrorResponseWire> = obj(
   {
     code: str('Error code (e.g. UNAUTHORIZED)'),
     message: str('Human-readable message'),
@@ -110,9 +206,9 @@ const ErrorResponse = obj(
   'code',
   'message',
   'statusCode',
-);
+) as FortressSchema<ErrorResponseWire>;
 
-const LoginIdentifier = obj(
+const LoginIdentifier: FortressSchema<LoginIdentifierWire> = obj(
   {
     id: int('Identifier ID'),
     userId: int('User ID'),
@@ -123,9 +219,25 @@ const LoginIdentifier = obj(
   'userId',
   'type',
   'value',
-);
+) as FortressSchema<LoginIdentifierWire>;
 
-const authComponents = defineComponents({
+/** Explicit registry type so JSR's fast-check doesn't walk into the deeply-inferred `defineComponents` return. */
+interface AuthComponents {
+  readonly components: {
+    readonly User: FortressSchema<UserWire>;
+    readonly AuthResponse: FortressSchema<AuthResponseWire>;
+    readonly AuthTokenPair: FortressSchema<AuthTokenPairWire>;
+    readonly SessionInfo: FortressSchema<SessionInfoWire>;
+    readonly CreateUserInput: FortressSchema<CreateUserInputWire>;
+    readonly ErrorResponse: FortressSchema<ErrorResponseWire>;
+    readonly LoginIdentifier: FortressSchema<LoginIdentifierWire>;
+  };
+  readonly ref: <K extends keyof AuthComponents['components']>(
+    name: K,
+  ) => FortressSchema<AuthComponents['components'][K] extends FortressSchema<infer U> ? U : never>;
+}
+
+const authComponents: AuthComponents = defineComponents({
   User,
   AuthResponse,
   AuthTokenPair,
@@ -133,26 +245,108 @@ const authComponents = defineComponents({
   CreateUserInput,
   ErrorResponse,
   LoginIdentifier,
-});
+}) as AuthComponents;
 
 /** Reusable OpenAPI component schemas referenced by the core auth endpoints. */
-export const authComponentSchemas = authComponents.components;
+export const authComponentSchemas: AuthComponents['components'] = authComponents.components;
 
 /** Typed `$ref` helper bound to {@link authComponentSchemas}. */
-export const authRef = authComponents.ref;
+export const authRef: AuthComponents['ref'] = authComponents.ref;
 
-// ── Auth endpoint definitions (keyed by handler name) ───────────────
+// ── Auth endpoint definitions (keyed by handler name) ───────────────────
+
+/**
+ * Typed record of every core auth endpoint. Declared explicitly (not
+ * inferred from the builder) so JSR's fast-check passes without
+ * `--allow-slow-types`, while `InferEndpointCallInput<typeof authEndpoints.login>`
+ * and friends still resolve to the precise per-endpoint shapes.
+ */
+export interface AuthEndpointsMap {
+  login: EndpointDefinition<
+    { identifier: string; password: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: AuthResponseWire; 401: ErrorResponseWire }
+  >;
+  createUser: EndpointDefinition<
+    CreateUserInputWire,
+    EmptyInput,
+    EmptyInput,
+    { 201: UserWire; 409: ErrorResponseWire }
+  >;
+  refresh: EndpointDefinition<
+    { refreshToken: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: AuthTokenPairWire; 401: ErrorResponseWire }
+  >;
+  logout: EndpointDefinition<
+    { refreshToken: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire }
+  >;
+  me: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    EmptyInput,
+    { 200: UserWire; 401: ErrorResponseWire }
+  >;
+  listSessions: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    EmptyInput,
+    { 200: SessionInfoWire[]; 401: ErrorResponseWire }
+  >;
+  revokeSession: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  revokeAllOtherSessions: EndpointDefinition<
+    { currentTokenId: number },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  addLoginIdentifier: EndpointDefinition<
+    { type: 'email' | 'phone' | 'username'; value: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  removeLoginIdentifier: EndpointDefinition<
+    { type: 'email' | 'phone' | 'username'; value: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  getLoginIdentifiers: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    EmptyInput,
+    { 200: LoginIdentifierWire[]; 401: ErrorResponseWire }
+  >;
+  impersonate: EndpointDefinition<
+    { targetUserId: number; reason?: string; expirySeconds?: number },
+    EmptyInput,
+    EmptyInput,
+    { 200: AuthResponseWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
+  >;
+}
 
 /**
  * Declarative endpoint definitions for fortress's built-in auth routes
  * (sign in, refresh, sessions, impersonation).
  *
- * Declared as a keyed record (not an array) so each entry's full
- * `EndpointDefinition<TBody, TQuery, TParams, TResponses>` type is
- * preserved for `fortress.call.*` inference. The runtime array used by
- * route matching is materialized via `Object.values(authEndpoints)`.
+ * The explicit `AuthEndpointsMap` annotation is what keeps JSR fast-check
+ * happy — each entry's `EndpointDefinition<TBody, TQuery, TParams, TResponses>`
+ * generics are stated declaratively, not inferred from the builder chain.
+ * `fortress.call.*` type inference still resolves because `typeof
+ * authEndpoints.login` picks up the exact generics declared on the map.
  */
-export const authEndpoints = {
+export const authEndpoints: AuthEndpointsMap = {
   login: endpoint('POST', '/auth/login')
     .summary('Login with credentials')
     .tags('Auth')
@@ -165,7 +359,7 @@ export const authEndpoints = {
     .response(200, 'Login successful', authRef('AuthResponse'))
     .response(401, 'Invalid credentials', authRef('ErrorResponse'))
     .handler('login')
-    .build(),
+    .build() as AuthEndpointsMap['login'],
 
   createUser: endpoint('POST', '/auth/register')
     .summary('Create a new user')
@@ -175,7 +369,7 @@ export const authEndpoints = {
     .response(201, 'User created', authRef('User'))
     .response(409, 'Email already exists', authRef('ErrorResponse'))
     .handler('createUser')
-    .build(),
+    .build() as AuthEndpointsMap['createUser'],
 
   refresh: endpoint('POST', '/auth/refresh')
     .summary('Refresh access token')
@@ -185,7 +379,7 @@ export const authEndpoints = {
     .response(200, 'Tokens refreshed', authRef('AuthTokenPair'))
     .response(401, 'Invalid or expired refresh token', authRef('ErrorResponse'))
     .handler('refresh')
-    .build(),
+    .build() as AuthEndpointsMap['refresh'],
 
   logout: endpoint('POST', '/auth/logout')
     .summary('Logout and revoke refresh token')
@@ -194,7 +388,7 @@ export const authEndpoints = {
     .body(obj({ refreshToken: str('Refresh token to revoke') }, 'refreshToken'))
     .response(200, 'Logged out', obj({ ok: bool() }, 'ok'))
     .handler('logout')
-    .build(),
+    .build() as AuthEndpointsMap['logout'],
 
   me: endpoint('GET', '/auth/me')
     .summary('Get current user profile')
@@ -203,7 +397,7 @@ export const authEndpoints = {
     .response(200, 'Current user', authRef('User'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('me')
-    .build(),
+    .build() as AuthEndpointsMap['me'],
 
   listSessions: endpoint('GET', '/auth/sessions')
     .summary('List active sessions')
@@ -212,7 +406,7 @@ export const authEndpoints = {
     .response(200, 'Active sessions', arr(authRef('SessionInfo')))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('listSessions')
-    .build(),
+    .build() as AuthEndpointsMap['listSessions'],
 
   revokeSession: endpoint('DELETE', '/auth/sessions/:id')
     .summary('Revoke a specific session')
@@ -222,7 +416,7 @@ export const authEndpoints = {
     .response(200, 'Session revoked', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('revokeSession')
-    .build(),
+    .build() as AuthEndpointsMap['revokeSession'],
 
   revokeAllOtherSessions: endpoint('DELETE', '/auth/sessions')
     .summary('Revoke all other sessions')
@@ -233,7 +427,7 @@ export const authEndpoints = {
     .response(200, 'Other sessions revoked', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('revokeAllOtherSessions')
-    .build(),
+    .build() as AuthEndpointsMap['revokeAllOtherSessions'],
 
   addLoginIdentifier: endpoint('POST', '/auth/identifiers')
     .summary('Add a login identifier')
@@ -250,7 +444,7 @@ export const authEndpoints = {
     .response(200, 'Identifier added', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('addLoginIdentifier')
-    .build(),
+    .build() as AuthEndpointsMap['addLoginIdentifier'],
 
   removeLoginIdentifier: endpoint('DELETE', '/auth/identifiers')
     .summary('Remove a login identifier')
@@ -267,7 +461,7 @@ export const authEndpoints = {
     .response(200, 'Identifier removed', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('removeLoginIdentifier')
-    .build(),
+    .build() as AuthEndpointsMap['removeLoginIdentifier'],
 
   getLoginIdentifiers: endpoint('GET', '/auth/identifiers')
     .summary('List login identifiers')
@@ -276,7 +470,7 @@ export const authEndpoints = {
     .response(200, 'Login identifiers', arr(authRef('LoginIdentifier')))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('getLoginIdentifiers')
-    .build(),
+    .build() as AuthEndpointsMap['getLoginIdentifiers'],
 
   impersonate: endpoint('POST', '/auth/impersonate')
     .summary('Impersonate a user')
@@ -295,5 +489,5 @@ export const authEndpoints = {
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .response(404, 'Target user not found', authRef('ErrorResponse'))
     .handler('impersonate')
-    .build(),
-} as const;
+    .build() as AuthEndpointsMap['impersonate'],
+};

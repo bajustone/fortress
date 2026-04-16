@@ -99,7 +99,7 @@ See `docs/architecture.md` for the full technical design.
 ## JSR Publishing Notes
 
 - All exported functions MUST have **explicit return type annotations** (JSR "slow types" requirement)
-- `publish:dry` runs with `--allow-slow-types` because `authEndpoints` / `iamEndpoints` / plugin route records use deeply-inferred builder generics (`EndpointBuilder<TBody, TQuery, TParams, TResponses>`) that JSR's fast-check cannot follow without hand-written type annotations for every endpoint. Consumers on Deno/Bun/TS-native runtimes get full types from source; Node consumers via `.d.ts` generation get slightly slower first-compile types. Acceptable tradeoff for the typed `fortress.call.*` surface.
+- `authEndpoints` / `iamEndpoints` and their component registries live in `src/core/auth/auth-endpoints.ts` and `src/core/iam/iam-endpoints.ts` behind explicit `AuthEndpointsMap` / `IamEndpointsMap` annotations. Per-endpoint `EndpointDefinition<TBody, TQuery, TParams, TResponses>` generics are stated declaratively so JSR fast-check passes. Don't regress to inferred types — `publish:dry` and CI both run JSR's publish without `--allow-slow-types`; adding a new core endpoint means adding its generics to the map interface. Plugin route records (api-key, oauth, etc.) are shielded by the widened `FortressPlugin.routes: Record<string, EndpointDefinition>` boundary and stay inferred locally.
 - Use `npm:` prefix for npm dependencies in import map
 - Sub-path exports isolate optional deps — consumers only install what they import
 - Run `bun run publish:dry` to validate before publishing

@@ -1,9 +1,69 @@
+import type { ErrorResponseWire, OkResponseWire } from '../auth/auth-endpoints';
+import type { EndpointDefinition } from '../endpoint';
+import type { FortressSchema } from '../json-schema';
 import { authRef } from '../auth/auth-endpoints';
 import { arr, bool, defineComponents, endpoint, enums, int, nullable, obj, record, recordOf, str } from '../schema-builder';
 
-// ── Component schemas (typed registry) ──────────────────────────────
+// Sentinel for "no body / query / params" matching EndpointDefinition's default.
 
-const Role = obj(
+interface EmptyInput {}
+
+// ── Wire-format shapes (what endpoint handlers serialize to JSON) ──────
+
+/** Wire shape of a persisted role. `description` and `isSystem` are optional nullable on the wire. */
+export interface RoleWire {
+  id: number;
+  name: string;
+  description?: string | null;
+  isSystem?: boolean;
+}
+
+/** Wire shape of a persisted group. */
+export interface GroupWire {
+  id: number;
+  name: string;
+  description?: string | null;
+}
+
+/** Wire shape of a permission condition. `operator` is restricted to the supported set. */
+export interface PermissionConditionWire {
+  field: string;
+  operator: 'eq' | 'neq' | 'in' | 'startsWith';
+  value: string;
+}
+
+/** Wire shape of a persisted permission. */
+export interface PermissionWire {
+  id: number;
+  resource: string;
+  action: string;
+  effect: 'ALLOW' | 'DENY';
+  conditions?: PermissionConditionWire[];
+  description?: string | null;
+}
+
+/** Wire shape of a permission-creation input. */
+export interface PermissionInputWire {
+  resource: string;
+  action: string;
+  effect?: 'ALLOW' | 'DENY';
+  conditions?: PermissionConditionWire[];
+}
+
+/** Wire shape of a persisted service account. Date fields are ISO strings on the wire. */
+export interface ServiceAccountWire {
+  id: number;
+  name: string;
+  displayName?: string | null;
+  description?: string | null;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// ── Component schemas (typed registry) ──────────────────────────────────
+
+const Role: FortressSchema<RoleWire> = obj(
   {
     id: int('Role ID'),
     name: str('Role name'),
@@ -12,9 +72,9 @@ const Role = obj(
   },
   'id',
   'name',
-);
+) as FortressSchema<RoleWire>;
 
-const Group = obj(
+const Group: FortressSchema<GroupWire> = obj(
   {
     id: int('Group ID'),
     name: str('Group name'),
@@ -22,9 +82,9 @@ const Group = obj(
   },
   'id',
   'name',
-);
+) as FortressSchema<GroupWire>;
 
-const Permission = obj(
+const Permission: FortressSchema<PermissionWire> = obj(
   {
     id: int('Permission ID'),
     resource: str('Resource name'),
@@ -41,9 +101,9 @@ const Permission = obj(
   'resource',
   'action',
   'effect',
-);
+) as FortressSchema<PermissionWire>;
 
-const PermissionInput = obj(
+const PermissionInput: FortressSchema<PermissionInputWire> = obj(
   {
     resource: str('Resource name'),
     action: str('Action name'),
@@ -56,9 +116,9 @@ const PermissionInput = obj(
   },
   'resource',
   'action',
-);
+) as FortressSchema<PermissionInputWire>;
 
-const ServiceAccount = obj(
+const ServiceAccount: FortressSchema<ServiceAccountWire> = obj(
   {
     id: int('Service account ID'),
     name: str('Machine identifier — immutable after creation'),
@@ -71,33 +131,228 @@ const ServiceAccount = obj(
   'id',
   'name',
   'isActive',
-);
+) as FortressSchema<ServiceAccountWire>;
 
-const iamComponents = defineComponents({
+/** Explicit registry type so JSR's fast-check doesn't walk into the deeply-inferred `defineComponents` return. */
+interface IamComponents {
+  readonly components: {
+    readonly Role: FortressSchema<RoleWire>;
+    readonly Group: FortressSchema<GroupWire>;
+    readonly Permission: FortressSchema<PermissionWire>;
+    readonly PermissionInput: FortressSchema<PermissionInputWire>;
+    readonly ServiceAccount: FortressSchema<ServiceAccountWire>;
+  };
+  readonly ref: <K extends keyof IamComponents['components']>(
+    name: K,
+  ) => FortressSchema<IamComponents['components'][K] extends FortressSchema<infer U> ? U : never>;
+}
+
+const iamComponents: IamComponents = defineComponents({
   Role,
   Group,
   Permission,
   PermissionInput,
   ServiceAccount,
-});
+}) as IamComponents;
 
 /** Reusable OpenAPI component schemas referenced by the core IAM endpoints. */
-export const iamComponentSchemas = iamComponents.components;
+export const iamComponentSchemas: IamComponents['components'] = iamComponents.components;
 
 /** Typed `$ref` helper bound to {@link iamComponentSchemas}. */
-export const iamRef = iamComponents.ref;
+export const iamRef: IamComponents['ref'] = iamComponents.ref;
 
 // ── IAM endpoint definitions (keyed by handler name) ───────────────
 
+/** Resource catalog response shape. */
+interface ResourceCatalogWire {
+  resources: Record<string, { actions: string[]; description?: string }>;
+}
+
+/** Paged service-account list response shape. */
+interface ServiceAccountsListWire {
+  serviceAccounts: ServiceAccountWire[];
+  total: number;
+}
+
 /**
- * Declarative endpoint definitions for fortress's built-in IAM admin routes
- * (users, groups, roles, permissions, role bindings, service accounts).
- *
- * Keyed by handler name so each entry's full generic type survives to the
- * typed `fortress.call.*` proxy. Materialized into the runtime route
- * table via `Object.values(iamEndpoints)`.
+ * Typed record of every core IAM endpoint. Declared explicitly so JSR's
+ * fast-check passes without `--allow-slow-types`, while
+ * `InferEndpointCallInput<typeof iamEndpoints.X>` still resolves per-handler.
  */
-export const iamEndpoints = {
+export interface IamEndpointsMap {
+  getResources: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    EmptyInput,
+    { 200: ResourceCatalogWire; 401: ErrorResponseWire }
+  >;
+  getRoles: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    EmptyInput,
+    { 200: RoleWire[]; 401: ErrorResponseWire }
+  >;
+  createRole: EndpointDefinition<
+    { name: string; permissions: PermissionInputWire[]; description?: string },
+    EmptyInput,
+    EmptyInput,
+    { 201: RoleWire; 401: ErrorResponseWire }
+  >;
+  deleteRole: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 400: ErrorResponseWire; 401: ErrorResponseWire }
+  >;
+  bindRoleToUser: EndpointDefinition<
+    { userId: number; tenantId?: string },
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  bindRoleToGroup: EndpointDefinition<
+    { groupId: number; tenantId?: string },
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  unbindRole: EndpointDefinition<
+    {
+      subjectType: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
+      subjectId: number;
+      tenantId?: string;
+    },
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  createGroup: EndpointDefinition<
+    { name: string; description?: string },
+    EmptyInput,
+    EmptyInput,
+    { 201: GroupWire; 401: ErrorResponseWire }
+  >;
+  addUserToGroup: EndpointDefinition<
+    { userId: number },
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  removeUserFromGroup: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    { id: number; userId: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  getUserPermissions: EndpointDefinition<
+    EmptyInput,
+    { tenantId?: string },
+    { id: number },
+    { 200: PermissionWire[]; 401: ErrorResponseWire }
+  >;
+  checkPermission: EndpointDefinition<
+    {
+      userId: number;
+      resource: string;
+      action: string;
+      context?: Record<string, unknown>;
+    },
+    EmptyInput,
+    EmptyInput,
+    { 200: { allowed: boolean }; 401: ErrorResponseWire }
+  >;
+  bindPermissionToUser: EndpointDefinition<
+    { userId: number; permission: PermissionInputWire; tenantId?: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  bindPermissionToGroup: EndpointDefinition<
+    { groupId: number; permission: PermissionInputWire; tenantId?: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  unbindPermissionFromUser: EndpointDefinition<
+    { userId: number; permissionId: number; tenantId?: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  unbindPermissionFromGroup: EndpointDefinition<
+    { groupId: number; permissionId: number; tenantId?: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  createServiceAccount: EndpointDefinition<
+    { name: string; displayName?: string; description?: string },
+    EmptyInput,
+    EmptyInput,
+    { 201: ServiceAccountWire; 400: ErrorResponseWire; 401: ErrorResponseWire }
+  >;
+  listServiceAccounts: EndpointDefinition<
+    EmptyInput,
+    { limit?: number; offset?: number },
+    EmptyInput,
+    { 200: ServiceAccountsListWire; 401: ErrorResponseWire }
+  >;
+  getServiceAccount: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    { id: number },
+    { 200: ServiceAccountWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
+  >;
+  updateServiceAccount: EndpointDefinition<
+    { displayName?: string | null; description?: string | null; isActive?: boolean },
+    EmptyInput,
+    { id: number },
+    { 200: ServiceAccountWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
+  >;
+  deleteServiceAccount: EndpointDefinition<
+    EmptyInput,
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
+  >;
+  getServiceAccountPermissions: EndpointDefinition<
+    EmptyInput,
+    { tenantId?: string },
+    { id: number },
+    { 200: PermissionWire[]; 401: ErrorResponseWire }
+  >;
+  bindRoleToServiceAccount: EndpointDefinition<
+    { serviceAccountId: number; tenantId?: string },
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  unbindRoleFromServiceAccount: EndpointDefinition<
+    { serviceAccountId: number; tenantId?: string },
+    EmptyInput,
+    { id: number },
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  bindPermissionToServiceAccount: EndpointDefinition<
+    { serviceAccountId: number; permission: PermissionInputWire; tenantId?: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+  unbindPermissionFromServiceAccount: EndpointDefinition<
+    { serviceAccountId: number; permissionId: number; tenantId?: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: OkResponseWire; 401: ErrorResponseWire }
+  >;
+}
+
+/**
+ * Declarative endpoint definitions for fortress's built-in IAM admin routes.
+ * The explicit `IamEndpointsMap` annotation keeps JSR fast-check happy
+ * without sacrificing per-handler inference for `fortress.call.*`.
+ */
+export const iamEndpoints: IamEndpointsMap = {
   // ── Resources ──
 
   getResources: endpoint('GET', '/iam/resources')
@@ -113,7 +368,7 @@ export const iamEndpoints = {
     }, 'resources'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('getResources')
-    .build(),
+    .build() as IamEndpointsMap['getResources'],
 
   // ── Roles ──
 
@@ -125,7 +380,7 @@ export const iamEndpoints = {
     .response(200, 'All roles', arr(iamRef('Role')))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('getRoles')
-    .build(),
+    .build() as IamEndpointsMap['getRoles'],
 
   createRole: endpoint('POST', '/iam/roles')
     .summary('Create a role')
@@ -144,7 +399,7 @@ export const iamEndpoints = {
     .response(201, 'Role created', iamRef('Role'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('createRole')
-    .build(),
+    .build() as IamEndpointsMap['createRole'],
 
   deleteRole: endpoint('DELETE', '/iam/roles/:id')
     .summary('Delete a role')
@@ -156,7 +411,7 @@ export const iamEndpoints = {
     .response(400, 'Cannot delete system role', authRef('ErrorResponse'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('deleteRole')
-    .build(),
+    .build() as IamEndpointsMap['deleteRole'],
 
   // ── Role Bindings ──
 
@@ -173,7 +428,7 @@ export const iamEndpoints = {
     .response(200, 'Role bound to user', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('bindRoleToUser')
-    .build(),
+    .build() as IamEndpointsMap['bindRoleToUser'],
 
   bindRoleToGroup: endpoint('POST', '/iam/roles/:id/bind/group')
     .summary('Bind role to a group')
@@ -188,7 +443,7 @@ export const iamEndpoints = {
     .response(200, 'Role bound to group', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('bindRoleToGroup')
-    .build(),
+    .build() as IamEndpointsMap['bindRoleToGroup'],
 
   unbindRole: endpoint('DELETE', '/iam/roles/:id/bind')
     .summary('Unbind a role')
@@ -208,7 +463,7 @@ export const iamEndpoints = {
     .response(200, 'Role unbound', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('unbindRole')
-    .build(),
+    .build() as IamEndpointsMap['unbindRole'],
 
   // ── Groups ──
 
@@ -224,7 +479,7 @@ export const iamEndpoints = {
     .response(201, 'Group created', iamRef('Group'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('createGroup')
-    .build(),
+    .build() as IamEndpointsMap['createGroup'],
 
   addUserToGroup: endpoint('POST', '/iam/groups/:id/users')
     .summary('Add user to group')
@@ -236,7 +491,7 @@ export const iamEndpoints = {
     .response(200, 'User added to group', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('addUserToGroup')
-    .build(),
+    .build() as IamEndpointsMap['addUserToGroup'],
 
   removeUserFromGroup: endpoint('DELETE', '/iam/groups/:id/users/:userId')
     .summary('Remove user from group')
@@ -247,7 +502,7 @@ export const iamEndpoints = {
     .response(200, 'User removed from group', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('removeUserFromGroup')
-    .build(),
+    .build() as IamEndpointsMap['removeUserFromGroup'],
 
   // ── Permissions ──
 
@@ -261,7 +516,7 @@ export const iamEndpoints = {
     .response(200, 'User permissions', arr(iamRef('Permission')))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('getUserPermissions')
-    .build(),
+    .build() as IamEndpointsMap['getUserPermissions'],
 
   checkPermission: endpoint('POST', '/iam/check')
     .summary('Check if user has permission')
@@ -282,7 +537,7 @@ export const iamEndpoints = {
     .response(200, 'Permission check result', obj({ allowed: bool('Whether permission is granted') }, 'allowed'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('checkPermission')
-    .build(),
+    .build() as IamEndpointsMap['checkPermission'],
 
   bindPermissionToUser: endpoint('POST', '/iam/permissions/bind/user')
     .summary('Bind permission directly to a user')
@@ -301,7 +556,7 @@ export const iamEndpoints = {
     .response(200, 'Permission bound', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('bindPermissionToUser')
-    .build(),
+    .build() as IamEndpointsMap['bindPermissionToUser'],
 
   bindPermissionToGroup: endpoint('POST', '/iam/permissions/bind/group')
     .summary('Bind permission directly to a group')
@@ -320,7 +575,7 @@ export const iamEndpoints = {
     .response(200, 'Permission bound', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('bindPermissionToGroup')
-    .build(),
+    .build() as IamEndpointsMap['bindPermissionToGroup'],
 
   unbindPermissionFromUser: endpoint('DELETE', '/iam/permissions/bind/user')
     .summary('Unbind permission from a user')
@@ -339,7 +594,7 @@ export const iamEndpoints = {
     .response(200, 'Permission unbound', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('unbindPermissionFromUser')
-    .build(),
+    .build() as IamEndpointsMap['unbindPermissionFromUser'],
 
   unbindPermissionFromGroup: endpoint('DELETE', '/iam/permissions/bind/group')
     .summary('Unbind permission from a group')
@@ -358,7 +613,7 @@ export const iamEndpoints = {
     .response(200, 'Permission unbound', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('unbindPermissionFromGroup')
-    .build(),
+    .build() as IamEndpointsMap['unbindPermissionFromGroup'],
 
   // ── Service Accounts ──
 
@@ -380,7 +635,7 @@ export const iamEndpoints = {
     .response(400, 'Bad request', authRef('ErrorResponse'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('createServiceAccount')
-    .build(),
+    .build() as IamEndpointsMap['createServiceAccount'],
 
   listServiceAccounts: endpoint('GET', '/iam/service-accounts')
     .summary('List service accounts')
@@ -397,7 +652,7 @@ export const iamEndpoints = {
     }, 'serviceAccounts', 'total'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('listServiceAccounts')
-    .build(),
+    .build() as IamEndpointsMap['listServiceAccounts'],
 
   getServiceAccount: endpoint('GET', '/iam/service-accounts/:id')
     .summary('Get a service account by ID')
@@ -409,7 +664,7 @@ export const iamEndpoints = {
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .response(404, 'Not found', authRef('ErrorResponse'))
     .handler('getServiceAccount')
-    .build(),
+    .build() as IamEndpointsMap['getServiceAccount'],
 
   updateServiceAccount: endpoint('PATCH', '/iam/service-accounts/:id')
     .summary('Update a service account')
@@ -427,7 +682,7 @@ export const iamEndpoints = {
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .response(404, 'Not found', authRef('ErrorResponse'))
     .handler('updateServiceAccount')
-    .build(),
+    .build() as IamEndpointsMap['updateServiceAccount'],
 
   deleteServiceAccount: endpoint('DELETE', '/iam/service-accounts/:id')
     .summary('Delete a service account')
@@ -440,7 +695,7 @@ export const iamEndpoints = {
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .response(404, 'Not found', authRef('ErrorResponse'))
     .handler('deleteServiceAccount')
-    .build(),
+    .build() as IamEndpointsMap['deleteServiceAccount'],
 
   getServiceAccountPermissions: endpoint('GET', '/iam/service-accounts/:id/permissions')
     .summary('Get effective permissions for a service account')
@@ -452,7 +707,7 @@ export const iamEndpoints = {
     .response(200, 'Service account permissions', arr(iamRef('Permission')))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('getServiceAccountPermissions')
-    .build(),
+    .build() as IamEndpointsMap['getServiceAccountPermissions'],
 
   bindRoleToServiceAccount: endpoint('POST', '/iam/roles/:id/bind/service-account')
     .summary('Bind role to a service account')
@@ -467,7 +722,7 @@ export const iamEndpoints = {
     .response(200, 'Role bound to service account', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('bindRoleToServiceAccount')
-    .build(),
+    .build() as IamEndpointsMap['bindRoleToServiceAccount'],
 
   unbindRoleFromServiceAccount: endpoint('DELETE', '/iam/roles/:id/bind/service-account')
     .summary('Unbind role from a service account')
@@ -482,7 +737,7 @@ export const iamEndpoints = {
     .response(200, 'Role unbound', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('unbindRoleFromServiceAccount')
-    .build(),
+    .build() as IamEndpointsMap['unbindRoleFromServiceAccount'],
 
   bindPermissionToServiceAccount: endpoint('POST', '/iam/permissions/bind/service-account')
     .summary('Bind permission directly to a service account')
@@ -501,7 +756,7 @@ export const iamEndpoints = {
     .response(200, 'Permission bound', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('bindPermissionToServiceAccount')
-    .build(),
+    .build() as IamEndpointsMap['bindPermissionToServiceAccount'],
 
   unbindPermissionFromServiceAccount: endpoint('DELETE', '/iam/permissions/bind/service-account')
     .summary('Unbind permission from a service account')
@@ -520,5 +775,5 @@ export const iamEndpoints = {
     .response(200, 'Permission unbound', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('unbindPermissionFromServiceAccount')
-    .build(),
-} as const;
+    .build() as IamEndpointsMap['unbindPermissionFromServiceAccount'],
+};

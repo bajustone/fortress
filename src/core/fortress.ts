@@ -319,8 +319,8 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   // routes are layered on top so they can override a core handler that
   // shares a key (matches the `endpointMap` dedup order).
   const callEndpoints: Record<string, EndpointDefinition> = {
-    ...(authEndpoints as Record<string, EndpointDefinition>),
-    ...(iamEndpoints as Record<string, EndpointDefinition>),
+    ...(authEndpoints as unknown as Record<string, EndpointDefinition>),
+    ...(iamEndpoints as unknown as Record<string, EndpointDefinition>),
   };
   for (const plugin of plugins) {
     if (plugin.routes)

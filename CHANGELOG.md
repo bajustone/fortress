@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.0.38] - 2026-04-16
+
+### Fixed
+- fix(jsr)!: explicit types on `authEndpoints` / `iamEndpoints` / their component registries so JSR fast-check passes without `--allow-slow-types`. v0.0.36 and v0.0.37 silently failed `publish-jsr` (latest on the JSR registry was 0.0.35) — this release is the first since 0.0.35 to actually reach JSR. Removed `--allow-slow-types` from `publish:dry`, `jsr-check`, and `publish-jsr` so the regression can't recur.
+
+### Added
+- `AuthEndpointsMap` and `IamEndpointsMap` exported interfaces listing each core endpoint's `EndpointDefinition<TBody, TQuery, TParams, TResponses>` generics. Used to constrain `authEndpoints` / `iamEndpoints` at declaration — `fortress.call.*` per-handler inference is fully preserved.
+- Wire-format shape exports (`UserWire`, `AuthResponseWire`, `AuthTokenPairWire`, `ErrorResponseWire`, `SessionInfoWire`, `LoginIdentifierWire`, `CreateUserInputWire`, `OkResponseWire` in auth; `RoleWire`, `GroupWire`, `PermissionWire`, `PermissionInputWire`, `ServiceAccountWire` in iam). These mirror `src/core/types.ts` with `Date` fields widened to `string` (ISO 8601) — the shapes consumers actually see after JSON serialization.
+
 ## [0.0.37] - 2026-04-16
 
 ### Added
