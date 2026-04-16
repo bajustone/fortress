@@ -656,8 +656,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       },
     }),
 
-    routes: [
-      {
+    routes: {
+      handleTokenRequest: {
         method: 'POST',
         path: '/oauth/token',
         handler: 'handleTokenRequest',
@@ -683,7 +683,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           401: { description: 'Invalid client credentials' },
         },
       },
-      {
+      handleIntrospectRequest: {
         method: 'POST',
         path: '/oauth/introspect',
         handler: 'handleIntrospectRequest',
@@ -694,7 +694,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           401: { description: 'Client authentication required' },
         },
       },
-      {
+      handleRevokeRequest: {
         method: 'POST',
         path: '/oauth/revoke',
         handler: 'handleRevokeRequest',
@@ -702,7 +702,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: { 200: { description: 'Token revoked' } },
       },
-      {
+      handleUserInfoRequest: {
         method: 'GET',
         path: '/oauth/userinfo',
         handler: 'handleUserInfoRequest',
@@ -712,14 +712,14 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           401: { description: 'Invalid bearer token' },
         },
       },
-      {
+      handleDiscovery: {
         method: 'GET',
         path: '/oauth/.well-known/openid-configuration',
         handler: 'handleDiscovery',
         meta: { summary: 'OIDC discovery document', tags: ['OAuth'], security: ['none'] },
         responses: { 200: { description: 'OIDC configuration', schema: { type: 'object', additionalProperties: true } } },
       },
-    ],
+    },
   };
 }
 

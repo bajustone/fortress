@@ -259,7 +259,7 @@ async function invokeHandler(fortress: Fortress, ep: EndpointDefinition, c: any)
   for (const plugin of plugins) {
     if (!plugin.routes)
       continue;
-    const match = plugin.routes.find(r => r.path === ep.path && r.method === ep.method);
+    const match = (Object.values(plugin.routes) as EndpointDefinition[]).find(r => r.path === ep.path && r.method === ep.method);
     if (match) {
       const methods = (fortress.plugins as Record<string, Record<string, (...args: any[]) => any>>)[plugin.name];
       if (methods?.[ep.handler]) {

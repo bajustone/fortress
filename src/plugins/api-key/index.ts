@@ -17,13 +17,12 @@
  * @module
  */
 
-import type { EndpointDefinition } from '../../core/endpoint';
 import type { IamEvent, IamEventListener } from '../../core/iam/iam-service';
 import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
 import type { Subject } from '../../core/types';
 import type { ApiKeyInfo, ApiKeyKnobs, CreateKeyOptions } from './core';
 import { Errors } from '../../core/errors';
-import { arr, bool, endpoint, int, obj, str } from '../../core/schema-builder';
+import { arr, bool, endpoint, int, obj, ref, str } from '../../core/schema-builder';
 import {
   createKeyForSubject,
   deleteAllKeysForSubject,
@@ -74,10 +73,10 @@ export interface ApiKeyMethods {
 
 // ── Routes ──────────────────────────────────────────────────────────
 
-const errorRef = { $ref: '#/components/schemas/ErrorResponse' };
+const errorRef = ref('ErrorResponse');
 
-const apiKeySelfServiceRoutes: EndpointDefinition[] = [
-  endpoint('POST', '/api-key/keys')
+const apiKeySelfServiceRoutes = {
+  createKey: endpoint('POST', '/api-key/keys')
     .summary('Create an API key')
     .description('Create a new API key for the authenticated caller. The raw key is returned exactly once — it cannot be retrieved later.')
     .tags('API Keys')
@@ -96,7 +95,7 @@ const apiKeySelfServiceRoutes: EndpointDefinition[] = [
     .handler('createKey')
     .build(),
 
-  endpoint('GET', '/api-key/keys')
+  listKeys: endpoint('GET', '/api-key/keys')
     .summary('List the caller\'s API keys')
     .description('Return the active (non-revoked) API keys belonging to the authenticated caller. Raw keys and hashes are never returned.')
     .tags('API Keys')
@@ -116,7 +115,7 @@ const apiKeySelfServiceRoutes: EndpointDefinition[] = [
     .handler('listKeys')
     .build(),
 
-  endpoint('DELETE', '/api-key/keys/:id')
+  revokeKey: endpoint('DELETE', '/api-key/keys/:id')
     .summary('Revoke an API key')
     .description('Revoke one of the authenticated caller\'s own API keys. Returns 404 if the id does not belong to the caller.')
     .tags('API Keys')
@@ -128,7 +127,7 @@ const apiKeySelfServiceRoutes: EndpointDefinition[] = [
     .handler('revokeKey')
     .build(),
 
-  endpoint('POST', '/api-key/keys/:id/rotate')
+  rotateKey: endpoint('POST', '/api-key/keys/:id/rotate')
     .summary('Rotate an API key')
     .description('Revoke an existing key and issue a new one with the same name, scopes, and expiry. The new raw key is returned exactly once.')
     .tags('API Keys')
@@ -142,7 +141,7 @@ const apiKeySelfServiceRoutes: EndpointDefinition[] = [
     .response(404, 'Not found', errorRef)
     .handler('rotateKey')
     .build(),
-];
+} as const;
 
 // ── Plugin Factory ──────────────────────────────────────────────────
 

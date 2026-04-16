@@ -3,6 +3,9 @@ import type { FortressSchema, Infer, JSONSchema, Simplify } from './json-schema'
 import type { StandardSchemaV1 } from './standard-schema';
 import { validateJsonSchema } from './json-schema-validator';
 
+/** Shorthand for the Standard Schema inferred output type. */
+type InferSchema<T extends StandardSchemaV1> = StandardSchemaV1.InferOutput<T>;
+
 // ── Standard Schema wiring ─────────────────────────────────────────
 
 function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~standard'] {
@@ -108,9 +111,59 @@ export function anyOf<S extends FortressSchema<any>[]>(
   return toFortressSchema<Infer<S[number]>>({ anyOf: schemas as JSONSchema[] });
 }
 
-/** Build a `$ref` schema pointing at an OpenAPI component schema by name. */
-export function ref(name: string): FortressSchema<unknown> {
-  return toFortressSchema<unknown>({ $ref: `#/components/schemas/${name}` });
+/**
+ * Build a `$ref` schema pointing at an OpenAPI component schema by name.
+ *
+ * Two forms:
+ * - `ref(name)` — untyped `$ref`, returns `FortressSchema<unknown>`. Use when
+ *   the referenced component hasn't been declared yet (e.g. self-references
+ *   inside a components literal).
+ * - `ref(name, schema)` — typed `$ref`. The `schema` argument is never read at
+ *   runtime; it's there purely so TypeScript can copy its inferred type onto
+ *   the returned ref. Use when you already have a reference to the component
+ *   schema and want downstream response types to flow through.
+ *
+ * For the common case (typed refs against a known components map), prefer
+ * {@link defineComponents} — it returns a bound `ref` that only needs a name.
+ */
+export function ref<T>(name: string, schema: FortressSchema<T>): FortressSchema<T>;
+export function ref(name: string): FortressSchema<unknown>;
+export function ref<T>(name: string, _schema?: FortressSchema<T>): FortressSchema<T> {
+  return toFortressSchema<T>({ $ref: `#/components/schemas/${name}` });
+}
+
+/**
+ * Declare a typed registry of OpenAPI component schemas and return a bound
+ * `ref` function that preserves each component's inferred TypeScript type.
+ *
+ * ```ts
+ * const User = obj({ id: int(), email: str() }, 'id', 'email');
+ * const { components, ref } = defineComponents({ User });
+ *
+ * const ep = endpoint('GET', '/me')
+ *   .response(200, 'Current user', ref('User'))
+ *   //                             ^ FortressSchema<{ id: number; email: string }>
+ *   .handler('me')
+ *   .build();
+ * ```
+ *
+ * The returned `components` is the same object you passed in (useful for
+ * OpenAPI spec emission). The returned `ref` is a generic function that
+ * looks up each key in `T` and returns a `$ref` schema carrying the
+ * inferred type of the referenced component.
+ */
+export function defineComponents<T extends Record<string, FortressSchema<any>>>(
+  components: T,
+): {
+  components: T;
+  ref: <K extends keyof T & string>(name: K) => FortressSchema<Infer<T[K]>>;
+} {
+  return {
+    components,
+    ref: <K extends keyof T & string>(name: K): FortressSchema<Infer<T[K]>> => {
+      return toFortressSchema<Infer<T[K]>>({ $ref: `#/components/schemas/${String(name)}` });
+    },
+  };
 }
 
 /** Build an enum {@link FortressSchema} from a fixed set of string or number literal values. */
@@ -201,8 +254,25 @@ export type SchemaInput = FortressSchema<any> | StandardSchemaV1<any>;
  * Fluent builder for {@link EndpointDefinition} objects. Construct via the
  * {@link endpoint} factory and chain `summary`, `body`, `response`, etc.
  * before calling `build()`.
+ *
+ * The four type parameters accumulate as schemas are declared: each call to
+ * `.body()`, `.query()`, `.params()`, and `.response()` returns a new
+ * builder type with the inferred schema baked in. By the time `.build()` is
+ * called, the returned {@link EndpointDefinition} carries complete phantom
+ * type information about its request/response shape, which the
+ * `InferEndpoint*` helpers and the `fortress.call.*` proxy read at the call
+ * site.
  */
-export class EndpointBuilder {
+export class EndpointBuilder<
+  // eslint-disable-next-line ts/no-empty-object-type
+  TBody = {},
+  // eslint-disable-next-line ts/no-empty-object-type
+  TQuery = {},
+  // eslint-disable-next-line ts/no-empty-object-type
+  TParams = {},
+  // eslint-disable-next-line ts/no-empty-object-type
+  TResponses extends Record<number, unknown> = {},
+> {
   private _method: HttpMethod;
   private _path: string;
   private _handler = '';
@@ -252,24 +322,57 @@ export class EndpointBuilder {
     return this;
   }
 
-  body(schema: SchemaInput): this {
+  body<T extends StandardSchemaV1>(
+    schema: T,
+  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses> {
     this._body = schema;
-    return this;
+    return this as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses>;
   }
 
-  query(schema: SchemaInput): this {
+  query<T extends StandardSchemaV1>(
+    schema: T,
+  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses> {
     this._query = schema;
-    return this;
+    return this as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses>;
   }
 
-  params(schema: SchemaInput): this {
+  params<T extends StandardSchemaV1>(
+    schema: T,
+  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses> {
     this._params = schema;
-    return this;
+    return this as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses>;
   }
 
-  response(status: number, description: string, schema?: JSONSchema): this {
-    this._responses[status] = { description, schema };
-    return this;
+  /**
+   * Declare a response for a given status code. Three call shapes:
+   *
+   * - `.response(200, 'Ok', schema)` — typed. The inferred output type of
+   *   `schema` becomes the response body at that status.
+   * - `.response(401, 'Unauthorized', schema)` — also typed. Error bodies
+   *   are inferred the same way as success bodies; the `fortress.call.*`
+   *   proxy treats non-2xx as throws and only exposes 2xx responses.
+   * - `.response(204, 'No content')` — untyped. Use when there's no body.
+   */
+  response<S extends number, T extends StandardSchemaV1>(
+    status: S,
+    description: string,
+    schema: T,
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }>;
+  response<S extends number>(
+    status: S,
+    description: string,
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }>;
+  response<S extends number>(
+    status: S,
+    description: string,
+    schema?: StandardSchemaV1 | JSONSchema,
+  ): EndpointBuilder<TBody, TQuery, TParams, any> {
+    const stored: EndpointResponse = { description };
+    if (schema !== undefined) {
+      stored.schema = isStandardSchema(schema) ? extractJsonSchema(schema as FortressSchema<any>) : schema as JSONSchema;
+    }
+    this._responses[status] = stored;
+    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, any>;
   }
 
   handler(name: string): this {
@@ -277,8 +380,8 @@ export class EndpointBuilder {
     return this;
   }
 
-  build(): EndpointDefinition {
-    const def: EndpointDefinition = {
+  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses> {
+    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses> = {
       method: this._method,
       path: this._path,
       handler: this._handler,
@@ -323,6 +426,7 @@ export class EndpointBuilder {
 }
 
 /** Start building a new {@link EndpointDefinition} for the given HTTP method and path. */
-export function endpoint(method: HttpMethod, path: string): EndpointBuilder {
+// eslint-disable-next-line ts/no-empty-object-type
+export function endpoint(method: HttpMethod, path: string): EndpointBuilder<{}, {}, {}, {}> {
   return new EndpointBuilder(method, path);
 }

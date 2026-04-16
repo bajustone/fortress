@@ -87,6 +87,8 @@ See `docs/architecture.md` for the full technical design.
 11. **Framework-agnostic `fortress.handleRequest`** — every Fortress instance exposes a web-standard `(request: Request) => Promise<Response>` entry point that runs the full pipeline (plugin middleware → token verification → fortress RBAC → validation → endpoint dispatch → cookie attachment). All adapters delegate to it; new adapters are ~10-line wrappers.
 12. **Cookie defaults via `FortressConfig.cookies`** — `__Host-` prefixed `httpOnly`/`Secure`/`SameSite=Lax` in production, auto-relaxed (drops `__Host-` and `Secure`) in development so localhost over HTTP works. Login/refresh responses get `Set-Cookie` headers automatically.
 13. **Observability is layered and zero-default** — `FortressLogger` (pino-structural, `SILENT_LOGGER` default), `AuthEvent`/`IamEvent`/`PermissionCheckEvent` observers (sync for permission checks, async for others, all return unsubscribe fns, failures routed to `logger.error`), and an optional `TelemetryProvider` (tracer+meter) wired via `config.observability`. The `@bajustone/fortress/otel` sub-path is the only file that imports `@opentelemetry/api` (dynamically) — runtimes that don't opt in never resolve the peer dep. Metrics follow OTel semantic conventions: `db.client.operation.duration` for DB, seconds for durations, no user IDs on metric attributes (cardinality rules).
+14. **Typed endpoint I/O + typed in-process client** — `EndpointDefinition<TBody, TQuery, TParams, TResponses>` is generic; `EndpointBuilder` threads inferred types through `.body()`/`.query()`/`.params()`/`.response()`; `authEndpoints`/`iamEndpoints`/`plugin.routes` are keyed records (`Record<string, EndpointDefinition>`) so per-handler types survive. `fortress.call.<handler>(input, { headers })` is a typed callable — input is inferred from body+query+params, output from the 2xx response. Under the hood it serializes a `Request` and delegates to `handleRequest`, so middleware/RBAC/validation all run. Non-2xx throws a structured `FortressError`. Same type surface a future over-the-wire client SDK will expose.
+15. **Typed component registry via `defineComponents`** — returns `{ components, ref }` where `ref('User')` carries `FortressSchema<Infer<components.User>>` through to endpoint responses. For self-references inside a components literal (before the registry is built), use the 2-arg `ref('User', User)` overload.
 
 ## Testing
 
@@ -97,6 +99,7 @@ See `docs/architecture.md` for the full technical design.
 ## JSR Publishing Notes
 
 - All exported functions MUST have **explicit return type annotations** (JSR "slow types" requirement)
+- `publish:dry` runs with `--allow-slow-types` because `authEndpoints` / `iamEndpoints` / plugin route records use deeply-inferred builder generics (`EndpointBuilder<TBody, TQuery, TParams, TResponses>`) that JSR's fast-check cannot follow without hand-written type annotations for every endpoint. Consumers on Deno/Bun/TS-native runtimes get full types from source; Node consumers via `.d.ts` generation get slightly slower first-compile types. Acceptable tradeoff for the typed `fortress.call.*` surface.
 - Use `npm:` prefix for npm dependencies in import map
 - Sub-path exports isolate optional deps — consumers only install what they import
 - Run `bun run publish:dry` to validate before publishing

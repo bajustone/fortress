@@ -60,4 +60,59 @@ export const Errors = {
     new FortressError('DATABASE_ERROR', message, 500, { cause }),
   validationError: (issues: Array<{ path?: unknown; message: string }>): FortressError =>
     new FortressError('VALIDATION_ERROR', 'Validation failed', 422, { details: issues }),
+
+  /**
+   * Reconstruct a {@link FortressError} from a JSON error body emitted by
+   * `errorToResponse`. Used by the in-process `fortress.call.*` client to
+   * convert non-2xx responses into typed throws that mirror what a direct
+   * service-method call would produce.
+   *
+   * Maps by HTTP status when the body doesn't carry a recognizable
+   * `{ code, message }` payload, so network errors and opaque upstream
+   * failures still become structured `FortressError`s.
+   */
+  fromHttpResponse: (status: number, body: unknown): FortressError => {
+    const payload = (body && typeof body === 'object' ? body : {}) as {
+      code?: string;
+      message?: string;
+      details?: unknown;
+    };
+    const message = typeof payload.message === 'string' ? payload.message : `HTTP ${status}`;
+    const code = typeof payload.code === 'string' && isFortressErrorCode(payload.code)
+      ? payload.code
+      : statusToErrorCode(status);
+    return new FortressError(code, message, status, { details: payload.details });
+  },
 } as const;
+
+function isFortressErrorCode(code: string): code is FortressErrorCode {
+  return (
+    code === 'UNAUTHORIZED'
+    || code === 'TOKEN_REUSE'
+    || code === 'FORBIDDEN'
+    || code === 'BAD_REQUEST'
+    || code === 'NOT_FOUND'
+    || code === 'CONFLICT'
+    || code === 'RATE_LIMITED'
+    || code === 'DATABASE_ERROR'
+    || code === 'VALIDATION_ERROR'
+  );
+}
+
+function statusToErrorCode(status: number): FortressErrorCode {
+  if (status === 401)
+    return 'UNAUTHORIZED';
+  if (status === 403)
+    return 'FORBIDDEN';
+  if (status === 404)
+    return 'NOT_FOUND';
+  if (status === 409)
+    return 'CONFLICT';
+  if (status === 422)
+    return 'VALIDATION_ERROR';
+  if (status === 429)
+    return 'RATE_LIMITED';
+  if (status >= 500)
+    return 'DATABASE_ERROR';
+  return 'BAD_REQUEST';
+}

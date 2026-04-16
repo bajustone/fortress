@@ -129,6 +129,42 @@ const result = await fortress.auth.login('alice@example.com', 'correct-horse-bat
 const allowed = await fortress.iam.checkPermission(user.id, 'post', 'update');
 ```
 
+### Typed in-process client (`fortress.call`)
+
+Every endpoint you declare becomes callable with end-to-end types inferred
+from the schemas. No hand-rolled fetchers, no casting, no manual types.
+
+```typescript
+// Input shape is inferred from the login endpoint's body schema.
+// Response shape is inferred from the 200 response schema.
+const { accessToken, user } = await fortress.call.login({
+  identifier: 'alice@example.com',
+  password: 'correct-horse-battery-staple',
+});
+
+// Params endpoints work the same — path :id is substituted automatically.
+await fortress.call.revokeSession(
+  { id: 42 },
+  { headers: { authorization: `Bearer ${accessToken}` } },
+);
+
+// Non-2xx responses throw a typed FortressError with a stable `code`.
+try {
+  await fortress.call.login({ identifier: 'alice@example.com', password: 'wrong' });
+}
+catch (err) {
+  if (err instanceof FortressError && err.code === 'UNAUTHORIZED') {
+    // handle
+  }
+}
+```
+
+Under the hood, each call serializes to a `Request` and delegates to
+`fortress.handleRequest`, so plugin middleware, token verification, RBAC,
+and validation all run — the same pipeline a network client would hit.
+This is the foundation an over-the-wire client SDK will sit on top of:
+same type surface, different transport.
+
 ## Configuration
 
 The full `FortressConfig` interface:

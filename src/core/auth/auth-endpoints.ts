@@ -1,133 +1,159 @@
-import type { ComponentSchemas, EndpointDefinition } from '../endpoint';
-import { arr, bool, endpoint, enums, int, nullable, nullType, obj, oneOf, record, ref, str, strFormat } from '../schema-builder';
+import { arr, bool, defineComponents, endpoint, enums, int, nullable, nullType, obj, oneOf, record, str, strFormat } from '../schema-builder';
 
-// ── Component Schemas (reusable via $ref) ───────────────────────────
+// ── Component schemas (typed registry) ──────────────────────────────
+//
+// Each component is declared as a local `const` so TypeScript can infer its
+// type. Self-references inside composite components (e.g. `user` inside
+// `AuthResponse`) use the 2-arg `ref(name, schema)` overload — the name is
+// what ends up in the OpenAPI `$ref`, the schema argument only carries the
+// TS type and is never read at runtime.
 
-/** Reusable OpenAPI component schemas referenced by the core auth endpoints. */
-export const authComponentSchemas: ComponentSchemas = {
-  User: obj(
+const User = obj(
+  {
+    id: int('User ID'),
+    email: strFormat('email', 'User email'),
+    name: str('Display name'),
+    isActive: bool('Account active status'),
+    emailVerified: bool('Email verification status'),
+    createdAt: strFormat('date-time', 'Creation timestamp'),
+    updatedAt: strFormat('date-time', 'Last update timestamp'),
+  },
+  'id',
+  'email',
+  'name',
+  'isActive',
+  'createdAt',
+  'updatedAt',
+);
+
+const AuthResponse = oneOf(
+  obj(
     {
-      id: int('User ID'),
-      email: strFormat('email', 'User email'),
-      name: str('Display name'),
-      isActive: bool('Account active status'),
-      emailVerified: bool('Email verification status'),
-      createdAt: strFormat('date-time', 'Creation timestamp'),
-      updatedAt: strFormat('date-time', 'Last update timestamp'),
-    },
-    'id',
-    'email',
-    'name',
-    'isActive',
-    'createdAt',
-    'updatedAt',
-  ),
-
-  AuthResponse: oneOf(
-    obj(
-      {
-        status: enums('success'),
-        user: ref('User'),
-        accessToken: str('JWT access token'),
-        refreshToken: str('Refresh token for rotation'),
-        pluginData: record(),
-      },
-      'status',
-      'user',
-      'accessToken',
-      'refreshToken',
-    ),
-    obj(
-      {
-        status: enums('pending'),
-        user: ref('User'),
-        accessToken: nullType(),
-        refreshToken: nullType(),
-        pluginData: record(),
-      },
-      'status',
-      'user',
-      'accessToken',
-      'refreshToken',
-    ),
-    obj(
-      {
-        status: enums('impersonation'),
-        user: ref('User'),
-        accessToken: str('JWT access token'),
-        refreshToken: nullType(),
-        pluginData: record(),
-      },
-      'status',
-      'user',
-      'accessToken',
-      'refreshToken',
-    ),
-  ),
-
-  AuthTokenPair: obj(
-    {
+      status: enums('success'),
+      user: User,
       accessToken: str('JWT access token'),
-      refreshToken: str('New refresh token'),
+      refreshToken: str('Refresh token for rotation'),
+      pluginData: record(),
     },
+    'status',
+    'user',
     'accessToken',
     'refreshToken',
   ),
-
-  SessionInfo: obj(
+  obj(
     {
-      id: int('Token ID'),
-      ipAddress: nullable(str('Client IP address')),
-      userAgent: nullable(str('Client user agent')),
-      deviceName: nullable(str('Device name')),
-      createdAt: strFormat('date-time', 'Session creation time'),
-      lastActiveAt: nullable(strFormat('date-time', 'Last activity time')),
+      status: enums('pending'),
+      user: User,
+      accessToken: nullType(),
+      refreshToken: nullType(),
+      pluginData: record(),
     },
-    'id',
-    'createdAt',
+    'status',
+    'user',
+    'accessToken',
+    'refreshToken',
   ),
-
-  CreateUserInput: obj(
+  obj(
     {
-      email: strFormat('email', 'User email'),
-      name: str('Display name'),
-      password: str('User password'),
-      isActive: bool('Set active status (default true)'),
+      status: enums('impersonation'),
+      user: User,
+      accessToken: str('JWT access token'),
+      refreshToken: nullType(),
+      pluginData: record(),
     },
-    'email',
-    'name',
+    'status',
+    'user',
+    'accessToken',
+    'refreshToken',
   ),
+);
 
-  ErrorResponse: obj(
-    {
-      code: str('Error code (e.g. UNAUTHORIZED)'),
-      message: str('Human-readable message'),
-      statusCode: int('HTTP status code'),
-    },
-    'code',
-    'message',
-    'statusCode',
-  ),
+const AuthTokenPair = obj(
+  {
+    accessToken: str('JWT access token'),
+    refreshToken: str('New refresh token'),
+  },
+  'accessToken',
+  'refreshToken',
+);
 
-  LoginIdentifier: obj(
-    {
-      id: int('Identifier ID'),
-      userId: int('User ID'),
-      type: enums('email', 'phone', 'username'),
-      value: str('Identifier value'),
-    },
-    'id',
-    'userId',
-    'type',
-    'value',
-  ),
-};
+const SessionInfo = obj(
+  {
+    id: int('Token ID'),
+    ipAddress: nullable(str('Client IP address')),
+    userAgent: nullable(str('Client user agent')),
+    deviceName: nullable(str('Device name')),
+    createdAt: strFormat('date-time', 'Session creation time'),
+    lastActiveAt: nullable(strFormat('date-time', 'Last activity time')),
+  },
+  'id',
+  'createdAt',
+);
 
-// ── Auth Endpoint Definitions ───────────────────────────────────────
+const CreateUserInput = obj(
+  {
+    email: strFormat('email', 'User email'),
+    name: str('Display name'),
+    password: str('User password'),
+    isActive: bool('Set active status (default true)'),
+  },
+  'email',
+  'name',
+);
 
-/** Declarative {@link EndpointDefinition}s for fortress's built-in auth routes (sign in, refresh, sessions, impersonation). */
-export const authEndpoints: EndpointDefinition[] = [
-  endpoint('POST', '/auth/login')
+const ErrorResponse = obj(
+  {
+    code: str('Error code (e.g. UNAUTHORIZED)'),
+    message: str('Human-readable message'),
+    statusCode: int('HTTP status code'),
+  },
+  'code',
+  'message',
+  'statusCode',
+);
+
+const LoginIdentifier = obj(
+  {
+    id: int('Identifier ID'),
+    userId: int('User ID'),
+    type: enums('email', 'phone', 'username'),
+    value: str('Identifier value'),
+  },
+  'id',
+  'userId',
+  'type',
+  'value',
+);
+
+const authComponents = defineComponents({
+  User,
+  AuthResponse,
+  AuthTokenPair,
+  SessionInfo,
+  CreateUserInput,
+  ErrorResponse,
+  LoginIdentifier,
+});
+
+/** Reusable OpenAPI component schemas referenced by the core auth endpoints. */
+export const authComponentSchemas = authComponents.components;
+
+/** Typed `$ref` helper bound to {@link authComponentSchemas}. */
+export const authRef = authComponents.ref;
+
+// ── Auth endpoint definitions (keyed by handler name) ───────────────
+
+/**
+ * Declarative endpoint definitions for fortress's built-in auth routes
+ * (sign in, refresh, sessions, impersonation).
+ *
+ * Declared as a keyed record (not an array) so each entry's full
+ * `EndpointDefinition<TBody, TQuery, TParams, TResponses>` type is
+ * preserved for `fortress.call.*` inference. The runtime array used by
+ * route matching is materialized via `Object.values(authEndpoints)`.
+ */
+export const authEndpoints = {
+  login: endpoint('POST', '/auth/login')
     .summary('Login with credentials')
     .tags('Auth')
     .security('none')
@@ -136,80 +162,80 @@ export const authEndpoints: EndpointDefinition[] = [
       'identifier',
       'password',
     ))
-    .response(200, 'Login successful', ref('AuthResponse'))
-    .response(401, 'Invalid credentials', ref('ErrorResponse'))
+    .response(200, 'Login successful', authRef('AuthResponse'))
+    .response(401, 'Invalid credentials', authRef('ErrorResponse'))
     .handler('login')
     .build(),
 
-  endpoint('POST', '/auth/register')
+  createUser: endpoint('POST', '/auth/register')
     .summary('Create a new user')
     .tags('Auth')
     .security('none')
-    .body(ref('CreateUserInput'))
-    .response(201, 'User created', ref('User'))
-    .response(409, 'Email already exists', ref('ErrorResponse'))
+    .body(CreateUserInput)
+    .response(201, 'User created', authRef('User'))
+    .response(409, 'Email already exists', authRef('ErrorResponse'))
     .handler('createUser')
     .build(),
 
-  endpoint('POST', '/auth/refresh')
+  refresh: endpoint('POST', '/auth/refresh')
     .summary('Refresh access token')
     .tags('Auth')
     .security('none')
     .body(obj({ refreshToken: str('Current refresh token') }, 'refreshToken'))
-    .response(200, 'Tokens refreshed', ref('AuthTokenPair'))
-    .response(401, 'Invalid or expired refresh token', ref('ErrorResponse'))
+    .response(200, 'Tokens refreshed', authRef('AuthTokenPair'))
+    .response(401, 'Invalid or expired refresh token', authRef('ErrorResponse'))
     .handler('refresh')
     .build(),
 
-  endpoint('POST', '/auth/logout')
+  logout: endpoint('POST', '/auth/logout')
     .summary('Logout and revoke refresh token')
     .tags('Auth')
     .security('none')
     .body(obj({ refreshToken: str('Refresh token to revoke') }, 'refreshToken'))
-    .response(200, 'Logged out', obj({ ok: bool() }))
+    .response(200, 'Logged out', obj({ ok: bool() }, 'ok'))
     .handler('logout')
     .build(),
 
-  endpoint('GET', '/auth/me')
+  me: endpoint('GET', '/auth/me')
     .summary('Get current user profile')
     .tags('Auth')
     .security('bearer')
-    .response(200, 'Current user', ref('User'))
-    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(200, 'Current user', authRef('User'))
+    .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('me')
     .build(),
 
-  endpoint('GET', '/auth/sessions')
+  listSessions: endpoint('GET', '/auth/sessions')
     .summary('List active sessions')
     .tags('Auth')
     .security('bearer')
-    .response(200, 'Active sessions', arr(ref('SessionInfo')))
-    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(200, 'Active sessions', arr(authRef('SessionInfo')))
+    .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('listSessions')
     .build(),
 
-  endpoint('DELETE', '/auth/sessions/:id')
+  revokeSession: endpoint('DELETE', '/auth/sessions/:id')
     .summary('Revoke a specific session')
     .tags('Auth')
     .security('bearer')
     .params(obj({ id: int('Session/token ID') }, 'id'))
-    .response(200, 'Session revoked', obj({ ok: bool() }))
-    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(200, 'Session revoked', obj({ ok: bool() }, 'ok'))
+    .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('revokeSession')
     .build(),
 
-  endpoint('DELETE', '/auth/sessions')
+  revokeAllOtherSessions: endpoint('DELETE', '/auth/sessions')
     .summary('Revoke all other sessions')
     .description('Revokes all active sessions except the current one. Requires the current token ID.')
     .tags('Auth')
     .security('bearer')
     .body(obj({ currentTokenId: int('Current token ID to keep') }, 'currentTokenId'))
-    .response(200, 'Other sessions revoked', obj({ ok: bool() }))
-    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(200, 'Other sessions revoked', obj({ ok: bool() }, 'ok'))
+    .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('revokeAllOtherSessions')
     .build(),
 
-  endpoint('POST', '/auth/identifiers')
+  addLoginIdentifier: endpoint('POST', '/auth/identifiers')
     .summary('Add a login identifier')
     .tags('Auth')
     .security('bearer')
@@ -221,12 +247,12 @@ export const authEndpoints: EndpointDefinition[] = [
       'type',
       'value',
     ))
-    .response(200, 'Identifier added', obj({ ok: bool() }))
-    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(200, 'Identifier added', obj({ ok: bool() }, 'ok'))
+    .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('addLoginIdentifier')
     .build(),
 
-  endpoint('DELETE', '/auth/identifiers')
+  removeLoginIdentifier: endpoint('DELETE', '/auth/identifiers')
     .summary('Remove a login identifier')
     .tags('Auth')
     .security('bearer')
@@ -238,21 +264,21 @@ export const authEndpoints: EndpointDefinition[] = [
       'type',
       'value',
     ))
-    .response(200, 'Identifier removed', obj({ ok: bool() }))
-    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(200, 'Identifier removed', obj({ ok: bool() }, 'ok'))
+    .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('removeLoginIdentifier')
     .build(),
 
-  endpoint('GET', '/auth/identifiers')
+  getLoginIdentifiers: endpoint('GET', '/auth/identifiers')
     .summary('List login identifiers')
     .tags('Auth')
     .security('bearer')
-    .response(200, 'Login identifiers', arr(ref('LoginIdentifier')))
-    .response(401, 'Not authenticated', ref('ErrorResponse'))
+    .response(200, 'Login identifiers', arr(authRef('LoginIdentifier')))
+    .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('getLoginIdentifiers')
     .build(),
 
-  endpoint('POST', '/auth/impersonate')
+  impersonate: endpoint('POST', '/auth/impersonate')
     .summary('Impersonate a user')
     .description('Issue a short-lived, non-renewable token to act as another user. Requires fortress:impersonate permission.')
     .tags('Auth')
@@ -265,9 +291,9 @@ export const authEndpoints: EndpointDefinition[] = [
       },
       'targetUserId',
     ))
-    .response(200, 'Impersonation token issued', ref('AuthResponse'))
-    .response(401, 'Not authenticated', ref('ErrorResponse'))
-    .response(404, 'Target user not found', ref('ErrorResponse'))
+    .response(200, 'Impersonation token issued', authRef('AuthResponse'))
+    .response(401, 'Not authenticated', authRef('ErrorResponse'))
+    .response(404, 'Target user not found', authRef('ErrorResponse'))
     .handler('impersonate')
     .build(),
-];
+} as const;

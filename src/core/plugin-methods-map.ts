@@ -8,6 +8,8 @@ import type { SocialLoginMethods } from '../plugins/social-login';
 import type { TenancyMethods } from '../plugins/tenancy';
 import type { TwoFactorMethods } from '../plugins/two-factor';
 import type { WebAuthnMethods } from '../plugins/webauthn';
+import type { EndpointDefinition, InferEndpointCallInput, InferEndpointSuccessResponse } from './endpoint';
+import type { CallOptions } from './http/call';
 import type { FortressPlugin } from './plugin';
 
 /**
@@ -34,3 +36,38 @@ export type InferPlugins<T extends readonly FortressPlugin[]> = {
     ? PluginMethodsMap[P['name']]
     : Record<string, (...args: any[]) => any>;
 };
+
+// ── Typed call map helpers ──────────────────────────────────────────
+
+/** Distributes a union into an intersection — the classic TS trick. Used by {@link InferPluginCallMap}. */
+type UnionToIntersection<U> = (U extends any ? (x: U) => void : never) extends ((x: infer I) => void) ? I : never;
+
+/**
+ * Turn a record of {@link EndpointDefinition}s into a record of typed
+ * callables: each key becomes a function whose input is the endpoint's
+ * inferred body+query+params intersection and whose output is the inferred
+ * success-response body.
+ */
+export type CallableForEndpoints<E> = E extends Record<string, EndpointDefinition<any, any, any, any>>
+  ? {
+      [K in keyof E]: (
+        input: InferEndpointCallInput<E[K]>,
+        options?: CallOptions,
+      ) => Promise<InferEndpointSuccessResponse<E[K]>>;
+    }
+  : Record<string, never>;
+
+/**
+ * Infer the typed call surface contributed by a plugins tuple. Walks every
+ * plugin's `routes` record (if present) and unions the callables into one
+ * flat object keyed by handler name.
+ */
+export type InferPluginCallMap<T extends readonly FortressPlugin[]> = UnionToIntersection<
+  T[number] extends infer P
+    ? P extends { routes?: infer R }
+      ? R extends Record<string, EndpointDefinition<any, any, any, any>>
+        ? CallableForEndpoints<R>
+        : Record<string, never>
+      : Record<string, never>
+    : Record<string, never>
+>;

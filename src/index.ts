@@ -40,6 +40,10 @@ export type { FortressConfig, PasswordHasher } from './core/config';
  * Endpoint definition primitives — declarative `EndpointDefinition` objects
  * carrying request/response schemas, OpenAPI metadata, and HTTP method info
  * so framework adapters can mount routes without per-framework duplication.
+ *
+ * Plus the `InferEndpoint*` helpers that extract body/query/params/response
+ * types from an endpoint's generic parameters — the foundation of the typed
+ * `fortress.call.*` in-process client.
  */
 export type {
   ComponentSchemas,
@@ -48,6 +52,12 @@ export type {
   EndpointMeta,
   EndpointResponse,
   HttpMethod,
+  InferEndpointBody,
+  InferEndpointCallInput,
+  InferEndpointParams,
+  InferEndpointQuery,
+  InferEndpointResponses,
+  InferEndpointSuccessResponse,
   SecurityRequirement,
 } from './core/endpoint';
 
@@ -60,8 +70,12 @@ export type { FortressErrorCode } from './core/errors';
 /** Factory that builds a configured fortress instance and the helper for type-safe plugin method access. */
 export { createFortress, getPluginMethods } from './core/fortress';
 
-/** The fortress instance type returned by {@link createFortress}. */
-export type { Fortress } from './core/fortress';
+/** The fortress instance type returned by {@link createFortress}, plus the typed call-map helper. */
+export type { Fortress, TypedCall } from './core/fortress';
+
+/** Typed in-process client builder and per-call options. */
+export { buildCall } from './core/http/call';
+export type { CallOptions } from './core/http/call';
 
 /** Pre-built endpoint definitions and component schemas for the core IAM routes. */
 export { iamComponentSchemas, iamEndpoints } from './core/iam/iam-endpoints';
@@ -85,11 +99,10 @@ export type {
   ModelDefinition,
   PluginContext,
   PluginHooks,
-  RouteDefinition,
 } from './core/plugin';
 
-/** Type-level mapping helpers used to expose plugin methods on the fortress instance. */
-export type { InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
+/** Type-level mapping helpers used to expose plugin methods and typed call maps on the fortress instance. */
+export type { CallableForEndpoints, InferPluginCallMap, InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
 
 /**
  * Fluent JSON Schema builder DSL. Compose `obj`, `str`, `int`, `arr`, etc.
@@ -100,6 +113,7 @@ export {
   anyOf,
   arr,
   bool,
+  defineComponents,
   endpoint,
   EndpointBuilder,
   enums,

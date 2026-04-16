@@ -11,7 +11,7 @@ const SECRET = 'openapi-test-secret-at-least-32-bytes!!';
 
 describe('spec-builder', () => {
   it('builds a valid OpenAPI 3.1.0 spec', () => {
-    const spec = buildOpenAPISpec(authEndpoints, authComponentSchemas, {
+    const spec = buildOpenAPISpec(Object.values(authEndpoints), authComponentSchemas, {
       title: 'Test API',
       version: '1.0.0',
     });
@@ -25,7 +25,7 @@ describe('spec-builder', () => {
   });
 
   it('includes auth endpoints in paths', () => {
-    const spec = buildOpenAPISpec(authEndpoints, authComponentSchemas, {
+    const spec = buildOpenAPISpec(Object.values(authEndpoints), authComponentSchemas, {
       title: 'Test',
       version: '1.0.0',
     });
@@ -40,7 +40,7 @@ describe('spec-builder', () => {
   });
 
   it('converts :param to {param} in paths', () => {
-    const spec = buildOpenAPISpec(authEndpoints, authComponentSchemas, {
+    const spec = buildOpenAPISpec(Object.values(authEndpoints), authComponentSchemas, {
       title: 'Test',
       version: '1.0.0',
     });
@@ -52,7 +52,7 @@ describe('spec-builder', () => {
   });
 
   it('includes request body schemas', () => {
-    const spec = buildOpenAPISpec(authEndpoints, authComponentSchemas, {
+    const spec = buildOpenAPISpec(Object.values(authEndpoints), authComponentSchemas, {
       title: 'Test',
       version: '1.0.0',
     });
@@ -64,7 +64,7 @@ describe('spec-builder', () => {
   });
 
   it('includes response schemas', () => {
-    const spec = buildOpenAPISpec(authEndpoints, authComponentSchemas, {
+    const spec = buildOpenAPISpec(Object.values(authEndpoints), authComponentSchemas, {
       title: 'Test',
       version: '1.0.0',
     });
@@ -76,7 +76,7 @@ describe('spec-builder', () => {
   });
 
   it('includes component schemas', () => {
-    const spec = buildOpenAPISpec(authEndpoints, authComponentSchemas, {
+    const spec = buildOpenAPISpec(Object.values(authEndpoints), authComponentSchemas, {
       title: 'Test',
       version: '1.0.0',
     });
@@ -88,7 +88,7 @@ describe('spec-builder', () => {
   });
 
   it('includes security schemes only for used requirements', () => {
-    const spec = buildOpenAPISpec(authEndpoints, authComponentSchemas, {
+    const spec = buildOpenAPISpec(Object.values(authEndpoints), authComponentSchemas, {
       title: 'Test',
       version: '1.0.0',
     });

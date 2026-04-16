@@ -942,14 +942,21 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         ]
       : undefined,
 
-    routes: [
-      bootstrapEndpoint,
-      syncEndpoint,
-      ...adminAuthEndpoints,
-      ...adminIamEndpoints,
-      ...iamEndpoints,
-      ...(mountApiKeyRoutes ? adminApiKeyEndpoints : []),
-    ],
+    // Admin routes are aggregated from several internal arrays into a
+    // record keyed by `${method}_${path}` so collisions with core handler
+    // names (e.g. `createUser` exists in both auth-endpoints.ts and admin)
+    // are impossible. Admin routes exist for default-deny protection and
+    // aren't exposed via the typed `fortress.call.*` surface.
+    routes: Object.fromEntries(
+      [
+        bootstrapEndpoint,
+        syncEndpoint,
+        ...adminAuthEndpoints,
+        ...adminIamEndpoints,
+        ...Object.values(iamEndpoints) as EndpointDefinition[],
+        ...(mountApiKeyRoutes ? adminApiKeyEndpoints : []),
+      ].map(ep => [`${ep.method}_${ep.path}`, ep]),
+    ),
 
     methods: (ctx: PluginContext) => ({
       async getResources(): Promise<ResourceFile> {
@@ -1007,9 +1014,13 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         const pluginEndpoints: EndpointDefinition[] = [];
         for (const plugin of plugins) {
           if (plugin.routes)
-            pluginEndpoints.push(...plugin.routes);
+            pluginEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
         }
-        const allEndpoints = [...authEndpoints, ...iamEndpoints, ...pluginEndpoints];
+        const allEndpoints: EndpointDefinition[] = [
+          ...Object.values(authEndpoints) as EndpointDefinition[],
+          ...Object.values(iamEndpoints) as EndpointDefinition[],
+          ...pluginEndpoints,
+        ];
         const declaredPermissions = collectPermissions(allEndpoints);
 
         // Ensure each resource exists

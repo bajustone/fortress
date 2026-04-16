@@ -184,24 +184,24 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
 
   let cachedSpec: OpenAPISpec | null = null;
 
-  const routes: FortressPlugin['routes'] = [
-    {
+  const routes: FortressPlugin['routes'] = {
+    getSpec: {
       method: 'GET',
       path: specPath,
       handler: 'getSpec',
       meta: { summary: 'OpenAPI specification', tags: ['OpenAPI'], security: ['none'] },
       responses: { 200: { description: 'OpenAPI 3.1 JSON spec' } },
     },
-  ];
+  };
 
   if (!config.disableUI) {
-    routes.push({
+    routes.getUI = {
       method: 'GET',
       path: uiPath,
       handler: 'getUI',
       meta: { summary: 'API reference (Scalar)', tags: ['OpenAPI'], security: ['none'] },
       responses: { 200: { description: 'Scalar API reference HTML' } },
-    });
+    };
   }
 
   return {
@@ -220,19 +220,19 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
 
         // Add core auth endpoints
         if (config.includeCoreAuth !== false) {
-          allEndpoints.push(...authEndpoints);
+          allEndpoints.push(...Object.values(authEndpoints) as EndpointDefinition[]);
         }
 
         // Add core IAM endpoints
         if (config.includeCoreIam !== false) {
-          allEndpoints.push(...iamEndpoints);
+          allEndpoints.push(...Object.values(iamEndpoints) as EndpointDefinition[]);
         }
 
         // Add plugin endpoints (excluding our own)
         for (const plugin of plugins) {
           if (plugin.name === 'openapi' || !plugin.routes)
             continue;
-          allEndpoints.push(...plugin.routes);
+          allEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
         }
 
         // Add consumer-provided endpoints

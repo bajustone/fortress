@@ -8,11 +8,12 @@ import type { IamEvent, IamService, PermissionCheckEvent } from './iam/iam-servi
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
 import type { FortressPlugin, MiddlewareDefinition } from './plugin';
-import type { InferPlugins } from './plugin-methods-map';
+import type { CallableForEndpoints, InferPluginCallMap, InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
 import { createAuthService } from './auth/auth-service';
 import { resolveCookieConfig } from './config';
 import { Errors } from './errors';
+import { buildCall } from './http/call';
 import { serializeAuthCookies as serializeAuthCookiesFn } from './http/cookie-serialize';
 import { buildHandleRequest } from './http/handle-request';
 import { runPluginMiddleware as runPluginMiddlewareFn } from './http/plugin-middleware';
@@ -26,6 +27,20 @@ import { NO_OP_TELEMETRY } from './observability/types';
 import { processPlugins } from './plugin-runner';
 
 /**
+ * Typed in-process call surface. Composes auth + IAM endpoint callables
+ * with any plugin-contributed routes (derived from the plugins tuple).
+ *
+ * Each handler becomes a `(input, options?) => Promise<successBody>` where
+ * the input shape is the inferred intersection of the endpoint's body,
+ * query, and params schemas, and the output is the inferred 2xx response
+ * type. Non-2xx responses throw a `FortressError`.
+ */
+export type TypedCall<T extends readonly FortressPlugin[]>
+  = & CallableForEndpoints<typeof authEndpoints>
+    & CallableForEndpoints<typeof iamEndpoints>
+    & InferPluginCallMap<T>;
+
+/**
  * Configured fortress instance returned by {@link createFortress}. Holds the
  * core auth and IAM services, the resolved config, every endpoint definition
  * (auth + IAM + plugin routes), and the typed plugin method surface.
@@ -35,11 +50,27 @@ import { processPlugins } from './plugin-runner';
  * {@link Fortress.extractAccessToken}, {@link Fortress.serializeAuthCookies})
  * that adapters delegate to. See `src/core/http/`.
  */
-// eslint-disable-next-line ts/no-unsafe-function-type -- fallback type for untyped plugin access
-export interface Fortress<TPlugins = Record<string, Record<string, Function>>> {
+
+export interface Fortress<
+  // eslint-disable-next-line ts/no-unsafe-function-type -- fallback type for untyped plugin access
+  TPlugins = Record<string, Record<string, Function>>,
+  TCall = Record<string, (input?: any, options?: any) => Promise<any>>,
+> {
   auth: AuthService;
   iam: IamService;
   plugins: TPlugins;
+  /**
+   * Typed in-process client. Each key is a handler name (from the core
+   * auth/IAM endpoint records or a plugin's `routes` record); each value is
+   * an async function whose input/output types are inferred from the
+   * endpoint's declared body/query/params/response schemas.
+   *
+   * Under the hood, each callable serializes its input to a `Request` and
+   * delegates to `fortress.handleRequest`, so middleware, token
+   * verification, RBAC, and validation all run — the same path a network
+   * client would eventually hit. See `src/core/http/call.ts`.
+   */
+  call: TCall;
   config: Readonly<FortressConfig>;
   /** All endpoint definitions (auth + IAM + plugins) with JSON Schema metadata. */
   endpoints: EndpointDefinition[];
@@ -127,7 +158,7 @@ const MIN_SECRET_BYTES = 32;
  */
 export function createFortress<const T extends readonly FortressPlugin[]>(
   config: FortressConfig & { plugins?: T },
-): Fortress<InferPlugins<T>> {
+): Fortress<InferPlugins<T>, TypedCall<T>> {
   // Validate JWT secret strength
   const secrets = Array.isArray(config.jwt.secret) ? config.jwt.secret : [config.jwt.secret];
   for (const secret of secrets) {
@@ -231,16 +262,24 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     iam.addIamObserver(event => logCustomEvent(event));
   }
 
-  // Assemble all endpoint definitions: core auth + IAM + plugin routes
-  // Deduplicate by method+path — plugin routes take priority over core definitions
+  // Assemble all endpoint definitions: core auth + IAM + plugin routes.
+  // `authEndpoints` / `iamEndpoints` are keyed records (preserving per-handler
+  // generic types for `fortress.call.*`) — we flatten them to the array the
+  // route matcher expects via `Object.values`. Plugin route records are
+  // flattened the same way. Deduplication by `method + path` lets plugin
+  // routes override core definitions.
   const pluginEndpoints: EndpointDefinition[] = [];
   for (const plugin of plugins) {
     if (plugin.routes) {
-      pluginEndpoints.push(...plugin.routes);
+      pluginEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
     }
   }
   const endpointMap = new Map<string, EndpointDefinition>();
-  for (const ep of [...authEndpoints, ...iamEndpoints, ...pluginEndpoints]) {
+  const coreEndpoints: EndpointDefinition[] = [
+    ...Object.values(authEndpoints) as EndpointDefinition[],
+    ...Object.values(iamEndpoints) as EndpointDefinition[],
+  ];
+  for (const ep of [...coreEndpoints, ...pluginEndpoints]) {
     endpointMap.set(`${ep.method} ${ep.path}`, ep);
   }
   const endpoints = Array.from(endpointMap.values());
@@ -249,19 +288,21 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   const cookies = resolveCookieConfig(config.cookies);
 
   // Build the framework-agnostic HTTP auxiliary closures upfront. `handleRequest`
-  // gets bound after the instance is constructed because it needs the
-  // assembled `Fortress` object (route table is built from `endpoints`).
-  const instance = {
+  // and `call` both get bound after the instance is constructed because
+  // they need the assembled `Fortress` object (route table is built from
+  // `endpoints`; `call` delegates to `handleRequest`).
+  const instance: Fortress<InferPlugins<T>, TypedCall<T>> = {
     auth,
     iam,
     plugins: pluginMethods as InferPlugins<T>,
+    call: {} as TypedCall<T>,
     config,
     endpoints,
     cookies,
     logger,
     telemetry,
     handleRequest: undefined as unknown as (request: Request) => Promise<Response>,
-    runPluginMiddleware: (phase, ctx) => runPluginMiddlewareFn(plugins, config, phase, ctx),
+    runPluginMiddleware: (phase, ctx): Promise<void> => runPluginMiddlewareFn(plugins, config, phase, ctx),
     extractAccessToken: (request: Request): string | null => extractAccessTokenFn(request, cookies),
     resolvePrincipal: (request: Request): Promise<ResolvedPrincipal | null> =>
       resolveRequestPrincipalFn(instance as Fortress, request),
@@ -270,8 +311,22 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
         access: config.jwt.accessTokenExpirySeconds ?? 900,
         refresh: config.jwt.refreshTokenExpirySeconds ?? 604_800,
       }),
-  } satisfies Fortress<InferPlugins<T>>;
+  };
 
   instance.handleRequest = buildHandleRequest(instance as Fortress);
+
+  // Assemble the typed call map. Core auth/IAM handlers come first; plugin
+  // routes are layered on top so they can override a core handler that
+  // shares a key (matches the `endpointMap` dedup order).
+  const callEndpoints: Record<string, EndpointDefinition> = {
+    ...(authEndpoints as Record<string, EndpointDefinition>),
+    ...(iamEndpoints as Record<string, EndpointDefinition>),
+  };
+  for (const plugin of plugins) {
+    if (plugin.routes)
+      Object.assign(callEndpoints, plugin.routes);
+  }
+  instance.call = buildCall(instance as Fortress, callEndpoints) as TypedCall<T>;
+
   return instance;
 }

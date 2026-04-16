@@ -181,22 +181,22 @@ describe('fortress.handleRequest', () => {
       const received: PluginRouteContext[] = [];
       const plugin: FortressPlugin = {
         name: 'spy',
-        routes: [
-          {
+        routes: {
+          echo: {
             method: 'POST',
             path: '/spy/echo',
             handler: 'echo',
             meta: { summary: 'Echo caller', tags: ['Test'], security: ['bearer'] },
             responses: { 200: { description: 'ok' } },
           },
-          {
+          publicEcho: {
             method: 'GET',
             path: '/spy/public',
             handler: 'publicEcho',
             meta: { summary: 'Public echo', tags: ['Test'], security: ['none'] },
             responses: { 200: { description: 'ok' } },
           },
-        ],
+        },
         methods: () => ({
           echo(_body: unknown, ctx: PluginRouteContext): { ok: true } {
             received.push(ctx);

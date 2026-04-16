@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.0.36] - 2026-04-15
+
+### Added
+- feat(endpoints): typed in-process client — `fortress.call.<handler>(input)` infers body/query/params from the endpoint's declared schemas and returns the 2xx response body typed. Non-2xx throws a structured `FortressError`.
+- feat(schema-builder): `defineComponents({...})` returns a typed `ref` bound to a component map so `$ref`s carry their TS type through to endpoint responses. The old `ref(name)` still works; a new 2-arg overload `ref(name, schema)` preserves type for self-references inside a components literal.
+- feat(endpoint): `EndpointDefinition` + `EndpointBuilder` are now generic in body/query/params/responses. Added `InferEndpointBody`, `InferEndpointQuery`, `InferEndpointParams`, `InferEndpointResponses`, `InferEndpointSuccessResponse`, `InferEndpointCallInput` helpers.
+- feat(errors): `Errors.fromHttpResponse(status, body)` reconstructs a `FortressError` from a JSON error body — the inverse of `errorToResponse`.
+
+### Changed (breaking)
+- `authEndpoints` / `iamEndpoints` changed shape from `EndpointDefinition[]` to keyed records (`Record<string, EndpointDefinition<...>>`). Preserves per-handler generic types for the new typed call surface. Consumers that iterated the arrays should now use `Object.values(authEndpoints)`.
+- `FortressPlugin.routes` changed from `EndpointDefinition[]` to `Record<string, EndpointDefinition>` — keyed by handler name. All built-in plugins with routes (admin, api-key, oauth, openapi, webauthn) migrated. The `RouteDefinition` alias has been removed.
+- `Fortress` interface grew a second generic parameter `TCall` and a new `call` field.
+
 ## [0.0.35] - 2026-04-15
 
 ### Added

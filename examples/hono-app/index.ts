@@ -877,6 +877,22 @@ async function seed(): Promise<void> {
     'webhook-signing-secret',
   );
 
+  // ── Typed in-process client ─────────────────────────────────────────
+  // `fortress.call.*` is the typed client surface. Each handler is
+  // inferred from its EndpointDefinition: input shape matches the body/
+  // query/params schemas, output matches the 2xx response schema.
+  //
+  //   const { accessToken, user } = await fortress.call.login({
+  //     identifier: 'admin@example.com',
+  //     password: 'Password123!',
+  //   });
+  //
+  // Under the hood, each call serializes to a Request, runs through
+  // fortress.handleRequest (full pipeline: middleware → token verify →
+  // RBAC → validation → dispatch), and parses the JSON body. Non-2xx
+  // responses throw a `FortressError` with the original `code`/`statusCode`.
+  // Same type surface a future over-the-wire client SDK will expose.
+
   console.warn('');
   console.warn('╔══════════════════════════════════════════════╗');
   console.warn('║  Fortress Example App                        ║');

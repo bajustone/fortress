@@ -2,6 +2,7 @@ import type { DatabaseAdapter } from '../adapters/database';
 import type { ScopeRule } from '../adapters/database/types';
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
+import type { EndpointDefinition } from './endpoint';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
 import type {
@@ -28,8 +29,17 @@ export interface FortressPlugin {
   // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
   methods?: (ctx: PluginContext) => Record<string, Function>;
 
-  /** HTTP routes this plugin adds */
-  routes?: RouteDefinition[];
+  /**
+   * HTTP routes this plugin adds, keyed by handler name.
+   *
+   * A keyed record (not an array) so each entry's full
+   * `EndpointDefinition<TBody, TQuery, TParams, TResponses>` type is
+   * preserved for the typed `fortress.call.*` proxy. The dispatcher looks
+   * plugin route handlers up by name (`fortress.plugins[pluginName][handlerName]`),
+   * so the keyed shape is already the natural fit at dispatch time — the
+   * key just needs to match the `EndpointDefinition.handler` string.
+   */
+  routes?: Record<string, EndpointDefinition>;
 
   /** Middleware to inject into the request pipeline */
   middleware?: MiddlewareDefinition[];
@@ -132,9 +142,6 @@ export interface PluginContext {
   /** Resolved logger (silent no-op if `config.logger` is unset). */
   logger?: FortressLogger;
 }
-
-/** @deprecated Use EndpointDefinition from './endpoint' instead. Kept as alias for backward compatibility. */
-export type RouteDefinition = import('./endpoint').EndpointDefinition;
 
 /**
  * Second argument passed to plugin HTTP route handlers by the dispatcher.

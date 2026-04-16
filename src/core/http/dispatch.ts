@@ -148,7 +148,8 @@ function findOwningPlugin(fortress: Fortress, endpoint: EndpointDefinition): For
   for (const plugin of plugins) {
     if (!plugin.routes)
       continue;
-    if (plugin.routes.some(r => r.method === endpoint.method && r.path === endpoint.path)) {
+    const routes = Object.values(plugin.routes) as EndpointDefinition[];
+    if (routes.some(r => r.method === endpoint.method && r.path === endpoint.path)) {
       return plugin;
     }
   }

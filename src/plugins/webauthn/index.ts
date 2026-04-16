@@ -127,8 +127,8 @@ function uint8ArrayToBase64url(bytes: Uint8Array): string {
 
 // ── Routes ──────────────────────────────────────────────────────────
 
-const webauthnRoutes = [
-  endpoint('POST', '/webauthn/register/options')
+const webauthnRoutes = {
+  generateRegistrationOptions: endpoint('POST', '/webauthn/register/options')
     .summary('Generate WebAuthn registration options')
     .description('Generate public key credential creation options for registering a new passkey against the authenticated caller.')
     .tags('WebAuthn')
@@ -143,7 +143,7 @@ const webauthnRoutes = [
     .handler('generateRegistrationOptions')
     .build(),
 
-  endpoint('POST', '/webauthn/register/verify')
+  verifyRegistration: endpoint('POST', '/webauthn/register/verify')
     .summary('Verify WebAuthn registration')
     .description('Verify the registration response from the authenticator and store the new credential for the authenticated caller.')
     .tags('WebAuthn')
@@ -161,7 +161,7 @@ const webauthnRoutes = [
     .handler('verifyRegistration')
     .build(),
 
-  endpoint('POST', '/webauthn/authenticate/options')
+  generateAuthenticationOptions: endpoint('POST', '/webauthn/authenticate/options')
     .summary('Generate WebAuthn authentication options')
     .description('Generate public key credential request options. Optionally pass userId for non-discoverable credential flow.')
     .tags('WebAuthn')
@@ -173,7 +173,7 @@ const webauthnRoutes = [
     .handler('generateAuthenticationOptions')
     .build(),
 
-  endpoint('POST', '/webauthn/authenticate/verify')
+  verifyAuthentication: endpoint('POST', '/webauthn/authenticate/verify')
     .summary('Verify WebAuthn authentication')
     .description('Verify the authentication assertion. Returns tokens if passwordless mode is enabled.')
     .tags('WebAuthn')
@@ -190,7 +190,7 @@ const webauthnRoutes = [
     .response(401, 'Authentication failed')
     .handler('verifyAuthentication')
     .build(),
-];
+} as const;
 
 // ── Plugin Factory ──────────────────────────────────────────────────
 

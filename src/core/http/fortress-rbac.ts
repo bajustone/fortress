@@ -33,7 +33,7 @@ export function getPluginPathPrefixes(plugins: readonly FortressPlugin[]): strin
   for (const plugin of plugins) {
     if (!plugin.routes)
       continue;
-    for (const route of plugin.routes) {
+    for (const route of Object.values(plugin.routes)) {
       const match = PLUGIN_PREFIX_REGEX.exec(route.path);
       if (match)
         prefixes.add(match[1]);
