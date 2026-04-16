@@ -1188,7 +1188,7 @@ await tf.enable(userId);
 | Plugin | Description |
 |--------|-------------|
 | [Admin](#admin) | Admin CRUD for users, roles, groups, permissions + bootstrap |
-| [Rate Limit](#rate-limit) | Sliding window rate limiting with dual-key support |
+| [Rate Limit](#rate-limit) | Sliding-window rate limiting for Fortress auth endpoints and your own app routes (Hono/Express/SvelteKit wrappers + programmatic check()) |
 | [Account Lockout](#account-lockout) | Progressive lockout with exponential backoff |
 | [Email Verification](#email-verification) | Token-based email verification with login gating |
 | [Two-Factor Authentication](#two-factor-authentication) | TOTP, backup codes, trusted devices |
@@ -1254,28 +1254,37 @@ See [Admin plugin docs](docs/plugins/admin.md) for the full endpoint list and pe
 
 ### Rate Limit
 
-Sliding-window rate limiting for login and registration. Tracks both IP and account to prevent distributed attacks while allowing legitimate use.
+Sliding-window rate limiting across every Fortress sensitive endpoint (login, register, refresh, OAuth token, API-key issue) **and** any user-owned route via named rules + per-framework middleware. Tracks per-IP and per-user counters.
 
 ```typescript
 import { rateLimit } from '@bajustone/fortress/plugins/rate-limit';
+import { honoRateLimit } from '@bajustone/fortress/plugins/rate-limit/hono';
 
+// 1. Configure built-in endpoint blocks + named rules for your routes.
 rateLimit({
-  login: {
-    maxPerIp: 10,           // default: 10 attempts per window
-    maxPerAccount: 5,       // default: 5 attempts per window
-    windowSeconds: 900,     // default: 900 (15 min)
+  login:       { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 },
+  register:    { maxPerIp: 3,  windowSeconds: 3600 },
+  refresh:     { maxPerIp: 60, windowSeconds: 60 },
+  oauthToken:  { maxPerIp: 60, windowSeconds: 60 },
+  apiKeyIssue: { maxPerIp: 10, maxPerUser: 10, windowSeconds: 3600 },
+
+  rules: {
+    api: { maxPerIp: 200, maxPerUser: 1000, windowSeconds: 60 },
   },
-  register: {
-    maxPerIp: 3,            // default: 3 registrations per window
-    windowSeconds: 3600,    // default: 3600 (1 hour)
-  },
-  store: customStore,       // optional: custom RateLimitStore (default: in-memory)
+
+  store: customStore,  // optional: custom RateLimitStore (default: in-memory)
 })
+
+// 2. Mount the framework wrapper on your own routes.
+app.use('/api/*', honoRateLimit(fortress, 'api'));
+
+// 3. Or call programmatically (any framework / context):
+await fortress.plugins['rate-limit'].check('api', { ip, userId });
 ```
 
-This is a hook-only plugin -- it works automatically on login and registration with no methods to call. IPv6 addresses are normalized to /64 prefixes to prevent bypass via address rotation.
+Framework wrappers ship for Hono (`honoRateLimit`), Express (`expressRateLimit`), and SvelteKit (`svelteKitRateLimit`). IPv6 addresses are normalized to `/64` prefixes to prevent bypass via address rotation.
 
-When rate-limited, a `FortressError` with code `RATE_LIMITED` and a `retryAfter` value (in seconds) is thrown.
+When rate-limited, a `FortressError` with code `RATE_LIMITED` and a `retryAfter` value (in seconds) is thrown — adapters render it as a 429 with `Retry-After`.
 
 ---
 

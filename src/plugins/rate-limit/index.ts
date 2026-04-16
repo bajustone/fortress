@@ -1,116 +1,341 @@
 /**
  * Sliding-window rate limiting plugin for fortress.
  *
- * Limits requests per identifier (IP, user ID, or custom) over a rolling
- * window. Ships with an in-memory store; bring-your-own store via the
+ * Protects built-in Fortress auth endpoints (`login`, `register`, `refresh`,
+ * plus OAuth token issuance and API-key creation when those plugins are
+ * mounted) and exposes a `check()` method + per-framework middleware
+ * wrappers so consumers can rate-limit any of their own routes.
+ *
+ * Ships with an in-memory store; bring-your-own store via the
  * {@link RateLimitStore} interface for distributed deployments (Redis, etc).
  *
  * @module
  */
 
-import type { FortressPlugin } from '../../core/plugin';
+import type { FortressPlugin, MiddlewareDefinition, PluginContext } from '../../core/plugin';
 import type { RateLimitStore } from './memory-store';
 import { Errors } from '../../core/errors';
 import { createMemoryStore } from './memory-store';
 
 export type { RateLimitStore } from './memory-store';
 
+/**
+ * A single rate-limit rule. At least one of `maxPerIp` / `maxPerUser` must be
+ * set; if neither is set the rule is a no-op. Keys are checked independently
+ * and the first to exceed short-circuits with a `rateLimited` error.
+ */
+export interface RateLimitRule {
+  /** Max requests per client IP in the window. */
+  maxPerIp?: number;
+  /** Max requests per authenticated user in the window. Ignored if the check has no userId. */
+  maxPerUser?: number;
+  /** Sliding window length in seconds. */
+  windowSeconds: number;
+  /** Optional key-namespace override. Defaults to the rule name. */
+  keyPrefix?: string;
+}
+
+/** Rate-limit config block for login (per-account adds an email-scoped key). */
+export interface LoginRateLimit {
+  maxPerIp?: number;
+  maxPerAccount?: number;
+  windowSeconds?: number;
+}
+
+export interface SimpleRateLimit {
+  maxPerIp?: number;
+  maxPerUser?: number;
+  windowSeconds?: number;
+}
+
 export interface RateLimitConfig {
-  /** Rate limit for login attempts. */
-  login?: {
-    /** Max login attempts per IP within the window. Default: 10. */
-    maxPerIp?: number;
-    /** Max login attempts per account identifier within the window. Default: 5. */
-    maxPerAccount?: number;
-    /** Sliding window duration in seconds. Default: 900 (15 minutes). */
-    windowSeconds?: number;
-  };
-  /** Rate limit for registration attempts. */
-  register?: {
-    /** Max registration attempts per IP within the window. Default: 3. */
-    maxPerIp?: number;
-    /** Sliding window duration in seconds. Default: 3600 (1 hour). */
-    windowSeconds?: number;
-  };
-  /** Custom store for rate limit counters. Default: in-memory sliding window. */
+  /** Limit for `POST /auth/login`. */
+  login?: LoginRateLimit;
+  /** Limit for `POST /auth/register`. */
+  register?: { maxPerIp?: number; windowSeconds?: number };
+  /** Limit for `POST /auth/refresh` (runs in `beforeTokenRefresh` hook). */
+  refresh?: SimpleRateLimit;
+  /** Limit for OAuth `POST /oauth/token` (IP-scoped; client_id lives in the form body). */
+  oauthToken?: { maxPerIp?: number; windowSeconds?: number };
+  /** Limit for API-key issuance `POST /api-key/keys` (requires authenticated user). */
+  apiKeyIssue?: SimpleRateLimit;
+
+  /**
+   * Named rules referenced by `methods.check(name, keys)` and the
+   * per-framework middleware wrappers. Use these for your own app routes
+   * or for Fortress endpoints that don't have a dedicated config block
+   * (magic-link, 2FA verify, email verification — these are methods-only,
+   * so wire the limiter in your own handler).
+   */
+  rules?: Record<string, RateLimitRule>;
+
+  /**
+   * Extra path-based bindings for any route served by `fortress.handleRequest`.
+   * Each entry binds a named rule (or inline rule) to a path glob.
+   */
+  paths?: PathBinding[];
+
+  /** Custom store for rate-limit counters. Default: in-memory sliding window. */
   store?: RateLimitStore;
+}
+
+export interface PathBinding {
+  /** Path glob (supports `*` and `:param`). */
+  match: string;
+  /** HTTP methods to restrict to (uppercase). Omit to match all methods. */
+  methods?: string[];
+  /** Pipeline phase. `after-auth` required when keying per user. Default: `before-auth`. */
+  position?: 'before-auth' | 'after-auth';
+  /** Named rule key in `config.rules`, or an inline rule. */
+  rule: string | RateLimitRule;
 }
 
 const DEFAULT_LOGIN = { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 };
 const DEFAULT_REGISTER = { maxPerIp: 3, windowSeconds: 3600 };
+const DEFAULT_REFRESH = { maxPerIp: 60, maxPerUser: 60, windowSeconds: 60 };
+const DEFAULT_OAUTH_TOKEN = { maxPerIp: 60, windowSeconds: 60 };
+const DEFAULT_API_KEY_ISSUE = { maxPerIp: 10, maxPerUser: 10, windowSeconds: 3600 };
 
 /**
  * Normalize an IPv6 address to its /64 prefix to prevent bypass via address rotation.
  * IPv4 addresses are returned as-is.
  */
-function normalizeIp(ip: string | undefined): string {
+export function normalizeIp(ip: string | undefined | null): string {
   if (!ip)
     return 'unknown';
-
-  // Handle IPv4-mapped IPv6 (::ffff:1.2.3.4)
   if (ip.startsWith('::ffff:'))
     return ip.slice(7);
-
-  // IPv6: take first 4 groups (/64 prefix)
-  if (ip.includes(':')) {
-    const expanded = ip.split(':').slice(0, 4).join(':');
-    return expanded;
-  }
-
-  // IPv4: use as-is
+  if (ip.includes(':'))
+    return ip.split(':').slice(0, 4).join(':');
   return ip;
 }
 
-/**
- * Rate limiting plugin for Fortress.
- * Protects login and registration endpoints using a sliding window algorithm
- * with dual-key limiting (per-IP and per-account).
- */
+/** Read an IP from a standard web Request's forwarding headers. */
+function ipFromRequest(request: Request): string {
+  const xff = request.headers.get('x-forwarded-for');
+  if (xff)
+    return xff.split(',')[0].trim();
+  return request.headers.get('x-real-ip') ?? '';
+}
+
+interface CheckKeys {
+  ip?: string | null;
+  userId?: number | string | null;
+}
+
+async function runRule(
+  store: RateLimitStore,
+  ruleName: string,
+  rule: RateLimitRule,
+  keys: CheckKeys,
+): Promise<void> {
+  const windowMs = rule.windowSeconds * 1000;
+  const prefix = rule.keyPrefix ?? ruleName;
+
+  // IP-keyed check: normalize undefined → 'unknown' so missing client IP
+  // still increments (matches legacy behavior and guards against request
+  // smuggling via omitted headers). Skip only when `maxPerIp` is unset.
+  if (rule.maxPerIp != null) {
+    const ip = normalizeIp(keys.ip);
+    const res = await store.increment(`${prefix}:ip:${ip}`, windowMs);
+    if (res.count > rule.maxPerIp) {
+      const retryAfter = Math.max(Math.ceil((res.resetAt - Date.now()) / 1000), 1);
+      throw Errors.rateLimited(retryAfter);
+    }
+  }
+
+  // User-keyed check: only runs when a userId is actually present — no
+  // fallback identifier, as unauthenticated requests can't be rate-limited
+  // per account here.
+  if (rule.maxPerUser != null && keys.userId != null) {
+    const res = await store.increment(`${prefix}:user:${keys.userId}`, windowMs);
+    if (res.count > rule.maxPerUser) {
+      const retryAfter = Math.max(Math.ceil((res.resetAt - Date.now()) / 1000), 1);
+      throw Errors.rateLimited(retryAfter);
+    }
+  }
+}
+
 /**
  * Rate limit plugin factory. Returns a {@link FortressPlugin} that enforces
- * a sliding-window limit per identifier (IP, user ID, or custom). Defaults
- * to an in-memory store; supply your own via `config.store` for distributed
- * deployments.
+ * sliding-window limits on Fortress's sensitive auth endpoints and exposes a
+ * programmatic `check()` method for rate-limiting arbitrary user routes.
+ *
+ * @example Basic usage
+ * ```ts
+ * rateLimit({
+ *   login: { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 900 },
+ *   refresh: { maxPerIp: 60, windowSeconds: 60 },
+ *   rules: {
+ *     api: { maxPerIp: 100, windowSeconds: 60 },
+ *   },
+ * })
+ * ```
+ *
+ * @example Rate-limiting your own routes (Hono)
+ * ```ts
+ * import { honoRateLimit } from '@bajustone/fortress/plugins/rate-limit/hono';
+ * app.use('/api/*', honoRateLimit(fortress, 'api'));
+ * ```
  */
 export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
   const store = config.store ?? createMemoryStore();
-  const loginConfig = { ...DEFAULT_LOGIN, ...config.login };
-  const registerConfig = { ...DEFAULT_REGISTER, ...config.register };
+
+  // Merge defaults only when the endpoint block is present — that way config
+  // keys stay opt-in. Passing `{}` for a block enables it with defaults.
+  const loginCfg = config.login ? { ...DEFAULT_LOGIN, ...config.login } : undefined;
+  const registerCfg = config.register ? { ...DEFAULT_REGISTER, ...config.register } : undefined;
+  const refreshCfg = config.refresh ? { ...DEFAULT_REFRESH, ...config.refresh } : undefined;
+  const oauthTokenCfg = config.oauthToken ? { ...DEFAULT_OAUTH_TOKEN, ...config.oauthToken } : undefined;
+  const apiKeyIssueCfg = config.apiKeyIssue ? { ...DEFAULT_API_KEY_ISSUE, ...config.apiKeyIssue } : undefined;
+
+  // Build the rule registry. User rules first, then built-in names (built-ins
+  // win on collision — prevents accidental override of the auth-endpoint limits).
+  const rules: Record<string, RateLimitRule> = { ...config.rules };
+
+  if (loginCfg) {
+    rules.login = { maxPerIp: loginCfg.maxPerIp, windowSeconds: loginCfg.windowSeconds };
+    // Per-account limit uses the login rule's window but a distinct key prefix.
+    if (loginCfg.maxPerAccount != null) {
+      rules['login:account'] = {
+        maxPerUser: loginCfg.maxPerAccount,
+        windowSeconds: loginCfg.windowSeconds,
+        keyPrefix: 'login:account',
+      };
+    }
+  }
+  if (registerCfg)
+    rules.register = { maxPerIp: registerCfg.maxPerIp, windowSeconds: registerCfg.windowSeconds };
+  if (refreshCfg) {
+    rules.refresh = {
+      maxPerIp: refreshCfg.maxPerIp,
+      maxPerUser: refreshCfg.maxPerUser,
+      windowSeconds: refreshCfg.windowSeconds,
+    };
+  }
+  if (oauthTokenCfg)
+    rules.oauthToken = { maxPerIp: oauthTokenCfg.maxPerIp, windowSeconds: oauthTokenCfg.windowSeconds };
+  if (apiKeyIssueCfg) {
+    rules.apiKeyIssue = {
+      maxPerIp: apiKeyIssueCfg.maxPerIp,
+      maxPerUser: apiKeyIssueCfg.maxPerUser,
+      windowSeconds: apiKeyIssueCfg.windowSeconds,
+    };
+  }
+
+  async function check(ruleName: string, keys: CheckKeys): Promise<void> {
+    const rule = rules[ruleName];
+    if (!rule)
+      throw new Error(`rate-limit: unknown rule '${ruleName}' — declare it in config.rules or add the matching endpoint config block`);
+    await runRule(store, ruleName, rule, keys);
+  }
+
+  // Build MiddlewareDefinition entries for each bound endpoint config block +
+  // user-provided `paths`. Each handler rate-checks then calls next().
+  const middleware: MiddlewareDefinition[] = [];
+
+  const bindBuiltin = (
+    ruleName: string,
+    match: string,
+    methodFilter: string[] | undefined,
+    position: 'before-auth' | 'after-auth',
+  ): void => {
+    middleware.push({
+      path: match,
+      position,
+      handler: async (_ctx: PluginContext, request: unknown, next: () => Promise<void>) => {
+        const req = (request as { request?: Request }).request;
+        if (!req) {
+          await next();
+          return;
+        }
+        if (methodFilter && !methodFilter.includes(req.method)) {
+          await next();
+          return;
+        }
+        const userId = (request as { fortressUserId?: number }).fortressUserId;
+        await check(ruleName, { ip: ipFromRequest(req), userId });
+        await next();
+      },
+    });
+  };
+
+  if (oauthTokenCfg)
+    bindBuiltin('oauthToken', '/oauth/token', ['POST'], 'before-auth');
+  if (apiKeyIssueCfg)
+    bindBuiltin('apiKeyIssue', '/api-key/keys', ['POST'], 'after-auth');
+
+  for (const binding of config.paths ?? []) {
+    const inlineRule = typeof binding.rule === 'object' ? binding.rule : null;
+    const ruleName = typeof binding.rule === 'string' ? binding.rule : `path:${binding.match}`;
+    if (inlineRule)
+      rules[ruleName] = inlineRule;
+    else if (!rules[ruleName])
+      throw new Error(`rate-limit: unknown rule reference '${binding.rule}' in paths config`);
+
+    const position = binding.position ?? 'before-auth';
+    const methodFilter = binding.methods?.map(m => m.toUpperCase());
+    middleware.push({
+      path: binding.match,
+      position,
+      handler: async (_ctx: PluginContext, request: unknown, next: () => Promise<void>) => {
+        const req = (request as { request?: Request }).request;
+        if (!req) {
+          await next();
+          return;
+        }
+        if (methodFilter && !methodFilter.includes(req.method)) {
+          await next();
+          return;
+        }
+        const userId = (request as { fortressUserId?: number }).fortressUserId;
+        await check(ruleName, { ip: ipFromRequest(req), userId });
+        await next();
+      },
+    });
+  }
 
   return {
     name: 'rate-limit',
 
+    ...(middleware.length > 0 ? { middleware } : {}),
+
     hooks: {
       async beforeLogin(ctx) {
-        const ip = normalizeIp(ctx.meta?.ipAddress);
-        const identifier = ctx.email;
-        const windowMs = loginConfig.windowSeconds * 1000;
-
-        // Check per-IP limit
-        const ipResult = await store.increment(`login:ip:${ip}`, windowMs);
-        if (ipResult.count > loginConfig.maxPerIp) {
-          const retryAfter = Math.ceil((ipResult.resetAt - Date.now()) / 1000);
-          throw Errors.rateLimited(Math.max(retryAfter, 1));
-        }
-
-        // Check per-account limit
-        const accountResult = await store.increment(`login:account:${identifier}`, windowMs);
-        if (accountResult.count > loginConfig.maxPerAccount) {
-          const retryAfter = Math.ceil((accountResult.resetAt - Date.now()) / 1000);
-          throw Errors.rateLimited(Math.max(retryAfter, 1));
-        }
+        if (!loginCfg)
+          return;
+        const ip = ctx.meta?.ipAddress;
+        const email = ctx.email;
+        // Per-IP
+        if (loginCfg.maxPerIp != null)
+          await check('login', { ip });
+        // Per-account (identifier keyed as userId slot on the synthetic rule)
+        if (loginCfg.maxPerAccount != null)
+          await check('login:account', { userId: email });
       },
 
       async beforeRegister(ctx) {
-        const ip = normalizeIp(ctx.meta?.ipAddress);
-        const windowMs = registerConfig.windowSeconds * 1000;
+        if (!registerCfg)
+          return;
+        await check('register', { ip: ctx.meta?.ipAddress });
+      },
 
-        const ipResult = await store.increment(`register:ip:${ip}`, windowMs);
-        if (ipResult.count > registerConfig.maxPerIp) {
-          const retryAfter = Math.ceil((ipResult.resetAt - Date.now()) / 1000);
-          throw Errors.rateLimited(Math.max(retryAfter, 1));
-        }
+      async beforeTokenRefresh(ctx) {
+        if (!refreshCfg)
+          return;
+        const ip = ctx.meta?.ipAddress;
+        // Best-effort per-user limit: the hook runs before the refresh token
+        // is verified, so userId isn't known yet. IP-only here; per-user is
+        // enforced via the `/auth/refresh`-aware middleware when you mount
+        // refresh under a user-scoped wrapper in your own code.
+        await check('refresh', { ip });
       },
     },
+
+    methods: (_ctx: PluginContext) => ({
+      check,
+      /** Read-only view of the resolved rule registry (debug / introspection). */
+      listRules: (): string[] => Object.keys(rules),
+    }),
   };
 }

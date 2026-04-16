@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- feat(rate-limit): extend coverage to `refresh` (`beforeTokenRefresh` hook), OAuth `/oauth/token`, and API-key issuance (`POST /api-key/keys`) via path-bound plugin middleware.
+- feat(rate-limit): **named rules** (`config.rules`) referenced from a new programmatic `fortress.plugins['rate-limit'].check(ruleName, { ip, userId })` surface.
+- feat(rate-limit): per-framework wrappers — `honoRateLimit`, `expressRateLimit`, `svelteKitRateLimit` — published as sub-path exports `./plugins/rate-limit/{hono,express,sveltekit}`. Rate-limit any user-owned route in one line.
+- feat(rate-limit): `paths` config accepts arbitrary path-glob bindings to a rule + optional method filter, for any Fortress-handled route without a built-in block.
+
+### Changed (breaking)
+- `RateLimitConfig.login` / `register` are now fully opt-in — omitting a block disables that hook (previously both were always enabled with defaults if the plugin was registered). Pass an empty object (`login: {}`) to enable defaults.
+- Rate-limit store key format changed from `login:ip:<ip>` / `login:account:<email>` to `<rule>:ip:<ip>` / `<rule>:user:<value>` for consistency across all rule types. Clears automatically with in-memory store; external stores on v0.0.x may need a flush.
+
 ## [0.0.36] - 2026-04-16
 
 ### Added

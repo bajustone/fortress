@@ -41,6 +41,7 @@ import { magicLink } from '../../src/plugins/magic-link';
 import { oauth } from '../../src/plugins/oauth';
 import { openapi } from '../../src/plugins/openapi';
 import { rateLimit } from '../../src/plugins/rate-limit';
+import { expressRateLimit } from '../../src/plugins/rate-limit/express';
 import { socialLogin } from '../../src/plugins/social-login';
 import { tenancy } from '../../src/plugins/tenancy';
 import { twoFactor } from '../../src/plugins/two-factor';
@@ -71,6 +72,13 @@ const fortress = createFortress({
     rateLimit({
       login: { maxPerIp: 100, maxPerAccount: 10, windowSeconds: 60 },
       register: { maxPerIp: 50, windowSeconds: 60 },
+      refresh: { maxPerIp: 120, windowSeconds: 60 },
+      oauthToken: { maxPerIp: 60, windowSeconds: 60 },
+      apiKeyIssue: { maxPerIp: 10, maxPerUser: 10, windowSeconds: 3600 },
+      // Named rules consumed by expressRateLimit() on user-owned routes.
+      rules: {
+        api: { maxPerIp: 200, maxPerUser: 1000, windowSeconds: 60 },
+      },
     }),
     accountLockout({
       maxFailedAttempts: 3,
@@ -435,6 +443,11 @@ app.delete('/auth/api-keys/:id', async (req, res, next) => {
 // ═══════════════════════════════════════════════════════════════════════════
 // 6. RBAC-protected routes
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Rate-limit all /api/* routes using the named 'api' rule defined above.
+// Sits before authMiddleware so abusive unauthenticated hits are rejected
+// early without paying for principal resolution.
+app.use('/api', expressRateLimit(fortress, 'api'));
 
 app.use('/api/users', authMiddleware);
 app.use('/api/groups', authMiddleware);

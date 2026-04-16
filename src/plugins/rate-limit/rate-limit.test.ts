@@ -279,7 +279,10 @@ describe('rate-limit plugin', () => {
       const fortress = createFortress({
         jwt: { secret: SECRET },
         database: createTestAdapter(),
-        plugins: [rateLimit({ store: customStore })],
+        plugins: [rateLimit({
+          login: { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 60 },
+          store: customStore,
+        })],
       });
 
       await fortress.auth.createUser({
@@ -293,6 +296,290 @@ describe('rate-limit plugin', () => {
       // Should have called increment for IP and account keys
       expect(calls.some(k => k.startsWith('login:ip:'))).toBe(true);
       expect(calls.some(k => k.startsWith('login:account:'))).toBe(true);
+    });
+  });
+
+  describe('refresh rate limiting', () => {
+    it('blocks excessive refresh attempts from the same IP', async () => {
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          rateLimit({
+            refresh: { maxPerIp: 2, windowSeconds: 60 },
+          }),
+        ],
+      });
+
+      await fortress.auth.createUser({
+        email: 'r@example.com',
+        name: 'R',
+        password: 'valid-password-123',
+      });
+      const meta = { ipAddress: '9.9.9.9' };
+      const { refreshToken } = await fortress.auth.login('r@example.com', 'valid-password-123', meta);
+      if (!refreshToken)
+        throw new Error('expected refreshToken');
+
+      // Two refreshes within limit
+      let current = refreshToken;
+      for (let i = 0; i < 2; i++) {
+        const next = await fortress.auth.refresh(current, meta);
+        current = next.refreshToken;
+      }
+
+      // Third is blocked
+      try {
+        await fortress.auth.refresh(current, meta);
+        expect.fail('Should have thrown');
+      }
+      catch (e: any) {
+        expect(e.code).toBe('RATE_LIMITED');
+        expect(e.retryAfter).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  describe('programmatic check() surface', () => {
+    it('rejects when rule exceeded and prefixes keys by rule name', async () => {
+      const calls: string[] = [];
+      const customStore = {
+        async increment(key: string, _windowMs: number) {
+          calls.push(key);
+          return { count: calls.filter(c => c === key).length, resetAt: Date.now() + 60_000 };
+        },
+        async get() {
+          return null;
+        },
+      };
+
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          rateLimit({
+            rules: {
+              api: { maxPerIp: 2, windowSeconds: 60 },
+            },
+            store: customStore,
+          }),
+        ],
+      });
+
+      const methods = fortress.plugins['rate-limit'] as unknown as {
+        check: (r: string, k: { ip?: string; userId?: number }) => Promise<void>;
+        listRules: () => string[];
+      };
+
+      expect(methods.listRules()).toContain('api');
+
+      await methods.check('api', { ip: '1.2.3.4' });
+      await methods.check('api', { ip: '1.2.3.4' });
+
+      await expect(methods.check('api', { ip: '1.2.3.4' })).rejects.toMatchObject({
+        code: 'RATE_LIMITED',
+      });
+
+      expect(calls.every(k => k.startsWith('api:ip:'))).toBe(true);
+    });
+
+    it('keys independently by user vs ip', async () => {
+      const calls: string[] = [];
+      const customStore = {
+        async increment(key: string, _windowMs: number) {
+          calls.push(key);
+          return { count: calls.filter(c => c === key).length, resetAt: Date.now() + 60_000 };
+        },
+        async get() {
+          return null;
+        },
+      };
+
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          rateLimit({
+            rules: {
+              mixed: { maxPerIp: 10, maxPerUser: 10, windowSeconds: 60 },
+            },
+            store: customStore,
+          }),
+        ],
+      });
+
+      const methods = fortress.plugins['rate-limit'] as unknown as {
+        check: (r: string, k: { ip?: string; userId?: number }) => Promise<void>;
+      };
+
+      await methods.check('mixed', { ip: '1.2.3.4', userId: 42 });
+      expect(calls).toContain('mixed:ip:1.2.3.4');
+      expect(calls).toContain('mixed:user:42');
+    });
+
+    it('throws when referencing an unknown rule', async () => {
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [rateLimit({ rules: { api: { maxPerIp: 5, windowSeconds: 60 } } })],
+      });
+      const methods = fortress.plugins['rate-limit'] as unknown as {
+        check: (r: string, k: { ip?: string }) => Promise<void>;
+      };
+      await expect(methods.check('missing', { ip: '1.1.1.1' })).rejects.toThrow(/unknown rule/);
+    });
+  });
+
+  describe('middleware registration', () => {
+    it('registers middleware for oauthToken and apiKeyIssue when configured', () => {
+      const plugin = rateLimit({
+        oauthToken: { maxPerIp: 100, windowSeconds: 60 },
+        apiKeyIssue: { maxPerIp: 10, windowSeconds: 3600 },
+      });
+      const paths = (plugin.middleware ?? []).map(m => ({ path: m.path, pos: m.position }));
+      expect(paths).toContainEqual({ path: '/oauth/token', pos: 'before-auth' });
+      expect(paths).toContainEqual({ path: '/api-key/keys', pos: 'after-auth' });
+    });
+
+    it('registers middleware for user-defined paths', () => {
+      const plugin = rateLimit({
+        rules: { strict: { maxPerIp: 5, windowSeconds: 60 } },
+        paths: [
+          { match: '/webhooks/*', methods: ['POST'], rule: 'strict' },
+          { match: '/public/*', position: 'before-auth', rule: { maxPerIp: 100, windowSeconds: 60 } },
+        ],
+      });
+      expect(plugin.middleware).toHaveLength(2);
+      expect(plugin.middleware?.[0].path).toBe('/webhooks/*');
+      expect(plugin.middleware?.[1].path).toBe('/public/*');
+    });
+
+    it('emits no middleware when only hook-based configs are present', () => {
+      const plugin = rateLimit({
+        login: { maxPerIp: 5, windowSeconds: 60 },
+        register: { maxPerIp: 5, windowSeconds: 60 },
+      });
+      expect(plugin.middleware).toBeUndefined();
+    });
+  });
+
+  describe('end-to-end via fortress.handleRequest', () => {
+    it('oauthToken middleware rate-limits POST /oauth/token through handleRequest', async () => {
+      // Configure a tight limit and drive requests through handleRequest.
+      // We intentionally don't mount the oauth plugin — the before-auth
+      // middleware runs ahead of route matching, so rate-limiting fires
+      // before the 404. That confirms end-to-end wiring without dragging
+      // in the oauth dependency graph.
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [rateLimit({ oauthToken: { maxPerIp: 2, windowSeconds: 60 } })],
+      });
+
+      const makeRequest = (): Request =>
+        new Request('http://localhost/oauth/token', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+            'x-forwarded-for': '9.9.9.9',
+          },
+          body: 'grant_type=client_credentials',
+        });
+
+      // Two within limit — not blocked by rate-limit (they'll 404 because
+      // oauth isn't mounted; either way NOT 429).
+      const r1 = await fortress.handleRequest(makeRequest());
+      const r2 = await fortress.handleRequest(makeRequest());
+      expect(r1.status).not.toBe(429);
+      expect(r2.status).not.toBe(429);
+
+      // Third hits the rate limiter.
+      const r3 = await fortress.handleRequest(makeRequest());
+      expect(r3.status).toBe(429);
+      expect(r3.headers.get('Retry-After')).toBeTruthy();
+    });
+
+    it('paths binding enforces method filter (GET passes, POST is limited)', async () => {
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          rateLimit({
+            rules: { mutations: { maxPerIp: 1, windowSeconds: 60 } },
+            paths: [{ match: '/things/*', methods: ['POST'], rule: 'mutations' }],
+          }),
+        ],
+      });
+
+      // GET is never rate-limited (method filter excludes it). Both GETs
+      // return 404 from handleRequest because /things is not a fortress route,
+      // but neither is a 429.
+      const g1 = await fortress.handleRequest(new Request('http://localhost/things/a', {
+        headers: { 'x-forwarded-for': '1.1.1.1' },
+      }));
+      const g2 = await fortress.handleRequest(new Request('http://localhost/things/b', {
+        headers: { 'x-forwarded-for': '1.1.1.1' },
+      }));
+      expect(g1.status).not.toBe(429);
+      expect(g2.status).not.toBe(429);
+
+      // First POST passes the rate-limit check, second is blocked with 429.
+      const p1 = await fortress.handleRequest(new Request('http://localhost/things/a', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '1.1.1.1' },
+      }));
+      const p2 = await fortress.handleRequest(new Request('http://localhost/things/b', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '1.1.1.1' },
+      }));
+      expect(p1.status).not.toBe(429);
+      expect(p2.status).toBe(429);
+    });
+
+    it('method filter is case-insensitive', async () => {
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          rateLimit({
+            rules: { r: { maxPerIp: 1, windowSeconds: 60 } },
+            // Lowercase on purpose — the plugin should uppercase before matching.
+            paths: [{ match: '/x/*', methods: ['post'], rule: 'r' }],
+          }),
+        ],
+      });
+
+      const hit = async (): Promise<number> => (await fortress.handleRequest(new Request('http://localhost/x/a', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '2.2.2.2' },
+      }))).status;
+
+      expect(await hit()).not.toBe(429);
+      expect(await hit()).toBe(429);
+    });
+
+    it('cross-rule isolation: exceeding one rule does not affect another', async () => {
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          rateLimit({
+            rules: {
+              a: { maxPerIp: 1, windowSeconds: 60 },
+              b: { maxPerIp: 1, windowSeconds: 60 },
+            },
+          }),
+        ],
+      });
+      const methods = fortress.plugins['rate-limit'] as unknown as {
+        check: (r: string, k: { ip: string }) => Promise<void>;
+      };
+
+      await methods.check('a', { ip: '3.3.3.3' });
+      await expect(methods.check('a', { ip: '3.3.3.3' })).rejects.toMatchObject({ code: 'RATE_LIMITED' });
+
+      // Rule 'b' is still fresh even though 'a' is exhausted.
+      await methods.check('b', { ip: '3.3.3.3' });
     });
   });
 });
