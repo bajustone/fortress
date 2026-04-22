@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.41] - 2026-04-22
+
+### Fixed
+- fix input schemas
+
 ## [0.0.40] - 2026-04-16
 
 ### Fixed
