@@ -262,6 +262,47 @@ describe('schema detection (Zod-like Standard Schema)', () => {
     expect(result).toBe(s); // same reference
   });
 
+  /** Mimics fetcher: JSON Schema object with ~standard bolted on, no jsonSchema.input adapter. */
+  function mockFetcherObject(): StandardSchemaV1 & { type: 'object'; properties: Record<string, unknown>; required: string[] } {
+    return {
+      'type': 'object',
+      'properties': { name: { type: 'string' } },
+      'required': ['name'],
+      '~standard': {
+        version: 1,
+        vendor: 'fetcher',
+        validate: (value: unknown) => ({ value }),
+      },
+    } as any;
+  }
+
+  it('extractJsonSchema returns fetcher-shaped schema as-is (non-fortress vendor, no adapter)', () => {
+    const f = mockFetcherObject();
+    const result = extractJsonSchema(f);
+    expect(result).toBe(f);
+    expect(result).toMatchObject({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    });
+  });
+
+  it('extractJsonSchema handles $ref-shaped Standard Schema regardless of vendor', () => {
+    const r = {
+      '$ref': '#/components/schemas/User',
+      '~standard': { version: 1, vendor: 'fetcher', validate: (v: unknown) => ({ value: v }) },
+    } as any;
+    expect(extractJsonSchema(r)).toBe(r);
+  });
+
+  it('extractJsonSchema falls back to {} for wrapper-style schema whose type is not a JSON Schema type', () => {
+    const fakeZod = {
+      'type': 'ZodObject',
+      '~standard': { version: 1, vendor: 'zod', validate: (v: unknown) => ({ value: v }) },
+    } as any;
+    expect(extractJsonSchema(fakeZod)).toEqual({});
+  });
+
   it('endpoint builder extracts JSON Schema from external Standard Schema', () => {
     const zod = mockZodSchema();
     const ep = endpoint('POST', '/test')

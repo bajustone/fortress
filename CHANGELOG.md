@@ -30,6 +30,9 @@
 
 ## Unreleased
 
+### Fixed
+- `extractJsonSchema` now recognizes Standard Schema implementations that are themselves JSON Schema objects (e.g. `@bajustone/fetcher`), not just fortress. Previously only schemas with `vendor: 'fortress'` or a `~standard.jsonSchema.input()` adapter (Zod, Valibot, ArkType) survived — fetcher schemas fell through to `{}` and bodies/queries/params disappeared from generated OpenAPI specs. Detection uses structural JSON Schema props (`type` matching a spec type, or `$ref`/`oneOf`/`anyOf`/`allOf`), so Zod-style wrappers whose `type` is an internal kind string (`'ZodObject'`) still route through the adapter path.
+
 ### Added
 - feat(rate-limit): extend coverage to `refresh` (`beforeTokenRefresh` hook), OAuth `/oauth/token`, and API-key issuance (`POST /api-key/keys`) via path-bound plugin middleware.
 - feat(rate-limit): **named rules** (`config.rules`) referenced from a new programmatic `fortress.plugins['rate-limit'].check(ruleName, { ip, userId })` surface.

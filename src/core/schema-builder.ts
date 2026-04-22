@@ -219,12 +219,37 @@ export function isFortressSchema(value: unknown): value is FortressSchema {
     && ('type' in (value as any) || '$ref' in (value as any) || 'oneOf' in (value as any) || 'anyOf' in (value as any));
 }
 
+/** Valid JSON Schema type values per the spec. */
+const JSON_SCHEMA_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'array', 'null']);
+
+/**
+ * `true` if the value carries structural JSON Schema props directly on the
+ * object — a valid `type` value, or `$ref`/`oneOf`/`anyOf`/`allOf`. Libraries
+ * that implement Standard Schema over a JSON Schema object (fortress, fetcher)
+ * match this; wrapper schemas like Zod do not (their `type` holds internal
+ * kind strings like `'ZodObject'`, not JSON Schema types).
+ */
+function hasJsonSchemaShape(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null)
+    return false;
+  const v = value as any;
+  if ('$ref' in v || 'oneOf' in v || 'anyOf' in v || 'allOf' in v)
+    return true;
+  if (typeof v.type === 'string' && JSON_SCHEMA_TYPES.has(v.type))
+    return true;
+  if (Array.isArray(v.type) && v.type.every((t: unknown) => typeof t === 'string' && JSON_SCHEMA_TYPES.has(t)))
+    return true;
+  return false;
+}
+
 /**
  * Extract a {@link JSONSchema} from any schema input.
  *
  * - {@link FortressSchema}: returned as-is (it already _is_ JSON Schema).
- * - External Standard Schema: extracted via the `~standard.jsonSchema`
- *   adapter if the implementation provides one (Zod, Valibot, ArkType, etc).
+ * - External Standard Schema with a `~standard.jsonSchema.input()` adapter
+ *   (Zod, Valibot, ArkType, etc.): extracted via the adapter.
+ * - External Standard Schema that already IS a JSON Schema object (fetcher,
+ *   etc.): returned as-is.
  * - Anything else: empty object fallback.
  */
 export function extractJsonSchema(schema: FortressSchema<any> | StandardSchemaV1<any>): JSONSchema {
@@ -232,11 +257,15 @@ export function extractJsonSchema(schema: FortressSchema<any> | StandardSchemaV1
   if (isFortressSchema(schema)) {
     return schema;
   }
-  // External Standard Schema — try ~standard.jsonSchema interface
   if (isStandardSchema(schema)) {
     const std = (schema as any)['~standard'];
+    // Wrapper Standard Schemas that expose a JSON Schema adapter (Zod, Valibot, ...)
     if (std?.jsonSchema?.input) {
       return std.jsonSchema.input({ target: 'draft-2020-12' }) as JSONSchema;
+    }
+    // Standard Schemas that already ARE JSON Schema objects (fetcher, ...)
+    if (hasJsonSchemaShape(schema)) {
+      return schema as JSONSchema;
     }
   }
   // Fallback
