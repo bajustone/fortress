@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.42] - 2026-04-29
+
+### Added
+- oauth2
+
 ## [Unreleased]
 
 ### Added
