@@ -1363,9 +1363,11 @@ OAuth 2.0 authorization server with PKCE support. Makes Fortress an OAuth/OIDC *
 - `GET /oauth/userinfo` — OpenID Connect userinfo
 - `GET /oauth/.well-known/openid-configuration` — OIDC discovery
 
-**Methods:** `createClient()`, `createAuthorizationCode()`, `exchangeCode()`, `clientCredentialsGrant()`, `revokeToken()`, `introspectToken()`, `createPendingFlow()`, `resumePendingFlow()`, `getUserInfo()`, `handleTokenRequest()`, `handleIntrospectRequest()`, `handleRevokeRequest()`, `handleUserInfoRequest()`, `handleDiscovery()`, `resolveTokenPermissions()`
+**Methods:** `createClient()`, `createAuthorizationCode()`, `exchangeCode()`, `clientCredentialsGrant()`, `revokeToken()`, `introspectToken()`, `createPendingFlow()`, `getPendingFlow()`, `resumePendingFlow()`, `getUserInfo()`, `handleTokenRequest()`, `handleIntrospectRequest()`, `handleRevokeRequest()`, `handleUserInfoRequest()`, `handleDiscovery()`, `handleAuthorizeRequest()`, `handleGetFlow()`, `handleApproveFlow()`, `handleDenyFlow()`, `resolveTokenPermissions()`
 
 **Identity broker pattern:** When an unauthenticated user hits `/oauth/authorize`, the plugin stores OAuth params in `oauth_pending_flow`, redirects to login, then resumes the flow after authentication.
+
+**SPA-friendly consent flow (Pattern B):** Opt-in via `enableAuthorizeEndpoint`/`enableConsentApi` + `loginUrl`/`consentUrl`. Fortress runs the OAuth state machine and returns 302s + JSON; the host app (SvelteKit/Next/etc.) renders login + consent screens. PKCE fields stay server-side. Plugin contributes four routes: `GET /oauth/authorize`, `GET /oauth/flows/:flowId`, `POST /oauth/flows/:flowId/approve`, `POST /oauth/flows/:flowId/deny` — each backed by a transport-agnostic method of the same `handle*` name.
 
 **PKCE:** `src/plugins/oauth/pkce.ts` — S256 challenge generation and verification via `crypto.subtle`.
 

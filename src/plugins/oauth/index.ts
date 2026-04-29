@@ -26,6 +26,32 @@ export interface OAuthConfig {
   scopePermissionMap?: Record<string, { resource: string; action: string }>;
   /** Base URL for the OAuth server (used in OIDC discovery document) */
   issuerUrl?: string;
+  /**
+   * Mount the front-door `GET /oauth/authorize` endpoint. Off by default —
+   * opt in once your host app has wired up `loginUrl` and `consentUrl`.
+   * Plugin methods (`createPendingFlow`, `handleAuthorizeRequest`) stay
+   * available regardless.
+   */
+  enableAuthorizeEndpoint?: boolean;
+  /**
+   * Mount the consent-API endpoints (`GET /oauth/flows/:flowId`,
+   * `POST /oauth/flows/:flowId/approve`, `POST /oauth/flows/:flowId/deny`).
+   * Off by default — opt in for the SPA-friendly consent flow (Pattern B).
+   * The corresponding methods stay available regardless.
+   */
+  enableConsentApi?: boolean;
+  /**
+   * Where the host app's sign-in page lives, e.g.
+   * `'https://app.example.com/signin'`. The authorize endpoint redirects
+   * unauthenticated users to `${loginUrl}?flow=<id>`.
+   */
+  loginUrl?: string;
+  /**
+   * Where the host app's consent page lives, e.g.
+   * `'https://app.example.com/oauth/consent'`. The authorize endpoint
+   * redirects authenticated users to `${consentUrl}?flow=<id>`.
+   */
+  consentUrl?: string;
 }
 
 interface OAuthClientRecord {
@@ -112,6 +138,9 @@ export interface OAuthMethods {
   revokeToken: (token: string) => Promise<void>;
   introspectToken: (token: string) => Promise<{ active: boolean; clientId?: string; userId?: number; scope?: string }>;
   createPendingFlow: (params: { clientId: string; redirectUri: string; scope?: string; state: string; codeChallenge?: string; codeChallengeMethod?: string }) => Promise<{ flowId: number }>;
+  /** Read a pending flow without consuming it. Throws if not found or expired. */
+  getPendingFlow: (flowId: number) => Promise<PendingFlowRecord>;
+  /** Read and delete a pending flow (single-use). Throws if not found or expired. */
   resumePendingFlow: (flowId: number) => Promise<PendingFlowRecord>;
   getUserInfo: (token: string) => Promise<FortressUser | null>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
@@ -120,6 +149,42 @@ export interface OAuthMethods {
   handleRevokeRequest: (body: { token: string }) => Promise<void>;
   handleUserInfoRequest: (bearerToken: string) => Promise<FortressUser | null>;
   handleDiscovery: () => Record<string, unknown>;
+  /**
+   * Handle GET /oauth/authorize. Validates the query, creates a pending
+   * flow, and returns the URL to redirect the browser to (login if no
+   * user, consent if authenticated).
+   */
+  handleAuthorizeRequest: (
+    query: Record<string, string | undefined>,
+    context: { userId?: number },
+  ) => Promise<{ redirectUrl: string; flowId: number }>;
+  /**
+   * Handle GET /oauth/flows/:flowId. Returns the consent metadata the host
+   * app's consent page renders. Throws if the flow is unknown or expired.
+   */
+  handleGetFlow: (flowId: number) => Promise<{
+    flowId: number;
+    client: { clientId: string; name: string };
+    redirectUri: string;
+    scopes: string[];
+    state: string;
+  }>;
+  /**
+   * Handle POST /oauth/flows/:flowId/approve. Issues an authorization code
+   * for the authenticated user, deletes the pending flow, and returns the
+   * URL the browser should be sent back to (the OAuth client's redirect_uri
+   * with `?code=...&state=...`).
+   */
+  handleApproveFlow: (
+    flowId: number,
+    context: { userId: number },
+  ) => Promise<{ redirectUrl: string }>;
+  /**
+   * Handle POST /oauth/flows/:flowId/deny. Deletes the pending flow and
+   * returns the URL the browser should be sent back to (redirect_uri with
+   * `?error=access_denied&state=...`).
+   */
+  handleDenyFlow: (flowId: number) => Promise<{ redirectUrl: string }>;
   resolveTokenPermissions: (token: string) => Promise<{ resource: string; action: string }[]>;
 }
 /**
@@ -471,8 +536,34 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       },
 
       /**
-       * Resume a pending OAuth flow after user authenticates.
-       * Returns the stored flow params so the caller can generate an auth code.
+       * Read a pending OAuth flow without consuming it.
+       *
+       * Used by the consent UI to fetch flow metadata (client, scopes, redirect URI)
+       * before the user approves or denies. Safe to call multiple times.
+       *
+       * @throws {FortressError} `not_found` if the flow doesn't exist.
+       * @throws {FortressError} `bad_request` if the flow has expired.
+       */
+      async getPendingFlow(flowId: number): Promise<PendingFlowRecord> {
+        const flow = await ctx.db.findOne<PendingFlowRecord>({
+          model: 'oauth_pending_flow',
+          where: [{ field: 'id', operator: '=', value: flowId }],
+        });
+
+        if (!flow)
+          throw Errors.notFound('Pending flow not found');
+
+        if (flow.expiresAt < new Date())
+          throw Errors.badRequest('Pending flow expired');
+
+        return flow;
+      },
+
+      /**
+       * Resume a pending OAuth flow after user authenticates (single-use consume).
+       *
+       * Returns the stored flow params and deletes the row so the same flow can't
+       * be replayed. Use {@link OAuthMethods.getPendingFlow} for non-destructive reads.
        */
       async resumePendingFlow(flowId: number): Promise<PendingFlowRecord> {
         const flow = await ctx.db.findOne<PendingFlowRecord>({
@@ -498,6 +589,152 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       /**
        * Get userinfo for an access token (OpenID Connect userinfo endpoint).
        */
+      /**
+       * Handle the authorize endpoint. Validates the OAuth query, creates a
+       * pending flow row, and decides whether the browser should be sent to
+       * the host app's login page or consent page next.
+       *
+       * The dispatcher turns `redirectUrl` into a 302 response. Errors are
+       * thrown as {@link FortressError}s so they surface as a 4xx JSON body
+       * (the OAuth client is expected to handle that).
+       */
+      async handleAuthorizeRequest(
+        query: Record<string, string | undefined>,
+        context: { userId?: number },
+      ): Promise<{ redirectUrl: string; flowId: number }> {
+        if (!config.loginUrl || !config.consentUrl) {
+          throw Errors.badRequest(
+            'OAuth plugin is missing loginUrl/consentUrl configuration',
+          );
+        }
+
+        const clientId = query.client_id;
+        const redirectUri = query.redirect_uri;
+        const responseType = query.response_type;
+        const state = query.state;
+        const scope = query.scope;
+        const codeChallenge = query.code_challenge;
+        const codeChallengeMethod = query.code_challenge_method;
+
+        if (!clientId)
+          throw Errors.badRequest('client_id is required');
+        if (!redirectUri)
+          throw Errors.badRequest('redirect_uri is required');
+        if (responseType !== 'code')
+          throw Errors.badRequest('response_type must be "code"');
+        if (!state)
+          throw Errors.badRequest('state is required');
+
+        // Validate the client and redirect URI up front so a bogus client
+        // never reaches the user-facing pages.
+        const client = await ctx.db.findOne<OAuthClientRecord>({
+          model: 'oauth_client',
+          where: [{ field: 'clientId', operator: '=', value: clientId }],
+        });
+        if (!client)
+          throw Errors.badRequest('Unknown client_id');
+
+        const allowedRedirects = JSON.parse(client.redirectUris) as string[];
+        if (!allowedRedirects.includes(redirectUri))
+          throw Errors.badRequest('Invalid redirect_uri');
+
+        // PKCE method validation — we only support S256 (matches the
+        // discovery document).
+        if (codeChallenge && codeChallengeMethod && codeChallengeMethod !== 'S256') {
+          throw Errors.badRequest('Only S256 code_challenge_method is supported');
+        }
+
+        const expiresAt = new Date(Date.now() + pendingFlowExpiry * 1000);
+        const flow = await ctx.db.create<PendingFlowRecord>({
+          model: 'oauth_pending_flow',
+          data: {
+            clientId,
+            redirectUri,
+            scope: scope ?? null,
+            state,
+            codeChallenge: codeChallenge ?? null,
+            codeChallengeMethod: codeChallengeMethod ?? null,
+            expiresAt,
+          },
+        });
+
+        const target = context.userId ? config.consentUrl : config.loginUrl;
+        const url = new URL(target);
+        url.searchParams.set('flow', String(flow.id));
+        return { redirectUrl: url.toString(), flowId: flow.id };
+      },
+
+      /**
+       * Read a pending flow as the consent UI's data source. Strips fields
+       * that should never leave the server (PKCE challenge / method).
+       */
+      async handleGetFlow(flowId: number): Promise<{
+        flowId: number;
+        client: { clientId: string; name: string };
+        redirectUri: string;
+        scopes: string[];
+        state: string;
+      }> {
+        const flow = await this.getPendingFlow(flowId);
+        const client = await ctx.db.findOne<OAuthClientRecord>({
+          model: 'oauth_client',
+          where: [{ field: 'clientId', operator: '=', value: flow.clientId }],
+        });
+        if (!client)
+          throw Errors.notFound('OAuth client not found');
+
+        return {
+          flowId: flow.id,
+          client: { clientId: client.clientId, name: client.name },
+          redirectUri: flow.redirectUri,
+          scopes: flow.scope ? flow.scope.split(' ').filter(Boolean) : [],
+          state: flow.state,
+        };
+      },
+
+      /**
+       * Approve a pending flow on behalf of the authenticated user. Creates
+       * the authorization code, consumes the pending flow, and returns the
+       * client's redirect URI with `?code=...&state=...` appended.
+       */
+      async handleApproveFlow(
+        flowId: number,
+        context: { userId: number },
+      ): Promise<{ redirectUrl: string }> {
+        // Read first so we can fail before issuing a code if anything's wrong.
+        const flow = await this.getPendingFlow(flowId);
+        const { code } = await this.createAuthorizationCode({
+          clientId: flow.clientId,
+          userId: context.userId,
+          redirectUri: flow.redirectUri,
+          scope: flow.scope ?? undefined,
+          codeChallenge: flow.codeChallenge ?? undefined,
+          codeChallengeMethod: flow.codeChallengeMethod ?? undefined,
+        });
+        // Consume the pending flow only after the code is in place.
+        await ctx.db.delete({
+          model: 'oauth_pending_flow',
+          where: [{ field: 'id', operator: '=', value: flow.id }],
+        });
+
+        const url = new URL(flow.redirectUri);
+        url.searchParams.set('code', code);
+        url.searchParams.set('state', flow.state);
+        return { redirectUrl: url.toString() };
+      },
+
+      /**
+       * Deny a pending flow. Consumes the flow row and returns the OAuth
+       * client's redirect URI with `?error=access_denied&state=...`.
+       */
+      async handleDenyFlow(flowId: number): Promise<{ redirectUrl: string }> {
+        const flow = await this.resumePendingFlow(flowId);
+        const url = new URL(flow.redirectUri);
+        url.searchParams.set('error', 'access_denied');
+        url.searchParams.set('state', flow.state);
+        return { redirectUrl: url.toString() };
+      },
+
       async getUserInfo(token: string): Promise<FortressUser | null> {
         const tokenHash = await hashToken(token);
         const record = await ctx.db.findOne<AccessTokenRecord>({
@@ -657,6 +894,121 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
     }),
 
     routes: {
+      // Front door for the auth-code flow. Opt-in: only mounted when the
+      // host app has wired up `loginUrl` and `consentUrl`.
+      ...(config.enableAuthorizeEndpoint
+        ? {
+            handleAuthorizeRequest: {
+              method: 'GET' as const,
+              path: '/oauth/authorize',
+              handler: 'handleAuthorizeRequest',
+              meta: {
+                summary: 'Start an OAuth authorization-code flow',
+                tags: ['OAuth'],
+                security: ['none'] as ('none' | 'basic' | 'bearer')[],
+              },
+              input: {
+                query: {
+                  type: 'object' as const,
+                  properties: {
+                    client_id: { type: 'string' as const, description: 'Registered OAuth client ID' },
+                    redirect_uri: { type: 'string' as const, format: 'uri', description: 'Must match a redirect URI registered with the client' },
+                    response_type: { type: 'string' as const, enum: ['code'], description: 'Only "code" is supported' },
+                    scope: { type: 'string' as const, description: 'Space-separated requested scopes' },
+                    state: { type: 'string' as const, description: 'Opaque value returned to the client; required to prevent CSRF' },
+                    code_challenge: { type: 'string' as const, description: 'PKCE code challenge (recommended for public clients)' },
+                    code_challenge_method: { type: 'string' as const, enum: ['S256'], description: 'PKCE method — only S256 is supported' },
+                  },
+                  required: ['client_id', 'redirect_uri', 'response_type', 'state'],
+                },
+              },
+              responses: {
+                302: { description: 'Redirect to login (unauthenticated) or consent (authenticated) page with ?flow=<id>' },
+                400: { description: 'Invalid request' },
+              },
+            },
+          }
+        : {}),
+      // Consent API — SPA-friendly flow inspection + approve/deny.
+      ...(config.enableConsentApi
+        ? {
+            handleGetFlow: {
+              method: 'GET' as const,
+              path: '/oauth/flows/:flowId',
+              handler: 'handleGetFlow',
+              meta: {
+                summary: 'Fetch pending OAuth flow metadata',
+                tags: ['OAuth'],
+                security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+              },
+              responses: {
+                200: {
+                  description: 'Flow metadata',
+                  schema: {
+                    type: 'object' as const,
+                    properties: {
+                      flowId: { type: 'number' as const },
+                      client: {
+                        type: 'object' as const,
+                        properties: {
+                          clientId: { type: 'string' as const },
+                          name: { type: 'string' as const },
+                        },
+                      },
+                      redirectUri: { type: 'string' as const },
+                      scopes: { type: 'array' as const, items: { type: 'string' as const } },
+                      state: { type: 'string' as const },
+                    },
+                  },
+                },
+                401: { description: 'Authentication required' },
+                404: { description: 'Flow not found' },
+              },
+            },
+            handleApproveFlow: {
+              method: 'POST' as const,
+              path: '/oauth/flows/:flowId/approve',
+              handler: 'handleApproveFlow',
+              meta: {
+                summary: 'Approve a pending OAuth flow',
+                tags: ['OAuth'],
+                security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+              },
+              responses: {
+                200: {
+                  description: 'Authorization code issued',
+                  schema: {
+                    type: 'object' as const,
+                    properties: { redirectUrl: { type: 'string' as const } },
+                  },
+                },
+                401: { description: 'Authentication required' },
+                404: { description: 'Flow not found' },
+              },
+            },
+            handleDenyFlow: {
+              method: 'POST' as const,
+              path: '/oauth/flows/:flowId/deny',
+              handler: 'handleDenyFlow',
+              meta: {
+                summary: 'Deny a pending OAuth flow',
+                tags: ['OAuth'],
+                security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+              },
+              responses: {
+                200: {
+                  description: 'Flow denied',
+                  schema: {
+                    type: 'object' as const,
+                    properties: { redirectUrl: { type: 'string' as const } },
+                  },
+                },
+                401: { description: 'Authentication required' },
+                404: { description: 'Flow not found' },
+              },
+            },
+          }
+        : {}),
       handleTokenRequest: {
         method: 'POST',
         path: '/oauth/token',

@@ -13,9 +13,33 @@ adjust the imports to use SvelteKit's `$lib` / `$app` aliases.
 | `src/lib/server/fortress.ts` | Singleton Fortress instance (server-only). |
 | `src/hooks.server.ts` | Handle hook — primary integration point. |
 | `src/app.d.ts` | Augments `App.Locals` so `event.locals.fortress` is typed. |
-| `src/routes/login/+page.server.ts` | Form-action login (`fortressActions.login`). |
+| `src/routes/login/+page.server.ts` | Form-action login. Honors `?flow=<id>` to land back on consent. |
 | `src/routes/dashboard/+page.server.ts` | Protected route reading `getUserId`. |
+| `src/routes/oauth/consent/+page.server.ts` | OAuth consent flow — fetches flow metadata, posts approve/deny. |
+| `src/routes/oauth/consent/+page.svelte` | Branded consent UI rendered in your app, not Fortress. |
 | `src/routes/api/fortress/[...path]/+server.ts` | **Optional** catch-all escape hatch. |
+
+## OAuth consent flow (Pattern B)
+
+`src/lib/server/fortress.ts` registers the `oauth` plugin with
+`enableAuthorizeEndpoint`/`enableConsentApi` on, and seeds a demo user
+(`alice@example.com` / `hunter2`) plus a demo OAuth client at startup.
+The seeded `client_id` / `client_secret` are logged to the server console.
+
+To try the flow end-to-end:
+
+1. Start the example (`npm run dev`).
+2. Copy the seeded `client_id` from the server log.
+3. Hit `http://localhost:5173/api/oauth/authorize?client_id=<id>&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Foauth%2Fcallback-demo&response_type=code&state=xyz&scope=read:posts`.
+4. Fortress 302s to `/login?flow=<id>` (no session). Log in as alice.
+5. The login action redirects to `/oauth/consent?flow=<id>`. The page
+   loads flow metadata, you click Allow, and the action redirects the
+   browser to the OAuth client's `redirect_uri` with `?code=...&state=xyz`.
+6. The client exchanges the code for an access token via
+   `POST /api/oauth/token` (Basic auth with `client_id:client_secret`).
+
+No HTML ever leaves Fortress — the consent screen is `+page.svelte`,
+styled however you like.
 
 ## Two ways to mount Fortress
 

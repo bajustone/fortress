@@ -1853,8 +1853,26 @@ oauth({
     'read:posts': { resource: 'post', action: 'read' },
     'write:posts': { resource: 'post', action: 'create' },
   },
+  // Opt-in: SPA-friendly consent flow (Pattern B). The host app owns the
+  // login + consent UI; Fortress only returns redirects and JSON.
+  enableAuthorizeEndpoint: true,
+  enableConsentApi: true,
+  loginUrl:   'https://app.myapp.com/signin',
+  consentUrl: 'https://app.myapp.com/oauth/consent',
 })
 ```
+
+**SPA-friendly authorization (Pattern B):**
+
+When `enableAuthorizeEndpoint` and `enableConsentApi` are on, Fortress runs
+the OAuth state machine while your host app (e.g. SvelteKit) renders the
+login and consent screens. The flow:
+
+1. OAuth client redirects browser to `GET /oauth/authorize?client_id=...&redirect_uri=...&response_type=code&state=...&code_challenge=...`.
+2. Fortress validates, creates an `oauth_pending_flow` row, and 302s to either `${loginUrl}?flow=<id>` (no session) or `${consentUrl}?flow=<id>` (logged in).
+3. The consent page calls `GET /oauth/flows/<id>` for client name + scopes, then `POST /oauth/flows/<id>/approve` (or `/deny`) and navigates the browser to the returned `redirectUrl`.
+
+No HTML is ever served from Fortress — the framework-agnostic stance is preserved.
 
 **Client Management:**
 
@@ -1928,6 +1946,10 @@ const perms = await fortress.plugins['oauth'].resolveTokenPermissions(accessToke
 | POST | `/oauth/revoke` | Token revocation (RFC 7009) |
 | GET | `/oauth/userinfo` | OIDC UserInfo endpoint |
 | GET | `/.well-known/openid-configuration` | OIDC Discovery document |
+| GET | `/oauth/authorize` | *(opt-in)* Front door for the auth-code flow — 302s to `loginUrl` / `consentUrl` |
+| GET | `/oauth/flows/:flowId` | *(opt-in)* Pending-flow metadata for the consent UI |
+| POST | `/oauth/flows/:flowId/approve` | *(opt-in)* Issue auth code, return `redirectUrl` |
+| POST | `/oauth/flows/:flowId/deny` | *(opt-in)* Cancel flow, return `access_denied` redirect URL |
 
 ---
 

@@ -57,7 +57,7 @@ export async function dispatchEndpoint(
   // OAuth endpoints get form-encoded body parsing + Basic auth handling.
   const owningPlugin = findOwningPlugin(fortress, endpoint);
   if (owningPlugin?.name === 'oauth') {
-    return dispatchOAuth(fortress, request, endpoint);
+    return dispatchOAuth(fortress, request, endpoint, auth);
   }
 
   // Parse body / query into a generic object.
@@ -205,6 +205,7 @@ async function dispatchOAuth(
   fortress: Fortress,
   request: Request,
   endpoint: EndpointDefinition,
+  auth: DispatchAuth,
 ): Promise<Response> {
   const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>).oauth;
   if (!methods)
@@ -272,6 +273,40 @@ async function dispatchOAuth(
       const result = m.handleDiscovery();
       return jsonResponse(result, 200);
     }
+    case 'handleAuthorizeRequest': {
+      // GET /oauth/authorize — front door for the auth-code flow.
+      // Reads query params, optionally identifies the user, then 302s to
+      // either the configured loginUrl or consentUrl with `?flow=<id>`.
+      const query = Object.fromEntries(new URL(request.url).searchParams);
+      const result = (await m.handleAuthorizeRequest(query, { userId: auth.userId })) as {
+        redirectUrl: string;
+      };
+      return new Response(null, {
+        status: 302,
+        headers: { Location: result.redirectUrl },
+      });
+    }
+    case 'handleGetFlow': {
+      const flowId = consentFlowIdFromUrl(request.url);
+      const result = await m.handleGetFlow(flowId);
+      return jsonResponse(result, 200);
+    }
+    case 'handleApproveFlow': {
+      if (auth.userId === undefined) {
+        return jsonResponse(
+          { error: 'unauthorized', error_description: 'Authentication required' },
+          401,
+        );
+      }
+      const flowId = consentFlowIdFromUrl(request.url);
+      const result = await m.handleApproveFlow(flowId, { userId: auth.userId });
+      return jsonResponse(result, 200);
+    }
+    case 'handleDenyFlow': {
+      const flowId = consentFlowIdFromUrl(request.url);
+      const result = await m.handleDenyFlow(flowId);
+      return jsonResponse(result, 200);
+    }
     default: {
       // Authorize endpoint and friends — JSON body. Call through `m` so the
       // `this` binding survives.
@@ -280,6 +315,20 @@ async function dispatchOAuth(
       return jsonResponse(result ?? { ok: true }, successStatus(endpoint));
     }
   }
+}
+
+const FLOW_ID_PATTERN = /\/oauth\/flows\/(\d+)/;
+
+/**
+ * Extract the `:flowId` path segment from a `/oauth/flows/:flowId[/...]` URL
+ * and parse it as a number. Throws if the segment is missing or non-numeric.
+ */
+function consentFlowIdFromUrl(url: string): number {
+  const path = new URL(url).pathname;
+  const match = FLOW_ID_PATTERN.exec(path);
+  if (!match)
+    throw Errors.badRequest('Invalid flow id');
+  return Number(match[1]);
 }
 
 // ── Auth / IAM hardcoded dispatch ────────────────────────────────────

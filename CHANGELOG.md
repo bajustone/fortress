@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **OAuth: SPA-friendly authorization flow (Pattern B).** The OAuth plugin can now drive a consent flow where the host app owns the login + consent UI and Fortress owns the state machine — no HTML ever leaves Fortress, the framework-agnostic stance stays intact.
+  - New `OAuthConfig` fields: `enableAuthorizeEndpoint`, `enableConsentApi`, `loginUrl`, `consentUrl`. Both endpoint groups default to off so existing setups are unaffected.
+  - New endpoints (opt-in): `GET /oauth/authorize` (front door, 302s to `loginUrl?flow=<id>` if no session, `consentUrl?flow=<id>` if authenticated), `GET /oauth/flows/:flowId` (consent metadata: client name, requested scopes, redirect URI — PKCE fields stripped), `POST /oauth/flows/:flowId/approve` (issues auth code, returns `{ redirectUrl }`), `POST /oauth/flows/:flowId/deny` (returns `access_denied` redirect URL).
+  - New plugin methods: `handleAuthorizeRequest`, `handleGetFlow`, `handleApproveFlow`, `handleDenyFlow`. All transport-agnostic; safe to call from `fortress.call.*` or directly.
+  - New method `getPendingFlow(flowId)` for non-destructive reads of pending flows. Existing `resumePendingFlow` (single-use consume) is unchanged.
+
 ## [0.0.41] - 2026-04-22
 
 ### Fixed

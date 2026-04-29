@@ -282,6 +282,279 @@ describe('oauth plugin', () => {
 
       await expect(methods.resumePendingFlow(flowId)).rejects.toThrow('not found');
     });
+
+    it('getPendingFlow reads without consuming', async () => {
+      const client = await methods.createClient({
+        name: 'App',
+        redirectUris: ['https://app.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+
+      const { flowId } = await methods.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://app.com/callback',
+        scope: 'read:posts',
+        state: 'consent-state',
+      });
+
+      // First read returns flow
+      const flow1 = await methods.getPendingFlow(flowId);
+      expect(flow1.clientId).toBe(client.clientId);
+      expect(flow1.scope).toBe('read:posts');
+
+      // Second read still works (non-destructive)
+      const flow2 = await methods.getPendingFlow(flowId);
+      expect(flow2.state).toBe('consent-state');
+
+      // resumePendingFlow still consumes it
+      await methods.resumePendingFlow(flowId);
+      await expect(methods.getPendingFlow(flowId)).rejects.toThrow('not found');
+    });
+
+    it('handleAuthorizeRequest redirects unauthenticated users to loginUrl', async () => {
+      const client = await methods.createClient({
+        name: 'Moodle',
+        redirectUris: ['https://lms.example.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+
+      // Re-init plugin with login/consent URLs.
+      const localDb = createTestAdapter();
+      const localPlugin = oauth({
+        loginUrl: 'https://app.example.com/signin',
+        consentUrl: 'https://app.example.com/oauth/consent',
+      });
+      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { secret: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
+      // Re-create the client in the local DB.
+      await localDb.create({
+        model: 'oauth_client',
+        data: {
+          clientId: client.clientId,
+          clientSecretHash: 'irrelevant',
+          name: 'Moodle',
+          redirectUris: JSON.stringify(['https://lms.example.com/callback']),
+          grantTypes: JSON.stringify(['authorization_code']),
+        },
+      });
+
+      const result = await localMethods.handleAuthorizeRequest(
+        {
+          client_id: client.clientId,
+          redirect_uri: 'https://lms.example.com/callback',
+          response_type: 'code',
+          state: 'xyz',
+          scope: 'read:posts',
+        },
+        { userId: undefined },
+      );
+
+      expect(result.redirectUrl.startsWith('https://app.example.com/signin?flow=')).toBe(true);
+      expect(result.flowId).toBeGreaterThan(0);
+
+      const flow = await localMethods.getPendingFlow(result.flowId);
+      expect(flow.clientId).toBe(client.clientId);
+      expect(flow.state).toBe('xyz');
+    });
+
+    it('handleAuthorizeRequest redirects authenticated users to consentUrl', async () => {
+      const client = await methods.createClient({
+        name: 'Moodle',
+        redirectUris: ['https://lms.example.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+      const localDb = createTestAdapter();
+      const localPlugin = oauth({
+        loginUrl: 'https://app.example.com/signin',
+        consentUrl: 'https://app.example.com/oauth/consent',
+      });
+      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { secret: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
+      await localDb.create({
+        model: 'oauth_client',
+        data: {
+          clientId: client.clientId,
+          clientSecretHash: 'irrelevant',
+          name: 'Moodle',
+          redirectUris: JSON.stringify(['https://lms.example.com/callback']),
+          grantTypes: JSON.stringify(['authorization_code']),
+        },
+      });
+
+      const result = await localMethods.handleAuthorizeRequest(
+        {
+          client_id: client.clientId,
+          redirect_uri: 'https://lms.example.com/callback',
+          response_type: 'code',
+          state: 'logged-in-state',
+        },
+        { userId: 42 },
+      );
+
+      expect(result.redirectUrl.startsWith('https://app.example.com/oauth/consent?flow=')).toBe(true);
+    });
+
+    it('handleAuthorizeRequest rejects unknown clients and bad redirect URIs', async () => {
+      const localDb = createTestAdapter();
+      const localPlugin = oauth({
+        loginUrl: 'https://app.example.com/signin',
+        consentUrl: 'https://app.example.com/oauth/consent',
+      });
+      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { secret: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
+
+      await expect(
+        localMethods.handleAuthorizeRequest(
+          {
+            client_id: 'nonexistent',
+            redirect_uri: 'https://x.com/cb',
+            response_type: 'code',
+            state: 's',
+          },
+          { userId: undefined },
+        ),
+      ).rejects.toThrow('Unknown client_id');
+
+      const c = await localMethods.createClient({
+        name: 'X',
+        redirectUris: ['https://x.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+      await expect(
+        localMethods.handleAuthorizeRequest(
+          {
+            client_id: c.clientId,
+            redirect_uri: 'https://evil.com/cb',
+            response_type: 'code',
+            state: 's',
+          },
+          { userId: undefined },
+        ),
+      ).rejects.toThrow('Invalid redirect_uri');
+    });
+
+    it('handleAuthorizeRequest throws when loginUrl/consentUrl are not configured', async () => {
+      const localDb = createTestAdapter();
+      const localPlugin = oauth({}); // no URLs
+      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { secret: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
+
+      await expect(
+        localMethods.handleAuthorizeRequest(
+          {
+            client_id: 'whatever',
+            redirect_uri: 'https://x.com/cb',
+            response_type: 'code',
+            state: 's',
+          },
+          { userId: undefined },
+        ),
+      ).rejects.toThrow('loginUrl/consentUrl');
+    });
+
+    it('handleGetFlow returns flow metadata without leaking PKCE fields', async () => {
+      const client = await methods.createClient({
+        name: 'Brand X',
+        redirectUris: ['https://x.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+      const verifier = generateCodeVerifier();
+      const challenge = await generateCodeChallenge(verifier);
+      const { flowId } = await methods.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://x.com/callback',
+        scope: 'read:posts write:posts',
+        state: 's-1',
+        codeChallenge: challenge,
+        codeChallengeMethod: 'S256',
+      });
+
+      const meta = await methods.handleGetFlow(flowId);
+      expect(meta.flowId).toBe(flowId);
+      expect(meta.client.clientId).toBe(client.clientId);
+      expect(meta.client.name).toBe('Brand X');
+      expect(meta.scopes).toEqual(['read:posts', 'write:posts']);
+      expect(meta.state).toBe('s-1');
+      // Crucially — no challenge / method exposed.
+      expect((meta as Record<string, unknown>).codeChallenge).toBeUndefined();
+      expect((meta as Record<string, unknown>).codeChallengeMethod).toBeUndefined();
+    });
+
+    it('handleApproveFlow issues a code and returns a redirect URL', async () => {
+      const client = await methods.createClient({
+        name: 'App',
+        redirectUris: ['https://app.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+      const { flowId } = await methods.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://app.com/callback',
+        scope: 'read:posts',
+        state: 'approve-state',
+      });
+
+      const result = await methods.handleApproveFlow(flowId, { userId });
+
+      const url = new URL(result.redirectUrl);
+      expect(url.origin + url.pathname).toBe('https://app.com/callback');
+      expect(url.searchParams.get('state')).toBe('approve-state');
+      const code = url.searchParams.get('code');
+      expect(code).toBeTruthy();
+
+      // Flow should now be consumed.
+      await expect(methods.getPendingFlow(flowId)).rejects.toThrow('not found');
+
+      // The issued code should be exchangeable.
+      const tokens = await methods.exchangeCode({
+        code: code as string,
+        clientId: client.clientId,
+        clientSecret: 'wrong-secret',
+        redirectUri: 'https://app.com/callback',
+      }).catch(e => e);
+      // We don't have the real secret in this test; just confirm the code
+      // was actually persisted by making sure the failure is auth-related,
+      // not "code not found".
+      expect(String(tokens)).not.toMatch(/code/i);
+    });
+
+    it('handleDenyFlow consumes the flow and returns access_denied URL', async () => {
+      const client = await methods.createClient({
+        name: 'App',
+        redirectUris: ['https://app.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+      const { flowId } = await methods.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://app.com/callback',
+        state: 'deny-state',
+      });
+
+      const result = await methods.handleDenyFlow(flowId);
+      const url = new URL(result.redirectUrl);
+      expect(url.searchParams.get('error')).toBe('access_denied');
+      expect(url.searchParams.get('state')).toBe('deny-state');
+
+      await expect(methods.getPendingFlow(flowId)).rejects.toThrow('not found');
+    });
+
+    it('getPendingFlow throws on expired flow', async () => {
+      const client = await methods.createClient({
+        name: 'App',
+        redirectUris: ['https://app.com/callback'],
+        grantTypes: ['authorization_code'],
+      });
+
+      const { flowId } = await methods.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://app.com/callback',
+        state: 'state-x',
+      });
+
+      // Force expiry by mutating the row directly through the adapter.
+      await db.update({
+        model: 'oauth_pending_flow',
+        where: [{ field: 'id', operator: '=', value: flowId }],
+        data: { expiresAt: new Date(Date.now() - 1000) },
+      });
+
+      await expect(methods.getPendingFlow(flowId)).rejects.toThrow('expired');
+    });
   });
 
   describe('getUserInfo', () => {

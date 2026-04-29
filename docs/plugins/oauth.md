@@ -259,6 +259,47 @@ const { code } = await fortress.plugins.oauth.createAuthorizationCode({
 
 Pending flows are single-use and expire after `pendingFlowExpirySeconds` (default 10 minutes).
 
+### SPA-friendly Consent Flow (Pattern B)
+
+For host apps that already render their own login UI (e.g. SvelteKit/Next/React) the plugin ships a turn-key version of the broker flow above. Fortress runs the OAuth state machine; your app owns the screens.
+
+Enable it via four config knobs:
+
+```ts
+oauth({
+  enableAuthorizeEndpoint: true,
+  enableConsentApi: true,
+  loginUrl:   'https://app.example.com/signin',
+  consentUrl: 'https://app.example.com/oauth/consent',
+})
+```
+
+The choreography:
+
+1. **OAuth client** sends the browser to `GET /oauth/authorize?client_id=...&redirect_uri=...&response_type=code&state=...&code_challenge=...`. Fortress validates everything against the registered client, creates an `oauth_pending_flow` row, and 302s to either `${loginUrl}?flow=<id>` (no session) or `${consentUrl}?flow=<id>` (logged in).
+2. **Sign-in page** (your app, e.g. `/signin`) reads `?flow=<id>`, runs the existing login form, and on success redirects back to `${API}/oauth/authorize?...` with the original query — or simpler, to `${consentUrl}?flow=<id>` directly now that the session cookie is set.
+3. **Consent page** (your app, e.g. `/oauth/consent`) calls `GET /oauth/flows/<id>` (cookie-authed) for `{ flowId, client: { clientId, name }, redirectUri, scopes, state }`, renders the screen, and on submit posts to `POST /oauth/flows/<id>/approve` or `/deny`. Both return `{ redirectUrl }`; the page navigates the browser there.
+
+Fortress never serves HTML. The `code_challenge` / `code_challenge_method` are kept server-side and never returned by `GET /oauth/flows/<id>`, so the SPA can't tamper with PKCE.
+
+**Cross-origin setups.** The flow above works whether the host app and the Fortress API share an origin or not, but the cookie + CORS wiring differs:
+
+- **Same origin or sibling subdomains** (e.g. `api.example.com` + `app.example.com` under `example.com`): set `cookies.domain: '.example.com'` and `cookies.sameSite: 'lax'`. The SvelteKit consent page can read the flow with a server-side `+page.server.ts` `load` that forwards the incoming `cookie` header to the API. No browser CORS needed.
+- **Truly different origins** (e.g. `tdmp-api.com` + `tdmp-web.com`): set `cookies.sameSite: 'none'` and `cookies.secure: true`, drop the `__Host-` prefix (`__Host-` cookies forbid `Domain`, but cross-site cookies need `SameSite=None`). The consent page must fetch `/oauth/flows/:id` from the **browser** with `credentials: 'include'` (a `+page.ts` universal load, or `onMount`) — SvelteKit's server can't see the API origin's cookie. Configure CORS on `/oauth/flows/*` and `/auth/*` to allow the web origin with `credentials: true`.
+
+In both cases the 302s out of `/oauth/authorize` are top-level navigations and aren't subject to CORS.
+
+Methods you can call directly (in addition to the HTTP endpoints):
+
+```ts
+// Non-destructive read — used by the consent page on every render.
+const flow = await fortress.plugins.oauth.getPendingFlow(flowId);
+
+// Same as the HTTP handlers; transport-agnostic.
+const { redirectUrl } = await fortress.plugins.oauth.handleApproveFlow(flowId, { userId });
+await fortress.plugins.oauth.handleDenyFlow(flowId);
+```
+
 ### Scope-to-IAM Permission Mapping
 
 Resolve an access token's scopes into Fortress IAM permissions:
@@ -301,6 +342,38 @@ mountFortress(app, fortress);
 ```
 
 This registers the following endpoints. An optional `prefix` can be passed: `mountFortress(app, fortress, { prefix: "/api" })`.
+
+### GET /oauth/authorize *(opt-in)*
+
+Front door for the auth-code flow. Mounted only when `enableAuthorizeEndpoint: true`.
+
+Validates `client_id`, `redirect_uri`, `response_type=code`, `state`, and (optional) `code_challenge[_method]` against the registered client, persists the request as a pending flow, then returns `302 Location: ${loginUrl}?flow=<id>` (no session) or `${consentUrl}?flow=<id>` (authenticated).
+
+Returns `400` for unknown client, mismatched redirect URI, or unsupported PKCE method.
+
+### GET /oauth/flows/:flowId *(opt-in)*
+
+Flow metadata for the consent page. Mounted only when `enableConsentApi: true`. Requires a bearer/cookie session.
+
+```json
+{
+  "flowId": 17,
+  "client": { "clientId": "...", "name": "Brand X" },
+  "redirectUri": "https://x.com/callback",
+  "scopes": ["read:posts", "write:posts"],
+  "state": "opaque-csrf-value"
+}
+```
+
+Returns `404` if the flow is unknown or expired.
+
+### POST /oauth/flows/:flowId/approve *(opt-in)*
+
+Issue an authorization code on behalf of the authenticated user, consume the pending flow, and return `{ redirectUrl }` (the OAuth client's `redirect_uri` with `?code=...&state=...` appended). Requires a bearer/cookie session.
+
+### POST /oauth/flows/:flowId/deny *(opt-in)*
+
+Consume the pending flow and return `{ redirectUrl }` with `?error=access_denied&state=...`.
 
 ### POST /oauth/token
 
