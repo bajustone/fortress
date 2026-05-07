@@ -1530,6 +1530,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
                 summary: 'Start an OAuth authorization-code flow',
                 tags: ['OAuth'],
                 security: ['none'] as ('none' | 'basic' | 'bearer')[],
+                bearerKind: 'oauth' as const,
               },
               input: {
                 query: {
@@ -1637,7 +1638,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         method: 'POST',
         path: '/oauth/token',
         handler: 'handleTokenRequest',
-        meta: { summary: 'Exchange credentials for tokens', tags: ['OAuth'], security: ['basic'] },
+        meta: { summary: 'Exchange credentials for tokens', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: {
           body: {
             type: 'object',
@@ -1663,7 +1664,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         method: 'POST',
         path: '/oauth/introspect',
         handler: 'handleIntrospectRequest',
-        meta: { summary: 'Introspect a token (RFC 7662)', tags: ['OAuth'], security: ['basic'] },
+        meta: { summary: 'Introspect a token (RFC 7662)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: {
           200: { description: 'Token info', schema: { type: 'object', properties: { active: { type: 'boolean' }, sub: { type: 'string' }, scope: { type: 'string' }, exp: { type: 'number' } } } },
@@ -1674,7 +1675,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         method: 'POST',
         path: '/oauth/revoke',
         handler: 'handleRevokeRequest',
-        meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['none'] },
+        meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: { 200: { description: 'Token revoked' } },
       },
@@ -1682,7 +1683,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         method: 'GET',
         path: '/oauth/userinfo',
         handler: 'handleUserInfoRequest',
-        meta: { summary: 'Get user info (OIDC Core §5.3)', tags: ['OAuth'], security: ['bearer'] },
+        meta: { summary: 'Get user info (OIDC Core §5.3)', tags: ['OAuth'], security: ['bearer'], bearerKind: 'oauth' as const },
         responses: {
           200: {
             description: 'OIDC userinfo response',
@@ -1707,14 +1708,14 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         method: 'GET',
         path: '/oauth/.well-known/openid-configuration',
         handler: 'handleDiscovery',
-        meta: { summary: 'OIDC discovery document', tags: ['OAuth'], security: ['none'] },
+        meta: { summary: 'OIDC discovery document', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         responses: { 200: { description: 'OIDC configuration', schema: { type: 'object', additionalProperties: true } } },
       },
       handleJwksRequest: {
         method: 'GET',
         path: '/oauth/.well-known/jwks.json',
         handler: 'handleJwksRequest',
-        meta: { summary: 'JSON Web Key Set (RFC 7517)', tags: ['OAuth'], security: ['none'] },
+        meta: { summary: 'JSON Web Key Set (RFC 7517)', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         responses: {
           200: {
             description: 'JWKS for verifying id_token signatures',

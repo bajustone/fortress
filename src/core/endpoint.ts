@@ -22,6 +22,30 @@ export interface EndpointMeta {
   deprecated?: boolean;
   /** IAM permission required to access this endpoint. Enforced by RBAC middleware. */
   permission?: EndpointPermission;
+  /**
+   * What kind of bearer token this route accepts.
+   *
+   * - `'jwt'` (default) — the route expects a Fortress session JWT in
+   *   `Authorization: Bearer <jwt>` (or the cookie). The dispatcher runs
+   *   the plugin principal chain, JWT verification, and RBAC enforcement
+   *   automatically before invoking the handler.
+   * - `'oauth'` — the route's bearer is an OAuth 2.0 access token (or no
+   *   token at all, e.g. `/oauth/authorize`). The dispatcher skips its
+   *   auth pipeline entirely and the handler self-parses the bearer
+   *   (typical for `/oauth/userinfo`, `/oauth/token`, etc.). Body parsing
+   *   and validation are also skipped, since OAuth bodies are
+   *   `application/x-www-form-urlencoded` per RFC 6749.
+   *
+   * Routes that don't set this field default to `'jwt'`. Without this
+   * marker, the OAuth plugin's consent-flow endpoints
+   * (`/oauth/flows/:flowId{,/approve,/deny}`) — which are SPA-driven and
+   * require a Fortress JWT — used to be silently unauthenticated due to
+   * a path-based `startsWith('/oauth/')` short-circuit in the dispatcher,
+   * forcing every host app to ship a workaround shim. Setting
+   * `bearerKind: 'oauth'` only on the actual protocol routes lets the
+   * dispatcher honour `security: ['bearer']` everywhere else.
+   */
+  bearerKind?: 'jwt' | 'oauth';
 }
 
 /** Request input declarations for an endpoint — JSON Schemas for OpenAPI plus Standard Schemas for runtime validation. */

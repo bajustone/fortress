@@ -89,16 +89,22 @@ export function buildHandleRequest(
       //        become the request principal.
       //    3b. JWT bearer fallback. Used when no plugin resolves the
       //        request and the endpoint declared `security: 'bearer'`.
-      //    3c. OAuth paths declare `security: 'bearer'` but the bearer
-      //        is an OAuth access token, not a Fortress JWT — dispatch
-      //        parses those inside the OAuth handler, so we skip both
-      //        the resolver chain and the JWT check here.
+      //    3c. Routes that declare `meta.bearerKind: 'oauth'` (the OAuth
+      //        protocol endpoints — token, userinfo, introspect, revoke,
+      //        authorize, jwks, discovery) self-parse their bearer
+      //        (which is an OAuth access token, not a Fortress JWT) so
+      //        we skip both the resolver chain and the JWT check here.
+      //        Other `/oauth/*` routes — e.g. the consent-flow endpoints
+      //        `/oauth/flows/:flowId{,/approve,/deny}` — default to
+      //        `bearerKind: 'jwt'` and go through the normal auth
+      //        pipeline so a host app SPA can call them with a Fortress
+      //        JWT and have RBAC honoured.
       let subject: Subject | undefined;
       let userId: number | undefined;
       let claims: TokenClaims | undefined;
-      const isOauthPath = endpoint.path.startsWith('/oauth/');
+      const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
 
-      if (!isOauthPath) {
+      if (!selfManagedBearer) {
         const resolved = await tryPluginPrincipal(fortress, request);
         if (resolved) {
           subject = resolved.subject;
@@ -107,7 +113,7 @@ export function buildHandleRequest(
       }
 
       const requiresBearer
-        = !isOauthPath && (endpoint.meta?.security?.includes('bearer') ?? false);
+        = !selfManagedBearer && (endpoint.meta?.security?.includes('bearer') ?? false);
       if (!subject && requiresBearer) {
         const token = extractAccessToken(request, cookieConfig);
         if (!token)
@@ -142,10 +148,11 @@ export function buildHandleRequest(
         fortressClaims: claims,
       });
 
-      // 5. Fortress-managed default-deny RBAC. OAuth paths self-authenticate
-      //    inside their handlers (the bearer is an OAuth token, not a JWT)
-      //    so they're exempt from the IAM check too.
-      if (!isOauthPath) {
+      // 5. Fortress-managed default-deny RBAC. Routes flagged
+      //    `bearerKind: 'oauth'` self-authenticate inside their handlers
+      //    (the bearer is an OAuth token, not a JWT) so they're exempt
+      //    from the IAM check too.
+      if (!selfManagedBearer) {
         await enforceFortressPermission(endpoint, subject, {
           checkPermission: (subj, resource, action): Promise<boolean> =>
             fortress.iam.checkPermission(subj, resource, action),
@@ -162,10 +169,11 @@ export function buildHandleRequest(
 
       // 7. Body parse + validation. Validation reads the body via clone()
       //    so dispatch can re-read it. We sniff the content-type to know
-      //    whether validateRequest can parse JSON. Skip for OAuth — its
-      //    bodies are `application/x-www-form-urlencoded` and the OAuth
-      //    dispatcher does its own parsing/validation per RFC 6749.
-      if (!isOauthPath) {
+      //    whether validateRequest can parse JSON. Skipped for routes
+      //    flagged `bearerKind: 'oauth'` — their bodies are
+      //    `application/x-www-form-urlencoded` and the OAuth dispatcher
+      //    does its own parsing/validation per RFC 6749.
+      if (!selfManagedBearer) {
         let parsedBody: unknown;
         if (
           request.method !== 'GET'
