@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1] - 2026-05-07
+
+### Fixed
+- fix(oauth): honor security: ['bearer'] on /oauth/* routes via bearerKind
+
 ## [0.1.0] - 2026-05-07
 
 ### Added
