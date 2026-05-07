@@ -271,4 +271,92 @@ describe('fortress.handleRequest', () => {
       expect(ctx.request).toBeInstanceOf(Request);
     });
   });
+
+  // Regression for the host-app shim that TDMP had to ship across the
+  // 0.0.42 → 0.1.0 upgrade: a custom route under /oauth/* with
+  // `security: ['bearer']` and no `bearerKind` MUST go through fortress's
+  // normal auth pipeline (JWT validation), not the OAuth-protocol
+  // self-managed bypass. The bypass is now opt-in via
+  // `meta.bearerKind: 'oauth'`.
+  describe('bearerKind: \'jwt\' default for /oauth/* routes', () => {
+    function makeOauthBearerPlugin(): { plugin: FortressPlugin; received: PluginRouteContext[] } {
+      const received: PluginRouteContext[] = [];
+      const plugin: FortressPlugin = {
+        name: 'oauth-bearer-spy',
+        routes: {
+          jwtRoute: {
+            method: 'POST',
+            path: '/oauth/host-app/jwt-route',
+            handler: 'jwtRoute',
+            // No `bearerKind` — should default to 'jwt' and require auth.
+            meta: { summary: 'Host app JWT route under /oauth/*', tags: ['Test'], security: ['bearer'] },
+            responses: { 200: { description: 'ok' } },
+          },
+          oauthRoute: {
+            method: 'POST',
+            path: '/oauth/host-app/oauth-route',
+            handler: 'oauthRoute',
+            // Opt out of fortress's auth pipeline — the handler self-manages.
+            meta: { summary: 'Host app OAuth route under /oauth/*', tags: ['Test'], security: ['bearer'], bearerKind: 'oauth' as const },
+            responses: { 200: { description: 'ok' } },
+          },
+        },
+        methods: () => ({
+          jwtRoute(_body: unknown, ctx: PluginRouteContext): { ok: true } {
+            received.push(ctx);
+            return { ok: true };
+          },
+          oauthRoute(_body: unknown, ctx: PluginRouteContext): { ok: true } {
+            received.push(ctx);
+            return { ok: true };
+          },
+        }),
+      };
+      return { plugin, received };
+    }
+
+    it('rejects /oauth/host-app/jwt-route without a JWT (401)', async () => {
+      const { plugin } = makeOauthBearerPlugin();
+      const f = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter(), plugins: [plugin] });
+
+      const res = await f.handleRequest(new Request('http://localhost/oauth/host-app/jwt-route', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }));
+      expect(res.status).toBe(401);
+    });
+
+    it('accepts /oauth/host-app/jwt-route with a valid JWT and populates ctx.userId', async () => {
+      const { plugin, received } = makeOauthBearerPlugin();
+      const f = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter(), plugins: [plugin] });
+      const user = await f.auth.createUser({ email: 'jwt@b.co', name: 'J', password: 'password123' });
+      const login = await f.auth.login('jwt@b.co', 'password123');
+      if (login.status !== 'success')
+        throw new Error('expected success');
+
+      const res = await f.handleRequest(new Request('http://localhost/oauth/host-app/jwt-route', {
+        method: 'POST',
+        headers: { 'authorization': `Bearer ${login.accessToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }));
+      expect(res.status).toBe(200);
+      expect(received).toHaveLength(1);
+      expect(received[0]!.userId).toBe(user.id);
+    });
+
+    it('accepts /oauth/host-app/oauth-route without any auth when bearerKind is "oauth"', async () => {
+      const { plugin, received } = makeOauthBearerPlugin();
+      const f = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter(), plugins: [plugin] });
+
+      const res = await f.handleRequest(new Request('http://localhost/oauth/host-app/oauth-route', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }));
+      expect(res.status).toBe(200);
+      expect(received).toHaveLength(1);
+      expect(received[0]!.userId).toBeUndefined();
+    });
+  });
 });
