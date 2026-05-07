@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.0] - 2026-05-07
+
+### Added
+- oauth: full RFC + OIDC compliance pass
+
 ## [0.0.42] - 2026-04-29
 
 ### Added
