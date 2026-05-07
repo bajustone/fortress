@@ -238,6 +238,12 @@ const oauthClients = sqliteTable('fortress_oauth_client', {
   name: text('name').notNull(),
   redirectUris: text('redirect_uris').notNull(), // JSON array
   grantTypes: text('grant_types').notNull(), // JSON array
+  // RFC 6749 §3.3 / RFC 9700 §2.2.1 per-client scope allow-list (JSON array,
+  // nullable for legacy v0 clients).
+  allowedScopes: text('allowed_scopes'),
+  // RFC 6749 §2.1 client authentication method ('client_secret_basic' |
+  // 'client_secret_post' | 'none' for RFC 8252 public clients).
+  tokenEndpointAuthMethod: text('token_endpoint_auth_method'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
@@ -250,6 +256,9 @@ const oauthAuthorizationCodes = sqliteTable('fortress_oauth_authorization_code',
   scope: text('scope'),
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: text('code_challenge_method'),
+  // OIDC Core §3.1.2.1 / §2 — echoed into the id_token if present.
+  nonce: text('nonce'),
+  authTime: integer('auth_time'),
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   usedAt: integer('used_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
@@ -265,6 +274,21 @@ const oauthAccessTokens = sqliteTable('fortress_oauth_access_token', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
+// RFC 6749 §6 + RFC 9700 §2.2.2 refresh tokens with rotation.
+const oauthRefreshTokens = sqliteTable('fortress_oauth_refresh_token', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  token: text('token').notNull().unique(),
+  familyId: text('family_id').notNull(),
+  clientId: text('client_id').notNull(),
+  userId: integer('user_id').notNull(),
+  scope: text('scope'),
+  issuedAt: integer('issued_at', { mode: 'timestamp' }).notNull(),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  usedAt: integer('used_at', { mode: 'timestamp' }),
+  parentId: integer('parent_id'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
 const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   clientId: text('client_id').notNull(),
@@ -273,7 +297,21 @@ const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
   state: text('state').notNull(),
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: text('code_challenge_method'),
+  nonce: text('nonce'),
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
+// OIDC Core / RFC 7517: id_token signing keys (RS256). Active key has
+// rotatedAt == null; rotated keys are kept for the JWKS verification grace
+// window.
+const oauthSigningKeys = sqliteTable('fortress_oauth_signing_key', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  kid: text('kid').notNull().unique(),
+  alg: text('alg').notNull(),
+  publicJwk: text('public_jwk').notNull(),
+  privateJwk: text('private_jwk').notNull(),
+  rotatedAt: integer('rotated_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
@@ -400,7 +438,9 @@ export const fortressSchema: Record<string, AnySQLiteTable> = {
   oauthClients,
   oauthAuthorizationCodes,
   oauthAccessTokens,
+  oauthRefreshTokens,
   oauthPendingFlows,
+  oauthSigningKeys,
   userScopeAssignments,
   accountLockouts,
   auditLogs,

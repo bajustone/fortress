@@ -10,24 +10,59 @@ export type FortressErrorCode
     | 'DATABASE_ERROR'
     | 'VALIDATION_ERROR';
 
+/**
+ * Machine-readable error codes defined by RFC 6749 §5.2 (token endpoint) and
+ * §4.1.2.1 (authorization endpoint). The OAuth plugin uses these as the
+ * `error` field in token-endpoint failure responses; the HTTP error mapper
+ * detects {@link FortressError.oauthError} and emits the
+ * `{ error, error_description }` shape required by the spec.
+ */
+export type OAuthErrorCode
+  = | 'invalid_request'
+    | 'invalid_client'
+    | 'invalid_grant'
+    | 'unauthorized_client'
+    | 'unsupported_grant_type'
+    | 'invalid_scope'
+    | 'access_denied'
+    | 'unsupported_response_type'
+    | 'server_error'
+    | 'temporarily_unavailable';
+
 /** The single error class fortress throws. Carries an error code, HTTP status, and structured details. */
 export class FortressError extends Error {
   readonly code: FortressErrorCode;
   readonly statusCode: number;
   readonly retryAfter?: number;
   readonly details?: unknown;
+  /** RFC 6749 §5.2 / §4.1.2.1 machine code. Set by `Errors.oauth()`. */
+  readonly oauthError?: OAuthErrorCode;
+  /** Human-readable description for the OAuth `error_description` field. */
+  readonly oauthDescription?: string;
+  /** Optional URI for the OAuth `error_uri` field (§5.2). */
+  readonly oauthErrorUri?: string;
 
   constructor(
     code: FortressErrorCode,
     message: string,
     statusCode: number,
-    options?: { cause?: unknown; retryAfter?: number; details?: unknown },
+    options?: {
+      cause?: unknown;
+      retryAfter?: number;
+      details?: unknown;
+      oauthError?: OAuthErrorCode;
+      oauthDescription?: string;
+      oauthErrorUri?: string;
+    },
   ) {
     super(message, { cause: options?.cause });
     this.code = code;
     this.statusCode = statusCode;
     this.retryAfter = options?.retryAfter;
     this.details = options?.details;
+    this.oauthError = options?.oauthError;
+    this.oauthDescription = options?.oauthDescription;
+    this.oauthErrorUri = options?.oauthErrorUri;
   }
 
   toJSON(): { code: FortressErrorCode; message: string; statusCode: number; details?: unknown } {
@@ -60,6 +95,34 @@ export const Errors = {
     new FortressError('DATABASE_ERROR', message, 500, { cause }),
   validationError: (issues: Array<{ path?: unknown; message: string }>): FortressError =>
     new FortressError('VALIDATION_ERROR', 'Validation failed', 422, { details: issues }),
+
+  /**
+   * RFC 6749 §5.2 / §4.1.2.1 OAuth error.
+   *
+   * The HTTP error mapper detects `oauthError` and emits the OAuth-spec
+   * JSON body `{ error, error_description, error_uri? }` instead of the
+   * default fortress `{ code, message }` shape, so strict OAuth clients
+   * (Moodle, openid-client, Spring Security, etc.) can switch behaviour
+   * on the machine-readable `error` field.
+   *
+   * Status is inferred from the OAuth code per the spec table:
+   * - `invalid_client` → 401
+   * - everything else → 400
+   */
+  oauth: (
+    error: OAuthErrorCode,
+    description?: string,
+    options?: { status?: number; errorUri?: string; cause?: unknown },
+  ): FortressError => {
+    const status = options?.status ?? (error === 'invalid_client' ? 401 : 400);
+    const code: FortressErrorCode = status === 401 ? 'UNAUTHORIZED' : 'BAD_REQUEST';
+    return new FortressError(code, description ?? error, status, {
+      oauthError: error,
+      oauthDescription: description,
+      oauthErrorUri: options?.errorUri,
+      cause: options?.cause,
+    });
+  },
 
   /**
    * Reconstruct a {@link FortressError} from a JSON error body emitted by

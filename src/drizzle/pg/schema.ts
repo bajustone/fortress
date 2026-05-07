@@ -238,6 +238,12 @@ const oauthClients = pgTable('fortress_oauth_client', {
   name: varchar('name', { length: 255 }).notNull(),
   redirectUris: text('redirect_uris').notNull(), // JSON array
   grantTypes: text('grant_types').notNull(), // JSON array
+  // RFC 6749 §3.3 / RFC 9700 §2.2.1 per-client scope allow-list (JSON array,
+  // nullable for legacy v0 clients).
+  allowedScopes: text('allowed_scopes'),
+  // RFC 6749 §2.1 client authentication method ('client_secret_basic' |
+  // 'client_secret_post' | 'none' for RFC 8252 public clients).
+  tokenEndpointAuthMethod: text('token_endpoint_auth_method'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -250,6 +256,9 @@ const oauthAuthorizationCodes = pgTable('fortress_oauth_authorization_code', {
   scope: text('scope'),
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: varchar('code_challenge_method', { length: 10 }),
+  // OIDC Core §3.1.2.1 / §2 — echoed into the id_token if present.
+  nonce: text('nonce'),
+  authTime: integer('auth_time'),
   expiresAt: timestamp('expires_at').notNull(),
   usedAt: timestamp('used_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -265,6 +274,21 @@ const oauthAccessTokens = pgTable('fortress_oauth_access_token', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
+// RFC 6749 §6 + RFC 9700 §2.2.2 refresh tokens with rotation.
+const oauthRefreshTokens = pgTable('fortress_oauth_refresh_token', {
+  id: serial('id').primaryKey(),
+  token: varchar('token', { length: 255 }).notNull().unique(),
+  familyId: varchar('family_id', { length: 64 }).notNull(),
+  clientId: varchar('client_id', { length: 255 }).notNull(),
+  userId: integer('user_id').notNull(),
+  scope: text('scope'),
+  issuedAt: timestamp('issued_at').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+  parentId: integer('parent_id'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
 const oauthPendingFlows = pgTable('fortress_oauth_pending_flow', {
   id: serial('id').primaryKey(),
   clientId: varchar('client_id', { length: 255 }).notNull(),
@@ -273,7 +297,19 @@ const oauthPendingFlows = pgTable('fortress_oauth_pending_flow', {
   state: varchar('state', { length: 255 }).notNull(),
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: varchar('code_challenge_method', { length: 10 }),
+  nonce: text('nonce'),
   expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+// OIDC Core / RFC 7517: id_token signing keys (RS256).
+const oauthSigningKeys = pgTable('fortress_oauth_signing_key', {
+  id: serial('id').primaryKey(),
+  kid: varchar('kid', { length: 64 }).notNull().unique(),
+  alg: varchar('alg', { length: 16 }).notNull(),
+  publicJwk: text('public_jwk').notNull(),
+  privateJwk: text('private_jwk').notNull(),
+  rotatedAt: timestamp('rotated_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -400,7 +436,9 @@ export const fortressPgSchema: Record<string, AnyPgTable> = {
   oauthClients,
   oauthAuthorizationCodes,
   oauthAccessTokens,
+  oauthRefreshTokens,
   oauthPendingFlows,
+  oauthSigningKeys,
   userScopeAssignments,
   accountLockouts,
   auditLogs,

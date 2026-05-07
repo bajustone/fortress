@@ -217,6 +217,8 @@ const CREATE_TABLES_SQL = `
     name VARCHAR(255) NOT NULL,
     redirect_uris TEXT NOT NULL,
     grant_types TEXT NOT NULL,
+    allowed_scopes TEXT,
+    token_endpoint_auth_method TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
 
@@ -229,6 +231,8 @@ const CREATE_TABLES_SQL = `
     scope TEXT,
     code_challenge TEXT,
     code_challenge_method VARCHAR(10),
+    nonce TEXT,
+    auth_time INTEGER,
     expires_at TIMESTAMP NOT NULL,
     used_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -244,6 +248,20 @@ const CREATE_TABLES_SQL = `
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
 
+  CREATE TABLE IF NOT EXISTS fortress_oauth_refresh_token (
+    id SERIAL PRIMARY KEY,
+    token VARCHAR(255) NOT NULL UNIQUE,
+    family_id VARCHAR(64) NOT NULL,
+    client_id VARCHAR(255) NOT NULL,
+    user_id INTEGER NOT NULL,
+    scope TEXT,
+    issued_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    parent_id INTEGER,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
   CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
     id SERIAL PRIMARY KEY,
     client_id VARCHAR(255) NOT NULL,
@@ -252,7 +270,18 @@ const CREATE_TABLES_SQL = `
     state VARCHAR(255) NOT NULL,
     code_challenge TEXT,
     code_challenge_method VARCHAR(10),
+    nonce TEXT,
     expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_oauth_signing_key (
+    id SERIAL PRIMARY KEY,
+    kid VARCHAR(64) NOT NULL UNIQUE,
+    alg VARCHAR(16) NOT NULL,
+    public_jwk TEXT NOT NULL,
+    private_jwk TEXT NOT NULL,
+    rotated_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
 
@@ -320,7 +349,9 @@ const TRUNCATE_SQL = `
     fortress_audit_log,
     fortress_account_lockout,
     fortress_user_scope_assignment,
+    fortress_oauth_signing_key,
     fortress_oauth_pending_flow,
+    fortress_oauth_refresh_token,
     fortress_oauth_access_token,
     fortress_oauth_authorization_code,
     fortress_oauth_client,

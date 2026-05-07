@@ -1839,7 +1839,18 @@ webhook-signature: v1,<base64-hmac-sha256>
 
 ### OAuth Server
 
-Full OAuth 2.0 server (RFC 6749) with Authorization Code + PKCE, Client Credentials, token introspection (RFC 7662), revocation (RFC 7009), and OIDC discovery.
+Full OAuth 2.0 / OIDC server. Spec coverage:
+
+- **RFC 6749** Authorization Code + PKCE, Client Credentials, **Refresh Token** (with rotation)
+- **RFC 6750** Bearer Token Usage · **RFC 7009** revocation · **RFC 7662** introspection
+- **RFC 7636** mandatory PKCE (RFC 9700 §2.1.1) — plain method rejected, S256 only
+- **RFC 8252** OAuth for native apps (public clients via `tokenEndpointAuthMethod: 'none'`, loopback redirect URIs with any-port)
+- **RFC 8414** AS Metadata + **OIDC Discovery 1.0** (full claims/scopes/algs metadata)
+- **RFC 9207** issuer identification on the authorization response (anti-mix-up)
+- **RFC 9700** OAuth Security BCP — mandatory PKCE, single-use codes, refresh-token rotation with replay detection
+- **OpenID Connect Core 1.0** — id_token (RS256), userinfo with scope-gated standard claims, nonce echo, JWKS at `/oauth/.well-known/jwks.json`
+
+See `docs/oauth-compliance-plan.html` for the full spec-by-spec compliance matrix.
 
 ```typescript
 import { oauth } from '@bajustone/fortress/plugins/oauth';
@@ -1848,11 +1859,18 @@ oauth({
   authCodeExpirySeconds: 600,        // default: 600 (10 min)
   pendingFlowExpirySeconds: 600,     // default: 600 (10 min)
   accessTokenExpirySeconds: 3600,    // default: 3600 (1 hour)
-  issuerUrl: 'https://auth.myapp.com',
+  refreshTokenExpirySeconds: 30 * 24 * 3600, // default: 30 days; 0 disables
+  idTokenExpirySeconds: 3600,        // default: 3600 (OIDC Core)
+  issuerUrl: 'https://auth.myapp.com', // MUST be https:// in production
   scopePermissionMap: {
     'read:posts': { resource: 'post', action: 'read' },
     'write:posts': { resource: 'post', action: 'create' },
   },
+  // Optional per-deployment claim extension for /oauth/userinfo + id_token.
+  userinfoClaims: (user, scope) => ({
+    tenant_id: (user as any).tenantId,
+    ...(scope?.includes('profile') ? { picture: (user as any).avatarUrl } : {}),
+  }),
   // Opt-in: SPA-friendly consent flow (Pattern B). The host app owns the
   // login + consent UI; Fortress only returns redirects and JSON.
   enableAuthorizeEndpoint: true,
@@ -1861,6 +1879,39 @@ oauth({
   consentUrl: 'https://app.myapp.com/oauth/consent',
 })
 ```
+
+**Public clients (RFC 8252):** SPAs and native apps register with
+`tokenEndpointAuthMethod: 'none'` and authenticate via PKCE alone — no
+client secret. Loopback redirect URIs (`http://127.0.0.1/cb`,
+`http://[::1]/cb`) match any-port at runtime, so native apps can pick a
+port dynamically. `localhost` (DNS) is *not* widened (DNS-rebinding
+guidance, RFC 8252 §8.3).
+
+**id_token + JWKS (OIDC Core):** when the request includes
+`scope=openid`, `/oauth/token` issues an RS256 id_token alongside the
+access token. The signing key is auto-generated on first use and
+published at `/oauth/.well-known/jwks.json` (`kid` = RFC 7638
+thumbprint). `nonce` from the authorize request is echoed verbatim;
+`auth_time` is recorded at consent.
+
+**Refresh tokens with rotation (RFC 9700 §2.2.2):** every successful
+`exchangeCode` returns a refresh token. `grant_type=refresh_token` rotates
+the pair on each use. Reuse of an already-rotated token is treated as
+attack — the entire token family is revoked, forcing re-authentication.
+Set `refreshTokenExpirySeconds: 0` to disable refresh-token issuance.
+
+**Per-client scope allow-list (RFC 6749 §3.3):** pass
+`allowedScopes: ['openid', 'email', 'profile']` to `createClient` to
+gate which scopes a given client can request. Scope intersection is
+applied at authorize and `client_credentials`; widening on refresh is
+rejected; narrowing is permitted.
+
+**Standard error wire shape:** `/oauth/token` returns the RFC 6749 §5.2
+body `{ error, error_description, error_uri? }` with machine-readable
+codes (`invalid_request`, `invalid_client`, `invalid_grant`,
+`unauthorized_client`, `unsupported_grant_type`, `invalid_scope`,
+`access_denied`, ...). Strict RPs that switch behaviour on the `error`
+field work out of the box.
 
 **SPA-friendly authorization (Pattern B):**
 

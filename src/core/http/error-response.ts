@@ -29,6 +29,25 @@ export function errorToResponse(err: unknown, logger?: FortressLogger): Response
     if (err.code === 'RATE_LIMITED' && err.retryAfter !== undefined) {
       headers['Retry-After'] = String(err.retryAfter);
     }
+    // RFC 6749 §5.2: token-endpoint failures MUST use the
+    // `{ error, error_description, error_uri? }` shape with a
+    // machine-readable `error` code. Detect it via FortressError.oauthError
+    // and emit the spec body in place of the default fortress envelope.
+    if (err.oauthError) {
+      const body: Record<string, unknown> = { error: err.oauthError };
+      if (err.oauthDescription)
+        body.error_description = err.oauthDescription;
+      if (err.oauthErrorUri)
+        body.error_uri = err.oauthErrorUri;
+      // For 401s on the token endpoint the spec also recommends a
+      // `WWW-Authenticate: Basic realm="..."` header when the client used
+      // HTTP Basic; clients ignore it in practice and we don't track the
+      // auth scheme here, so omit it.
+      return new Response(JSON.stringify(body), {
+        status: err.statusCode,
+        headers,
+      });
+    }
     return new Response(JSON.stringify(err.toJSON()), {
       status: err.statusCode,
       headers,

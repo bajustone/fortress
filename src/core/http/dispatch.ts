@@ -246,6 +246,13 @@ async function dispatchOAuth(
       return jsonResponse({}, 200);
     }
     case 'handleUserInfoRequest': {
+      // RFC 6750 §2.1: bearer token from Authorization header.
+      // The plugin's `handleUserInfoRequest` now returns OIDC-Core-§5.3
+      // shaped claims directly (sub-as-string, scope-gated standard
+      // claims, optional userinfoClaims hook output) and throws 401 for
+      // an invalid / expired token — which the standard error mapper
+      // serialises to a `{ code, message }` body. We just pass the result
+      // through.
       const bearer = parseBearerToken(authHeader);
       if (!bearer) {
         return jsonResponse(
@@ -253,25 +260,26 @@ async function dispatchOAuth(
           401,
         );
       }
-      const user = (await m.handleUserInfoRequest(bearer)) as {
-        id: number;
-        email: string;
-        name: string;
-      } | null;
-      if (!user) {
-        return jsonResponse(
-          { error: 'invalid_token', error_description: 'Token invalid or expired' },
-          401,
-        );
-      }
-      return jsonResponse(
-        { sub: String(user.id), email: user.email, name: user.name },
-        200,
-      );
+      const claims = await m.handleUserInfoRequest(bearer) as Record<string, unknown>;
+      return jsonResponse(claims, 200);
     }
     case 'handleDiscovery': {
       const result = m.handleDiscovery();
       return jsonResponse(result, 200);
+    }
+    case 'handleJwksRequest': {
+      // RFC 7517 / OIDC Discovery: public JWKS for id_token verification.
+      // Cacheable for a short window — long enough that key rotation
+      // doesn't immediately bust every RP, short enough that a rotated
+      // key reaches them within the grace period.
+      const result = await m.handleJwksRequest();
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=300',
+        },
+      });
     }
     case 'handleAuthorizeRequest': {
       // GET /oauth/authorize — front door for the auth-code flow.

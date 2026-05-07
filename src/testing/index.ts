@@ -215,6 +215,11 @@ const CREATE_TABLES_SQL = `
     name TEXT NOT NULL,
     redirect_uris TEXT NOT NULL,
     grant_types TEXT NOT NULL,
+    -- RFC 6749 §3.3 / RFC 9700 §2.2.1: per-client scope allow-list (JSON array).
+    allowed_scopes TEXT,
+    -- RFC 6749 §2.1 / OIDC Discovery client authentication method.
+    -- 'client_secret_basic' | 'client_secret_post' | 'none' (public client).
+    token_endpoint_auth_method TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
@@ -227,6 +232,9 @@ const CREATE_TABLES_SQL = `
     scope TEXT,
     code_challenge TEXT,
     code_challenge_method TEXT,
+    -- OIDC Core §3.1.2.1 nonce / auth_time, persisted for id_token issuance.
+    nonce TEXT,
+    auth_time INTEGER,
     expires_at INTEGER NOT NULL,
     used_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -242,6 +250,21 @@ const CREATE_TABLES_SQL = `
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
+  -- RFC 6749 §6 + RFC 9700 §2.2.2 refresh tokens with rotation.
+  CREATE TABLE IF NOT EXISTS fortress_oauth_refresh_token (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    family_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    scope TEXT,
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    parent_id INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
   CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     client_id TEXT NOT NULL,
@@ -250,7 +273,19 @@ const CREATE_TABLES_SQL = `
     state TEXT NOT NULL,
     code_challenge TEXT,
     code_challenge_method TEXT,
+    nonce TEXT,
     expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  -- OIDC Core / RFC 7517: id_token signing key persistence (RS256 today).
+  CREATE TABLE IF NOT EXISTS fortress_oauth_signing_key (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kid TEXT NOT NULL UNIQUE,
+    alg TEXT NOT NULL,
+    public_jwk TEXT NOT NULL,
+    private_jwk TEXT NOT NULL,
+    rotated_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
