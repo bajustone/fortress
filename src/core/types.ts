@@ -138,6 +138,12 @@ export interface PermissionContext {
   request?: Record<string, unknown>;
   user?: Record<string, unknown>;
   tenantId?: string;
+  /**
+   * Optional narrowing scopes from the credential used for this request
+   * (for example an API key). `null`/`undefined` means unscoped/full
+   * subject permissions; an empty array means no permissions.
+   */
+  credentialScopes?: string[] | null;
 }
 
 /** A persisted IAM role grouping a set of {@link Permission}s. */

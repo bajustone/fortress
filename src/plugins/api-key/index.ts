@@ -193,7 +193,7 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
       const resolved = await resolveApiKey(ctx.db, key);
       if (!resolved)
         return null;
-      return { subject: resolved.subject };
+      return { subject: resolved.subject, scopes: resolved.scopes };
     },
 
     methods: (ctx: PluginContext) => {
@@ -290,6 +290,12 @@ function resolveCallerSubject(
   if (routeCtx) {
     if (!routeCtx.subject)
       throw Errors.unauthorized('Not authenticated');
+    // Do not allow an API key credential to self-manage API keys. A scoped
+    // key could otherwise mint/rotate into a broader or unscoped key via the
+    // bearer-only self-service routes. Browser/JWT sessions have no
+    // credential scopes, so they remain allowed to manage their own keys.
+    if (routeCtx.scopes !== undefined)
+      throw Errors.forbidden('API keys cannot manage API keys');
     return routeCtx.subject;
   }
   if (!input.subject)

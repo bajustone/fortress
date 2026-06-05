@@ -29,9 +29,52 @@ beforeEach(async () => {
     password: 'target-pass-123',
   });
   targetId = target.id;
+
+  await fortress.iam.bindPermissionToUser(adminId, {
+    resource: 'fortress',
+    action: 'impersonate',
+  });
 });
 
 describe('impersonation', () => {
+  it('direct service call denies an admin without fortress:impersonate', async () => {
+    const other = await fortress.auth.createUser({
+      email: 'other-admin@example.com',
+      name: 'Other Admin',
+      password: 'other-pass-123',
+    });
+
+    await expect(fortress.auth.impersonate(other.id, targetId))
+      .rejects
+      .toThrow('Insufficient permissions');
+  });
+
+  it('http route denies a user without fortress:impersonate', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'plain@example.com',
+      name: 'Plain User',
+      password: 'plain-pass-123',
+    });
+    const token = await fortress.auth.signToken({
+      sub: user.id,
+      subjectType: 'USER',
+      name: user.name,
+      groups: [],
+      iss: 'fortress',
+    });
+
+    const response = await fortress.handleRequest(new Request('http://localhost/auth/impersonate', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ targetUserId: targetId }),
+    }));
+
+    expect(response.status).toBe(403);
+  });
+
   it('returns an access token with act claim containing admin userId', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
     const claims = await fortress.auth.verifyToken(result.accessToken as string);

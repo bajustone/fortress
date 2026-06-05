@@ -2,7 +2,7 @@ import type { Column, SQL, Table } from 'drizzle-orm';
 import type { DatabaseAdapter } from '../adapters/database';
 import type { WhereClause } from '../adapters/database/types';
 
-import { and, eq, getTableColumns, gt, gte, inArray, like, lt, lte, ne, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, gt, gte, inArray, isNull, like, lt, lte, ne, sql } from 'drizzle-orm';
 import { Errors } from '../core/errors';
 import { fortressPgSchema } from './pg/schema';
 import { fortressSchema } from './schema';
@@ -93,6 +93,8 @@ function buildWhereCondition(table: Table, where: WhereClause[]): SQL | undefine
         return lte(column, clause.value as any);
       case 'like':
         return like(column, clause.value as string);
+      case 'isNull':
+        return isNull(column);
       default:
         throw Errors.badRequest(`Unsupported operator: ${clause.operator}`);
     }
@@ -108,6 +110,49 @@ function sanitizeData(data: Record<string, unknown>): Record<string, unknown> {
     result[key] = value === undefined ? null : value;
   }
   return result;
+}
+
+function buildRawSql(sqlText: string, params: unknown[] = []): SQL {
+  if (params.length === 0)
+    return sql.raw(sqlText);
+
+  if (sqlText.includes('?')) {
+    const parts = sqlText.split('?');
+    if (parts.length - 1 !== params.length) {
+      throw Errors.badRequest(`rawQuery placeholder count (${parts.length - 1}) does not match params (${params.length})`);
+    }
+    let query: SQL = sql.raw(parts[0]);
+    for (let i = 0; i < params.length; i++) {
+      query = sql`${query}${params[i]}${sql.raw(parts[i + 1])}`;
+    }
+    return query;
+  }
+
+  const placeholder = /\$(\d+)/g;
+  let cursor = 0;
+  let query: SQL = sql.raw('');
+  let seen = 0;
+  for (const match of sqlText.matchAll(placeholder)) {
+    const index = Number(match[1]) - 1;
+    if (index < 0 || index >= params.length)
+      throw Errors.badRequest(`rawQuery placeholder ${match[0]} has no matching param`);
+    query = sql`${query}${sql.raw(sqlText.slice(cursor, match.index))}${params[index]}`;
+    cursor = (match.index ?? 0) + match[0].length;
+    seen++;
+  }
+  if (seen === 0)
+    throw Errors.badRequest('rawQuery params were provided but no placeholders were found');
+  query = sql`${query}${sql.raw(sqlText.slice(cursor))}`;
+  return query;
+}
+
+function normalizeRawRows<T>(result: unknown): T[] {
+  if (Array.isArray(result))
+    return result as T[];
+  const rows = (result as { rows?: unknown })?.rows;
+  if (Array.isArray(rows))
+    return rows as T[];
+  return [];
 }
 
 /**
@@ -236,6 +281,20 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
 
         const result = await execOne<{ count: number | string }>(query);
         return Number(result?.count) || 0;
+      },
+
+      async rawQuery<T>(sqlText: string, params?: unknown[]): Promise<T[]> {
+        const query = buildRawSql(sqlText, params ?? []);
+        if (isSqlite) {
+          if (typeof (drizzle as any).all === 'function')
+            return normalizeRawRows<T>((drizzle as any).all(query));
+          if (typeof (drizzle as any).execute === 'function')
+            return normalizeRawRows<T>(await (drizzle as any).execute(query));
+          throw Errors.badRequest('rawQuery is not supported by this SQLite Drizzle driver');
+        }
+        if (typeof (drizzle as any).execute !== 'function')
+          throw Errors.badRequest('rawQuery is not supported by this Drizzle driver');
+        return normalizeRawRows<T>(await (drizzle as any).execute(query));
       },
 
       async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {

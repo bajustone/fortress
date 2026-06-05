@@ -1,5 +1,6 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressConfig, PasswordHasher } from '../config';
+import type { StoredRefreshToken } from '../internal-adapter';
 import type { Unsubscribe } from '../observability/listener-list';
 import type { FortressLogger } from '../observability/logger';
 import type { Histogram, TelemetryProvider } from '../observability/types';
@@ -21,6 +22,7 @@ import type {
   TokenClaims,
 } from '../types';
 import { Errors, FortressError } from '../errors';
+import { evaluatePermissions } from '../iam/permission-evaluator';
 import { createInternalAdapter } from '../internal-adapter';
 import { createListenerList } from '../observability/listener-list';
 import { SILENT_LOGGER } from '../observability/logger';
@@ -93,7 +95,7 @@ export interface AuthService {
    * Issue a short-lived, non-renewable access token that lets an admin act as another user.
    * The token carries an RFC 8693 `act` claim identifying the real admin.
    *
-   * **Caller must verify the admin has the `fortress:impersonate` permission before calling this method.**
+   * Requires the admin user to hold `fortress:impersonate`. The built-in HTTP route also enforces this via endpoint metadata.
    */
   impersonate: (adminUserId: number, targetUserId: number, options?: { reason?: string; expirySeconds?: number }) => Promise<AuthResponse>;
 
@@ -131,6 +133,7 @@ export function createAuthService(
   deps?: AuthServiceDeps,
 ): AuthService {
   const resolved = resolveConfig(config);
+  const evaluationMode = config.rbac?.evaluationMode ?? 'allow-only';
   const hasher: PasswordHasher = config.passwordHasher ?? createDefaultHasher();
   const adapter = createInternalAdapter(db);
   const logger = deps?.logger;
@@ -353,130 +356,141 @@ export function createAuthService(
 
       const tokenHash = await hashToken(refreshToken);
 
-      const stored = await adapter.findRefreshTokenByHash(tokenHash);
+      const txResult = await db.transaction(async (tx) => {
+        const txAdapter = createInternalAdapter(tx);
 
-      if (!stored) {
-        throw Errors.unauthorized('Invalid refresh token');
-      }
-
-      // Token reuse detection: if already revoked, invalidate entire family
-      if (stored.isRevoked) {
-        await db.update({
+        // Atomic compare-and-set claim: exactly one concurrent refresh can
+        // flip isRevoked=false → true for this token hash. Losers see null
+        // and take the replay path below.
+        const stored = await tx.update<StoredRefreshToken>({
           model: 'refresh_token',
-          where: [{ field: 'tokenFamily', operator: '=', value: stored.tokenFamily }],
+          where: [
+            { field: 'tokenHash', operator: '=', value: tokenHash },
+            { field: 'isRevoked', operator: '=', value: false },
+          ],
           data: { isRevoked: true },
         });
-        if (authEventListeners.size() > 0) {
-          authEventListeners.emit({
-            eventType: 'TOKEN_REUSE_DETECTED',
-            actorId: stored.userId,
-            ipAddress: meta?.ipAddress,
-            userAgent: meta?.userAgent,
-            metadata: { tokenFamily: stored.tokenFamily },
-          });
-        }
-        throw Errors.tokenReuse();
-      }
 
-      if (stored.expiresAt < new Date()) {
-        throw Errors.unauthorized('Refresh token expired');
-      }
-
-      // Token fingerprint validation
-      if (config.jwt.validateRefreshFingerprint && stored.fingerprintHash) {
-        const currentFingerprint = meta?.userAgent
-          ? await computeFingerprintHash(meta.userAgent)
-          : null;
-
-        if (currentFingerprint !== stored.fingerprintHash) {
-          if (config.jwt.validateRefreshFingerprint === true) {
-            // Hard mode: invalidate entire token family and reject
-            await db.update({
+        if (!stored) {
+          const reused = await txAdapter.findRefreshTokenByHash(tokenHash);
+          if (reused) {
+            await tx.update({
               model: 'refresh_token',
-              where: [{ field: 'tokenFamily', operator: '=', value: stored.tokenFamily }],
+              where: [{ field: 'tokenFamily', operator: '=', value: reused.tokenFamily }],
               data: { isRevoked: true },
             });
-            throw Errors.unauthorized('Refresh token fingerprint mismatch');
-          }
-          else {
-            // Warn mode: log but allow
-            logger?.warn(
-              { tokenFamily: stored.tokenFamily },
-              'refresh token fingerprint mismatch',
-            );
             if (authEventListeners.size() > 0) {
               authEventListeners.emit({
-                eventType: 'TOKEN_FINGERPRINT_MISMATCH',
-                actorId: stored.userId,
+                eventType: 'TOKEN_REUSE_DETECTED',
+                actorId: reused.userId,
                 ipAddress: meta?.ipAddress,
                 userAgent: meta?.userAgent,
-                metadata: { tokenFamily: stored.tokenFamily },
+                metadata: { tokenFamily: reused.tokenFamily },
               });
+            }
+            throw Errors.tokenReuse();
+          }
+          throw Errors.unauthorized('Invalid refresh token');
+        }
+
+        if (stored.expiresAt < new Date()) {
+          throw Errors.unauthorized('Refresh token expired');
+        }
+
+        // Token fingerprint validation
+        if (config.jwt.validateRefreshFingerprint && stored.fingerprintHash) {
+          const currentFingerprint = meta?.userAgent
+            ? await computeFingerprintHash(meta.userAgent)
+            : null;
+
+          if (currentFingerprint !== stored.fingerprintHash) {
+            if (config.jwt.validateRefreshFingerprint === true) {
+              // Hard mode: invalidate entire token family and reject
+              await tx.update({
+                model: 'refresh_token',
+                where: [{ field: 'tokenFamily', operator: '=', value: stored.tokenFamily }],
+                data: { isRevoked: true },
+              });
+              throw Errors.unauthorized('Refresh token fingerprint mismatch');
+            }
+            else {
+              // Warn mode: log but allow
+              logger?.warn(
+                { tokenFamily: stored.tokenFamily },
+                'refresh token fingerprint mismatch',
+              );
+              if (authEventListeners.size() > 0) {
+                authEventListeners.emit({
+                  eventType: 'TOKEN_FINGERPRINT_MISMATCH',
+                  actorId: stored.userId,
+                  ipAddress: meta?.ipAddress,
+                  userAgent: meta?.userAgent,
+                  metadata: { tokenFamily: stored.tokenFamily },
+                });
+              }
             }
           }
         }
-      }
 
-      // Revoke old token
-      await db.update({
-        model: 'refresh_token',
-        where: [{ field: 'id', operator: '=', value: stored.id }],
-        data: { isRevoked: true },
+        // Get user
+        const user = await tx.findOne<FortressUser>({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: stored.userId }],
+        });
+
+        if (!user || !user.isActive) {
+          throw Errors.unauthorized('User not found or disabled');
+        }
+
+        // Issue new tokens with same family
+        const groups = await txAdapter.getUserGroups(user.id);
+        const customClaims = await enrichClaims(user.id);
+
+        const accessToken = await signAccessToken(
+          {
+            sub: user.id,
+            subjectType: 'USER',
+            name: user.name,
+            groups,
+            iss: resolved.issuer,
+            customClaims: Object.keys(customClaims).length > 0 ? customClaims : undefined,
+          },
+          resolved.secret,
+          resolved.accessTokenExpiry,
+        );
+
+        const newToken = await generateRefreshToken();
+
+        const newFingerprintHash = meta?.userAgent
+          ? await computeFingerprintHash(meta.userAgent)
+          : stored.fingerprintHash;
+
+        await tx.create({
+          model: 'refresh_token',
+          data: {
+            userId: stored.userId,
+            tokenHash: newToken.hash,
+            tokenFamily: stored.tokenFamily, // same family for rotation tracking
+            isRevoked: false,
+            expiresAt: new Date(Date.now() + resolved.refreshTokenExpiry * 1000),
+            ipAddress: meta?.ipAddress ?? stored.ipAddress,
+            userAgent: meta?.userAgent ?? stored.userAgent,
+            deviceName: meta?.deviceName ?? stored.deviceName,
+            lastActiveAt: new Date(),
+            fingerprintHash: newFingerprintHash,
+          },
+        });
+
+        return {
+          userId: user.id,
+          tokens: {
+            accessToken,
+            refreshToken: newToken.raw,
+          } satisfies AuthTokenPair,
+        };
       });
 
-      // Get user
-      const user = await db.findOne<FortressUser>({
-        model: 'user',
-        where: [{ field: 'id', operator: '=', value: stored.userId }],
-      });
-
-      if (!user || !user.isActive) {
-        throw Errors.unauthorized('User not found or disabled');
-      }
-
-      // Issue new tokens with same family
-      const groups = await getUserGroups(user.id);
-      const customClaims = await enrichClaims(user.id);
-
-      const accessToken = await signAccessToken(
-        {
-          sub: user.id,
-          subjectType: 'USER',
-          name: user.name,
-          groups,
-          iss: resolved.issuer,
-          customClaims: Object.keys(customClaims).length > 0 ? customClaims : undefined,
-        },
-        resolved.secret,
-        resolved.accessTokenExpiry,
-      );
-
-      const newToken = await generateRefreshToken();
-
-      const newFingerprintHash = meta?.userAgent
-        ? await computeFingerprintHash(meta.userAgent)
-        : stored.fingerprintHash;
-
-      await db.create({
-        model: 'refresh_token',
-        data: {
-          userId: stored.userId,
-          tokenHash: newToken.hash,
-          tokenFamily: stored.tokenFamily, // same family for rotation tracking
-          isRevoked: false,
-          expiresAt: new Date(Date.now() + resolved.refreshTokenExpiry * 1000),
-          ipAddress: meta?.ipAddress ?? stored.ipAddress,
-          userAgent: meta?.userAgent ?? stored.userAgent,
-          deviceName: meta?.deviceName ?? stored.deviceName,
-          lastActiveAt: new Date(),
-          fingerprintHash: newFingerprintHash,
-        },
-      });
-
-      let result: AuthTokenPair = {
-        accessToken,
-        refreshToken: newToken.raw,
-      };
+      let result: AuthTokenPair = txResult.tokens;
 
       const afterCtx: AfterHookContext = { db, config, meta, responseHeaders: new Headers() };
       result = await runAfterRefreshHooks(afterCtx, result);
@@ -484,7 +498,7 @@ export function createAuthService(
       if (authEventListeners.size() > 0) {
         authEventListeners.emit({
           eventType: 'TOKEN_REFRESH',
-          actorId: user.id,
+          actorId: txResult.userId,
           ipAddress: meta?.ipAddress,
           userAgent: meta?.userAgent,
           outcome: 'success',
@@ -711,6 +725,14 @@ export function createAuthService(
       targetUserId: number,
       options?: { reason?: string; expirySeconds?: number },
     ): Promise<AuthResponse> {
+      // Defense in depth for programmatic callers. The HTTP route also
+      // enforces this via endpoint metadata before dispatch, but direct
+      // service calls must fail closed too.
+      const adminPermissions = await adapter.getSubjectPermissions({ type: 'USER', id: adminUserId });
+      if (!evaluatePermissions(adminPermissions, 'fortress', 'impersonate', evaluationMode)) {
+        throw Errors.forbidden('Insufficient permissions');
+      }
+
       const targetUser = await db.findOne<FortressUser>({
         model: 'user',
         where: [{ field: 'id', operator: '=', value: targetUserId }],

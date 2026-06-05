@@ -1,6 +1,7 @@
 import type { AnySQLiteTable } from 'drizzle-orm/sqlite-core';
 
-import { index, integer, primaryKey, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { index, integer, primaryKey, sqliteTable, text, unique, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 // --- Core Identity ---
 
@@ -84,7 +85,9 @@ const permissions = sqliteTable('fortress_permission', {
   effect: text('effect').notNull().default('ALLOW'), // 'ALLOW' | 'DENY'
   conditions: text('conditions'), // JSON string of PermissionCondition[]
   description: text('description'),
-});
+}, table => [
+  unique().on(table.resource, table.action, table.effect, table.conditions),
+]);
 
 // --- IAM: Roles ---
 
@@ -112,7 +115,11 @@ const roleBindings = sqliteTable('fortress_role_binding', {
   subjectType: text('subject_type').notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
   tenantId: text('tenant_id'),
-});
+}, table => [
+  unique().on(table.roleId, table.subjectType, table.subjectId, table.tenantId),
+  uniqueIndex('uniq_role_binding_global').on(table.roleId, table.subjectType, table.subjectId).where(sql`${table.tenantId} is null`),
+  uniqueIndex('uniq_role_binding_tenant').on(table.roleId, table.subjectType, table.subjectId, table.tenantId).where(sql`${table.tenantId} is not null`),
+]);
 
 // --- IAM: Direct Permission Bindings ---
 
@@ -122,7 +129,11 @@ const directPermissionBindings = sqliteTable('fortress_direct_permission_binding
   subjectType: text('subject_type').notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
   tenantId: text('tenant_id'),
-});
+}, table => [
+  unique().on(table.permissionId, table.subjectType, table.subjectId, table.tenantId),
+  uniqueIndex('uniq_direct_permission_binding_global').on(table.permissionId, table.subjectType, table.subjectId).where(sql`${table.tenantId} is null`),
+  uniqueIndex('uniq_direct_permission_binding_tenant').on(table.permissionId, table.subjectType, table.subjectId, table.tenantId).where(sql`${table.tenantId} is not null`),
+]);
 
 // --- Plugins: Email Verification ---
 

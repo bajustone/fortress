@@ -102,6 +102,7 @@ export function buildHandleRequest(
       let subject: Subject | undefined;
       let userId: number | undefined;
       let claims: TokenClaims | undefined;
+      let scopes: string[] | null | undefined;
       const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
 
       if (!selfManagedBearer) {
@@ -109,6 +110,7 @@ export function buildHandleRequest(
         if (resolved) {
           subject = resolved.subject;
           claims = resolved.claims;
+          scopes = resolved.scopes;
         }
       }
 
@@ -146,6 +148,7 @@ export function buildHandleRequest(
         fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
+        fortressScopes: scopes,
       });
 
       // 5. Fortress-managed default-deny RBAC. Routes flagged
@@ -154,9 +157,9 @@ export function buildHandleRequest(
       //    from the IAM check too.
       if (!selfManagedBearer) {
         await enforceFortressPermission(endpoint, subject, {
-          checkPermission: (subj, resource, action): Promise<boolean> =>
-            fortress.iam.checkPermission(subj, resource, action),
-        });
+          checkPermission: (subj, resource, action, credentialScopes): Promise<boolean> =>
+            fortress.iam.checkPermission(subj, resource, action, { credentialScopes }),
+        }, scopes);
       }
 
       // 6. Plugin after-rbac middleware
@@ -165,6 +168,7 @@ export function buildHandleRequest(
         fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
+        fortressScopes: scopes,
       });
 
       // 7. Body parse + validation. Validation reads the body via clone()
@@ -204,6 +208,7 @@ export function buildHandleRequest(
         subject,
         userId,
         claims,
+        scopes,
         meta,
       });
 

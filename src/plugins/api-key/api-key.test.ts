@@ -4,6 +4,7 @@ import type { Subject } from '../../core/types';
 import type { ApiKeyConfig, ApiKeyMethods } from './index';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
+import { bool, endpoint, obj, str } from '../../core/schema-builder';
 import { createTestAdapter } from '../../testing';
 import { apiKey } from './index';
 
@@ -230,6 +231,57 @@ describe('api-key plugin — programmatic methods', () => {
       const result = await methods.resolveKey(key);
       expect(result!.scopes).toBeNull();
     });
+
+    it('narrows IAM route permissions to the API-key scopes', async () => {
+      const reportsPlugin = {
+        name: 'reports',
+        routes: {
+          deleteReport: endpoint('DELETE', '/reports/:id')
+            .security('bearer')
+            .permission('report', 'delete')
+            .params(obj({ id: str('Report id') }, 'id'))
+            .response(200, 'Deleted', obj({ ok: bool() }, 'ok'))
+            .handler('deleteReport')
+            .build(),
+        },
+        methods: () => ({ deleteReport: () => ({ ok: true }) }),
+      };
+      const fortress = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [apiKey({ prefix: 'test' }), reportsPlugin],
+      });
+      const apiKeys = fortress.plugins['api-key'] as unknown as ApiKeyMethods;
+      const user = await fortress.auth.createUser({
+        email: 'scoped@example.com',
+        name: 'Scoped',
+        password: 'password-123',
+      });
+      const role = await fortress.iam.createRole('report-deleter', [{ resource: 'report', action: 'delete' }]);
+      await fortress.iam.bindRoleToUser(user.id, role.id);
+
+      const readOnly = await apiKeys.createKey({
+        subject: userSubject(user.id),
+        name: 'Read only',
+        scopes: ['report:read'],
+      });
+      const denied = await fortress.handleRequest(new Request('http://localhost/reports/r1', {
+        method: 'DELETE',
+        headers: { Authorization: `ApiKey ${readOnly.key}` },
+      }));
+      expect(denied.status).toBe(403);
+
+      const wildcard = await apiKeys.createKey({
+        subject: userSubject(user.id),
+        name: 'Report wildcard',
+        scopes: ['report:*'],
+      });
+      const allowed = await fortress.handleRequest(new Request('http://localhost/reports/r1', {
+        method: 'DELETE',
+        headers: { Authorization: `ApiKey ${wildcard.key}` },
+      }));
+      expect(allowed.status).toBe(200);
+    });
   });
 });
 
@@ -292,6 +344,31 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
         body: JSON.stringify({ name: 'Key' }),
       }));
       expect(res.status).toBe(401);
+    });
+
+    it('denies API-key credentials from minting broader keys via self-service routes', async () => {
+      const { fortress, methods, userId } = await setup({
+        prefix: 'test',
+        routes: true,
+      });
+      const scoped = await methods.createKey({
+        subject: userSubject(userId),
+        name: 'Scoped caller',
+        scopes: ['report:read'],
+      });
+
+      const res = await fortress.handleRequest(new Request('http://localhost/api-key/keys', {
+        method: 'POST',
+        headers: {
+          'authorization': `ApiKey ${scoped.key}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'Escalated', scopes: ['*'] }),
+      }));
+
+      expect(res.status).toBe(403);
+      const keys = await methods.listKeys({ subject: userSubject(userId) });
+      expect(keys.some(k => k.name === 'Escalated')).toBe(false);
     });
 
     it('creates a key for the authenticated subject and ignores body.subject on POST', async () => {

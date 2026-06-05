@@ -48,6 +48,25 @@ export interface InternalAdapter {
 
 // --- Factory ---
 
+function normalizePermission(permission: Permission): Permission {
+  return {
+    ...permission,
+    conditions: typeof permission.conditions === 'string'
+      ? JSON.parse(permission.conditions)
+      : permission.conditions,
+  };
+}
+
+function serializePermissionConditions(
+  db: DatabaseAdapter,
+  conditions: PermissionInput['conditions'],
+): string | PermissionInput['conditions'] | null {
+  if (!conditions)
+    return null;
+  // PostgreSQL schema stores JSONB; SQLite stores text.
+  return db.dialect === 'pg' ? conditions : JSON.stringify(conditions);
+}
+
 export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
   return {
     async findUserByIdentifier(identifier: string): Promise<(FortressUser & { passwordHash: string | null }) | null> {
@@ -160,13 +179,11 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
              -- Direct permission bindings
              SELECT dpb.permission_id FROM fortress_direct_permission_binding dpb
              WHERE ${dpbPredicate}${dpbTenant}
-           )`,
+           )
+           ORDER BY p.id`,
           params,
         );
-        return rows.map(r => ({
-          ...r,
-          conditions: typeof r.conditions === 'string' ? JSON.parse(r.conditions) : r.conditions,
-        }));
+        return rows.map(normalizePermission);
       }
 
       // Fallback: sequential findMany queries
@@ -253,34 +270,41 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         return [];
 
       // 5. Fetch actual permissions
-      return db.findMany<Permission>({
+      const permissions = await db.findMany<Permission>({
         model: 'permission',
         where: [{ field: 'id', operator: 'in', value: allPermissionIds }],
       });
+      return permissions.map(normalizePermission);
     },
 
     async findOrCreatePermission(input: PermissionInput): Promise<Permission> {
+      const conditions = serializePermissionConditions(db, input.conditions);
       const existing = await db.findOne<Permission>({
         model: 'permission',
         where: [
           { field: 'resource', operator: '=', value: input.resource },
           { field: 'action', operator: '=', value: input.action },
+          { field: 'effect', operator: '=', value: input.effect ?? 'ALLOW' },
+          conditions == null
+            ? { field: 'conditions', operator: 'isNull', value: null }
+            : { field: 'conditions', operator: '=', value: conditions },
         ],
       });
 
       if (existing)
-        return existing;
+        return normalizePermission(existing);
 
-      return db.create<Permission>({
+      const created = await db.create<Permission>({
         model: 'permission',
         data: {
           resource: input.resource,
           action: input.action,
           effect: input.effect ?? 'ALLOW',
-          conditions: input.conditions ? JSON.stringify(input.conditions) : null,
+          conditions,
           description: `${input.action} ${input.resource}`,
         },
       });
+      return normalizePermission(created);
     },
 
     async ensureResource(name: string): Promise<void> {

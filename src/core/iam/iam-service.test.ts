@@ -67,6 +67,35 @@ describe('inline permissions (direct binding)', () => {
     });
   });
 
+  it('bindPermissionToUser is idempotent for global bindings', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'idem-direct@test.com',
+      name: 'Idem Direct',
+      password: 'password-123',
+    });
+
+    await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
+    await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
+
+    const perms = await fortress.config.database.findMany<{ id: number }>({
+      model: 'permission',
+      where: [
+        { field: 'resource', operator: '=', value: 'post' },
+        { field: 'action', operator: '=', value: 'read' },
+      ],
+    });
+    const count = await fortress.config.database.count({
+      model: 'direct_permission_binding',
+      where: [
+        { field: 'permissionId', operator: '=', value: perms[0].id },
+        { field: 'subjectType', operator: '=', value: 'USER' },
+        { field: 'subjectId', operator: '=', value: user.id },
+        { field: 'tenantId', operator: 'isNull', value: null },
+      ],
+    });
+    expect(count).toBe(1);
+  });
+
   it('bindPermissionToUser grants access without a role', async () => {
     const user = await fortress.auth.createUser({
       email: 'alice@test.com',
@@ -113,6 +142,29 @@ describe('inline permissions (direct binding)', () => {
     await fortress.iam.unbindPermissionFromUser(user.id, perm!.id);
 
     expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'read')).toBe(false);
+  });
+
+  it('bindRoleToUser is idempotent for global bindings', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'idem-role@test.com',
+      name: 'Idem Role',
+      password: 'password-123',
+    });
+    const role = await fortress.iam.createRole('idem-viewer', [{ resource: 'post', action: 'read' }]);
+
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+
+    const count = await fortress.config.database.count({
+      model: 'role_binding',
+      where: [
+        { field: 'roleId', operator: '=', value: role.id },
+        { field: 'subjectType', operator: '=', value: 'USER' },
+        { field: 'subjectId', operator: '=', value: user.id },
+        { field: 'tenantId', operator: 'isNull', value: null },
+      ],
+    });
+    expect(count).toBe(1);
   });
 
   it('direct and role-based permissions combine', async () => {

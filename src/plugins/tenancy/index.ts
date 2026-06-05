@@ -112,37 +112,37 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
       return {
         ...adapter,
         async create<T>(params: Parameters<DatabaseAdapter['create']>[0]): Promise<T> {
-          if (adapter.rawQuery) {
+          if (adapter.rawQuery && adapter.dialect === 'pg') {
             await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
           }
           return adapter.create<T>(params);
         },
         async findOne<T>(params: Parameters<DatabaseAdapter['findOne']>[0]): Promise<T | null> {
-          if (adapter.rawQuery) {
+          if (adapter.rawQuery && adapter.dialect === 'pg') {
             await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
           }
           return adapter.findOne<T>(params);
         },
         async findMany<T>(params: Parameters<DatabaseAdapter['findMany']>[0]): Promise<T[]> {
-          if (adapter.rawQuery) {
+          if (adapter.rawQuery && adapter.dialect === 'pg') {
             await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
           }
           return adapter.findMany<T>(params);
         },
         async update<T>(params: Parameters<DatabaseAdapter['update']>[0]): Promise<T | null> {
-          if (adapter.rawQuery) {
+          if (adapter.rawQuery && adapter.dialect === 'pg') {
             await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
           }
           return adapter.update<T>(params);
         },
         async delete(params: Parameters<DatabaseAdapter['delete']>[0]): Promise<void> {
-          if (adapter.rawQuery) {
+          if (adapter.rawQuery && adapter.dialect === 'pg') {
             await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
           }
           return adapter.delete(params);
         },
         async count(params: Parameters<DatabaseAdapter['count']>[0]): Promise<number> {
-          if (adapter.rawQuery) {
+          if (adapter.rawQuery && adapter.dialect === 'pg') {
             await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
           }
           return adapter.count(params);
@@ -170,7 +170,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
         });
 
         // Create tenant schema if rawQuery is available (PostgreSQL)
-        if (ctx.db.rawQuery) {
+        if (ctx.db.rawQuery && ctx.db.dialect === 'pg') {
           const schemaName = `${schemaPrefix}${data.taxId}`;
           await ctx.db.rawQuery(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
         }

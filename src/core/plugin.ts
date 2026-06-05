@@ -81,7 +81,7 @@ export interface FortressPlugin {
   resolvePrincipal?: (
     request: Request,
     ctx: PluginContext,
-  ) => Promise<{ subject: Subject; claims?: TokenClaims } | null>;
+  ) => Promise<{ subject: Subject; claims?: TokenClaims; scopes?: string[] | null } | null>;
 }
 
 // --- Hooks ---
@@ -161,6 +161,8 @@ export interface PluginRouteContext {
   /** Convenience alias for `subject?.id` when the subject is a USER. */
   userId?: number;
   claims?: TokenClaims;
+  /** Credential-level narrowing scopes from principal resolution, if any. */
+  scopes?: string[] | null;
   meta?: RequestMeta;
   request: Request;
 }

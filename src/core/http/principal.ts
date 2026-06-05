@@ -24,6 +24,8 @@ import type { Subject, TokenClaims } from '../types';
 export interface ResolvedPrincipal {
   subject: Subject;
   claims?: TokenClaims;
+  /** Credential-level narrowing scopes (e.g. API-key scopes). null/undefined = unscoped. */
+  scopes?: string[] | null;
 }
 
 /**
@@ -45,7 +47,7 @@ export async function tryPluginPrincipal(
       iam: fortress.iam,
     });
     if (resolved)
-      return { subject: resolved.subject, claims: resolved.claims };
+      return { subject: resolved.subject, claims: resolved.claims, scopes: resolved.scopes };
   }
   return null;
 }

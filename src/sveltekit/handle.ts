@@ -100,11 +100,13 @@ export function createSvelteKitHandle(
       let subject: Subject | undefined;
       let userId: number | undefined;
       let claims: TokenClaims | undefined;
+      let scopes: string[] | null | undefined;
 
       const pluginResolved = await tryPluginPrincipal(fortress, event.request);
       if (pluginResolved) {
         subject = pluginResolved.subject;
         claims = pluginResolved.claims;
+        scopes = pluginResolved.scopes;
       }
       else {
         const token = fortress.extractAccessToken(event.request);
@@ -140,6 +142,7 @@ export function createSvelteKitHandle(
           fortress,
           subject,
           claims,
+          scopes,
         );
       }
       else {
@@ -155,6 +158,7 @@ export function createSvelteKitHandle(
         fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
+        fortressScopes: scopes,
       });
 
       // 6. User-route RBAC via routeMap (skip-patterns filtered out first).
@@ -163,7 +167,9 @@ export function createSvelteKitHandle(
         if (mapping) {
           if (!subject)
             throw Errors.unauthorized('Not authenticated');
-          const allowed = await fortress.iam.checkPermission(subject, mapping.resource, mapping.action);
+          const allowed = await fortress.iam.checkPermission(subject, mapping.resource, mapping.action, {
+            credentialScopes: scopes,
+          });
           if (!allowed)
             throw Errors.forbidden('Insufficient permissions');
         }
@@ -175,6 +181,7 @@ export function createSvelteKitHandle(
         fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
+        fortressScopes: scopes,
       });
 
       // 8. Hand off to SvelteKit's normal route resolution.
@@ -198,6 +205,7 @@ function populateLocals(
   fortress: Fortress,
   subject: Subject,
   claims: TokenClaims | undefined,
+  scopes: string[] | null | undefined,
 ): void {
   const plugins = fortress.config.plugins ?? [];
   const requestContext: Record<string, unknown> = {
@@ -215,6 +223,7 @@ function populateLocals(
     subject,
     userId: subject.type === 'USER' ? subject.id : undefined,
     claims,
+    scopes,
     db: wrapped,
     getScopedDb: async (model: string): Promise<DatabaseAdapter> => {
       const rule = await collectScopeRules(plugins, subject.id, model, pluginCtx);

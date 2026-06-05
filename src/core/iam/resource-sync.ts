@@ -81,6 +81,7 @@ export async function pushResources(db: DatabaseAdapter, resources: ResourceFile
 export async function pullResources(db: DatabaseAdapter): Promise<ResourceFile> {
   const resources = await db.findMany<{ name: string; description: string | null }>({
     model: 'resource',
+    sortBy: { field: 'name', direction: 'asc' },
   });
 
   const result: ResourceFile = { resources: {} };
@@ -89,6 +90,7 @@ export async function pullResources(db: DatabaseAdapter): Promise<ResourceFile> 
     const permissions = await db.findMany<{ action: string }>({
       model: 'permission',
       where: [{ field: 'resource', operator: '=', value: resource.name }],
+      sortBy: { field: 'id', direction: 'asc' },
     });
 
     result.resources[resource.name] = {

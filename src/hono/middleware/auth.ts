@@ -25,6 +25,7 @@ export interface FortressEnv {
     fortressSubject: Subject;
     fortressUserId?: number;
     fortressClaims?: TokenClaims;
+    fortressScopes?: string[] | null;
     fortressDb: DatabaseAdapter;
     fortressGetScopedDb: (model: string) => Promise<DatabaseAdapter>;
   };
@@ -60,12 +61,14 @@ export function createAuthMiddleware(
       );
     }
 
-    const { subject, claims } = resolved;
+    const { subject, claims, scopes } = resolved;
     c.set('fortressSubject', subject);
     if (subject.type === 'USER')
       c.set('fortressUserId', subject.id);
     if (claims)
       c.set('fortressClaims', claims);
+    if (scopes !== undefined)
+      c.set('fortressScopes', scopes);
 
     // Build request context from headers for plugin adapter wrappers
     const plugins = fortress.config.plugins ?? [];

@@ -756,89 +756,107 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         }
 
         const tokenHash = await hashToken(params.refreshToken);
-        const record = await ctx.db.findOne<RefreshTokenRecord>({
-          model: 'oauth_refresh_token',
-          where: [{ field: 'token', operator: '=', value: tokenHash }],
-        });
-        if (!record)
-          throw Errors.oauth('invalid_grant', 'Invalid refresh token');
 
-        if (record.clientId !== params.clientId)
-          throw Errors.oauth('invalid_grant', 'Refresh token client mismatch');
-
-        if (record.expiresAt < new Date())
-          throw Errors.oauth('invalid_grant', 'Refresh token expired');
-
-        // RFC 9700 §2.2.2 replay detection. Reuse of a rotated token means
-        // an attacker stole it, OR the legitimate client missed the
-        // response and is retrying. Either way, the family is compromised
-        // and must die.
-        if (record.usedAt) {
-          await ctx.db.delete({
+        const grant = await ctx.db.transaction(async (tx) => {
+          const record = await tx.findOne<RefreshTokenRecord>({
             model: 'oauth_refresh_token',
-            where: [{ field: 'familyId', operator: '=', value: record.familyId }],
+            where: [{ field: 'token', operator: '=', value: tokenHash }],
           });
-          throw Errors.oauth('invalid_grant', 'Refresh token reuse detected; family revoked');
-        }
+          if (!record)
+            throw Errors.oauth('invalid_grant', 'Invalid refresh token');
 
-        // RFC 6749 §6: refreshed scope MUST NOT include any scope not
-        // originally granted. We allow narrowing only.
-        let scope = record.scope;
-        if (params.scope) {
-          const requested = params.scope.split(' ').filter(Boolean);
-          const original = (record.scope ?? '').split(' ').filter(Boolean);
-          const originalSet = new Set(original);
-          const widened = requested.find(s => !originalSet.has(s));
-          if (widened) {
-            throw Errors.oauth('invalid_scope', `Refreshed scope cannot widen: ${widened}`);
+          if (record.clientId !== params.clientId)
+            throw Errors.oauth('invalid_grant', 'Refresh token client mismatch');
+
+          if (record.expiresAt < new Date())
+            throw Errors.oauth('invalid_grant', 'Refresh token expired');
+
+          // RFC 9700 §2.2.2 replay detection. Reuse of a rotated token means
+          // an attacker stole it, OR the legitimate client missed the
+          // response and is retrying. Either way, the family is compromised
+          // and must die.
+          if (record.usedAt) {
+            await tx.delete({
+              model: 'oauth_refresh_token',
+              where: [{ field: 'familyId', operator: '=', value: record.familyId }],
+            });
+            return { replayDetected: true as const };
           }
-          scope = requested.join(' ');
-        }
 
-        // Mark the old refresh token used.
-        await ctx.db.update({
-          model: 'oauth_refresh_token',
-          where: [{ field: 'id', operator: '=', value: record.id }],
-          data: { usedAt: new Date() },
+          // RFC 6749 §6: refreshed scope MUST NOT include any scope not
+          // originally granted. We allow narrowing only.
+          let scope = record.scope;
+          if (params.scope) {
+            const requested = params.scope.split(' ').filter(Boolean);
+            const original = (record.scope ?? '').split(' ').filter(Boolean);
+            const originalSet = new Set(original);
+            const widened = requested.find(s => !originalSet.has(s));
+            if (widened) {
+              throw Errors.oauth('invalid_scope', `Refreshed scope cannot widen: ${widened}`);
+            }
+            scope = requested.join(' ');
+          }
+
+          // Atomic compare-and-set claim: only one concurrent caller can mark
+          // a never-used refresh token as used.
+          const claimed = await tx.update<RefreshTokenRecord>({
+            model: 'oauth_refresh_token',
+            where: [
+              { field: 'id', operator: '=', value: record.id },
+              { field: 'usedAt', operator: 'isNull', value: null },
+            ],
+            data: { usedAt: new Date() },
+          });
+          if (!claimed) {
+            await tx.delete({
+              model: 'oauth_refresh_token',
+              where: [{ field: 'familyId', operator: '=', value: record.familyId }],
+            });
+            return { replayDetected: true as const };
+          }
+
+          // Mint the new access token.
+          const { raw: accessRaw, hash: accessHash } = await generateRefreshToken();
+          await tx.create({
+            model: 'oauth_access_token',
+            data: {
+              token: accessHash,
+              clientId: params.clientId,
+              userId: record.userId,
+              scope,
+              expiresAt: new Date(Date.now() + accessTokenExpiry * 1000),
+            },
+          });
+
+          // Mint the new refresh token in the same family.
+          const { raw: refreshRaw, hash: refreshHash } = await generateRefreshToken();
+          await tx.create({
+            model: 'oauth_refresh_token',
+            data: {
+              token: refreshHash,
+              familyId: record.familyId,
+              clientId: params.clientId,
+              userId: record.userId,
+              scope,
+              issuedAt: new Date(),
+              expiresAt: new Date(Date.now() + refreshTokenExpiry * 1000),
+              usedAt: null,
+              parentId: record.id,
+            },
+          });
+
+          return {
+            accessToken: accessRaw,
+            tokenType: 'Bearer',
+            expiresIn: accessTokenExpiry,
+            refreshToken: refreshRaw,
+            ...(scope ? { scope } : {}),
+          };
         });
 
-        // Mint the new access token.
-        const { raw: accessRaw, hash: accessHash } = await generateRefreshToken();
-        await ctx.db.create({
-          model: 'oauth_access_token',
-          data: {
-            token: accessHash,
-            clientId: params.clientId,
-            userId: record.userId,
-            scope,
-            expiresAt: new Date(Date.now() + accessTokenExpiry * 1000),
-          },
-        });
-
-        // Mint the new refresh token in the same family.
-        const { raw: refreshRaw, hash: refreshHash } = await generateRefreshToken();
-        await ctx.db.create({
-          model: 'oauth_refresh_token',
-          data: {
-            token: refreshHash,
-            familyId: record.familyId,
-            clientId: params.clientId,
-            userId: record.userId,
-            scope,
-            issuedAt: new Date(),
-            expiresAt: new Date(Date.now() + refreshTokenExpiry * 1000),
-            usedAt: null,
-            parentId: record.id,
-          },
-        });
-
-        return {
-          accessToken: accessRaw,
-          tokenType: 'Bearer',
-          expiresIn: accessTokenExpiry,
-          refreshToken: refreshRaw,
-          ...(scope ? { scope } : {}),
-        };
+        if ('replayDetected' in grant)
+          throw Errors.oauth('invalid_grant', 'Refresh token reuse detected; family revoked');
+        return grant;
       },
 
       /**

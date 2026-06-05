@@ -32,6 +32,8 @@ export interface DispatchAuth {
   /** Convenience alias for `subject?.id` when the subject is a USER. */
   userId?: number;
   claims?: TokenClaims;
+  /** Credential-level narrowing scopes (e.g. API-key scopes). */
+  scopes?: string[] | null;
   meta?: RequestMeta;
 }
 
@@ -185,6 +187,7 @@ async function dispatchPlugin(
     subject: auth.subject,
     userId: auth.subject?.type === 'USER' ? auth.subject.id : undefined,
     claims: auth.claims,
+    scopes: auth.scopes,
     meta: auth.meta,
     request,
   };

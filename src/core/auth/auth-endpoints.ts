@@ -477,6 +477,7 @@ export const authEndpoints: AuthEndpointsMap = {
     .description('Issue a short-lived, non-renewable token to act as another user. Requires fortress:impersonate permission.')
     .tags('Auth')
     .security('bearer')
+    .permission('fortress', 'impersonate')
     .body(obj(
       {
         targetUserId: int('User to impersonate'),

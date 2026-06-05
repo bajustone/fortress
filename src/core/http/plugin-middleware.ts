@@ -41,6 +41,8 @@ export interface PluginRequestContext {
    */
   fortressUserId?: number;
   fortressClaims?: TokenClaims;
+  /** Credential-level narrowing scopes (for example API-key scopes), if any. */
+  fortressScopes?: string[] | null;
 }
 
 /**

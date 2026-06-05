@@ -87,7 +87,8 @@ const CREATE_TABLES_SQL = `
     action TEXT NOT NULL,
     effect TEXT NOT NULL DEFAULT 'ALLOW',
     conditions TEXT,
-    description TEXT
+    description TEXT,
+    UNIQUE (resource, action, effect, conditions)
   );
 
   CREATE TABLE IF NOT EXISTS fortress_role (
@@ -108,16 +109,30 @@ const CREATE_TABLES_SQL = `
     role_id INTEGER NOT NULL REFERENCES fortress_role(id) ON DELETE CASCADE,
     subject_type TEXT NOT NULL,
     subject_id INTEGER NOT NULL,
-    tenant_id TEXT
+    tenant_id TEXT,
+    UNIQUE (role_id, subject_type, subject_id, tenant_id)
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_role_binding_global
+    ON fortress_role_binding (role_id, subject_type, subject_id)
+    WHERE tenant_id IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_role_binding_tenant
+    ON fortress_role_binding (role_id, subject_type, subject_id, tenant_id)
+    WHERE tenant_id IS NOT NULL;
 
   CREATE TABLE IF NOT EXISTS fortress_direct_permission_binding (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     permission_id INTEGER NOT NULL REFERENCES fortress_permission(id) ON DELETE CASCADE,
     subject_type TEXT NOT NULL,
     subject_id INTEGER NOT NULL,
-    tenant_id TEXT
+    tenant_id TEXT,
+    UNIQUE (permission_id, subject_type, subject_id, tenant_id)
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_direct_permission_binding_global
+    ON fortress_direct_permission_binding (permission_id, subject_type, subject_id)
+    WHERE tenant_id IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_direct_permission_binding_tenant
+    ON fortress_direct_permission_binding (permission_id, subject_type, subject_id, tenant_id)
+    WHERE tenant_id IS NOT NULL;
 
   CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

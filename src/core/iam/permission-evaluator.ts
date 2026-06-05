@@ -5,6 +5,25 @@ const VARIABLE_PATTERN = /^\$\{(.+)\}$/;
 export type EvaluationMode = 'allow-only' | 'deny-overrides';
 
 /**
+ * Check whether a credential-level scope set allows the requested
+ * resource/action. `null`/`undefined` means the credential is unscoped and
+ * inherits the subject's full IAM permissions; an empty array allows nothing.
+ */
+export function withinCredentialScope(
+  scopes: string[] | null | undefined,
+  resource: string,
+  action: string,
+): boolean {
+  if (scopes == null)
+    return true;
+  return scopes.some(scope =>
+    scope === '*'
+    || scope === `${resource}:*`
+    || scope === `${resource}:${action}`,
+  );
+}
+
+/**
  * Evaluate a set of permissions against a resource+action request.
  *
  * - 'allow-only': if any ALLOW matches → allow, otherwise deny

@@ -103,6 +103,8 @@ export interface FortressLocals {
      * Plugin-resolved principals (api-key, etc.) do not populate this.
      */
     claims?: TokenClaims;
+    /** Credential-level narrowing scopes (for example API-key scopes). */
+    scopes?: string[] | null;
     /** Per-request DB adapter with plugin `wrapAdapter` chain applied. */
     db?: DatabaseAdapter;
     /** Lazily compute a model-scoped DB adapter (data-isolation aware). */

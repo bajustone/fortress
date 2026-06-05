@@ -69,6 +69,7 @@ export interface PermissionEnforcement {
     subject: Subject,
     resource: string,
     action: string,
+    scopes?: string[] | null,
   ) => Promise<boolean>;
 }
 
@@ -90,6 +91,7 @@ export async function enforceFortressPermission(
   endpoint: EndpointDefinition,
   subject: Subject | undefined,
   enforcement: PermissionEnforcement,
+  scopes?: string[] | null,
 ): Promise<void> {
   const security = endpoint.meta?.security;
 
@@ -106,6 +108,7 @@ export async function enforceFortressPermission(
       subject,
       endpoint.meta.permission.resource,
       endpoint.meta.permission.action,
+      scopes,
     );
     if (!allowed)
       throw Errors.forbidden('Insufficient permissions');

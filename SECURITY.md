@@ -20,7 +20,10 @@ We will acknowledge receipt within 48 hours and aim to release a fix within 7 da
 
 | Version | Supported |
 |---------|-----------|
-| 0.0.x   | Yes       |
+| 0.1.x   | Yes       |
+| 0.0.x   | No (pre-0.1; please upgrade) |
+
+Note: Fortress is pre-1.0; breaking changes may ship in any minor version. Pin to a minor series.
 
 ## Security Best Practices
 
