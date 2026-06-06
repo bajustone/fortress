@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- Remediation pass for the 2026-06-05 independent review (tenancy plugin skeleton findings remain deferred/unmounted):
+  - SQLite adapter transactions are serialized and use `BEGIN IMMEDIATE`, restoring atomic CAS semantics for refresh rotation and OAuth code exchange.
+  - OAuth authorization codes are now atomically single-use under concurrency; public-client PKCE is enforced at exchange; per-client `grantTypes` are enforced for `authorization_code` and `refresh_token`.
+  - OAuth consent flows are bound to a user and deny cross-user get/approve/deny with 404.
+  - Pipeline CSRF protection is now enabled by default for unsafe, cookie-authenticated Fortress routes. Bearer/API-key requests are skipped; configure via `FortressConfig.csrf`.
+  - Data-isolation bypass windows now use `AsyncLocalStorage` and no longer leak across concurrent requests.
+  - JWT verification pins HS256 and configured issuer; reserved JWT claims (`sub`, `act`, `groups`, etc.) are stripped from custom claims.
+  - Disabled-account login returns the same generic invalid-credentials path and still verifies the password hash to reduce enumeration/timing signals.
+  - Impersonation token TTL is clamped (default max 3600s) and emits an auth observer event.
+  - Follow-up gap closure from the implementation review:
+    - Public-client PKCE is now also enforced at code-issuance time (`createAuthorizationCode`), so a binding-less code is never minted — not only rejected at exchange.
+    - `findOrCreatePermission`, `ensureResource`, and the role/permission/group binding idempotency helpers are race-safe: a lost create race re-reads the winner's row instead of surfacing a raw unique-constraint error.
+    - CSRF detection recognizes refresh-only cookie sessions (expired access cookie), closing a bypass where a refresh-only request skipped the check.
+    - The SvelteKit adapter's silent token refresh is restricted to safe HTTP methods, so a cross-site unsafe request can no longer trigger a refresh-token rotation.
+
+### Changed
+- Auth cookie extraction now prefers an explicit `Authorization: Bearer` header over the access cookie (cookie-shadow hardening).
+- Cookies default to `Secure` / `__Host-` names regardless of `NODE_ENV`; local HTTP development must opt out with `cookies: { secure: false }`.
+- Schema migration required for OAuth pending flows (`user_id`) and permission uniqueness partial indexes.
+
 ## [0.1.1] - 2026-05-07
 
 ### Fixed

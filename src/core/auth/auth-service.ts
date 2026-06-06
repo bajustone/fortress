@@ -41,7 +41,8 @@ export interface AuthEvent {
   eventType:
     | 'LOGIN_SUCCESS' | 'LOGIN_FAILURE'
     | 'LOGOUT' | 'REGISTER'
-    | 'TOKEN_REFRESH' | 'TOKEN_REUSE_DETECTED' | 'TOKEN_FINGERPRINT_MISMATCH';
+    | 'TOKEN_REFRESH' | 'TOKEN_REUSE_DETECTED' | 'TOKEN_FINGERPRINT_MISMATCH'
+    | 'IMPERSONATE';
   actorId?: number;
   identifier?: string;
   method?: 'password' | 'oauth' | 'magic_link' | 'webauthn' | '2fa' | 'api_key';
@@ -290,12 +291,13 @@ export function createAuthService(
           throw Errors.unauthorized('Invalid credentials');
         }
 
-        if (!user.isActive) {
-          throw Errors.unauthorized('Account is disabled');
-        }
-
+        // Constant-time + constant-message handling for disabled accounts:
+        // still run the Argon2 verify so an attacker can't distinguish
+        // "account exists but disabled" from "wrong password" via timing
+        // *or* via error message. Both paths return the generic
+        // `Invalid credentials` (M3).
         const valid = await hasher.verify(user.passwordHash, password);
-        if (!valid) {
+        if (!user.isActive || !valid) {
           throw Errors.unauthorized('Invalid credentials');
         }
       }
@@ -379,16 +381,13 @@ export function createAuthService(
               where: [{ field: 'tokenFamily', operator: '=', value: reused.tokenFamily }],
               data: { isRevoked: true },
             });
-            if (authEventListeners.size() > 0) {
-              authEventListeners.emit({
-                eventType: 'TOKEN_REUSE_DETECTED',
-                actorId: reused.userId,
-                ipAddress: meta?.ipAddress,
-                userAgent: meta?.userAgent,
-                metadata: { tokenFamily: reused.tokenFamily },
-              });
-            }
-            throw Errors.tokenReuse();
+            // Do not throw inside the transaction: throwing would roll back
+            // the family revocation. Return a sentinel, commit, then throw.
+            return {
+              replayDetected: true as const,
+              userId: reused.userId,
+              tokenFamily: reused.tokenFamily,
+            };
           }
           throw Errors.unauthorized('Invalid refresh token');
         }
@@ -489,6 +488,19 @@ export function createAuthService(
           } satisfies AuthTokenPair,
         };
       });
+
+      if ('replayDetected' in txResult) {
+        if (authEventListeners.size() > 0) {
+          authEventListeners.emit({
+            eventType: 'TOKEN_REUSE_DETECTED',
+            actorId: txResult.userId,
+            ipAddress: meta?.ipAddress,
+            userAgent: meta?.userAgent,
+            metadata: { tokenFamily: txResult.tokenFamily },
+          });
+        }
+        throw Errors.tokenReuse();
+      }
 
       let result: AuthTokenPair = txResult.tokens;
 
@@ -617,7 +629,7 @@ export function createAuthService(
     async verifyToken(token: string): Promise<TokenClaims> {
       const start = performance.now();
       try {
-        const claims = await verifyAccessToken(token, resolved.secret);
+        const claims = await verifyAccessToken(token, resolved.secret, { issuer: resolved.issuer });
         tokenVerifyDuration?.record(
           (performance.now() - start) / 1000,
           { result: 'ok' },
@@ -676,23 +688,20 @@ export function createAuthService(
     },
 
     async revokeAllOtherSessions(userId: number, currentTokenId: number): Promise<void> {
-      const tokens = await db.findMany<{ id: number }>({
+      // L-tier: replace the read-then-loop with a single conditional UPDATE.
+      // The original N+1 path opened a window where new refresh tokens issued
+      // during the loop would slip through unrevoked, and added unnecessary
+      // adapter round-trips. The adapter performs `AND` of where clauses, so
+      // `id != currentTokenId` filters out the keep-token in one statement.
+      await db.update({
         model: 'refresh_token',
         where: [
           { field: 'userId', operator: '=', value: userId },
           { field: 'isRevoked', operator: '=', value: false },
+          { field: 'id', operator: '!=', value: currentTokenId },
         ],
+        data: { isRevoked: true },
       });
-
-      for (const token of tokens) {
-        if (token.id !== currentTokenId) {
-          await db.update({
-            model: 'refresh_token',
-            where: [{ field: 'id', operator: '=', value: token.id }],
-            data: { isRevoked: true },
-          });
-        }
-      }
     },
 
     async addLoginIdentifier(userId: number, type: LoginIdentifierType, value: string): Promise<void> {
@@ -742,7 +751,13 @@ export function createAuthService(
         throw Errors.notFound('Target user not found');
       }
 
-      const expirySeconds = options?.expirySeconds ?? 3600;
+      // RFC 8693-style act tokens must be short-lived; cap caller-supplied
+      // expiry at MAX_IMPERSONATION_TTL_SECONDS (default 3600s, configurable
+      // via `config.impersonation.maxTtlSeconds`). An admin with elevated
+      // privileges can still cause damage, but not for the next 10 years.
+      const requestedExpiry = options?.expirySeconds ?? 3600;
+      const maxExpiry = config.impersonation?.maxTtlSeconds ?? 3600;
+      const expirySeconds = Math.max(1, Math.min(requestedExpiry, maxExpiry));
       const groups = await getUserGroups(targetUser.id);
       const customClaims = await enrichClaims(targetUser.id);
 
@@ -762,6 +777,24 @@ export function createAuthService(
 
       // Do NOT issue a refresh token for impersonation — non-renewable
       const { passwordHash: _, ...safeUser } = targetUser as FortressUser & { passwordHash?: string };
+
+      // Audit trail for impersonation (P2.4 / L-tier follow-up). Emits
+      // through the standard auth observer pipeline so audit-log plugin,
+      // SIEM hooks, and metrics counters all see it.
+      if (authEventListeners.size() > 0) {
+        authEventListeners.emit({
+          eventType: 'IMPERSONATE' as AuthEvent['eventType'],
+          actorId: adminUserId,
+          identifier: String(targetUserId),
+          outcome: 'success',
+          metadata: {
+            targetUserId,
+            reason: options?.reason ?? null,
+            expirySeconds,
+            clamped: expirySeconds !== requestedExpiry,
+          },
+        });
+      }
 
       return {
         status: 'impersonation' as const,
@@ -861,8 +894,11 @@ export function createAuthService(
       if (data.isActive !== undefined)
         updateData.isActive = data.isActive;
       if (data.password !== undefined) {
-        if (config.passwordPolicy)
-          validatePassword(data.password, config.passwordPolicy);
+        // Match createUser semantics: validate unconditionally and await.
+        // The original code missed the await on a Promise — a breached or
+        // weak password would surface as an unhandled rejection while the
+        // hash was happily persisted (M1).
+        await validatePassword(data.password, config.passwordPolicy);
         updateData.passwordHash = await hasher.hash(data.password);
       }
 

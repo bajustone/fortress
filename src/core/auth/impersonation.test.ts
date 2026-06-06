@@ -146,4 +146,15 @@ describe('impersonation', () => {
     expect(result.user.name).toBe('Target User');
     expect((result.user as unknown as Record<string, unknown>).passwordHash).toBeUndefined();
   });
+
+  // M4 regression: caller-supplied `expirySeconds` must be clamped to a
+  // configured maximum so an admin can't mint a years-long act token.
+  it('clamps oversized expirySeconds to the configured cap (M4)', async () => {
+    const result = await fortress.auth.impersonate(adminId, targetId, {
+      expirySeconds: 60 * 60 * 24 * 365 * 10, // 10 years
+    });
+    const impersonationData = (result.pluginData as { impersonation?: { expiresInSeconds?: number } } | undefined)?.impersonation;
+    // Default cap is 3600s.
+    expect(impersonationData?.expiresInSeconds).toBeLessThanOrEqual(3600);
+  });
 });

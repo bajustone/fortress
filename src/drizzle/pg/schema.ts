@@ -86,7 +86,15 @@ const permissions = pgTable('fortress_permission', {
   conditions: jsonb('conditions'), // PermissionCondition[] as JSONB
   description: text('description'),
 }, table => [
-  unique().on(table.resource, table.action, table.effect, table.conditions),
+  // M8 fix — same split-index pattern as role/direct-permission bindings
+  // so concurrent findOrCreatePermission can't insert duplicate rows when
+  // conditions is NULL (a plain UNIQUE treats NULLs as distinct).
+  uniqueIndex('uniq_permission_no_conditions')
+    .on(table.resource, table.action, table.effect)
+    .where(sql`${table.conditions} is null`),
+  uniqueIndex('uniq_permission_with_conditions')
+    .on(table.resource, table.action, table.effect, table.conditions)
+    .where(sql`${table.conditions} is not null`),
 ]);
 
 // --- IAM: Roles ---
@@ -302,6 +310,7 @@ const oauthRefreshTokens = pgTable('fortress_oauth_refresh_token', {
 
 const oauthPendingFlows = pgTable('fortress_oauth_pending_flow', {
   id: serial('id').primaryKey(),
+  flowId: text('flow_id').notNull().unique(),
   clientId: varchar('client_id', { length: 255 }).notNull(),
   redirectUri: text('redirect_uri').notNull(),
   scope: text('scope'),
@@ -309,6 +318,11 @@ const oauthPendingFlows = pgTable('fortress_oauth_pending_flow', {
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: varchar('code_challenge_method', { length: 10 }),
   nonce: text('nonce'),
+  // H6 fix: subject the flow is bound to (TOFU-claimed on first
+  // authenticated touch).
+  userId: integer('user_id'),
+  // Single-use approval/denial claim used by the OAuth consent API.
+  usedAt: timestamp('used_at'),
   expiresAt: timestamp('expires_at').notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });

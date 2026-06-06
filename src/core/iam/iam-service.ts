@@ -1,4 +1,4 @@
-import type { DatabaseAdapter } from '../../adapters/database';
+import type { DatabaseAdapter, WhereClause } from '../../adapters/database';
 import type { FortressConfig } from '../config';
 import type { Unsubscribe } from '../observability/listener-list';
 import type { FortressLogger } from '../observability/logger';
@@ -171,28 +171,49 @@ export function createIamService(
       : [{ field: 'tenantId', operator: '=', value: tenantId }];
   }
 
+  /**
+   * Race-safe find-then-create for the idempotency helpers below. The unique
+   * indexes guarantee no duplicate row; under genuine concurrency the losing
+   * INSERT throws a unique-constraint error, which we treat as "the winner
+   * already created it" after re-checking. Returns `true` if THIS call
+   * inserted the row, `false` if it already existed (before or via the race).
+   */
+  async function insertIfMissing(
+    model: string,
+    where: WhereClause[],
+    data: Record<string, unknown>,
+  ): Promise<boolean> {
+    const existing = await db.findOne<{ id?: number }>({ model, where });
+    if (existing)
+      return false;
+    try {
+      await db.create({ model, data });
+      return true;
+    }
+    catch (err) {
+      const winner = await db.findOne<{ id?: number }>({ model, where });
+      if (winner)
+        return false;
+      throw err;
+    }
+  }
+
   async function createRoleBindingIfMissing(
     subjectType: SubjectType,
     subjectId: number,
     roleId: number,
     tenantId?: string,
   ): Promise<boolean> {
-    const existing = await db.findOne<{ id: number }>({
-      model: 'role_binding',
-      where: [
+    return insertIfMissing(
+      'role_binding',
+      [
         { field: 'roleId', operator: '=', value: roleId },
         { field: 'subjectType', operator: '=', value: subjectType },
         { field: 'subjectId', operator: '=', value: subjectId },
         ...tenantWhere(tenantId),
       ],
-    });
-    if (existing)
-      return false;
-    await db.create({
-      model: 'role_binding',
-      data: { roleId, subjectType, subjectId, tenantId: tenantId ?? null },
-    });
-    return true;
+      { roleId, subjectType, subjectId, tenantId: tenantId ?? null },
+    );
   }
 
   async function createDirectPermissionBindingIfMissing(
@@ -201,36 +222,27 @@ export function createIamService(
     permissionId: number,
     tenantId?: string,
   ): Promise<boolean> {
-    const existing = await db.findOne<{ id: number }>({
-      model: 'direct_permission_binding',
-      where: [
+    return insertIfMissing(
+      'direct_permission_binding',
+      [
         { field: 'permissionId', operator: '=', value: permissionId },
         { field: 'subjectType', operator: '=', value: subjectType },
         { field: 'subjectId', operator: '=', value: subjectId },
         ...tenantWhere(tenantId),
       ],
-    });
-    if (existing)
-      return false;
-    await db.create({
-      model: 'direct_permission_binding',
-      data: { permissionId, subjectType, subjectId, tenantId: tenantId ?? null },
-    });
-    return true;
+      { permissionId, subjectType, subjectId, tenantId: tenantId ?? null },
+    );
   }
 
   async function addUserToGroupIfMissing(groupId: number, userId: number): Promise<boolean> {
-    const existing = await db.findOne<{ groupId: number }>({
-      model: 'group_user',
-      where: [
+    return insertIfMissing(
+      'group_user',
+      [
         { field: 'groupId', operator: '=', value: groupId },
         { field: 'userId', operator: '=', value: userId },
       ],
-    });
-    if (existing)
-      return false;
-    await db.create({ model: 'group_user', data: { groupId, userId } });
-    return true;
+      { groupId, userId },
+    );
   }
 
   return {
@@ -343,6 +355,11 @@ export function createIamService(
       await db.delete({ model: 'role_permission', where: [{ field: 'roleId', operator: '=', value: roleId }] });
       await db.delete({ model: 'role_binding', where: [{ field: 'roleId', operator: '=', value: roleId }] });
       await db.delete({ model: 'role', where: [{ field: 'id', operator: '=', value: roleId }] });
+      // M6 fix: a deleted role can affect any subject via group bindings.
+      // We don't know which subjects were bound to it across tenants, so a
+      // global cache invalidation is the only safe option — without this,
+      // a stale ALLOW could survive in cache for up to `cache.ttlSeconds`.
+      cache?.invalidateAll();
       emit({ eventType: 'ROLE_DELETED', targetId: roleId, targetType: 'role' });
     },
 

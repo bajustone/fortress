@@ -9,6 +9,7 @@
  * @module
  */
 
+import type { WhereClause } from '../../adapters/database/types';
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, generateTokenFamily, hashToken } from '../../core/auth/refresh-token';
@@ -194,7 +195,10 @@ interface RefreshTokenRecord {
 
 /** Persisted state for an in-flight OAuth authorization-code flow. */
 export interface PendingFlowRecord {
+  /** Internal DB primary key — never exposed to clients. */
   id: number;
+  /** Public opaque handle used in URLs; replaces enumerable serial ids (H6). */
+  flowId: string;
   clientId: string;
   redirectUri: string;
   scope: string | null;
@@ -203,6 +207,18 @@ export interface PendingFlowRecord {
   codeChallengeMethod: string | null;
   /** OIDC Core §3.1.2.1 nonce — mirrored from the authorize query if present. */
   nonce: string | null;
+  /**
+   * Subject the flow is bound to. Null until the first authenticated
+   * read/approve, then trust-on-first-use claims it for that user. Every
+   * subsequent read/approve/deny MUST match.
+   *
+   * Closes H6 (IDOR on `/oauth/flows/:flowId`): without this column, any
+   * authenticated user could fetch another user's RP state token or
+   * approve their flow.
+   */
+  userId: number | null;
+  /** Set during atomic approve/deny claim; prevents concurrent double-submit. */
+  usedAt: Date | null;
   expiresAt: Date;
 }
 
@@ -244,15 +260,20 @@ export interface OAuthMethods {
   createClient: (data: { name: string; redirectUris: string[]; grantTypes: string[]; allowedScopes?: string[]; tokenEndpointAuthMethod?: TokenEndpointAuthMethod }) => Promise<{ clientId: string; clientSecret: string | null }>;
   createAuthorizationCode: (params: { clientId: string; userId: number; redirectUri: string; scope?: string; codeChallenge?: string; codeChallengeMethod?: string; nonce?: string; authTime?: number }) => Promise<{ code: string }>;
   exchangeCode: (params: { code: string; clientId: string; clientSecret?: string; redirectUri: string; codeVerifier?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number; scope?: string; refreshToken?: string; idToken?: string }>;
-  refreshTokenGrant: (params: { clientId: string; clientSecret?: string; refreshToken: string; scope?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number; refreshToken: string; scope?: string }>;
+  refreshTokenGrant: (params: { clientId: string; clientSecret?: string; refreshToken: string; scope?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number; refreshToken: string; scope?: string; idToken?: string }>;
   clientCredentialsGrant: (params: { clientId: string; clientSecret: string; scope?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number }>;
   revokeToken: (token: string) => Promise<void>;
   introspectToken: (token: string) => Promise<{ active: boolean; clientId?: string; userId?: number; scope?: string }>;
-  createPendingFlow: (params: { clientId: string; redirectUri: string; scope?: string; state: string; codeChallenge?: string; codeChallengeMethod?: string }) => Promise<{ flowId: number }>;
-  /** Read a pending flow without consuming it. Throws if not found or expired. */
-  getPendingFlow: (flowId: number) => Promise<PendingFlowRecord>;
+  createPendingFlow: (params: { clientId: string; redirectUri: string; scope?: string; state: string; codeChallenge?: string; codeChallengeMethod?: string; userId?: number }) => Promise<{ flowId: string }>;
+  /**
+   * Read a pending flow without consuming it. Throws if not found, expired,
+   * or (when `userId` is supplied) owned by a different user — in the
+   * "different user" case the error is `not_found` rather than `forbidden`
+   * to avoid confirming the flow's existence.
+   */
+  getPendingFlow: (flowId: string | number, context?: { userId?: number }) => Promise<PendingFlowRecord>;
   /** Read and delete a pending flow (single-use). Throws if not found or expired. */
-  resumePendingFlow: (flowId: number) => Promise<PendingFlowRecord>;
+  resumePendingFlow: (flowId: string | number, context?: { userId?: number }) => Promise<PendingFlowRecord>;
   getUserInfo: (token: string) => Promise<FortressUser | null>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
   handleTokenRequest: (body: TokenRequestBody, clientAuth?: ClientAuth) => Promise<Record<string, unknown>>;
@@ -282,13 +303,20 @@ export interface OAuthMethods {
   handleAuthorizeRequest: (
     query: Record<string, string | undefined>,
     context: { userId?: number },
-  ) => Promise<{ redirectUrl: string; flowId: number }>;
+  ) => Promise<{ redirectUrl: string; flowId: string }>;
   /**
    * Handle GET /oauth/flows/:flowId. Returns the consent metadata the host
    * app's consent page renders. Throws if the flow is unknown or expired.
+   *
+   * Requires the request principal to own the flow — the first authenticated
+   * read claims the flow for `context.userId` (trust-on-first-use); every
+   * subsequent read MUST come from the same user or the response is 404.
    */
-  handleGetFlow: (flowId: number) => Promise<{
-    flowId: number;
+  handleGetFlow: (
+    flowId: string | number,
+    context: { userId: number },
+  ) => Promise<{
+    flowId: string;
     client: { clientId: string; name: string };
     redirectUri: string;
     scopes: string[];
@@ -301,15 +329,20 @@ export interface OAuthMethods {
    * with `?code=...&state=...`).
    */
   handleApproveFlow: (
-    flowId: number,
-    context: { userId: number },
+    flowId: string | number,
+    context: { userId: number; authTimeSeconds?: number },
   ) => Promise<{ redirectUrl: string }>;
   /**
    * Handle POST /oauth/flows/:flowId/deny. Deletes the pending flow and
    * returns the URL the browser should be sent back to (redirect_uri with
    * `?error=access_denied&state=...`).
+   *
+   * Requires the request principal to own the flow.
    */
-  handleDenyFlow: (flowId: number) => Promise<{ redirectUrl: string }>;
+  handleDenyFlow: (
+    flowId: string | number,
+    context: { userId: number },
+  ) => Promise<{ redirectUrl: string }>;
   resolveTokenPermissions: (token: string) => Promise<{ resource: string; action: string }[]>;
 }
 /**
@@ -422,6 +455,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         name: 'oauth_pending_flow',
         fields: {
           id: { type: 'number', required: true },
+          flowId: { type: 'string', required: true, unique: true },
           clientId: { type: 'string', required: true },
           redirectUri: { type: 'string', required: true },
           scope: { type: 'string' },
@@ -429,6 +463,11 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           codeChallenge: { type: 'string' },
           codeChallengeMethod: { type: 'string' },
           nonce: { type: 'string' },
+          // H6 fix: subject the flow is bound to. Nullable for back-compat
+          // and to model the trust-on-first-use claim.
+          userId: { type: 'number' },
+          // Single-use approval/denial claim. Older rows may have null.
+          usedAt: { type: 'date' },
           expiresAt: { type: 'date', required: true },
           createdAt: { type: 'date', required: true },
         },
@@ -531,6 +570,14 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         if (!uris.some(r => matchRedirectUri(r, params.redirectUri)))
           throw Errors.oauth('invalid_request', 'Invalid redirect_uri');
 
+        // P1.3: enforce PKCE at code-issuance time for public clients. The
+        // exchange path also rejects a public-client code with no challenge,
+        // but failing here keeps a binding-less code from ever being stored
+        // and surfaces the error at the point of mint.
+        const isPublic = client.tokenEndpointAuthMethod === 'none';
+        if (isPublic && (!params.codeChallenge || params.codeChallengeMethod !== 'S256'))
+          throw Errors.oauth('invalid_request', 'PKCE (S256) is required for public clients');
+
         const { raw: code, hash: codeHash } = await generateRefreshToken();
         const expiresAt = new Date(Date.now() + authCodeExpiry * 1000);
 
@@ -568,7 +615,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         clientSecret?: string;
         redirectUri: string;
         codeVerifier?: string;
-      }): Promise<{ accessToken: string; tokenType: string; expiresIn: number; scope?: string }> {
+      }): Promise<{ accessToken: string; tokenType: string; expiresIn: number; scope?: string; refreshToken?: string; idToken?: string }> {
         // Validate client credentials
         const client = await ctx.db.findOne<OAuthClientRecord>({
           model: 'oauth_client',
@@ -594,125 +641,147 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           throw Errors.oauth('invalid_client', 'Public clients must not present a client_secret');
         }
 
-        // Look up the authorization code
+        // RFC 6749 §2.1 / §5.2: enforce per-client `grant_types` registration.
+        // Refresh + client-credentials grants check the same thing; we now
+        // also gate authorization_code here so a confidential client that
+        // was registered with `client_credentials` only can't silently
+        // exchange a smuggled code (M9).
+        const grantTypes = JSON.parse(client.grantTypes) as string[];
+        if (!grantTypes.includes('authorization_code'))
+          throw Errors.oauth('unauthorized_client', 'Client does not support authorization_code grant');
+
+        // P1.1: do lookup, CAS-claim, and token issuance inside a single
+        // transaction so two concurrent /token requests for the same code
+        // cannot both mint tokens. The conditional `update` (`usedAt is
+        // null`) is the compare-and-set: only one caller flips the row, the
+        // other gets `null` and is rejected with `invalid_grant`.
         const codeHash = await hashToken(params.code);
-        const authCode = await ctx.db.findOne<AuthCodeRecord>({
-          model: 'oauth_authorization_code',
-          where: [{ field: 'code', operator: '=', value: codeHash }],
-        });
-
-        if (!authCode)
-          throw Errors.oauth('invalid_grant', 'Invalid authorization code');
-
-        if (authCode.usedAt)
-          throw Errors.oauth('invalid_grant', 'Authorization code already used');
-
-        if (authCode.expiresAt < new Date())
-          throw Errors.oauth('invalid_grant', 'Authorization code expired');
-
-        if (authCode.clientId !== params.clientId)
-          throw Errors.oauth('invalid_grant', 'Client mismatch');
-
-        if (authCode.redirectUri !== params.redirectUri)
-          throw Errors.oauth('invalid_grant', 'Redirect URI mismatch');
-
-        // Verify PKCE — RFC 7636 §4.6. The authorize endpoint enforces that
-        // every code is bound to a challenge (§4.5 of the compliance plan),
-        // so missing PKCE state on the code is itself a server-side bug, but
-        // we still treat a missing verifier here as `invalid_grant` to give
-        // the right wire response.
-        if (authCode.codeChallenge && authCode.codeChallengeMethod) {
-          if (!params.codeVerifier)
-            throw Errors.oauth('invalid_grant', 'code_verifier required');
-
-          const valid = await verifyCodeChallenge(
-            params.codeVerifier,
-            authCode.codeChallenge,
-            authCode.codeChallengeMethod,
-          );
-
-          if (!valid)
-            throw Errors.oauth('invalid_grant', 'Invalid code_verifier');
-        }
-
-        // Mark code as used
-        await ctx.db.update({
-          model: 'oauth_authorization_code',
-          where: [{ field: 'id', operator: '=', value: authCode.id }],
-          data: { usedAt: new Date() },
-        });
-
-        // Issue access token
-        const { raw: tokenRaw, hash: tokenHash } = await generateRefreshToken();
-        const expiresAt = new Date(Date.now() + accessTokenExpiry * 1000);
-
-        await ctx.db.create({
-          model: 'oauth_access_token',
-          data: {
-            token: tokenHash,
-            clientId: params.clientId,
-            userId: authCode.userId,
-            scope: authCode.scope,
-            expiresAt,
-          },
-        });
-
-        // OIDC Core §3.1.3.7: id_token alongside the access token when the
-        // request used scope=openid. Resolve user + active signing key.
-        let idToken: string | undefined;
-        const scopes = (authCode.scope ?? '').split(' ').filter(Boolean);
-        if (scopes.includes('openid')) {
-          const user = await ctx.db.findOne<FortressUser>({
-            model: 'user',
-            where: [{ field: 'id', operator: '=', value: authCode.userId }],
+        return ctx.db.transaction(async (tx) => {
+          const authCode = await tx.findOne<AuthCodeRecord>({
+            model: 'oauth_authorization_code',
+            where: [{ field: 'code', operator: '=', value: codeHash }],
           });
-          if (user) {
-            const signingKey = await getActiveSigningKey(ctx.db);
-            idToken = await issueIdToken({
-              user,
-              clientId: params.clientId,
-              issuerUrl,
-              ttlSeconds: idTokenExpiry,
-              nonce: authCode.nonce ?? undefined,
-              authTimeSeconds: authCode.authTime ?? Math.floor(Date.now() / 1000),
-              scope: authCode.scope,
-              signingKey,
-            });
-          }
-        }
 
-        // RFC 6749 §6 + RFC 9700 §2.2.2: issue a refresh token alongside the
-        // access token at the start of a new rotation family. Public clients
-        // (RFC 8252) get them too; rotation + replay detection is the
-        // mitigation, not client confidentiality.
-        let refreshTokenRaw: string | undefined;
-        if (refreshEnabled) {
-          const { raw, hash } = await generateRefreshToken();
-          refreshTokenRaw = raw;
-          await ctx.db.create({
-            model: 'oauth_refresh_token',
+          if (!authCode)
+            throw Errors.oauth('invalid_grant', 'Invalid authorization code');
+
+          if (authCode.expiresAt < new Date())
+            throw Errors.oauth('invalid_grant', 'Authorization code expired');
+
+          if (authCode.clientId !== params.clientId)
+            throw Errors.oauth('invalid_grant', 'Client mismatch');
+
+          if (authCode.redirectUri !== params.redirectUri)
+            throw Errors.oauth('invalid_grant', 'Redirect URI mismatch');
+
+          // RFC 7636 §4.4.1 + RFC 9700 §2.1.1 (P1.3): PKCE is mandatory for
+          // public clients. A public-client code MUST carry a challenge —
+          // missing state here is a server-side bug, not a leniency.
+          if (isPublic && !authCode.codeChallenge)
+            throw Errors.oauth('invalid_grant', 'PKCE required for public clients');
+
+          // Verify PKCE — RFC 7636 §4.6.
+          if (authCode.codeChallenge && authCode.codeChallengeMethod) {
+            if (!params.codeVerifier)
+              throw Errors.oauth('invalid_grant', 'code_verifier required');
+
+            const valid = await verifyCodeChallenge(
+              params.codeVerifier,
+              authCode.codeChallenge,
+              authCode.codeChallengeMethod,
+            );
+
+            if (!valid)
+              throw Errors.oauth('invalid_grant', 'Invalid code_verifier');
+          }
+
+          // CAS claim: mark the code used iff it hasn't been used yet. If
+          // a concurrent exchange already won the race the conditional
+          // update returns null and we reject this caller — the standard
+          // RFC 6749 §4.1.2 single-use enforcement, now actually atomic.
+          const claimed = await tx.update<AuthCodeRecord>({
+            model: 'oauth_authorization_code',
+            where: [
+              { field: 'id', operator: '=', value: authCode.id },
+              { field: 'usedAt', operator: 'isNull', value: null },
+            ],
+            data: { usedAt: new Date() },
+          });
+          if (!claimed)
+            throw Errors.oauth('invalid_grant', 'Authorization code already used');
+
+          // Issue access token
+          const { raw: tokenRaw, hash: tokenHash } = await generateRefreshToken();
+          const expiresAt = new Date(Date.now() + accessTokenExpiry * 1000);
+
+          await tx.create({
+            model: 'oauth_access_token',
             data: {
-              token: hash,
-              familyId: generateTokenFamily(),
+              token: tokenHash,
               clientId: params.clientId,
               userId: authCode.userId,
-              scope: authCode.scope ?? null,
-              issuedAt: new Date(),
-              expiresAt: new Date(Date.now() + refreshTokenExpiry * 1000),
-              usedAt: null,
-              parentId: null,
+              scope: authCode.scope,
+              expiresAt,
             },
           });
-        }
 
-        return {
-          accessToken: tokenRaw,
-          tokenType: 'Bearer',
-          expiresIn: accessTokenExpiry,
-          scope: authCode.scope ?? undefined,
-          ...(refreshTokenRaw ? { refreshToken: refreshTokenRaw } : {}),
-          ...(idToken ? { idToken } : {}),
-        };
+          // OIDC Core §3.1.3.7: id_token alongside the access token when the
+          // request used scope=openid. Resolve user + active signing key.
+          let idToken: string | undefined;
+          const scopes = (authCode.scope ?? '').split(' ').filter(Boolean);
+          if (scopes.includes('openid')) {
+            const user = await tx.findOne<FortressUser>({
+              model: 'user',
+              where: [{ field: 'id', operator: '=', value: authCode.userId }],
+            });
+            if (user) {
+              const signingKey = await getActiveSigningKey(tx);
+              idToken = await issueIdToken({
+                user,
+                clientId: params.clientId,
+                issuerUrl,
+                ttlSeconds: idTokenExpiry,
+                nonce: authCode.nonce ?? undefined,
+                authTimeSeconds: authCode.authTime ?? Math.floor(Date.now() / 1000),
+                scope: authCode.scope,
+                signingKey,
+              });
+            }
+          }
+
+          // RFC 6749 §6 + RFC 9700 §2.2.2: issue a refresh token alongside
+          // the access token at the start of a new rotation family. Public
+          // clients (RFC 8252) get them too; rotation + replay detection is
+          // the mitigation, not client confidentiality.
+          let refreshTokenRaw: string | undefined;
+          if (refreshEnabled) {
+            const { raw, hash } = await generateRefreshToken();
+            refreshTokenRaw = raw;
+            await tx.create({
+              model: 'oauth_refresh_token',
+              data: {
+                token: hash,
+                familyId: generateTokenFamily(),
+                clientId: params.clientId,
+                userId: authCode.userId,
+                scope: authCode.scope ?? null,
+                issuedAt: new Date(),
+                expiresAt: new Date(Date.now() + refreshTokenExpiry * 1000),
+                usedAt: null,
+                parentId: null,
+              },
+            });
+          }
+
+          return {
+            accessToken: tokenRaw,
+            tokenType: 'Bearer',
+            expiresIn: accessTokenExpiry,
+            scope: authCode.scope ?? undefined,
+            ...(refreshTokenRaw ? { refreshToken: refreshTokenRaw } : {}),
+            ...(idToken ? { idToken } : {}),
+          };
+        });
       },
 
       /**
@@ -735,7 +804,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         clientSecret?: string;
         refreshToken: string;
         scope?: string;
-      }): Promise<{ accessToken: string; tokenType: string; expiresIn: number; refreshToken: string; scope?: string }> {
+      }): Promise<{ accessToken: string; tokenType: string; expiresIn: number; refreshToken: string; scope?: string; idToken?: string }> {
         const client = await ctx.db.findOne<OAuthClientRecord>({
           model: 'oauth_client',
           where: [{ field: 'clientId', operator: '=', value: params.clientId }],
@@ -754,6 +823,16 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           if (!secretValid)
             throw Errors.oauth('invalid_client', 'Invalid client credentials');
         }
+        else if (params.clientSecret) {
+          // Mirror exchangeCode: a public client MUST NOT present credentials
+          // even on /refresh (RFC 6749 §2.3.1 + M9 follow-up).
+          throw Errors.oauth('invalid_client', 'Public clients must not present a client_secret');
+        }
+
+        // Per-client grant_types enforcement (M9).
+        const refreshGrantTypes = JSON.parse(client.grantTypes) as string[];
+        if (!refreshGrantTypes.includes('refresh_token'))
+          throw Errors.oauth('unauthorized_client', 'Client does not support refresh_token grant');
 
         const tokenHash = await hashToken(params.refreshToken);
 
@@ -828,6 +907,29 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             },
           });
 
+          // OIDC Core allows a refreshed response to carry a fresh id_token
+          // when the original grant included `openid`. Many strict OIDC RPs
+          // expect this so their session identity view stays current.
+          let idToken: string | undefined;
+          if ((scope ?? '').split(' ').filter(Boolean).includes('openid')) {
+            const user = await tx.findOne<FortressUser>({
+              model: 'user',
+              where: [{ field: 'id', operator: '=', value: record.userId }],
+            });
+            if (user) {
+              const signingKey = await getActiveSigningKey(tx);
+              idToken = await issueIdToken({
+                user,
+                clientId: params.clientId,
+                issuerUrl,
+                ttlSeconds: idTokenExpiry,
+                authTimeSeconds: Math.floor(Date.now() / 1000),
+                scope,
+                signingKey,
+              });
+            }
+          }
+
           // Mint the new refresh token in the same family.
           const { raw: refreshRaw, hash: refreshHash } = await generateRefreshToken();
           await tx.create({
@@ -851,6 +953,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             expiresIn: accessTokenExpiry,
             refreshToken: refreshRaw,
             ...(scope ? { scope } : {}),
+            ...(idToken ? { idToken } : {}),
           };
         });
 
@@ -984,23 +1087,28 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         state: string;
         codeChallenge?: string;
         codeChallengeMethod?: string;
-      }): Promise<{ flowId: number }> {
+        userId?: number;
+      }): Promise<{ flowId: string }> {
         const expiresAt = new Date(Date.now() + pendingFlowExpiry * 1000);
+        const { raw: flowId } = await generateRefreshToken();
 
         const flow = await ctx.db.create<PendingFlowRecord>({
           model: 'oauth_pending_flow',
           data: {
+            flowId,
             clientId: params.clientId,
             redirectUri: params.redirectUri,
             scope: params.scope ?? null,
             state: params.state,
             codeChallenge: params.codeChallenge ?? null,
             codeChallengeMethod: params.codeChallengeMethod ?? null,
+            userId: params.userId ?? null,
+            usedAt: null,
             expiresAt,
           },
         });
 
-        return { flowId: flow.id };
+        return { flowId: flow.flowId };
       },
 
       /**
@@ -1012,17 +1120,34 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        * @throws {FortressError} `not_found` if the flow doesn't exist.
        * @throws {FortressError} `bad_request` if the flow has expired.
        */
-      async getPendingFlow(flowId: number): Promise<PendingFlowRecord> {
+      async getPendingFlow(
+        flowId: string | number,
+        context?: { userId?: number },
+      ): Promise<PendingFlowRecord> {
         const flow = await ctx.db.findOne<PendingFlowRecord>({
           model: 'oauth_pending_flow',
-          where: [{ field: 'id', operator: '=', value: flowId }],
+          where: pendingFlowLookupWhere(flowId),
         });
 
         if (!flow)
           throw Errors.notFound('Pending flow not found');
 
+        if (flow.usedAt)
+          throw Errors.notFound('Pending flow not found');
+
         if (flow.expiresAt < new Date())
           throw Errors.badRequest('Pending flow expired');
+
+        // H6 fix — owner check (only when the caller supplied a context).
+        // We deliberately return 404, not 403, to avoid confirming that the
+        // flow exists when a different user probes its id.
+        if (
+          context?.userId !== undefined
+          && flow.userId !== null
+          && flow.userId !== context.userId
+        ) {
+          throw Errors.notFound('Pending flow not found');
+        }
 
         return flow;
       },
@@ -1033,22 +1158,37 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        * Returns the stored flow params and deletes the row so the same flow can't
        * be replayed. Use {@link OAuthMethods.getPendingFlow} for non-destructive reads.
        */
-      async resumePendingFlow(flowId: number): Promise<PendingFlowRecord> {
+      async resumePendingFlow(
+        flowId: string | number,
+        context?: { userId?: number },
+      ): Promise<PendingFlowRecord> {
         const flow = await ctx.db.findOne<PendingFlowRecord>({
           model: 'oauth_pending_flow',
-          where: [{ field: 'id', operator: '=', value: flowId }],
+          where: pendingFlowLookupWhere(flowId),
         });
 
         if (!flow)
           throw Errors.notFound('Pending flow not found');
 
+        if (flow.usedAt)
+          throw Errors.notFound('Pending flow not found');
+
         if (flow.expiresAt < new Date())
           throw Errors.badRequest('Pending flow expired');
+
+        // H6 fix — same owner check semantics as getPendingFlow.
+        if (
+          context?.userId !== undefined
+          && flow.userId !== null
+          && flow.userId !== context.userId
+        ) {
+          throw Errors.notFound('Pending flow not found');
+        }
 
         // Delete the flow (single-use)
         await ctx.db.delete({
           model: 'oauth_pending_flow',
-          where: [{ field: 'id', operator: '=', value: flowId }],
+          where: [{ field: 'id', operator: '=', value: flow.id }],
         });
 
         return flow;
@@ -1069,7 +1209,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       async handleAuthorizeRequest(
         query: Record<string, string | undefined>,
         context: { userId?: number },
-      ): Promise<{ redirectUrl: string; flowId: number }> {
+      ): Promise<{ redirectUrl: string; flowId: string }> {
         const nonce = query.nonce;
         if (!config.loginUrl || !config.consentUrl) {
           throw Errors.badRequest(
@@ -1140,9 +1280,11 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         }
 
         const expiresAt = new Date(Date.now() + pendingFlowExpiry * 1000);
+        const { raw: flowId } = await generateRefreshToken();
         const flow = await ctx.db.create<PendingFlowRecord>({
           model: 'oauth_pending_flow',
           data: {
+            flowId,
             clientId,
             redirectUri,
             scope: effectiveScope || null,
@@ -1150,28 +1292,50 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             codeChallenge: codeChallenge ?? null,
             codeChallengeMethod: codeChallengeMethod ?? null,
             nonce: nonce ?? null,
+            // H6 fix — bind the flow to the authenticated user up front when
+            // the authorize endpoint already knows them. The login redirect
+            // path leaves userId null and lets the first authenticated
+            // GetFlow / Approve claim it.
+            userId: context.userId ?? null,
+            usedAt: null,
             expiresAt,
           },
         });
 
         const target = context.userId ? config.consentUrl : config.loginUrl;
         const url = new URL(target);
-        url.searchParams.set('flow', String(flow.id));
-        return { redirectUrl: url.toString(), flowId: flow.id };
+        url.searchParams.set('flow', flow.flowId);
+        return { redirectUrl: url.toString(), flowId: flow.flowId };
       },
 
       /**
        * Read a pending flow as the consent UI's data source. Strips fields
        * that should never leave the server (PKCE challenge / method).
        */
-      async handleGetFlow(flowId: number): Promise<{
-        flowId: number;
+      async handleGetFlow(
+        flowId: string | number,
+        context: { userId: number },
+      ): Promise<{
+        flowId: string;
         client: { clientId: string; name: string };
         redirectUri: string;
         scopes: string[];
         state: string;
       }> {
-        const flow = await this.getPendingFlow(flowId);
+        const flow = await this.getPendingFlow(flowId, context);
+        // TOFU claim: if the flow was created on the login path (no user
+        // yet) and this is the first authenticated touch, bind it to the
+        // caller. Subsequent reads from a different user will 404.
+        if (flow.userId === null) {
+          await ctx.db.update({
+            model: 'oauth_pending_flow',
+            where: [
+              { field: 'id', operator: '=', value: flow.id },
+              { field: 'userId', operator: 'isNull', value: null },
+            ],
+            data: { userId: context.userId },
+          });
+        }
         const client = await ctx.db.findOne<OAuthClientRecord>({
           model: 'oauth_client',
           where: [{ field: 'clientId', operator: '=', value: flow.clientId }],
@@ -1180,7 +1344,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           throw Errors.notFound('OAuth client not found');
 
         return {
-          flowId: flow.id,
+          flowId: flow.flowId,
           client: { clientId: client.clientId, name: client.name },
           redirectUri: flow.redirectUri,
           scopes: flow.scope ? flow.scope.split(' ').filter(Boolean) : [],
@@ -1194,28 +1358,86 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        * client's redirect URI with `?code=...&state=...` appended.
        */
       async handleApproveFlow(
-        flowId: number,
+        flowId: string | number,
         context: { userId: number; authTimeSeconds?: number },
       ): Promise<{ redirectUrl: string }> {
-        // Read first so we can fail before issuing a code if anything's wrong.
-        const flow = await this.getPendingFlow(flowId);
-        const { code } = await this.createAuthorizationCode({
-          clientId: flow.clientId,
-          userId: context.userId,
-          redirectUri: flow.redirectUri,
-          scope: flow.scope ?? undefined,
-          codeChallenge: flow.codeChallenge ?? undefined,
-          codeChallengeMethod: flow.codeChallengeMethod ?? undefined,
-          nonce: flow.nonce ?? undefined,
-          // OIDC Core §2 `auth_time` — if the host app passes the user's
-          // session-issued-at, use it; otherwise fall back to "now" (i.e.
-          // the user has just consented).
-          authTime: context.authTimeSeconds ?? Math.floor(Date.now() / 1000),
-        });
-        // Consume the pending flow only after the code is in place.
-        await ctx.db.delete({
-          model: 'oauth_pending_flow',
-          where: [{ field: 'id', operator: '=', value: flow.id }],
+        const { flow, code } = await ctx.db.transaction(async (tx) => {
+          const flow = await tx.findOne<PendingFlowRecord>({
+            model: 'oauth_pending_flow',
+            where: pendingFlowLookupWhere(flowId),
+          });
+
+          if (!flow)
+            throw Errors.notFound('Pending flow not found');
+          if (flow.usedAt)
+            throw Errors.notFound('Pending flow not found');
+          if (flow.expiresAt < new Date())
+            throw Errors.badRequest('Pending flow expired');
+          if (flow.userId !== null && flow.userId !== context.userId)
+            throw Errors.notFound('Pending flow not found');
+
+          // Claim before minting a code. The `usedAt IS NULL` predicate is
+          // the single-use compare-and-set that makes concurrent Approve
+          // requests yield exactly one authorization code.
+          const claimed = await tx.update<PendingFlowRecord>({
+            model: 'oauth_pending_flow',
+            where: [
+              { field: 'id', operator: '=', value: flow.id },
+              { field: 'usedAt', operator: 'isNull', value: null },
+            ],
+            data: {
+              usedAt: new Date(),
+              userId: flow.userId ?? context.userId,
+            },
+          });
+          if (!claimed)
+            throw Errors.notFound('Pending flow not found');
+
+          // Validate the client and redirect URI inside the same transaction
+          // before creating the code. This mirrors createAuthorizationCode
+          // while keeping the pending-flow claim + code mint atomic.
+          const client = await tx.findOne<OAuthClientRecord>({
+            model: 'oauth_client',
+            where: [{ field: 'clientId', operator: '=', value: flow.clientId }],
+          });
+          if (!client)
+            throw Errors.oauth('invalid_request', 'Invalid client_id');
+
+          const uris = JSON.parse(client.redirectUris) as string[];
+          if (!uris.some(r => matchRedirectUri(r, flow.redirectUri)))
+            throw Errors.oauth('invalid_request', 'Invalid redirect_uri');
+
+          const isPublic = client.tokenEndpointAuthMethod === 'none';
+          if (isPublic && (!flow.codeChallenge || flow.codeChallengeMethod !== 'S256'))
+            throw Errors.oauth('invalid_request', 'PKCE (S256) is required for public clients');
+
+          const { raw: code, hash: codeHash } = await generateRefreshToken();
+          await tx.create({
+            model: 'oauth_authorization_code',
+            data: {
+              code: codeHash,
+              clientId: flow.clientId,
+              userId: context.userId,
+              redirectUri: flow.redirectUri,
+              scope: flow.scope ?? null,
+              codeChallenge: flow.codeChallenge ?? null,
+              codeChallengeMethod: flow.codeChallengeMethod ?? null,
+              nonce: flow.nonce ?? null,
+              authTime: context.authTimeSeconds ?? Math.floor(Date.now() / 1000),
+              expiresAt: new Date(Date.now() + authCodeExpiry * 1000),
+              usedAt: null,
+            },
+          });
+
+          // Delete inside the transaction after minting. If code creation
+          // fails, the transaction rolls the claim back; if it commits, the
+          // flow is gone and cannot be reused.
+          await tx.delete({
+            model: 'oauth_pending_flow',
+            where: [{ field: 'id', operator: '=', value: flow.id }],
+          });
+
+          return { flow, code };
         });
 
         const url = new URL(flow.redirectUri);
@@ -1235,8 +1457,12 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        * too — the RP needs to validate the AS identity before trusting any
        * field, including `error`.
        */
-      async handleDenyFlow(flowId: number): Promise<{ redirectUrl: string }> {
-        const flow = await this.resumePendingFlow(flowId);
+      async handleDenyFlow(
+        flowId: string | number,
+        context: { userId: number },
+      ): Promise<{ redirectUrl: string }> {
+        // H6: owner check enforced via the context arg.
+        const flow = await this.resumePendingFlow(flowId, context);
         const url = new URL(flow.redirectUri);
         url.searchParams.set('error', 'access_denied');
         url.searchParams.set('state', flow.state);
@@ -1339,6 +1565,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             token_type: result.tokenType,
             expires_in: result.expiresIn,
             refresh_token: result.refreshToken,
+            ...(result.idToken ? { id_token: result.idToken } : {}),
             ...(result.scope ? { scope: result.scope } : {}),
           };
         }
@@ -1590,7 +1817,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
                   schema: {
                     type: 'object' as const,
                     properties: {
-                      flowId: { type: 'number' as const },
+                      flowId: { type: 'string' as const },
                       client: {
                         type: 'object' as const,
                         properties: {
@@ -1661,19 +1888,20 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
           body: {
             type: 'object',
             properties: {
-              grant_type: { type: 'string', enum: ['authorization_code', 'client_credentials'], description: 'OAuth grant type' },
+              grant_type: { type: 'string', enum: ['authorization_code', 'client_credentials', 'refresh_token'], description: 'OAuth grant type' },
               code: { type: 'string', description: 'Authorization code' },
               redirect_uri: { type: 'string', format: 'uri', description: 'Redirect URI used in authorize' },
               client_id: { type: 'string', description: 'Client ID (if not using Basic auth)' },
               client_secret: { type: 'string', description: 'Client secret (if not using Basic auth)' },
               code_verifier: { type: 'string', description: 'PKCE code verifier' },
+              refresh_token: { type: 'string', description: 'Refresh token for grant_type=refresh_token' },
               scope: { type: 'string', description: 'Space-separated scopes' },
             },
             required: ['grant_type'],
           },
         },
         responses: {
-          200: { description: 'Token issued', schema: { type: 'object', properties: { access_token: { type: 'string' }, token_type: { type: 'string' }, expires_in: { type: 'number' }, scope: { type: 'string' } } } },
+          200: { description: 'Token issued', schema: { type: 'object', properties: { access_token: { type: 'string' }, token_type: { type: 'string' }, expires_in: { type: 'number' }, refresh_token: { type: 'string' }, id_token: { type: 'string' }, scope: { type: 'string' } } } },
           400: { description: 'Invalid request' },
           401: { description: 'Invalid client credentials' },
         },
@@ -1800,6 +2028,16 @@ export function matchRedirectUri(registered: string, inbound: string): boolean {
  *   preserving the original ordering of the requested scopes (so RPs see
  *   the scopes back in the order they asked for, minus the dropped ones).
  */
+function pendingFlowLookupWhere(flowId: string | number): WhereClause[] {
+  // Accept numeric ids for direct legacy/test calls, but every newly-created
+  // flow returns and routes by the opaque `flowId` token. This closes the
+  // enumerable consent-flow IDOR vector without breaking internal migration
+  // tooling that may still have an integer id in hand.
+  return typeof flowId === 'number'
+    ? [{ field: 'id', operator: '=', value: flowId }]
+    : [{ field: 'flowId', operator: '=', value: flowId }];
+}
+
 function intersectScope(
   requested: string | null,
   clientAllowedJson: string | null | undefined,

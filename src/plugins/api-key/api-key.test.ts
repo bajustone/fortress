@@ -371,6 +371,50 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
       expect(keys.some(k => k.name === 'Escalated')).toBe(false);
     });
 
+    it('denies API-key credentials from listing keys via self-service routes', async () => {
+      const { fortress, methods, userId } = await setup({ prefix: 'test', routes: true });
+      const caller = await methods.createKey({
+        subject: userSubject(userId),
+        name: 'Caller key',
+      });
+
+      const res = await fortress.handleRequest(new Request('http://localhost/api-key/keys', {
+        headers: { authorization: `ApiKey ${caller.key}` },
+      }));
+
+      expect(res.status).toBe(403);
+    });
+
+    it('denies API-key credentials from revoking keys via self-service routes', async () => {
+      const { fortress, methods, userId } = await setup({ prefix: 'test', routes: true });
+      const caller = await methods.createKey({ subject: userSubject(userId), name: 'Caller key' });
+      const target = await methods.createKey({ subject: userSubject(userId), name: 'Target key' });
+
+      const res = await fortress.handleRequest(new Request(`http://localhost/api-key/keys/${target.id}`, {
+        method: 'DELETE',
+        headers: { authorization: `ApiKey ${caller.key}` },
+      }));
+
+      expect(res.status).toBe(403);
+      expect(await methods.resolveKey(target.key)).not.toBeNull();
+    });
+
+    it('denies API-key credentials from rotating keys via self-service routes', async () => {
+      const { fortress, methods, userId } = await setup({ prefix: 'test', routes: true });
+      const caller = await methods.createKey({ subject: userSubject(userId), name: 'Caller key' });
+      const target = await methods.createKey({ subject: userSubject(userId), name: 'Target key' });
+
+      const res = await fortress.handleRequest(new Request(`http://localhost/api-key/keys/${target.id}/rotate`, {
+        method: 'POST',
+        headers: { authorization: `ApiKey ${caller.key}` },
+      }));
+
+      expect(res.status).toBe(403);
+      expect(await methods.resolveKey(target.key)).not.toBeNull();
+      const keys = await methods.listKeys({ subject: userSubject(userId) });
+      expect(keys.filter(k => k.name === 'Target key')).toHaveLength(1);
+    });
+
     it('creates a key for the authenticated subject and ignores body.subject on POST', async () => {
       const { fortress, methods, userId, otherUserId, accessToken } = await setup({
         prefix: 'test',

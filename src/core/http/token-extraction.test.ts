@@ -19,12 +19,12 @@ describe('extractAccessToken', () => {
     expect(extractAccessToken(r, cookies)).toBe('header-token');
   });
 
-  it('prefers cookie over Authorization header', () => {
+  it('prefers Authorization header over cookie (P3.7 — cookie-shadow fix)', () => {
     const r = req({
       cookie: 'fortress_access=cookie-token',
       authorization: 'Bearer header-token',
     });
-    expect(extractAccessToken(r, cookies)).toBe('cookie-token');
+    expect(extractAccessToken(r, cookies)).toBe('header-token');
   });
 
   it('returns null when neither source has a token', () => {

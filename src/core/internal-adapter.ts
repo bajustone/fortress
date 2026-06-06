@@ -57,14 +57,31 @@ function normalizePermission(permission: Permission): Permission {
   };
 }
 
+function stableJson(value: unknown): unknown {
+  if (Array.isArray(value))
+    return value.map(stableJson);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort())
+      out[key] = stableJson((value as Record<string, unknown>)[key]);
+    return out;
+  }
+  return value;
+}
+
 function serializePermissionConditions(
   db: DatabaseAdapter,
   conditions: PermissionInput['conditions'],
 ): string | PermissionInput['conditions'] | null {
   if (!conditions)
     return null;
+  // M8: normalize JSON key order before storage / lookup. SQLite compares
+  // text byte-for-byte; PostgreSQL JSONB normalizes object key order on the
+  // server, but returning a stable object here keeps adapter behavior
+  // consistent and makes tests deterministic.
+  const normalized = stableJson(conditions) as PermissionInput['conditions'];
   // PostgreSQL schema stores JSONB; SQLite stores text.
-  return db.dialect === 'pg' ? conditions : JSON.stringify(conditions);
+  return db.dialect === 'pg' ? normalized : JSON.stringify(normalized);
 }
 
 export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
@@ -279,42 +296,65 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
 
     async findOrCreatePermission(input: PermissionInput): Promise<Permission> {
       const conditions = serializePermissionConditions(db, input.conditions);
-      const existing = await db.findOne<Permission>({
-        model: 'permission',
-        where: [
-          { field: 'resource', operator: '=', value: input.resource },
-          { field: 'action', operator: '=', value: input.action },
-          { field: 'effect', operator: '=', value: input.effect ?? 'ALLOW' },
-          conditions == null
-            ? { field: 'conditions', operator: 'isNull', value: null }
-            : { field: 'conditions', operator: '=', value: conditions },
-        ],
-      });
+      // The partial unique indexes (M8) guarantee at most one row per
+      // (resource, action, effect, conditions). Look it up by that tuple,
+      // honoring SQL's NULL-distinct rule for the no-conditions case.
+      const where = [
+        { field: 'resource', operator: '=' as const, value: input.resource },
+        { field: 'action', operator: '=' as const, value: input.action },
+        { field: 'effect', operator: '=' as const, value: input.effect ?? 'ALLOW' },
+        conditions == null
+          ? { field: 'conditions', operator: 'isNull' as const, value: null }
+          : { field: 'conditions', operator: '=' as const, value: conditions },
+      ];
 
+      const existing = await db.findOne<Permission>({ model: 'permission', where });
       if (existing)
         return normalizePermission(existing);
 
-      const created = await db.create<Permission>({
-        model: 'permission',
-        data: {
-          resource: input.resource,
-          action: input.action,
-          effect: input.effect ?? 'ALLOW',
-          conditions,
-          description: `${input.action} ${input.resource}`,
-        },
-      });
-      return normalizePermission(created);
+      try {
+        const created = await db.create<Permission>({
+          model: 'permission',
+          data: {
+            resource: input.resource,
+            action: input.action,
+            effect: input.effect ?? 'ALLOW',
+            conditions,
+            description: `${input.action} ${input.resource}`,
+          },
+        });
+        return normalizePermission(created);
+      }
+      catch (err) {
+        // find-then-create is not atomic: a concurrent caller can insert the
+        // same permission between our findOne and create, tripping the unique
+        // index. That's the expected outcome, not an error — re-read the row
+        // the winner inserted and return it. Re-throw anything that isn't a
+        // resolvable duplicate.
+        const winner = await db.findOne<Permission>({ model: 'permission', where });
+        if (winner)
+          return normalizePermission(winner);
+        throw err;
+      }
     },
 
     async ensureResource(name: string): Promise<void> {
-      const existing = await db.findOne<{ name: string }>({
-        model: 'resource',
-        where: [{ field: 'name', operator: '=', value: name }],
-      });
+      const where = [{ field: 'name', operator: '=' as const, value: name }];
+      const existing = await db.findOne<{ name: string }>({ model: 'resource', where });
+      if (existing)
+        return;
 
-      if (!existing) {
+      try {
         await db.create({ model: 'resource', data: { name } });
+      }
+      catch (err) {
+        // find-then-create is not atomic — a concurrent caller may have
+        // inserted the same resource name (unique). That's the desired end
+        // state, so swallow the conflict if the row now exists; re-throw
+        // otherwise.
+        const winner = await db.findOne<{ name: string }>({ model: 'resource', where });
+        if (!winner)
+          throw err;
       }
     },
   };

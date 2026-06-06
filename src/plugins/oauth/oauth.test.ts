@@ -2,6 +2,7 @@ import type { DatabaseAdapter } from '../../adapters/database';
 import type { OAuthMethods } from './index';
 import { importJWK, jwtVerify } from 'jose';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { generateRefreshToken } from '../../core/auth/refresh-token';
 import { createTestAdapter } from '../../testing';
 import { generateCodeChallenge, generateCodeVerifier, matchRedirectUri, oauth, toOidcUserinfo } from './index';
 
@@ -355,7 +356,8 @@ describe('oauth plugin', () => {
       );
 
       expect(result.redirectUrl.startsWith('https://app.example.com/signin?flow=')).toBe(true);
-      expect(result.flowId).toBeGreaterThan(0);
+      expect(typeof result.flowId).toBe('string');
+      expect(result.flowId.length).toBeGreaterThan(20);
 
       const flow = await localMethods.getPendingFlow(result.flowId);
       expect(flow.clientId).toBe(client.clientId);
@@ -476,7 +478,7 @@ describe('oauth plugin', () => {
         codeChallengeMethod: 'S256',
       });
 
-      const meta = await methods.handleGetFlow(flowId);
+      const meta = await methods.handleGetFlow(flowId, { userId });
       expect(meta.flowId).toBe(flowId);
       expect(meta.client.clientId).toBe(client.clientId);
       expect(meta.client.name).toBe('Brand X');
@@ -536,7 +538,7 @@ describe('oauth plugin', () => {
         state: 'deny-state',
       });
 
-      const result = await methods.handleDenyFlow(flowId);
+      const result = await methods.handleDenyFlow(flowId, { userId });
       const url = new URL(result.redirectUrl);
       expect(url.searchParams.get('error')).toBe('access_denied');
       expect(url.searchParams.get('state')).toBe('deny-state');
@@ -560,7 +562,7 @@ describe('oauth plugin', () => {
       // Force expiry by mutating the row directly through the adapter.
       await db.update({
         model: 'oauth_pending_flow',
-        where: [{ field: 'id', operator: '=', value: flowId }],
+        where: [{ field: 'flowId', operator: '=', value: flowId }],
         data: { expiresAt: new Date(Date.now() - 1000) },
       });
 
@@ -922,7 +924,8 @@ describe('oauth plugin', () => {
         },
         { userId: undefined },
       );
-      expect(result.flowId).toBeGreaterThan(0);
+      expect(typeof result.flowId).toBe('string');
+      expect(result.flowId.length).toBeGreaterThan(20);
     });
   });
 
@@ -957,7 +960,7 @@ describe('oauth plugin', () => {
         redirectUri: 'https://app.com/callback',
         state: 'iss-deny',
       });
-      const result = await methods.handleDenyFlow(flowId);
+      const result = await methods.handleDenyFlow(flowId, { userId });
       const url = new URL(result.redirectUrl);
       expect(url.searchParams.get('iss')).toBe('https://auth.example.com');
       expect(url.searchParams.get('error')).toBe('access_denied');
@@ -1555,7 +1558,7 @@ describe('oauth plugin', () => {
       const client = await methods.createClient({
         name: 'Refresh App',
         redirectUris: ['https://app.com/cb'],
-        grantTypes: ['authorization_code'],
+        grantTypes: ['authorization_code', 'refresh_token'],
       });
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
@@ -1605,6 +1608,30 @@ describe('oauth plugin', () => {
       expect(info.active).toBe(true);
     });
 
+    it('strict refresh concurrency: one winner, loser is replay and revokes the family', async () => {
+      const { refreshToken: r1, clientId, clientSecret } = await freshToken();
+
+      const results = await Promise.allSettled([
+        methods.refreshTokenGrant({ clientId, clientSecret, refreshToken: r1 }),
+        methods.refreshTokenGrant({ clientId, clientSecret, refreshToken: r1 }),
+      ]);
+
+      const fulfilled = results.filter(r => r.status === 'fulfilled') as PromiseFulfilledResult<{ refreshToken: string }>[];
+      const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect((rejected[0].reason as { oauthError?: string }).oauthError).toBe('invalid_grant');
+      expect(String(rejected[0].reason)).toMatch(/reuse/i);
+
+      // Strict replay semantics: the duplicate loser kills the token family,
+      // including the winner's newly issued refresh token.
+      await expect(methods.refreshTokenGrant({
+        clientId,
+        clientSecret,
+        refreshToken: fulfilled[0].value.refreshToken,
+      })).rejects.toThrow('Invalid refresh token');
+    });
+
     it('replay detection: reusing R1 after R2 issued kills the family', async () => {
       const { refreshToken: r1, clientId, clientSecret } = await freshToken();
       const { refreshToken: r2 } = await methods.refreshTokenGrant({
@@ -1637,7 +1664,7 @@ describe('oauth plugin', () => {
       const otherClient = await methods.createClient({
         name: 'Other',
         redirectUris: ['https://other.com/cb'],
-        grantTypes: ['authorization_code'],
+        grantTypes: ['authorization_code', 'refresh_token'],
       });
       await expect(methods.refreshTokenGrant({
         clientId: otherClient.clientId,
@@ -1674,6 +1701,16 @@ describe('oauth plugin', () => {
       expect(result.scope).toBe('openid');
     });
 
+    it('refresh returns a fresh id_token when the original grant included openid', async () => {
+      const { refreshToken, clientId, clientSecret } = await freshToken('openid email');
+      const result = await methods.refreshTokenGrant({
+        clientId,
+        clientSecret,
+        refreshToken,
+      }) as { idToken?: string };
+      expect(result.idToken).toBeTruthy();
+    });
+
     it('handleTokenRequest dispatches grant_type=refresh_token', async () => {
       const { refreshToken, clientId, clientSecret } = await freshToken();
       const result = await methods.handleTokenRequest(
@@ -1683,6 +1720,15 @@ describe('oauth plugin', () => {
       expect(result.access_token).toBeTruthy();
       expect(result.refresh_token).toBeTruthy();
       expect(result.token_type).toBe('Bearer');
+    });
+
+    it('handleTokenRequest includes id_token on openid refresh', async () => {
+      const { refreshToken, clientId, clientSecret } = await freshToken('openid');
+      const result = await methods.handleTokenRequest(
+        { grant_type: 'refresh_token', refresh_token: refreshToken },
+        { clientId, clientSecret },
+      );
+      expect(result.id_token).toBeTruthy();
     });
 
     it('discovery declares refresh_token in grant_types_supported', () => {
@@ -1904,10 +1950,14 @@ describe('oauth plugin', () => {
         tokenEndpointAuthMethod: 'none',
       });
       // The native app's loopback server picked port 53127 at runtime.
+      // Public clients now require PKCE at mint time (P1.3), so bind a challenge.
+      const challenge = await generateCodeChallenge(generateCodeVerifier());
       const { code } = await methods.createAuthorizationCode({
         clientId: client.clientId,
         userId,
         redirectUri: 'http://127.0.0.1:53127/cb',
+        codeChallenge: challenge,
+        codeChallengeMethod: 'S256',
       });
       expect(code).toBeTruthy();
     });
@@ -1937,6 +1987,214 @@ describe('oauth plugin', () => {
     it('accepts HTTP issuer URLs in development', () => {
       process.env.NODE_ENV = 'development';
       expect(() => oauth({ issuerUrl: 'http://localhost:8080' })).not.toThrow();
+    });
+  });
+
+  // ===================================================================
+  // Remediation regressions (P1.1, P1.2, P1.3, P3.4)
+  // ===================================================================
+  describe('remediation: code exchange single-use under concurrency (P1.1)', () => {
+    it('exactly one of two concurrent exchanges of the same code succeeds', async () => {
+      const client = await methods.createClient({
+        name: 'Race App',
+        redirectUris: ['https://app.com/cb'],
+        grantTypes: ['authorization_code'],
+      });
+      const verifier = generateCodeVerifier();
+      const challenge = await generateCodeChallenge(verifier);
+      const { code } = await methods.createAuthorizationCode({
+        clientId: client.clientId,
+        userId,
+        redirectUri: 'https://app.com/cb',
+        codeChallenge: challenge,
+        codeChallengeMethod: 'S256',
+      });
+
+      const results = await Promise.allSettled([
+        methods.exchangeCode({
+          code,
+          clientId: client.clientId,
+          clientSecret: client.clientSecret!,
+          redirectUri: 'https://app.com/cb',
+          codeVerifier: verifier,
+        }),
+        methods.exchangeCode({
+          code,
+          clientId: client.clientId,
+          clientSecret: client.clientSecret!,
+          redirectUri: 'https://app.com/cb',
+          codeVerifier: verifier,
+        }),
+      ]);
+
+      const fulfilled = results.filter(r => r.status === 'fulfilled').length;
+      const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+      expect(fulfilled).toBe(1);
+      expect(rejected.length).toBe(1);
+      expect((rejected[0].reason as { oauthError?: string }).oauthError).toBe('invalid_grant');
+    });
+  });
+
+  describe('remediation: consent-flow approval single-use + owner check (P1.2 / H6)', () => {
+    it('exactly one of two concurrent approvals of the same flow mints a code', async () => {
+      const client = await methods.createClient({
+        name: 'Approval Race App',
+        redirectUris: ['https://app.com/cb'],
+        grantTypes: ['authorization_code'],
+      });
+      const { flowId } = await methods.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://app.com/cb',
+        state: 'approve-race',
+        userId,
+      });
+
+      const results = await Promise.allSettled([
+        methods.handleApproveFlow(flowId, { userId }),
+        methods.handleApproveFlow(flowId, { userId }),
+      ]);
+
+      const fulfilled = results.filter(r => r.status === 'fulfilled') as PromiseFulfilledResult<{ redirectUrl: string }>[];
+      const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(String(rejected[0].reason)).toMatch(/not found/i);
+
+      const url = new URL(fulfilled[0].value.redirectUrl);
+      expect(url.searchParams.get('code')).toBeTruthy();
+      const codeCount = await db.count({
+        model: 'oauth_authorization_code',
+        where: [{ field: 'clientId', operator: '=', value: client.clientId }],
+      });
+      expect(codeCount).toBe(1);
+    });
+
+    it('a different user gets 404 when reading a pending flow', async () => {
+      const client = await methods.createClient({
+        name: 'IDOR App',
+        redirectUris: ['https://app.com/cb'],
+        grantTypes: ['authorization_code'],
+      });
+      const { flowId } = await methods.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://app.com/cb',
+        state: 's',
+        userId, // bound to user A up-front
+      });
+      // Create user B.
+      const userB = await db.create<{ id: number }>({
+        model: 'user',
+        data: { email: 'bob@example.com', name: 'Bob', passwordHash: 'h', isActive: true },
+      });
+
+      await expect(
+        methods.handleGetFlow(flowId, { userId: userB.id }),
+      ).rejects.toThrow(/not found/);
+      await expect(
+        methods.handleApproveFlow(flowId, { userId: userB.id }),
+      ).rejects.toThrow(/not found/);
+      await expect(
+        methods.handleDenyFlow(flowId, { userId: userB.id }),
+      ).rejects.toThrow(/not found/);
+    });
+
+    it('tofu: an unbound flow is claimed by the first authenticated getFlow', async () => {
+      const client = await methods.createClient({
+        name: 'TOFU App',
+        redirectUris: ['https://app.com/cb'],
+        grantTypes: ['authorization_code'],
+      });
+      const { flowId } = await methods.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://app.com/cb',
+        state: 's',
+      });
+      // User A reads first — should succeed and bind the flow to them.
+      await methods.handleGetFlow(flowId, { userId });
+      // User B reads next — should 404.
+      const userB = await db.create<{ id: number }>({
+        model: 'user',
+        data: { email: 'eve@example.com', name: 'Eve', passwordHash: 'h', isActive: true },
+      });
+      await expect(
+        methods.handleGetFlow(flowId, { userId: userB.id }),
+      ).rejects.toThrow(/not found/);
+    });
+  });
+
+  describe('remediation: PKCE mandatory for public clients (P1.3 / H7)', () => {
+    it('public client cannot mint a code without an S256 challenge', async () => {
+      const client = await methods.createClient({
+        name: 'Public SPA',
+        redirectUris: ['https://spa.com/cb'],
+        grantTypes: ['authorization_code'],
+        tokenEndpointAuthMethod: 'none',
+      });
+      // P1.3: the mint path itself now refuses to issue a binding-less code
+      // to a public client, so a PKCE-less code never reaches storage.
+      await expect(methods.createAuthorizationCode({
+        clientId: client.clientId,
+        userId,
+        redirectUri: 'https://spa.com/cb',
+      })).rejects.toThrow(/PKCE \(S256\) is required for public clients/);
+    });
+
+    it('a pre-existing public-client code with no challenge still cannot be exchanged', async () => {
+      const client = await methods.createClient({
+        name: 'Public SPA legacy',
+        redirectUris: ['https://spa2.com/cb'],
+        grantTypes: ['authorization_code'],
+        tokenEndpointAuthMethod: 'none',
+      });
+      // Defense-in-depth: simulate a binding-less code that predates the
+      // mint-time guard by inserting it directly (the mint path now refuses
+      // to create one). The exchange path must still reject it.
+      const { raw, hash } = await generateRefreshToken();
+      await db.create({
+        model: 'oauth_authorization_code',
+        data: {
+          code: hash,
+          clientId: client.clientId,
+          userId,
+          redirectUri: 'https://spa2.com/cb',
+          scope: null,
+          codeChallenge: null,
+          codeChallengeMethod: null,
+          nonce: null,
+          authTime: null,
+          expiresAt: new Date(Date.now() + 60_000),
+          usedAt: null,
+        },
+      });
+      await expect(methods.exchangeCode({
+        code: raw,
+        clientId: client.clientId,
+        redirectUri: 'https://spa2.com/cb',
+      })).rejects.toThrow(/PKCE required for public clients/);
+    });
+  });
+
+  describe('remediation: per-client grant_types enforcement (P3.4 / M9)', () => {
+    it('rejects authorization_code on a client not registered for it', async () => {
+      const client = await methods.createClient({
+        name: 'CC only',
+        redirectUris: ['https://app.com/cb'],
+        grantTypes: ['client_credentials'],
+      });
+      // Even though the redirect_uri is registered, the grant_types list
+      // does not include `authorization_code`, so issuance must fail at
+      // /token even if a code somehow exists.
+      const { code } = await methods.createAuthorizationCode({
+        clientId: client.clientId,
+        userId,
+        redirectUri: 'https://app.com/cb',
+      });
+      await expect(methods.exchangeCode({
+        code,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret!,
+        redirectUri: 'https://app.com/cb',
+      })).rejects.toThrow(/authorization_code grant/);
     });
   });
 });

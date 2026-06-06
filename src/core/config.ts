@@ -1,5 +1,6 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { PasswordPolicyConfig } from './auth/password-policy';
+import type { CsrfConfig } from './http/csrf';
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
 import type { FortressPlugin } from './plugin';
@@ -54,9 +55,26 @@ export interface FortressConfig {
   database: DatabaseAdapter;
   passwordHasher?: PasswordHasher;
   passwordPolicy?: PasswordPolicyConfig;
+  /**
+   * Impersonation hardening (RFC 8693 `act` tokens). All fields optional;
+   * defaults to a 1-hour ceiling on caller-supplied `expirySeconds`.
+   */
+  impersonation?: {
+    /**
+     * Hard ceiling on the impersonation access-token lifetime in seconds.
+     * `auth.impersonate({ expirySeconds })` is clamped to this. Default: 3600.
+     */
+    maxTtlSeconds?: number;
+  };
   plugins?: readonly FortressPlugin[];
   /** Auth-cookie naming and attributes used by `fortress.handleRequest` and framework adapters. */
   cookies?: CookieConfig;
+  /**
+   * Pipeline CSRF protection (H5). Defaults to `{ enabled: true }`.
+   * Bearer/API-key requests are exempt automatically — only cookie-auth
+   * traffic is checked. See {@link CsrfConfig}.
+   */
+  csrf?: CsrfConfig;
   /**
    * Optional pluggable logger. Accepts any object that conforms structurally
    * to {@link FortressLogger} — a `pino()` instance, Fastify's `app.log`,
@@ -90,8 +108,12 @@ export interface ResolvedCookieConfig {
  * `secure` so localhost over HTTP works.
  */
 export function resolveCookieConfig(config?: CookieConfig): ResolvedCookieConfig {
-  const isProd = typeof process !== 'undefined' && process.env?.NODE_ENV === 'production';
-  const secure = config?.secure ?? isProd;
+  // P3.7: default to `Secure` unless the caller explicitly opts out. Many
+  // production runtimes do not set NODE_ENV to 'production' (containers,
+  // serverless, Kubernetes Jobs), so falling back to NODE_ENV would leave
+  // cookies unprotected. Local HTTP development must now opt out
+  // explicitly via `cookies: { secure: false }`.
+  const secure = config?.secure ?? true;
   // __Host- prefix requires Secure + Path=/ + no Domain (RFC 6265bis).
   const canHostPrefix = secure && !config?.domain && (config?.path ?? '/') === '/';
   const defaultAccess = canHostPrefix ? '__Host-fortress_access' : 'fortress_access';

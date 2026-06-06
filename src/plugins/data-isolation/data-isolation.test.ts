@@ -130,5 +130,36 @@ describe('data-isolation plugin', () => {
 
       expect(rules).toBeNull();
     });
+
+    // H4 regression: pre-fix, `unscoped()` set a module-level flag so a
+    // concurrent request would see no isolation while the first request
+    // was still awaiting inside the bypass window.
+    it('unscoped does not leak across concurrent async flows (H4)', async () => {
+      const db = createTestAdapter();
+      const plugin = dataIsolation({
+        scopes: [
+          { name: 'org', field: 'orgId', models: ['sale'], resolveValue: async () => 7 },
+        ],
+      });
+      const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+      const methods = plugin.methods!(ctx) as { unscoped: <T>(fn: () => Promise<T>) => Promise<T> };
+
+      // Flow A holds an unscoped window open across an await.
+      // Flow B asks for scope rules in the middle.
+      const flowB = (async (): Promise<unknown> => {
+        // Microtask-delay so flow A is already "inside" unscoped().
+        await Promise.resolve();
+        return plugin.scopeRules!(1, 'sale', ctx);
+      })();
+      const flowA = methods.unscoped(async () => {
+        await new Promise(r => setTimeout(r, 5));
+        return 'a-done';
+      });
+
+      const [flowAResult, flowBResult] = await Promise.all([flowA, flowB]);
+      expect(flowAResult).toBe('a-done');
+      // Flow B is in its own async context — still scoped.
+      expect((flowBResult as { filters: { field: string }[] }).filters[0].field).toBe('orgId');
+    });
   });
 });

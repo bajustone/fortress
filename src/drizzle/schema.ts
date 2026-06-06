@@ -86,7 +86,17 @@ const permissions = sqliteTable('fortress_permission', {
   conditions: text('conditions'), // JSON string of PermissionCondition[]
   description: text('description'),
 }, table => [
-  unique().on(table.resource, table.action, table.effect, table.conditions),
+  // M8 fix: SQL UNIQUE treats two NULL `conditions` as distinct, so the
+  // plain unique() above lets `findOrCreatePermission` insert duplicate
+  // rows for the same (resource, action, effect, conditions=NULL) tuple
+  // under concurrency. Mirror the split-index pattern used for role /
+  // direct-permission bindings.
+  uniqueIndex('uniq_permission_no_conditions')
+    .on(table.resource, table.action, table.effect)
+    .where(sql`${table.conditions} is null`),
+  uniqueIndex('uniq_permission_with_conditions')
+    .on(table.resource, table.action, table.effect, table.conditions)
+    .where(sql`${table.conditions} is not null`),
 ]);
 
 // --- IAM: Roles ---
@@ -302,6 +312,7 @@ const oauthRefreshTokens = sqliteTable('fortress_oauth_refresh_token', {
 
 const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  flowId: text('flow_id').notNull().unique(),
   clientId: text('client_id').notNull(),
   redirectUri: text('redirect_uri').notNull(),
   scope: text('scope'),
@@ -309,6 +320,12 @@ const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: text('code_challenge_method'),
   nonce: text('nonce'),
+  // H6 fix: subject the flow is bound to. Nullable for the
+  // login-redirect path which can't know the user up front — the
+  // first authenticated GetFlow / Approve claims it.
+  userId: integer('user_id'),
+  // Single-use approval/denial claim used by the OAuth consent API.
+  usedAt: integer('used_at', { mode: 'timestamp' }),
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });

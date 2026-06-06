@@ -218,6 +218,37 @@ describe('createSvelteKitHandle: user routes', () => {
     expect(newAccess).not.toBe(expiredAccess);
     expect((event.locals as { fortress?: { userId?: number } }).fortress?.userId).toBeGreaterThan(0);
   });
+
+  it('does NOT silently refresh on unsafe methods (CSRF — P1.5/H5)', async () => {
+    // A silent refresh rotates the refresh token, so it must not be triggered
+    // by an unsafe (cross-site-reachable) request. SSR loads are GETs; an
+    // expired-access POST should fall through with no subject and no rotation.
+    const expired = createFortress({
+      jwt: { secret: SECRET, accessTokenExpirySeconds: 1 },
+      database: fortress.config.database,
+    });
+    const freshLogin = await expired.auth.login('a@b.co', 'password123');
+    if (freshLogin.status !== 'success')
+      throw new Error('expected success');
+    const expiredAccess = freshLogin.accessToken;
+    const validRefresh = freshLogin.refreshToken;
+
+    await new Promise(r => setTimeout(r, 1500));
+
+    const handle = createSvelteKitHandle(expired);
+    const event = fakeEvent({
+      method: 'POST',
+      url: 'http://localhost/dashboard',
+      cookies: {
+        [expired.cookies.accessName]: expiredAccess,
+        [expired.cookies.refreshName]: validRefresh,
+      },
+    });
+    await handle({ event, resolve: async () => new Response() });
+    // No rotation: access cookie unchanged, no authenticated subject.
+    expect(event.cookies._store.get(expired.cookies.accessName)).toBe(expiredAccess);
+    expect((event.locals as { fortress?: { userId?: number } }).fortress?.userId).toBeUndefined();
+  });
 });
 
 // ── toSvelteKitHandler ──────────────────────────────────────────────

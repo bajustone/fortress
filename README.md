@@ -997,13 +997,18 @@ export const { GET, POST, PUT, DELETE, PATCH } = toSvelteKitHandler(fortress);
 #### Cookies and CSRF
 
 - **Cookie defaults**: `__Host-fortress_access` / `__Host-fortress_refresh`
-  with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` in production. In
-  dev (`NODE_ENV !== 'production'`) the `__Host-` prefix and `Secure` are
-  dropped so localhost over HTTP works. Override via
-  `FortressConfig.cookies`.
-- **CSRF**: Fortress-managed routes are intercepted before `resolve()` so
-  SvelteKit's built-in `csrf.checkOrigin` does not apply. Form actions
-  (`?/login`) DO go through `resolve()` and ARE subject to it.
+  with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` by default in all
+  environments. Local HTTP development must opt out explicitly with
+  `cookies: { secure: false }`, which drops the `__Host-` prefix.
+- **CSRF**: Fortress-managed unsafe routes (`POST`/`PUT`/`PATCH`/`DELETE`)
+  are protected by Fortress's pipeline CSRF check whenever the request
+  carries either Fortress cookie (access **or** refresh):
+  `Sec-Fetch-Site: cross-site` is rejected and the `X-Fortress-CSRF`
+  header is required. The check is not bypassed just because an
+  `Authorization` or API-key header is also present; pure bearer/API-key
+  requests with no Fortress cookies skip it. Form actions (`?/login`) still
+  go through `resolve()` and remain subject to SvelteKit's own
+  `csrf.checkOrigin`.
 - **Auto-refresh**: when an access cookie is expired but the refresh
   cookie is still valid, the handle hook silently refreshes both tokens
   and sets new cookies before `resolve(event)`. Opening N tabs at once
@@ -1014,7 +1019,13 @@ See `examples/sveltekit-app/` for a complete reference.
 
 ### CSRF Protection
 
-Hono-only. Uses the custom-header strategy -- browsers enforce CORS preflight on custom headers, preventing cross-site form submission:
+Fortress-managed routes have pipeline CSRF enabled by default for unsafe
+requests that carry a Fortress access or refresh cookie. The check still
+applies when an `Authorization`/API-key header is also present alongside
+cookies; only pure bearer/API-key requests with no Fortress cookies skip it.
+The Hono middleware below is still available for user-owned Hono routes. It
+uses the same custom-header strategy -- browsers enforce CORS preflight on
+custom headers, preventing cross-site form submission:
 
 ```typescript
 import { createCsrfMiddleware } from '@bajustone/fortress/hono';
@@ -1078,6 +1089,11 @@ import { createDrizzleAdapter, fortressSchema } from '@bajustone/fortress/drizzl
 const drizzleDb = drizzle('app.db', { schema: fortressSchema });
 const db = createDrizzleAdapter(drizzleDb); // dialect defaults to 'sqlite'
 ```
+
+SQLite transactions are serialized with `BEGIN IMMEDIATE` to match
+SQLite's single-writer model. Nested transactions on the same adapter are
+not supported; calling `tx.transaction(...)` inside a SQLite transaction
+throws a clear `BAD_REQUEST` error instead of deadlocking.
 
 #### PostgreSQL
 
@@ -1624,6 +1640,12 @@ Built-in providers: **Google**, **GitHub**, **Microsoft** (with tenant support),
 
 ### Tenancy
 
+> **Experimental / do not mount in production yet.** The tenancy plugin is a
+> skeleton and was explicitly out of scope for the 2026-06-05 remediation
+> pass. Known hardening work remains around tenant identifier handling,
+> fail-closed tenant resolution, and trusted tenant context. Leave it
+> unmounted until those items are completed.
+
 Schema-per-tenant isolation for PostgreSQL. Each tenant gets its own database schema, providing strong data isolation at the database level.
 
 ```typescript
@@ -1665,6 +1687,12 @@ The plugin automatically:
 ### Data Isolation
 
 Row-level data isolation that works with any database. Automatically injects WHERE filters on reads and default values on creates.
+
+Runtime note: `withoutScope()` and `unscoped()` use `node:async_hooks` /
+`AsyncLocalStorage` so bypasses are isolated to the current async request.
+Use this plugin only in Node/Bun-compatible runtimes that provide
+`node:async_hooks`; edge/browser-like runtimes may need a custom wrapper or
+should avoid the bypass helpers.
 
 ```typescript
 import { dataIsolation } from '@bajustone/fortress/plugins/data-isolation';

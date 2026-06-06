@@ -6,6 +6,12 @@ The `data-isolation` plugin adds row-level data isolation to Fortress. It works 
 
 Unlike the `tenancy` plugin (which uses PostgreSQL schema-per-tenant isolation), this plugin operates at the row level and supports any database backend.
 
+Runtime note: scoped bypass helpers (`withoutScope()` and `unscoped()`) use
+`node:async_hooks` / `AsyncLocalStorage` to keep bypass state local to the
+current async request. Use this plugin in Node/Bun-compatible runtimes that
+provide `node:async_hooks`; edge/browser-like runtimes may need a custom
+request-context wrapper or should avoid those bypass helpers.
+
 ## Installation
 
 Import the `dataIsolation` factory and pass it in the `plugins` array when creating a Fortress instance:

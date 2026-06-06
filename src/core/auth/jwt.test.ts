@@ -82,5 +82,56 @@ describe('jwt', () => {
       expect(decoded.customClaims?.tenantId).toBe(5);
       expect(decoded.customClaims?.tenantCode).toBe('acme');
     });
+
+    // M2 regression: a caller (or a plugin contributing via
+    // enrichTokenClaims) MUST NOT be able to forge `act`, `sub`, `groups`,
+    // `subjectType`, etc. through customClaims.
+    it('drops reserved keys from customClaims (no forged impersonation)', async () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production'; // silent drop in prod
+      try {
+        const sneaky = {
+          ...claims,
+          customClaims: {
+            // attacker tries to overwrite trusted claims
+            sub: 9999,
+            act: { sub: 1, subjectType: 'USER' },
+            groups: ['admin'],
+            subjectType: 'SERVICE_ACCOUNT',
+            tenantId: 'real-tenant',
+          },
+        };
+        const token = await signAccessToken(sneaky, secret, 900);
+        const decoded = await verifyAccessToken(token, secret);
+
+        // Real sub/groups/subjectType prevail; forged act dropped.
+        expect(decoded.sub).toBe(42);
+        expect(decoded.subjectType).toBe('USER');
+        expect(decoded.groups).toEqual(['admin', 'editor']);
+        expect(decoded.act).toBeUndefined();
+        // Non-reserved custom claims survive.
+        expect(decoded.customClaims?.tenantId).toBe('real-tenant');
+      }
+      finally {
+        if (originalNodeEnv === undefined)
+          delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = originalNodeEnv;
+      }
+    });
+  });
+
+  describe('remediation: alg + issuer pinning (M5 / P2.5)', () => {
+    it('verifies with the expected issuer', async () => {
+      const token = await signAccessToken(claims, secret, 900);
+      const decoded = await verifyAccessToken(token, secret, { issuer: 'fortress-test' });
+      expect(decoded.iss).toBe('fortress-test');
+    });
+
+    it('rejects a token whose iss does not match', async () => {
+      const token = await signAccessToken(claims, secret, 900);
+      await expect(
+        verifyAccessToken(token, secret, { issuer: 'someone-else' }),
+      ).rejects.toThrow();
+    });
   });
 });

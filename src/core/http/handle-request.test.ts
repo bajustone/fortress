@@ -279,28 +279,33 @@ describe('fortress.handleRequest', () => {
   // self-managed bypass. The bypass is now opt-in via
   // `meta.bearerKind: 'oauth'`.
   describe('bearerKind: \'jwt\' default for /oauth/* routes', () => {
-    function makeOauthBearerPlugin(): { plugin: FortressPlugin; received: PluginRouteContext[] } {
+    function makeOauthBearerPlugin(includeForbiddenSelfAuth = false): { plugin: FortressPlugin; received: PluginRouteContext[] } {
       const received: PluginRouteContext[] = [];
+      const routes: NonNullable<FortressPlugin['routes']> = {
+        jwtRoute: {
+          method: 'POST',
+          path: '/oauth/host-app/jwt-route',
+          handler: 'jwtRoute',
+          // No `bearerKind` — should default to 'jwt' and require auth.
+          meta: { summary: 'Host app JWT route under /oauth/*', tags: ['Test'], security: ['bearer'] },
+          responses: { 200: { description: 'ok' } },
+        },
+      };
+      if (includeForbiddenSelfAuth) {
+        routes.oauthRoute = {
+          method: 'POST',
+          path: '/oauth/host-app/oauth-route',
+          handler: 'oauthRoute',
+          // P3.6 hardening: arbitrary plugin routes may no longer opt out of
+          // the auth pipeline with bearerKind:'oauth'. Only known OAuth
+          // protocol routes are allowed to self-auth.
+          meta: { summary: 'Host app OAuth route under /oauth/*', tags: ['Test'], security: ['bearer'], bearerKind: 'oauth' as const },
+          responses: { 200: { description: 'ok' } },
+        };
+      }
       const plugin: FortressPlugin = {
         name: 'oauth-bearer-spy',
-        routes: {
-          jwtRoute: {
-            method: 'POST',
-            path: '/oauth/host-app/jwt-route',
-            handler: 'jwtRoute',
-            // No `bearerKind` — should default to 'jwt' and require auth.
-            meta: { summary: 'Host app JWT route under /oauth/*', tags: ['Test'], security: ['bearer'] },
-            responses: { 200: { description: 'ok' } },
-          },
-          oauthRoute: {
-            method: 'POST',
-            path: '/oauth/host-app/oauth-route',
-            handler: 'oauthRoute',
-            // Opt out of fortress's auth pipeline — the handler self-manages.
-            meta: { summary: 'Host app OAuth route under /oauth/*', tags: ['Test'], security: ['bearer'], bearerKind: 'oauth' as const },
-            responses: { 200: { description: 'ok' } },
-          },
-        },
+        routes,
         methods: () => ({
           jwtRoute(_body: unknown, ctx: PluginRouteContext): { ok: true } {
             received.push(ctx);
@@ -345,18 +350,10 @@ describe('fortress.handleRequest', () => {
       expect(received[0]!.userId).toBe(user.id);
     });
 
-    it('accepts /oauth/host-app/oauth-route without any auth when bearerKind is "oauth"', async () => {
-      const { plugin, received } = makeOauthBearerPlugin();
-      const f = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter(), plugins: [plugin] });
-
-      const res = await f.handleRequest(new Request('http://localhost/oauth/host-app/oauth-route', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
-      }));
-      expect(res.status).toBe(200);
-      expect(received).toHaveLength(1);
-      expect(received[0]!.userId).toBeUndefined();
+    it('rejects arbitrary plugin routes that set bearerKind="oauth" (P3.6)', async () => {
+      const { plugin } = makeOauthBearerPlugin(true);
+      expect(() => createFortress({ jwt: { secret: SECRET }, database: createTestAdapter(), plugins: [plugin] }))
+        .toThrow(/not an approved self-auth OAuth protocol route/);
     });
   });
 });

@@ -166,12 +166,21 @@ function resolveSingleValue(value: string, context: PermissionContext): unknown 
   return resolveFieldValue(match[1], context);
 }
 
+// L-tier: prototype-pollution-safe key set. Reading `__proto__` /
+// `constructor` / `prototype` off an attacker-controlled object would
+// either return the prototype chain or let a condition spoof an
+// inherited value as a real field. We skip these keys defensively even
+// though all currently-known callers feed plain object literals.
+const FORBIDDEN_PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   const parts = path.split('.');
   let current: unknown = obj;
 
   for (const part of parts) {
     if (current === null || current === undefined || typeof current !== 'object')
+      return undefined;
+    if (FORBIDDEN_PROTO_KEYS.has(part))
       return undefined;
     current = (current as Record<string, unknown>)[part];
   }

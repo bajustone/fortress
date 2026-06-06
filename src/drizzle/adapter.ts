@@ -2,6 +2,7 @@ import type { Column, SQL, Table } from 'drizzle-orm';
 import type { DatabaseAdapter } from '../adapters/database';
 import type { WhereClause } from '../adapters/database/types';
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { and, eq, getTableColumns, gt, gte, inArray, isNull, like, lt, lte, ne, sql } from 'drizzle-orm';
 import { Errors } from '../core/errors';
 import { fortressPgSchema } from './pg/schema';
@@ -175,6 +176,14 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
   const defaults = dialect === 'pg' ? PG_DEFAULT_TABLE_MAP : SQLITE_DEFAULT_TABLE_MAP;
   const tableMap: Record<string, Table> = { ...defaults, ...(options?.tables as Record<string, Table>) };
   const isSqlite = dialect === 'sqlite';
+  // SQLite drivers used by Drizzle (better-sqlite3 / bun:sqlite) expose a
+  // single synchronous connection. Manual async transactions must therefore
+  // be serialized: an `await` between BEGIN and COMMIT would otherwise allow a
+  // second request to issue BEGIN on the same connection. SQLite is
+  // single-writer anyway, so this preserves correctness with predictable
+  // queuing semantics.
+  let sqliteTxChain: Promise<unknown> = Promise.resolve();
+  const sqliteTxContext = new AsyncLocalStorage<boolean>();
 
   /** Execute a query expecting a single row (or undefined). SQLite uses .get(), PG/MySQL awaits the query. */
   async function execOne<T>(query: any): Promise<T | undefined> {
@@ -211,6 +220,8 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
   /** Build a DatabaseAdapter backed by a specific Drizzle instance (db or tx) */
   function buildAdapter(drizzle: DrizzleDB): DatabaseAdapter {
     const self: DatabaseAdapter = {
+      get dialect() { return dialect; },
+
       async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
         const table = getTable(params.model);
         const result = await execOne<T>((drizzle as any).insert(table).values(sanitizeData(params.data) as any).returning());
@@ -260,7 +271,16 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
       async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T | null> {
         const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
-        const result = await execOne<T>((drizzle as any).update(table).set(sanitizeData(params.data) as any).where(condition).returning());
+        const query = (drizzle as any).update(table).set(sanitizeData(params.data) as any).where(condition).returning();
+        // SQLite drivers only step the statement for rows that are read from
+        // RETURNING. Use .all() so UPDATEs that match multiple rows actually
+        // apply to every row (family/session revocation depends on this),
+        // while preserving the adapter contract of returning one row/null.
+        if (isSqlite) {
+          const rows = query.all() as T[];
+          return rows[0] ?? null;
+        }
+        const result = await execOne<T>(query);
         return (result as T) ?? null;
       },
 
@@ -299,19 +319,31 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
 
       async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {
         if (dialect === 'sqlite') {
-          // SQLite (better-sqlite3, bun:sqlite) transactions are synchronous.
-          // Drizzle's SQLite .transaction() doesn't support async callbacks.
-          // We use a manual BEGIN/COMMIT/ROLLBACK approach for async compatibility.
-          (drizzle as any).run(sql`BEGIN`);
-          try {
-            const result = await fn(self);
-            (drizzle as any).run(sql`COMMIT`);
-            return result;
+          // SQLite transactions are serialized on one connection. A nested
+          // tx.transaction(...) from inside the callback would otherwise be
+          // queued behind the still-open outer transaction while the outer
+          // callback awaits it: a self-deadlock. Detect that context and fail
+          // clearly instead of hanging.
+          if (sqliteTxContext.getStore()) {
+            throw Errors.badRequest('Nested transactions are not supported by the SQLite Drizzle adapter');
           }
-          catch (error) {
-            (drizzle as any).run(sql`ROLLBACK`);
-            throw error;
-          }
+
+          const run = async (): Promise<T> => {
+            (drizzle as any).run(sql`BEGIN IMMEDIATE`);
+            try {
+              const result = await sqliteTxContext.run(true, () => fn(self));
+              (drizzle as any).run(sql`COMMIT`);
+              return result;
+            }
+            catch (error) {
+              (drizzle as any).run(sql`ROLLBACK`);
+              throw error;
+            }
+          };
+
+          const result = sqliteTxChain.then(run, run);
+          sqliteTxChain = result.catch(() => undefined);
+          return result;
         }
 
         // PostgreSQL/MySQL: use Drizzle's native async transaction
