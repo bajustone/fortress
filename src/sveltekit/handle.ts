@@ -8,8 +8,9 @@
  *    `building` to opt out).
  * 2. Intercepts Fortress-managed paths (`/auth/*`, `/iam/*`, plugin paths)
  *    by calling `fortress.handleRequest(event.request)` and returning the
- *    `Response` directly — bypassing SvelteKit's router AND its built-in
- *    CSRF check (which only runs inside `resolve(event)`).
+ *    `Response` directly. This bypasses SvelteKit's built-in CSRF check
+ *    (which only runs inside `resolve(event)`), but `handleRequest` runs
+ *    Fortress's own pipeline CSRF check (H5) in its place.
  * 3. For user routes, runs plugin `before-auth` middleware, extracts the
  *    access token (cookie-first, Bearer fallback), verifies it,
  *    auto-refreshes when expired, populates `event.locals.fortress`, runs
@@ -53,6 +54,8 @@ import {
 } from '../core/plugin-runner';
 import { replayCookies, setAuthCookies } from './cookies';
 
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 /** Build the SvelteKit `handle` hook for a Fortress instance. */
 export function createSvelteKitHandle(
   fortress: Fortress,
@@ -72,10 +75,11 @@ export function createSvelteKitHandle(
       const innerPath = stripPrefix(fullPath, basePath);
 
       // 2. Fortress-managed path → delegate to core, return Response directly.
-      //    The handle hook returns BEFORE resolve() so SvelteKit's CSRF check
-      //    is bypassed for these routes (login, refresh, etc.). We detect
-      //    fortress paths by matching the canonical endpoint table — this
-      //    catches /auth/login, /iam/*, plugin routes, OAuth, OpenAPI, etc.
+      //    The handle hook returns BEFORE resolve(), so SvelteKit's own CSRF
+      //    check is skipped — but handleRequest runs Fortress's pipeline CSRF
+      //    check (enforceCsrf) for these routes (login, refresh, etc.). We
+      //    detect fortress paths by matching the canonical endpoint table —
+      //    this catches /auth/login, /iam/*, plugin routes, OAuth, OpenAPI.
       if (innerPath !== null && matchRoute(routeTable, event.request.method, innerPath)) {
         const rewritten = rewriteRequest(event.request, event.url, innerPath);
         const response = await fortress.handleRequest(rewritten);
@@ -100,11 +104,13 @@ export function createSvelteKitHandle(
       let subject: Subject | undefined;
       let userId: number | undefined;
       let claims: TokenClaims | undefined;
+      let scopes: string[] | null | undefined;
 
       const pluginResolved = await tryPluginPrincipal(fortress, event.request);
       if (pluginResolved) {
         subject = pluginResolved.subject;
         claims = pluginResolved.claims;
+        scopes = pluginResolved.scopes;
       }
       else {
         const token = fortress.extractAccessToken(event.request);
@@ -114,8 +120,15 @@ export function createSvelteKitHandle(
             subject = { type: claims.subjectType, id: claims.sub };
           }
           catch {
-            // Token invalid or expired — try silent refresh.
-            const refreshToken = event.cookies.get(fortress.cookies.refreshName);
+            // Token invalid or expired — try silent refresh. Restricted to
+            // safe methods (SSR page loads are GETs): a silent refresh rotates
+            // the refresh token, so allowing it on unsafe cross-site requests
+            // would be a CSRF-triggered state change. Unsafe requests fall
+            // through with no subject; the client re-auths via the
+            // CSRF-protected POST /auth/refresh endpoint.
+            const refreshToken = SAFE_METHODS.has(event.request.method.toUpperCase())
+              ? event.cookies.get(fortress.cookies.refreshName)
+              : undefined;
             if (refreshToken) {
               try {
                 const refreshed = await fortress.auth.refresh(refreshToken);
@@ -140,6 +153,7 @@ export function createSvelteKitHandle(
           fortress,
           subject,
           claims,
+          scopes,
         );
       }
       else {
@@ -155,6 +169,7 @@ export function createSvelteKitHandle(
         fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
+        fortressScopes: scopes,
       });
 
       // 6. User-route RBAC via routeMap (skip-patterns filtered out first).
@@ -163,7 +178,9 @@ export function createSvelteKitHandle(
         if (mapping) {
           if (!subject)
             throw Errors.unauthorized('Not authenticated');
-          const allowed = await fortress.iam.checkPermission(subject, mapping.resource, mapping.action);
+          const allowed = await fortress.iam.checkPermission(subject, mapping.resource, mapping.action, {
+            credentialScopes: scopes,
+          });
           if (!allowed)
             throw Errors.forbidden('Insufficient permissions');
         }
@@ -175,6 +192,7 @@ export function createSvelteKitHandle(
         fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
+        fortressScopes: scopes,
       });
 
       // 8. Hand off to SvelteKit's normal route resolution.
@@ -198,6 +216,7 @@ function populateLocals(
   fortress: Fortress,
   subject: Subject,
   claims: TokenClaims | undefined,
+  scopes: string[] | null | undefined,
 ): void {
   const plugins = fortress.config.plugins ?? [];
   const requestContext: Record<string, unknown> = {
@@ -215,6 +234,7 @@ function populateLocals(
     subject,
     userId: subject.type === 'USER' ? subject.id : undefined,
     claims,
+    scopes,
     db: wrapped,
     getScopedDb: async (model: string): Promise<DatabaseAdapter> => {
       const rule = await collectScopeRules(plugins, subject.id, model, pluginCtx);

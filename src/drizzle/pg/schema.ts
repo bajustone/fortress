@@ -1,6 +1,7 @@
 import type { AnyPgTable } from 'drizzle-orm/pg-core';
 
-import { boolean, index, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, varchar } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
 
 // --- Core Identity ---
 
@@ -84,7 +85,17 @@ const permissions = pgTable('fortress_permission', {
   effect: varchar('effect', { length: 10 }).notNull().default('ALLOW'), // 'ALLOW' | 'DENY'
   conditions: jsonb('conditions'), // PermissionCondition[] as JSONB
   description: text('description'),
-});
+}, table => [
+  // M8 fix — same split-index pattern as role/direct-permission bindings
+  // so concurrent findOrCreatePermission can't insert duplicate rows when
+  // conditions is NULL (a plain UNIQUE treats NULLs as distinct).
+  uniqueIndex('uniq_permission_no_conditions')
+    .on(table.resource, table.action, table.effect)
+    .where(sql`${table.conditions} is null`),
+  uniqueIndex('uniq_permission_with_conditions')
+    .on(table.resource, table.action, table.effect, table.conditions)
+    .where(sql`${table.conditions} is not null`),
+]);
 
 // --- IAM: Roles ---
 
@@ -112,7 +123,11 @@ const roleBindings = pgTable('fortress_role_binding', {
   subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
   tenantId: varchar('tenant_id', { length: 100 }),
-});
+}, table => [
+  unique().on(table.roleId, table.subjectType, table.subjectId, table.tenantId),
+  uniqueIndex('uniq_role_binding_global').on(table.roleId, table.subjectType, table.subjectId).where(sql`${table.tenantId} is null`),
+  uniqueIndex('uniq_role_binding_tenant').on(table.roleId, table.subjectType, table.subjectId, table.tenantId).where(sql`${table.tenantId} is not null`),
+]);
 
 // --- IAM: Direct Permission Bindings ---
 
@@ -122,7 +137,11 @@ const directPermissionBindings = pgTable('fortress_direct_permission_binding', {
   subjectType: varchar('subject_type', { length: 20 }).notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
   tenantId: varchar('tenant_id', { length: 100 }),
-});
+}, table => [
+  unique().on(table.permissionId, table.subjectType, table.subjectId, table.tenantId),
+  uniqueIndex('uniq_direct_permission_binding_global').on(table.permissionId, table.subjectType, table.subjectId).where(sql`${table.tenantId} is null`),
+  uniqueIndex('uniq_direct_permission_binding_tenant').on(table.permissionId, table.subjectType, table.subjectId, table.tenantId).where(sql`${table.tenantId} is not null`),
+]);
 
 // --- Plugins: Email Verification ---
 
@@ -291,6 +310,7 @@ const oauthRefreshTokens = pgTable('fortress_oauth_refresh_token', {
 
 const oauthPendingFlows = pgTable('fortress_oauth_pending_flow', {
   id: serial('id').primaryKey(),
+  flowId: text('flow_id').notNull().unique(),
   clientId: varchar('client_id', { length: 255 }).notNull(),
   redirectUri: text('redirect_uri').notNull(),
   scope: text('scope'),
@@ -298,6 +318,11 @@ const oauthPendingFlows = pgTable('fortress_oauth_pending_flow', {
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: varchar('code_challenge_method', { length: 10 }),
   nonce: text('nonce'),
+  // H6 fix: subject the flow is bound to (TOFU-claimed on first
+  // authenticated touch).
+  userId: integer('user_id'),
+  // Single-use approval/denial claim used by the OAuth consent API.
+  usedAt: timestamp('used_at'),
   expiresAt: timestamp('expires_at').notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });

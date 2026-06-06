@@ -257,8 +257,16 @@ describe('resolveRequestPrincipal', () => {
   });
 
   it('returns null (does NOT throw) for a malformed JWT with tampered signature', async () => {
-    // Take a real JWT, mangle the last char to invalidate the signature.
-    const bad = `${validAccessToken.slice(0, -1)}X`;
+    // Take a real JWT and flip the FIRST signature char. Mangling the last
+    // base64url char is non-deterministic — the trailing char only carries a
+    // few significant bits, so a different char can decode to the same
+    // signature bytes (and occasionally the original char already is the
+    // replacement). A mid-segment char carries full bits, so flipping it
+    // always invalidates the signature.
+    const parts = validAccessToken.split('.');
+    const sig = parts[2];
+    parts[2] = (sig[0] === 'A' ? 'B' : 'A') + sig.slice(1);
+    const bad = parts.join('.');
     const result = await resolveRequestPrincipal(
       fortress,
       new Request('http://localhost/api', {

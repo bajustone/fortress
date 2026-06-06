@@ -18,6 +18,7 @@ import { resolveCookieConfig } from '../config';
 import { Errors, FortressError } from '../errors';
 import { coerceBySchema, validateRequest } from '../validation';
 import { serializeAuthCookies } from './cookie-serialize';
+import { enforceCsrf, resolveCsrfConfig } from './csrf';
 import { dispatchEndpoint } from './dispatch';
 import { errorToResponse, withCookies } from './error-response';
 import {
@@ -44,6 +45,9 @@ export function buildHandleRequest(
 ): (request: Request) => Promise<Response> {
   const routeTable = buildRouteTable(fortress.endpoints);
   const cookieConfig = resolveCookieConfig(fortress.config.cookies);
+  // H5: pipeline CSRF check resolved once at startup so per-request cost
+  // is just header / cookie inspection.
+  const csrfConfig = resolveCsrfConfig(fortress.config.csrf);
   const plugins = fortress.config.plugins ?? [];
   const pluginPathPrefixes = getPluginPathPrefixes(plugins);
 
@@ -62,6 +66,12 @@ export function buildHandleRequest(
 
       // 1. Plugin before-auth middleware (rate limit, audit log, etc.)
       await runPluginMiddleware(plugins, fortress.config, 'before-auth', { request });
+
+      // 1a. H5 — CSRF check. Runs before token verification so a malicious
+      //     cross-site POST can't trigger any auth lookup work either. The
+      //     check is a no-op for safe methods, bearer/API-key flows, and
+      //     deployments that opt out.
+      enforceCsrf(request, pathname, csrfConfig, cookieConfig);
 
       // 2. Match path + method to an endpoint
       const matched = matchRoute(routeTable, request.method, pathname);
@@ -102,6 +112,7 @@ export function buildHandleRequest(
       let subject: Subject | undefined;
       let userId: number | undefined;
       let claims: TokenClaims | undefined;
+      let scopes: string[] | null | undefined;
       const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
 
       if (!selfManagedBearer) {
@@ -109,6 +120,7 @@ export function buildHandleRequest(
         if (resolved) {
           subject = resolved.subject;
           claims = resolved.claims;
+          scopes = resolved.scopes;
         }
       }
 
@@ -146,6 +158,7 @@ export function buildHandleRequest(
         fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
+        fortressScopes: scopes,
       });
 
       // 5. Fortress-managed default-deny RBAC. Routes flagged
@@ -154,9 +167,9 @@ export function buildHandleRequest(
       //    from the IAM check too.
       if (!selfManagedBearer) {
         await enforceFortressPermission(endpoint, subject, {
-          checkPermission: (subj, resource, action): Promise<boolean> =>
-            fortress.iam.checkPermission(subj, resource, action),
-        });
+          checkPermission: (subj, resource, action, credentialScopes): Promise<boolean> =>
+            fortress.iam.checkPermission(subj, resource, action, { credentialScopes }),
+        }, scopes);
       }
 
       // 6. Plugin after-rbac middleware
@@ -165,6 +178,7 @@ export function buildHandleRequest(
         fortressSubject: subject,
         fortressUserId: userId,
         fortressClaims: claims,
+        fortressScopes: scopes,
       });
 
       // 7. Body parse + validation. Validation reads the body via clone()
@@ -204,6 +218,7 @@ export function buildHandleRequest(
         subject,
         userId,
         claims,
+        scopes,
         meta,
       });
 

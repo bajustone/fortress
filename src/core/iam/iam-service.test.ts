@@ -67,6 +67,35 @@ describe('inline permissions (direct binding)', () => {
     });
   });
 
+  it('bindPermissionToUser is idempotent for global bindings', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'idem-direct@test.com',
+      name: 'Idem Direct',
+      password: 'password-123',
+    });
+
+    await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
+    await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
+
+    const perms = await fortress.config.database.findMany<{ id: number }>({
+      model: 'permission',
+      where: [
+        { field: 'resource', operator: '=', value: 'post' },
+        { field: 'action', operator: '=', value: 'read' },
+      ],
+    });
+    const count = await fortress.config.database.count({
+      model: 'direct_permission_binding',
+      where: [
+        { field: 'permissionId', operator: '=', value: perms[0].id },
+        { field: 'subjectType', operator: '=', value: 'USER' },
+        { field: 'subjectId', operator: '=', value: user.id },
+        { field: 'tenantId', operator: 'isNull', value: null },
+      ],
+    });
+    expect(count).toBe(1);
+  });
+
   it('bindPermissionToUser grants access without a role', async () => {
     const user = await fortress.auth.createUser({
       email: 'alice@test.com',
@@ -113,6 +142,29 @@ describe('inline permissions (direct binding)', () => {
     await fortress.iam.unbindPermissionFromUser(user.id, perm!.id);
 
     expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'read')).toBe(false);
+  });
+
+  it('bindRoleToUser is idempotent for global bindings', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'idem-role@test.com',
+      name: 'Idem Role',
+      password: 'password-123',
+    });
+    const role = await fortress.iam.createRole('idem-viewer', [{ resource: 'post', action: 'read' }]);
+
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+
+    const count = await fortress.config.database.count({
+      model: 'role_binding',
+      where: [
+        { field: 'roleId', operator: '=', value: role.id },
+        { field: 'subjectType', operator: '=', value: 'USER' },
+        { field: 'subjectId', operator: '=', value: user.id },
+        { field: 'tenantId', operator: 'isNull', value: null },
+      ],
+    });
+    expect(count).toBe(1);
   });
 
   it('direct and role-based permissions combine', async () => {
@@ -483,5 +535,123 @@ describe('iam-service: admin CRUD', () => {
         fortress.iam.addPermissionToRole(99999, { resource: 'x', action: 'y' }),
       ).rejects.toThrow('Role not found');
     });
+  });
+});
+
+describe('remediation regressions (P3.1, P3.3)', () => {
+  it('deleteRole invalidates the permission cache (P3.1/M6)', async () => {
+    // With caching enabled, a global checkPermission warms the cache. Without
+    // the deleteRole invalidation, the granted decision would survive in cache
+    // for up to the TTL even after the role (and its access) is gone.
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      rbac: { cache: { ttlSeconds: 300 } },
+    });
+    const user = await fortress.auth.createUser({
+      email: 'cache@test.com',
+      name: 'Cache',
+      password: 'password-123',
+    });
+    const role = await fortress.iam.createRole('reporter', [{ resource: 'reports', action: 'read' }]);
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+
+    // Warm the cache with a granted decision.
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'reports', 'read')).toBe(true);
+
+    await fortress.iam.deleteRole(role.id);
+
+    // Must be denied immediately — not after the 300s TTL.
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'reports', 'read')).toBe(false);
+  });
+
+  it('permission identity includes effect (ALLOW and DENY are distinct rows)', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+    });
+    const role = await fortress.iam.createRole('effect-identity', [
+      { resource: 'doc', action: 'archive', effect: 'ALLOW' },
+      { resource: 'doc', action: 'archive', effect: 'DENY' },
+    ]);
+
+    const detail = await fortress.iam.getRole(role.id);
+    expect(detail.permissions).toHaveLength(2);
+    expect(detail.permissions.map(p => p.effect).sort()).toEqual(['ALLOW', 'DENY']);
+
+    const count = await fortress.config.database.count({
+      model: 'permission',
+      where: [
+        { field: 'resource', operator: '=', value: 'doc' },
+        { field: 'action', operator: '=', value: 'archive' },
+      ],
+    });
+    expect(count).toBe(2);
+  });
+
+  it('permission identity includes stable serialized conditions', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+    });
+    const role = await fortress.iam.createRole('conditions-identity', [
+      {
+        resource: 'invoice',
+        action: 'read',
+        conditions: [{ field: 'resource.region', operator: 'eq', value: 'eu' }],
+      },
+      {
+        resource: 'invoice',
+        action: 'read',
+        conditions: [{ field: 'resource.region', operator: 'eq', value: 'us' }],
+      },
+    ]);
+
+    const detail = await fortress.iam.getRole(role.id);
+    expect(detail.permissions).toHaveLength(2);
+
+    const rows = await fortress.config.database.findMany<{ conditions: string }>({
+      model: 'permission',
+      where: [
+        { field: 'resource', operator: '=', value: 'invoice' },
+        { field: 'action', operator: '=', value: 'read' },
+      ],
+    });
+    expect(rows).toHaveLength(2);
+    const serialized = rows.map(row => row.conditions).sort();
+    expect(serialized[0]).toContain('eu');
+    expect(serialized[1]).toContain('us');
+  });
+
+  it('findOrCreatePermission resolves concurrent creates to one row (P3.3/M8)', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+    });
+    const user = await fortress.auth.createUser({
+      email: 'race@test.com',
+      name: 'Race',
+      password: 'password-123',
+    });
+
+    // Two concurrent binds referencing the same (resource, action, no-conditions)
+    // permission. The partial unique index forbids a duplicate row; the
+    // find-or-create must absorb the lost race instead of throwing a raw DB error.
+    await expect(Promise.all([
+      fortress.iam.bindPermissionToUser(user.id, { resource: 'doc', action: 'read' }),
+      fortress.iam.bindPermissionToUser(user.id, { resource: 'doc', action: 'read' }),
+    ])).resolves.toBeDefined();
+
+    const count = await fortress.config.database.count({
+      model: 'permission',
+      where: [
+        { field: 'resource', operator: '=', value: 'doc' },
+        { field: 'action', operator: '=', value: 'read' },
+        { field: 'effect', operator: '=', value: 'ALLOW' },
+        { field: 'conditions', operator: 'isNull', value: null },
+      ],
+    });
+    expect(count).toBe(1);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'doc', 'read')).toBe(true);
   });
 });

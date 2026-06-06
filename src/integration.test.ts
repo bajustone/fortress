@@ -98,6 +98,34 @@ describe('auth integration', () => {
     // — that's fine, the important thing is we got a valid new token
   });
 
+  it('strict refresh concurrency: one winner, loser is treated as replay and revokes the family', async () => {
+    await fortress.auth.createUser({
+      email: 'concurrent-refresh@example.com',
+      name: 'Concurrent',
+      password: 'password-123',
+    });
+
+    const login = await fortress.auth.login('concurrent-refresh@example.com', 'password-123');
+    const oldRefreshToken = login.refreshToken as string;
+
+    const results = await Promise.allSettled([
+      fortress.auth.refresh(oldRefreshToken),
+      fortress.auth.refresh(oldRefreshToken),
+    ]);
+
+    const fulfilled = results.filter(r => r.status === 'fulfilled') as PromiseFulfilledResult<{ refreshToken: string }>[];
+    const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0].reason)).toMatch(/Token reuse detected/);
+
+    // Fortress deliberately uses strict replay semantics: the losing
+    // duplicate invalidates the entire token family, including the winner's
+    // freshly issued refresh token. This favours theft detection over a
+    // concurrency grace window.
+    await expect(fortress.auth.refresh(fulfilled[0].value.refreshToken)).rejects.toThrow('Token reuse detected');
+  });
+
   it('detects refresh token reuse', async () => {
     await fortress.auth.createUser({
       email: 'eve@example.com',

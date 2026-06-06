@@ -284,6 +284,41 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   }
   const endpoints = Array.from(endpointMap.values());
 
+  // L-tier: fail-fast on `security: ['none']` + `permission` collisions.
+  // The two are mutually exclusive: an unauthenticated route has no subject
+  // to evaluate the permission against, so default-deny RBAC would always
+  // reject it. Catch the misconfiguration at startup, not at first request.
+  const oauthSelfAuthAllowlist = new Set([
+    'GET /oauth/authorize',
+    'POST /oauth/token',
+    'POST /oauth/introspect',
+    'POST /oauth/revoke',
+    'GET /oauth/userinfo',
+    'GET /oauth/.well-known/openid-configuration',
+    'GET /oauth/.well-known/jwks.json',
+  ]);
+  for (const ep of endpoints) {
+    const security = ep.meta?.security ?? [];
+    if (security.includes('none') && ep.meta?.permission) {
+      throw Errors.badRequest(
+        `Endpoint ${ep.method} ${ep.path} declares security:['none'] AND a permission `
+        + `(${ep.meta.permission.resource}:${ep.meta.permission.action}). These are mutually `
+        + `exclusive — default-deny RBAC would reject every request.`,
+      );
+    }
+
+    // P3.6: `bearerKind: 'oauth'` means "this handler self-authenticates"
+    // and therefore skips the normal plugin/JWT/RBAC/JSON-validation
+    // pipeline. It is intentionally reserved for the OAuth protocol routes
+    // that parse form bodies or OAuth access tokens themselves. Any other
+    // route trying to use it is almost certainly a latent auth bypass.
+    if (ep.meta?.bearerKind === 'oauth' && !oauthSelfAuthAllowlist.has(`${ep.method} ${ep.path}`)) {
+      throw Errors.badRequest(
+        `Endpoint ${ep.method} ${ep.path} sets bearerKind:'oauth' but is not an approved self-auth OAuth protocol route.`,
+      );
+    }
+  }
+
   // Resolve cookie config once at startup so all HTTP entry points share names.
   const cookies = resolveCookieConfig(config.cookies);
 

@@ -1,6 +1,7 @@
 import type { AnySQLiteTable } from 'drizzle-orm/sqlite-core';
 
-import { index, integer, primaryKey, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { index, integer, primaryKey, sqliteTable, text, unique, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 // --- Core Identity ---
 
@@ -84,7 +85,19 @@ const permissions = sqliteTable('fortress_permission', {
   effect: text('effect').notNull().default('ALLOW'), // 'ALLOW' | 'DENY'
   conditions: text('conditions'), // JSON string of PermissionCondition[]
   description: text('description'),
-});
+}, table => [
+  // M8 fix: SQL UNIQUE treats two NULL `conditions` as distinct, so the
+  // plain unique() above lets `findOrCreatePermission` insert duplicate
+  // rows for the same (resource, action, effect, conditions=NULL) tuple
+  // under concurrency. Mirror the split-index pattern used for role /
+  // direct-permission bindings.
+  uniqueIndex('uniq_permission_no_conditions')
+    .on(table.resource, table.action, table.effect)
+    .where(sql`${table.conditions} is null`),
+  uniqueIndex('uniq_permission_with_conditions')
+    .on(table.resource, table.action, table.effect, table.conditions)
+    .where(sql`${table.conditions} is not null`),
+]);
 
 // --- IAM: Roles ---
 
@@ -112,7 +125,11 @@ const roleBindings = sqliteTable('fortress_role_binding', {
   subjectType: text('subject_type').notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
   tenantId: text('tenant_id'),
-});
+}, table => [
+  unique().on(table.roleId, table.subjectType, table.subjectId, table.tenantId),
+  uniqueIndex('uniq_role_binding_global').on(table.roleId, table.subjectType, table.subjectId).where(sql`${table.tenantId} is null`),
+  uniqueIndex('uniq_role_binding_tenant').on(table.roleId, table.subjectType, table.subjectId, table.tenantId).where(sql`${table.tenantId} is not null`),
+]);
 
 // --- IAM: Direct Permission Bindings ---
 
@@ -122,7 +139,11 @@ const directPermissionBindings = sqliteTable('fortress_direct_permission_binding
   subjectType: text('subject_type').notNull(), // 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'
   subjectId: integer('subject_id').notNull(),
   tenantId: text('tenant_id'),
-});
+}, table => [
+  unique().on(table.permissionId, table.subjectType, table.subjectId, table.tenantId),
+  uniqueIndex('uniq_direct_permission_binding_global').on(table.permissionId, table.subjectType, table.subjectId).where(sql`${table.tenantId} is null`),
+  uniqueIndex('uniq_direct_permission_binding_tenant').on(table.permissionId, table.subjectType, table.subjectId, table.tenantId).where(sql`${table.tenantId} is not null`),
+]);
 
 // --- Plugins: Email Verification ---
 
@@ -291,6 +312,7 @@ const oauthRefreshTokens = sqliteTable('fortress_oauth_refresh_token', {
 
 const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  flowId: text('flow_id').notNull().unique(),
   clientId: text('client_id').notNull(),
   redirectUri: text('redirect_uri').notNull(),
   scope: text('scope'),
@@ -298,6 +320,12 @@ const oauthPendingFlows = sqliteTable('fortress_oauth_pending_flow', {
   codeChallenge: text('code_challenge'),
   codeChallengeMethod: text('code_challenge_method'),
   nonce: text('nonce'),
+  // H6 fix: subject the flow is bound to. Nullable for the
+  // login-redirect path which can't know the user up front — the
+  // first authenticated GetFlow / Approve claims it.
+  userId: integer('user_id'),
+  // Single-use approval/denial claim used by the OAuth consent API.
+  usedAt: integer('used_at', { mode: 'timestamp' }),
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });

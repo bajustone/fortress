@@ -5,6 +5,25 @@ const VARIABLE_PATTERN = /^\$\{(.+)\}$/;
 export type EvaluationMode = 'allow-only' | 'deny-overrides';
 
 /**
+ * Check whether a credential-level scope set allows the requested
+ * resource/action. `null`/`undefined` means the credential is unscoped and
+ * inherits the subject's full IAM permissions; an empty array allows nothing.
+ */
+export function withinCredentialScope(
+  scopes: string[] | null | undefined,
+  resource: string,
+  action: string,
+): boolean {
+  if (scopes == null)
+    return true;
+  return scopes.some(scope =>
+    scope === '*'
+    || scope === `${resource}:*`
+    || scope === `${resource}:${action}`,
+  );
+}
+
+/**
  * Evaluate a set of permissions against a resource+action request.
  *
  * - 'allow-only': if any ALLOW matches → allow, otherwise deny
@@ -147,12 +166,21 @@ function resolveSingleValue(value: string, context: PermissionContext): unknown 
   return resolveFieldValue(match[1], context);
 }
 
+// L-tier: prototype-pollution-safe key set. Reading `__proto__` /
+// `constructor` / `prototype` off an attacker-controlled object would
+// either return the prototype chain or let a condition spoof an
+// inherited value as a real field. We skip these keys defensively even
+// though all currently-known callers feed plain object literals.
+const FORBIDDEN_PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   const parts = path.split('.');
   let current: unknown = obj;
 
   for (const part of parts) {
     if (current === null || current === undefined || typeof current !== 'object')
+      return undefined;
+    if (FORBIDDEN_PROTO_KEYS.has(part))
       return undefined;
     current = (current as Record<string, unknown>)[part];
   }

@@ -29,6 +29,7 @@ export interface ExpressRequest {
    */
   fortressUserId?: number;
   fortressClaims?: TokenClaims;
+  fortressScopes?: string[] | null;
   fortressDb?: DatabaseAdapter;
   fortressGetScopedDb?: (model: string) => Promise<DatabaseAdapter>;
 }
@@ -91,12 +92,14 @@ export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
         throw new FortressError('UNAUTHORIZED', 'Missing or invalid credentials', 401);
       }
 
-      const { subject, claims } = resolved;
+      const { subject, claims, scopes } = resolved;
       req.fortressSubject = subject;
       if (subject.type === 'USER')
         req.fortressUserId = subject.id;
       if (claims)
         req.fortressClaims = claims;
+      if (scopes !== undefined)
+        req.fortressScopes = scopes;
 
       const plugins = fortress.config.plugins ?? [];
       const requestContext: Record<string, unknown> = {
@@ -169,7 +172,9 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
         throw new FortressError('UNAUTHORIZED', 'Not authenticated', 401);
       }
 
-      const allowed = await fortress.iam.checkPermission(req.fortressSubject, mapping.resource, mapping.action);
+      const allowed = await fortress.iam.checkPermission(req.fortressSubject, mapping.resource, mapping.action, {
+        credentialScopes: req.fortressScopes,
+      });
       if (!allowed) {
         throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403);
       }

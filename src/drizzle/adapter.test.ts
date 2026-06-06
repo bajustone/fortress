@@ -277,6 +277,37 @@ describe('drizzle adapter: update returns null on no match', () => {
     expect(result).toBeNull();
   });
 
+  it('applies update to every matching row while returning one row', async () => {
+    const user = await db.create<{ id: number }>({
+      model: 'user',
+      data: { email: 'update-many@test.com', name: 'Many', passwordHash: 'h', isActive: true },
+    });
+    await db.create({
+      model: 'refresh_token',
+      data: { userId: user.id, tokenHash: 'many-1', tokenFamily: 'fam-many', isRevoked: false, expiresAt: new Date('2099-01-01T00:00:00Z') },
+    });
+    await db.create({
+      model: 'refresh_token',
+      data: { userId: user.id, tokenHash: 'many-2', tokenFamily: 'fam-many', isRevoked: false, expiresAt: new Date('2099-01-01T00:00:00Z') },
+    });
+
+    const result = await db.update({
+      model: 'refresh_token',
+      where: [{ field: 'tokenFamily', operator: '=', value: 'fam-many' }],
+      data: { isRevoked: true },
+    });
+
+    expect(result).not.toBeNull();
+    const remainingActive = await db.count({
+      model: 'refresh_token',
+      where: [
+        { field: 'tokenFamily', operator: '=', value: 'fam-many' },
+        { field: 'isRevoked', operator: '=', value: false },
+      ],
+    });
+    expect(remainingActive).toBe(0);
+  });
+
   it('returns the updated record when a row matches', async () => {
     const user = await db.create<{ id: number }>({
       model: 'user',
@@ -292,5 +323,103 @@ describe('drizzle adapter: update returns null on no match', () => {
     expect(updated).not.toBeNull();
     expect(updated!.name).toBe('After');
     expect(updated!.id).toBe(user.id);
+  });
+});
+
+// C3 regression: two concurrent transactions on SQLite must not collide.
+// Pre-fix, an awaited callback could let a second BEGIN issue against the
+// same connection ("cannot start a transaction within a transaction") and
+// a COMMIT from one path would close the other. The fix serialises
+// transactions through an async chain and uses BEGIN IMMEDIATE to take
+// the write lock up front.
+describe('drizzle adapter: concurrent transactions (C3)', () => {
+  it('does not error "transaction within a transaction" under concurrency', async () => {
+    const user = await db.create<{ id: number }>({
+      model: 'user',
+      data: { email: 'cas@test.com', name: 'CAS', passwordHash: 'h', isActive: true },
+    });
+
+    const txOne = db.transaction(async (tx) => {
+      const row = await tx.findOne<{ id: number; name: string }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: user.id }],
+      });
+      // Yield so the second tx has a chance to start while we're "inside"
+      // this one. With the old `BEGIN`/shared-adapter pattern this is where
+      // the failure mode would surface.
+      await new Promise(r => setTimeout(r, 0));
+      await tx.update({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: user.id }],
+        data: { name: `${row!.name}-A` },
+      });
+    });
+    const txTwo = db.transaction(async (tx) => {
+      const row = await tx.findOne<{ id: number; name: string }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: user.id }],
+      });
+      await tx.update({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: user.id }],
+        data: { name: `${row!.name}-B` },
+      });
+    });
+
+    await Promise.all([txOne, txTwo]);
+
+    const final = await db.findOne<{ name: string }>({
+      model: 'user',
+      where: [{ field: 'id', operator: '=', value: user.id }],
+    });
+    // Both transactions ran serially, so the final name reflects both
+    // updates layered on top of each other. The exact ordering is
+    // implementation-defined (whichever tx the chain scheduled first wins).
+    expect(final!.name === 'CAS-A-B' || final!.name === 'CAS-B-A').toBe(true);
+  });
+
+  it('rejects nested SQLite transactions with a clear error instead of deadlocking', async () => {
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.transaction(async () => 'nested');
+      }),
+    ).rejects.toThrow('Nested transactions are not supported by the SQLite Drizzle adapter');
+  });
+
+  it('compare-and-set update is atomic across concurrent transactions', async () => {
+    // This is the pattern OAuth code exchange + refresh rotation rely on:
+    // exactly one of N concurrent transactions can flip a NULL claim flag.
+    const user = await db.create<{ id: number }>({
+      model: 'user',
+      data: { email: 'claim@test.com', name: 'C', passwordHash: 'h', isActive: true },
+    });
+    await db.create({
+      model: 'refresh_token',
+      data: {
+        userId: user.id,
+        tokenHash: 'h-claim',
+        tokenFamily: 'f',
+        isRevoked: false,
+        expiresAt: new Date('2099-01-01T00:00:00Z'),
+      },
+    });
+
+    async function tryClaim(): Promise<boolean> {
+      return db.transaction(async (tx) => {
+        const claimed = await tx.update<{ id: number }>({
+          model: 'refresh_token',
+          where: [
+            { field: 'tokenHash', operator: '=', value: 'h-claim' },
+            { field: 'isRevoked', operator: '=', value: false },
+          ],
+          data: { isRevoked: true },
+        });
+        return claimed !== null;
+      });
+    }
+
+    const results = await Promise.all([tryClaim(), tryClaim(), tryClaim()]);
+    const wins = results.filter(Boolean).length;
+    expect(wins).toBe(1);
   });
 });

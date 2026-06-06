@@ -470,4 +470,60 @@ describe('service-account HTTP endpoints — core dispatch', () => {
       ).toBe(false);
     });
   });
+
+  // ── POST /iam/check — caller-context sanitization (P3.2/M7) ──
+  describe('post /iam/check context sanitization', () => {
+    it('cannot satisfy an ownership condition via forged context.resource', async () => {
+      // Bob may read a doc only when he owns it (ownership ABAC condition).
+      const bob = await ctx.fortress.auth.createUser({
+        email: 'bob@example.com',
+        name: 'Bob',
+        password: 'password-123',
+      });
+      await ctx.fortress.iam.bindPermissionToUser(bob.id, {
+        resource: 'doc',
+        action: 'read',
+        conditions: [{ field: 'resource.ownerId', operator: 'eq', value: { ref: 'user.id' } }],
+      });
+
+      // An attacker-supplied context that forges ownership. Pre-fix, the
+      // evaluator saw resource.ownerId === user.id and answered "allowed".
+      const res = await ctx.fortress.handleRequest(new Request('http://localhost/iam/check', {
+        method: 'POST',
+        headers: authHeaders(ctx.adminToken, 'application/json'),
+        body: JSON.stringify({
+          userId: bob.id,
+          resource: 'doc',
+          action: 'read',
+          context: { resource: { ownerId: bob.id }, user: { id: bob.id } },
+        }),
+      }));
+      expect(res.status).toBe(200);
+      // The forged resource.* / user.* are stripped, so the condition fails.
+      expect((await res.json() as { allowed: boolean }).allowed).toBe(false);
+    });
+
+    it('still answers a plain (unconditional) permission correctly', async () => {
+      // Positive control: the endpoint works — the false above is the
+      // sanitization, not a broken handler.
+      const carol = await ctx.fortress.auth.createUser({
+        email: 'carol@example.com',
+        name: 'Carol',
+        password: 'password-123',
+      });
+      await ctx.fortress.iam.bindPermissionToUser(carol.id, { resource: 'doc', action: 'list' });
+
+      const res = await ctx.fortress.handleRequest(new Request('http://localhost/iam/check', {
+        method: 'POST',
+        headers: authHeaders(ctx.adminToken, 'application/json'),
+        body: JSON.stringify({
+          userId: carol.id,
+          resource: 'doc',
+          action: 'list',
+        }),
+      }));
+      expect(res.status).toBe(200);
+      expect((await res.json() as { allowed: boolean }).allowed).toBe(true);
+    });
+  });
 });

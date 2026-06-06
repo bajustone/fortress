@@ -142,7 +142,14 @@ Access tokens are short-lived (default 15 min) and re-issued via the refresh tok
 
 ## CSRF Protection
 
-Fortress provides a custom-header CSRF middleware for Hono:
+Fortress-managed routes enforce pipeline CSRF by default for unsafe methods
+when the request carries a Fortress access or refresh cookie. The check
+rejects `Sec-Fetch-Site: cross-site` and requires `X-Fortress-CSRF` (or your
+configured header). It still applies when an `Authorization`/API-key header
+is present alongside cookies; pure bearer/API-key requests with no Fortress
+cookies skip it.
+
+Fortress also provides a custom-header CSRF middleware for Hono user routes:
 
 ```typescript
 import { createCsrfMiddleware } from '@bajustone/fortress/hono';
@@ -172,6 +179,8 @@ Every refresh token belongs to a token family. When a refresh token is used:
 2. A new token in the same family is issued
 
 If a previously-used token is presented (reuse detection), the entire token family is invalidated. This protects against token theft: if an attacker steals a refresh token and uses it, the legitimate user's next refresh attempt triggers family-wide revocation.
+
+Concurrency note: Fortress deliberately treats a losing concurrent refresh as reuse. If two requests submit the same refresh token at once, one rotates successfully and the loser revokes the family, including the winner's new refresh token. Coordinate refreshes client-side or add a server-side single-flight/grace mechanism if your UX requires multi-tab auto-refresh without re-login.
 
 ### Token Fingerprinting
 

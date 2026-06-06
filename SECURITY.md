@@ -20,27 +20,57 @@ We will acknowledge receipt within 48 hours and aim to release a fix within 7 da
 
 | Version | Supported |
 |---------|-----------|
-| 0.0.x   | Yes       |
+| 0.1.x   | Yes       |
+| 0.0.x   | No (pre-0.1; please upgrade) |
+
+Note: Fortress is pre-1.0; breaking changes may ship in any minor version. Pin to a minor series.
 
 ## Security Best Practices
 
 See [docs/security.md](docs/security.md) for comprehensive security guidance.
 
+## Registration account-enumeration tradeoff
+
+The built-in public `POST /auth/register` endpoint intentionally returns a
+409 when the submitted email already exists. This is useful UX for many
+first-party apps but is an account-enumeration signal. Treat this as an
+accepted tradeoff unless your product requires non-enumerating registration.
+If you do, wrap registration with your own flow (e.g. always return 202 and
+send either a verification email or an "already have an account" email).
+
+When using the built-in endpoint publicly, mount the rate-limit plugin with
+`register` protection enabled to slow bulk enumeration.
+
+## Experimental plugins
+
+The tenancy plugin is currently a skeleton and should be treated as
+**experimental / unmounted**. Its SQL identifier handling, fail-closed
+resolution, and tenant-context trust model must be completed before any real
+deployment mounts it.
+
 ## Cookie posture (SvelteKit / `fortress.handleRequest`)
 
 When using `fortress.handleRequest` directly or the SvelteKit adapter, auth
 tokens are written to two `httpOnly` cookies. Defaults from
-`FortressConfig.cookies`:
+`FortressConfig.cookies` are now production-safe regardless of `NODE_ENV`:
 
-| Environment | Access cookie | Refresh cookie | Attributes |
+| Default | Access cookie | Refresh cookie | Attributes |
 |---|---|---|---|
-| Production (`NODE_ENV=production`) | `__Host-fortress_access` | `__Host-fortress_refresh` | `HttpOnly; Secure; SameSite=Lax; Path=/` |
-| Development | `fortress_access` | `fortress_refresh` | `HttpOnly; SameSite=Lax; Path=/` |
+| All environments | `__Host-fortress_access` | `__Host-fortress_refresh` | `HttpOnly; Secure; SameSite=Lax; Path=/` |
 
 The `__Host-` prefix binds the cookie to the exact origin (no `Domain`, no
 subpath, must be `Secure`) — the strongest browser-enforced isolation.
-It's automatically dropped in non-production because `Secure` is required
-for the prefix and would break localhost HTTP.
+Many production runtimes do not reliably set `NODE_ENV=production`, so
+Fortress no longer infers cookie security from that variable.
+
+Local HTTP development must opt out explicitly:
+
+```ts
+createFortress({
+  // ...
+  cookies: { secure: false }, // drops __Host- prefix; localhost HTTP only
+})
+```
 
 Override via `FortressConfig.cookies` if you need a `Domain`, `Path`,
 custom names, or `SameSite=strict`. Note: `SameSite=strict` blocks
@@ -48,19 +78,46 @@ top-level cross-site navigation cookies, which breaks magic-link email
 flows and OAuth callbacks. Stick with `lax` unless you know you don't need
 them.
 
-## CSRF posture (SvelteKit)
+## CSRF posture
 
-The SvelteKit adapter splits CSRF protection across two paths:
+Fortress now performs its own pipeline CSRF check on Fortress-managed
+routes (`/auth/*`, `/iam/*`, plugin paths) before dispatch. The check is on
+by default for unsafe methods (`POST`, `PUT`, `PATCH`, `DELETE`) whenever
+the request carries a Fortress access **or refresh** cookie:
 
-- **Fortress-managed routes** (`/auth/*`, `/iam/*`, plugin paths) are
-  intercepted in `hooks.server.ts` *before* SvelteKit's `resolve()` runs,
-  which means they bypass SvelteKit's built-in `csrf.checkOrigin`. They
-  rely on `SameSite=Lax` cookies and (for OAuth) PKCE for cross-site
-  protection.
-- **Form actions** (`<form action="?/login">`) DO go through `resolve()`
-  and ARE subject to SvelteKit's `checkOrigin`. This is the right default
-  — keep it on. To accept logins from a separate frontend origin, add the
-  origin to `csrf.allowedOrigins` in `svelte.config.js`.
+- `Sec-Fetch-Site: cross-site` is rejected.
+- A custom header is required (`X-Fortress-CSRF` by default).
+- The check is not bypassed just because an `Authorization` or API-key
+  header is also present; cookies remain ambient browser credentials.
+- Pure bearer/API-key requests with no Fortress cookies skip the check.
+
+Configure via:
+
+```ts
+createFortress({
+  // ...
+  csrf: {
+    enabled: true,
+    headerName: 'X-Fortress-CSRF',
+    skipPaths: [],
+  },
+})
+```
+
+Set `csrf.enabled = false` only for pure bearer/API deployments where no
+Fortress route is reachable with ambient cookies. SvelteKit form actions
+that go through `resolve()` remain subject to SvelteKit's own
+`csrf.checkOrigin`; keep that enabled as defense in depth.
+
+## Refresh-token concurrency posture
+
+Fortress uses strict refresh-token replay semantics. When two concurrent
+refresh attempts present the same refresh token, exactly one can rotate it;
+the loser is treated as token reuse and the entire token family is revoked,
+including the winner's newly issued refresh token. This favors theft
+containment over a concurrency grace window. Applications with aggressive
+multi-tab auto-refresh should coordinate refreshes client-side or add a
+server-side single-flight/grace mechanism.
 
 ## SSR auto-refresh race
 

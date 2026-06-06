@@ -32,6 +32,8 @@ export interface DispatchAuth {
   /** Convenience alias for `subject?.id` when the subject is a USER. */
   userId?: number;
   claims?: TokenClaims;
+  /** Credential-level narrowing scopes (e.g. API-key scopes). */
+  scopes?: string[] | null;
   meta?: RequestMeta;
 }
 
@@ -185,6 +187,7 @@ async function dispatchPlugin(
     subject: auth.subject,
     userId: auth.subject?.type === 'USER' ? auth.subject.id : undefined,
     claims: auth.claims,
+    scopes: auth.scopes,
     meta: auth.meta,
     request,
   };
@@ -295,8 +298,17 @@ async function dispatchOAuth(
       });
     }
     case 'handleGetFlow': {
+      // H6 fix — every consent-flow endpoint requires authentication so the
+      // owner check has someone to compare against. Without this guard, an
+      // unauthenticated caller could read another user's pending flow.
+      if (auth.userId === undefined) {
+        return jsonResponse(
+          { error: 'unauthorized', error_description: 'Authentication required' },
+          401,
+        );
+      }
       const flowId = consentFlowIdFromUrl(request.url);
-      const result = await m.handleGetFlow(flowId);
+      const result = await m.handleGetFlow(flowId, { userId: auth.userId });
       return jsonResponse(result, 200);
     }
     case 'handleApproveFlow': {
@@ -311,8 +323,14 @@ async function dispatchOAuth(
       return jsonResponse(result, 200);
     }
     case 'handleDenyFlow': {
+      if (auth.userId === undefined) {
+        return jsonResponse(
+          { error: 'unauthorized', error_description: 'Authentication required' },
+          401,
+        );
+      }
       const flowId = consentFlowIdFromUrl(request.url);
-      const result = await m.handleDenyFlow(flowId);
+      const result = await m.handleDenyFlow(flowId, { userId: auth.userId });
       return jsonResponse(result, 200);
     }
     default: {
@@ -325,18 +343,18 @@ async function dispatchOAuth(
   }
 }
 
-const FLOW_ID_PATTERN = /\/oauth\/flows\/(\d+)/;
+const FLOW_ID_PATTERN = /\/oauth\/flows\/([^/]+)/;
 
 /**
- * Extract the `:flowId` path segment from a `/oauth/flows/:flowId[/...]` URL
- * and parse it as a number. Throws if the segment is missing or non-numeric.
+ * Extract the opaque `:flowId` path segment from a
+ * `/oauth/flows/:flowId[/...]` URL. Throws if the segment is missing.
  */
-function consentFlowIdFromUrl(url: string): number {
+function consentFlowIdFromUrl(url: string): string {
   const path = new URL(url).pathname;
   const match = FLOW_ID_PATTERN.exec(path);
   if (!match)
     throw Errors.badRequest('Invalid flow id');
-  return Number(match[1]);
+  return decodeURIComponent(match[1]);
 }
 
 // ── Auth / IAM hardcoded dispatch ────────────────────────────────────
@@ -462,11 +480,24 @@ async function invokeIamHandler(
       const subject = subjectIn?.type && subjectIn?.id != null
         ? { type: subjectIn.type as 'USER' | 'GROUP' | 'SERVICE_ACCOUNT', id: Number(subjectIn.id) }
         : { type: 'USER' as const, id: Number(body.userId) };
+      // M7 fix: sanitize caller-supplied context before forwarding to the
+      // evaluator. `/iam/check` is an admin diagnostic; we must NOT let a
+      // caller widen credentialScopes (which would let any caller answer
+      // "yes" by passing scopes:['*']) nor satisfy ownership conditions by
+      // forging `resource.ownerId === user.id`. The narrowed shape allows
+      // only `request.*` (truly request-scoped data the caller could have
+      // supplied in a real request anyway).
+      const rawCtx = body.context as Record<string, unknown> | undefined;
+      const safeCtx: { tenantId?: string; request?: Record<string, unknown> } = {};
+      if (rawCtx?.tenantId !== undefined && typeof rawCtx.tenantId === 'string')
+        safeCtx.tenantId = rawCtx.tenantId;
+      if (rawCtx?.request && typeof rawCtx.request === 'object')
+        safeCtx.request = rawCtx.request as Record<string, unknown>;
       const allowed = await fortress.iam.checkPermission(
         subject,
         String(body.resource ?? ''),
         String(body.action ?? ''),
-        body.context as never,
+        safeCtx as never,
       );
       return { allowed };
     }

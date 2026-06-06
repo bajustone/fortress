@@ -26,9 +26,18 @@ describe('resolveCookieConfig', () => {
     setEnv(originalNodeEnv);
   });
 
-  it('drops __Host- prefix and disables Secure outside production', () => {
+  it('defaults Secure on outside production too (P3.7 — NODE_ENV not relied on)', () => {
     setEnv('development');
     const c = resolveCookieConfig();
+    expect(c.accessName).toBe('__Host-fortress_access');
+    expect(c.refreshName).toBe('__Host-fortress_refresh');
+    expect(c.secure).toBe(true);
+    setEnv(originalNodeEnv);
+  });
+
+  it('opting out of Secure drops __Host- prefix (local HTTP dev escape hatch)', () => {
+    setEnv('development');
+    const c = resolveCookieConfig({ secure: false });
     expect(c.accessName).toBe('fortress_access');
     expect(c.refreshName).toBe('fortress_refresh');
     expect(c.secure).toBe(false);

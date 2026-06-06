@@ -15,6 +15,57 @@ import { jwtVerify, SignJWT } from 'jose';
 import { Errors } from '../errors';
 
 /**
+ * JWT claim names fortress controls and that must never be overridable by
+ * caller-supplied `customClaims` or by plugin `enrichTokenClaims` output.
+ *
+ * Letting a caller set `act` would forge an impersonation marker; letting a
+ * caller set `sub`/`iss`/`exp` would let them mint a token for any subject
+ * or extend its lifetime. The denylist is enforced in {@link signAccessToken}
+ * — extra claims are dropped (with a `warn` log in dev) before the safe
+ * claims are spread.
+ */
+export const RESERVED_JWT_CLAIMS: ReadonlySet<string> = new Set([
+  'sub',
+  'iss',
+  'iat',
+  'exp',
+  'nbf',
+  'aud',
+  'jti',
+  'act',
+  'groups',
+  'subjectType',
+  'name',
+]);
+
+/**
+ * Strip any reserved keys from a custom-claims object. In development we
+ * log a warning so library users notice the collision; in production we
+ * silently drop (the safe default — a misbehaving plugin shouldn't be able
+ * to break token issuance).
+ */
+export function stripReservedClaims(
+  claims: Record<string, unknown> | undefined,
+  context: string,
+): Record<string, unknown> {
+  if (!claims)
+    return {};
+  const out: Record<string, unknown> = {};
+  let stripped: string[] | undefined;
+  for (const [key, value] of Object.entries(claims)) {
+    if (RESERVED_JWT_CLAIMS.has(key)) {
+      (stripped ??= []).push(key);
+      continue;
+    }
+    out[key] = value;
+  }
+  if (stripped && typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
+    console.warn(`[fortress/jwt] dropping reserved claim(s) from ${context}: ${stripped.join(', ')}`);
+  }
+  return out;
+}
+
+/**
  * Encode a secret string to Uint8Array for jose.
  */
 function encodeSecret(secret: string): Uint8Array {
@@ -40,12 +91,17 @@ export async function signAccessToken(
 ): Promise<string> {
   const [signingKey] = normalizeSecrets(secret);
 
+  // Strip reserved claim names from customClaims before spreading — a caller
+  // (or a plugin contributing via enrichTokenClaims) MUST NOT be able to
+  // overwrite `act`, `sub`, `groups`, etc. (See RESERVED_JWT_CLAIMS.)
+  const safeCustom = stripReservedClaims(claims.customClaims, 'signAccessToken.customClaims');
+
   return new SignJWT({
     name: claims.name,
     subjectType: claims.subjectType,
     groups: claims.groups,
     ...(claims.act ? { act: claims.act } : {}),
-    ...(claims.customClaims ?? {}),
+    ...safeCustom,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
@@ -57,16 +113,25 @@ export async function signAccessToken(
 
 /**
  * Verify a JWT access token. Tries each secret in order for rotation support.
+ *
+ * Pins `alg: HS256` and (when supplied) the expected `issuer`. jose already
+ * rejects `alg: none` by default; the explicit allowlist is defense in
+ * depth against future jose behavioural drift and against confused-deputy
+ * attacks if anyone later adds asymmetric key support.
  */
 export async function verifyAccessToken(
   token: string,
   secret: string | string[],
+  options?: { issuer?: string },
 ): Promise<TokenClaims> {
   const secrets = normalizeSecrets(secret);
+  const verifyOptions: { algorithms: string[]; issuer?: string } = { algorithms: ['HS256'] };
+  if (options?.issuer)
+    verifyOptions.issuer = options.issuer;
 
   for (const key of secrets) {
     try {
-      const { payload } = await jwtVerify(token, key);
+      const { payload } = await jwtVerify(token, key, verifyOptions);
       return {
         sub: Number(payload.sub),
         subjectType: (payload.subjectType as SubjectType | undefined) ?? 'USER',

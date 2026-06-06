@@ -1,12 +1,12 @@
 /** Core operators that all DatabaseAdapter implementations MUST support */
-export type CoreOperator = '=' | '!=' | 'in' | 'gt' | 'lt' | 'gte' | 'lte';
+export type CoreOperator = '=' | '!=' | 'in' | 'gt' | 'lt' | 'gte' | 'lte' | 'isNull';
 
 /** A single condition in a database query, joined with AND by the adapter. */
 export interface WhereClause {
   field: string;
   /**
    * Open string — core uses CoreOperator values.
-   *  Adapters MAY support additional operators: 'like', 'isNull', 'between', etc.
+   *  Adapters MAY support additional operators: 'like', 'between', etc.
    *  Adapters throw on unsupported operators at runtime.
    */
   operator: CoreOperator | (string & {});

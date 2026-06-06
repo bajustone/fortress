@@ -10,6 +10,7 @@
 
 import type { ScopeRule } from '../../adapters/database/types';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface DataIsolationScope {
   /** Scope name for identification and bypass control */
@@ -26,9 +27,39 @@ export interface DataIsolationConfig {
   scopes: DataIsolationScope[];
 }
 
-// Track bypassed scopes via a module-level set (per-request bypass context)
-const bypassedScopes = new Set<string>();
-let bypassAll = false;
+/**
+ * Per-request bypass state. Stored in `AsyncLocalStorage` so concurrent
+ * requests don't trample each other's `unscoped()` / `withoutScope()`
+ * windows. The pre-fix implementation used module-level globals — one
+ * request's `unscoped()` await would silently disable isolation for every
+ * other in-flight request handling the same async tick (H4).
+ *
+ * Runtime support: `AsyncLocalStorage` is Node core and is implemented by
+ * Bun, Deno, Cloudflare Workers (with the `nodejs_compat` flag and a
+ * compatibility date of 2024-09-23 or later), and Vercel Edge. This plugin
+ * uses only the universally-supported subset — `run()` and `getStore()`,
+ * never `enterWith()`/`disable()` — and wraps native async callbacks, so the
+ * workerd "thenable context-loss" caveat does not apply. The only hot-path
+ * call is the cheap `getStore()` read in `scopeRules`. This is also the
+ * direction of the TC39 AsyncContext proposal (Stage 2), so the approach is
+ * standards-track rather than a Node-specific hack.
+ *
+ * The dependency is scoped to this module — importing the main
+ * `@bajustone/fortress` entry only pulls in plugin *types*, not
+ * `node:async_hooks`, so it loads only when this plugin is actually used.
+ * On a runtime that genuinely lacks `node:async_hooks`, importing the
+ * plugin throws at import time.
+ */
+interface BypassState {
+  all: boolean;
+  scopes: Set<string>;
+}
+
+const bypassStore = new AsyncLocalStorage<BypassState>();
+
+function currentBypassState(): BypassState | undefined {
+  return bypassStore.getStore();
+}
 
 export interface DataIsolationMethods {
   withoutScope: <T>(scopeName: string, fn: () => Promise<T>) => Promise<T>;
@@ -55,14 +86,15 @@ export function dataIsolation(config: DataIsolationConfig): FortressPlugin & { r
     }],
 
     async scopeRules(userId: number, model: string, ctx: PluginContext): Promise<ScopeRule | null> {
-      if (bypassAll)
+      const state = currentBypassState();
+      if (state?.all)
         return null;
 
       const filters: ScopeRule['filters'] = [];
       const defaults: ScopeRule['defaults'] = {};
 
       for (const scope of config.scopes) {
-        if (bypassedScopes.has(scope.name))
+        if (state?.scopes.has(scope.name))
           continue;
 
         // Check if this scope applies to the queried model
@@ -85,29 +117,30 @@ export function dataIsolation(config: DataIsolationConfig): FortressPlugin & { r
       /**
        * Execute a callback with a specific scope bypassed.
        * Queries within the callback will not have the named scope filter applied.
+       *
+       * The bypass is async-context-local: it applies only to async work
+       * spawned inside `fn` and never leaks across concurrent requests.
        */
       async withoutScope<T>(scopeName: string, fn: () => Promise<T>): Promise<T> {
-        bypassedScopes.add(scopeName);
-        try {
-          return await fn();
-        }
-        finally {
-          bypassedScopes.delete(scopeName);
-        }
+        const existing = currentBypassState();
+        const nextScopes = new Set(existing?.scopes ?? []);
+        nextScopes.add(scopeName);
+        const next: BypassState = { all: existing?.all ?? false, scopes: nextScopes };
+        return bypassStore.run(next, fn);
       },
 
       /**
        * Execute a callback with all scopes bypassed.
-       * Use with caution — no row-level isolation is applied.
+       * Use with caution \u2014 no row-level isolation is applied.
+       *
+       * The bypass is async-context-local. Calls outside the callback (and
+       * concurrent requests running on different async contexts) are
+       * unaffected.
        */
       async unscoped<T>(fn: () => Promise<T>): Promise<T> {
-        bypassAll = true;
-        try {
-          return await fn();
-        }
-        finally {
-          bypassAll = false;
-        }
+        const existing = currentBypassState();
+        const next: BypassState = { all: true, scopes: new Set(existing?.scopes ?? []) };
+        return bypassStore.run(next, fn);
       },
     }),
   };

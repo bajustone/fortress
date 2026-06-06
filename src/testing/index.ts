@@ -89,6 +89,16 @@ const CREATE_TABLES_SQL = `
     conditions TEXT,
     description TEXT
   );
+  -- M8 fix: SQL's plain UNIQUE treats two NULL conditions as distinct,
+  -- which would let findOrCreatePermission insert duplicate rows for the
+  -- same (resource, action, effect, conditions=NULL) tuple under load.
+  -- Split partial indexes cover both halves.
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_permission_no_conditions
+    ON fortress_permission (resource, action, effect)
+    WHERE conditions IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_permission_with_conditions
+    ON fortress_permission (resource, action, effect, conditions)
+    WHERE conditions IS NOT NULL;
 
   CREATE TABLE IF NOT EXISTS fortress_role (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,16 +118,30 @@ const CREATE_TABLES_SQL = `
     role_id INTEGER NOT NULL REFERENCES fortress_role(id) ON DELETE CASCADE,
     subject_type TEXT NOT NULL,
     subject_id INTEGER NOT NULL,
-    tenant_id TEXT
+    tenant_id TEXT,
+    UNIQUE (role_id, subject_type, subject_id, tenant_id)
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_role_binding_global
+    ON fortress_role_binding (role_id, subject_type, subject_id)
+    WHERE tenant_id IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_role_binding_tenant
+    ON fortress_role_binding (role_id, subject_type, subject_id, tenant_id)
+    WHERE tenant_id IS NOT NULL;
 
   CREATE TABLE IF NOT EXISTS fortress_direct_permission_binding (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     permission_id INTEGER NOT NULL REFERENCES fortress_permission(id) ON DELETE CASCADE,
     subject_type TEXT NOT NULL,
     subject_id INTEGER NOT NULL,
-    tenant_id TEXT
+    tenant_id TEXT,
+    UNIQUE (permission_id, subject_type, subject_id, tenant_id)
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_direct_permission_binding_global
+    ON fortress_direct_permission_binding (permission_id, subject_type, subject_id)
+    WHERE tenant_id IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_direct_permission_binding_tenant
+    ON fortress_direct_permission_binding (permission_id, subject_type, subject_id, tenant_id)
+    WHERE tenant_id IS NOT NULL;
 
   CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -267,6 +291,7 @@ const CREATE_TABLES_SQL = `
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    flow_id TEXT NOT NULL UNIQUE,
     client_id TEXT NOT NULL,
     redirect_uri TEXT NOT NULL,
     scope TEXT,
@@ -274,6 +299,11 @@ const CREATE_TABLES_SQL = `
     code_challenge TEXT,
     code_challenge_method TEXT,
     nonce TEXT,
+    -- H6 fix: subject the flow is bound to. Nullable so the login-redirect
+    -- path can claim it on the first authenticated touch (trust-on-first-use).
+    user_id INTEGER,
+    -- Atomic approval/denial single-use claim.
+    used_at INTEGER,
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );

@@ -77,7 +77,11 @@ export async function isPasswordBreached(
     });
 
     if (!response.ok) {
-      // Fail open on API errors — don't block registration due to HIBP downtime
+      // Fail open on API errors — don't block registration due to HIBP downtime.
+      // L-tier: log so operators notice when the breach check stops working.
+      console.warn(
+        `[fortress/password-policy] HIBP range API returned HTTP ${response.status}; failing open for this check.`,
+      );
       return false;
     }
 
@@ -88,8 +92,11 @@ export async function isPasswordBreached(
 
     return data.includes(suffix);
   }
-  catch {
-    // Fail open on network errors
+  catch (err) {
+    // Fail open on network errors. Log so operators notice the control is down.
+    console.warn(
+      `[fortress/password-policy] HIBP range API unreachable (${(err as Error).message ?? err}); failing open for this check.`,
+    );
     return false;
   }
 }

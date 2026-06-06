@@ -1,4 +1,4 @@
-import type { DatabaseAdapter } from '../../adapters/database';
+import type { DatabaseAdapter, WhereClause } from '../../adapters/database';
 import type { FortressConfig } from '../config';
 import type { Unsubscribe } from '../observability/listener-list';
 import type { FortressLogger } from '../observability/logger';
@@ -22,7 +22,7 @@ import { createInternalAdapter } from '../internal-adapter';
 import { createListenerList } from '../observability/listener-list';
 import { SILENT_LOGGER } from '../observability/logger';
 import { createPermissionCache, subjectCacheKey } from './permission-cache';
-import { evaluatePermissions } from './permission-evaluator';
+import { evaluatePermissions, withinCredentialScope } from './permission-evaluator';
 import { loadResourceFile, pullResources, pushResources, writeResourceFile } from './resource-sync';
 
 export interface IamEvent {
@@ -165,6 +165,86 @@ export function createIamService(
       )
     : null;
 
+  function tenantWhere(tenantId?: string): { field: 'tenantId'; operator: '=' | 'isNull'; value: string | null }[] {
+    return tenantId == null
+      ? [{ field: 'tenantId', operator: 'isNull', value: null }]
+      : [{ field: 'tenantId', operator: '=', value: tenantId }];
+  }
+
+  /**
+   * Race-safe find-then-create for the idempotency helpers below. The unique
+   * indexes guarantee no duplicate row; under genuine concurrency the losing
+   * INSERT throws a unique-constraint error, which we treat as "the winner
+   * already created it" after re-checking. Returns `true` if THIS call
+   * inserted the row, `false` if it already existed (before or via the race).
+   */
+  async function insertIfMissing(
+    model: string,
+    where: WhereClause[],
+    data: Record<string, unknown>,
+  ): Promise<boolean> {
+    const existing = await db.findOne<{ id?: number }>({ model, where });
+    if (existing)
+      return false;
+    try {
+      await db.create({ model, data });
+      return true;
+    }
+    catch (err) {
+      const winner = await db.findOne<{ id?: number }>({ model, where });
+      if (winner)
+        return false;
+      throw err;
+    }
+  }
+
+  async function createRoleBindingIfMissing(
+    subjectType: SubjectType,
+    subjectId: number,
+    roleId: number,
+    tenantId?: string,
+  ): Promise<boolean> {
+    return insertIfMissing(
+      'role_binding',
+      [
+        { field: 'roleId', operator: '=', value: roleId },
+        { field: 'subjectType', operator: '=', value: subjectType },
+        { field: 'subjectId', operator: '=', value: subjectId },
+        ...tenantWhere(tenantId),
+      ],
+      { roleId, subjectType, subjectId, tenantId: tenantId ?? null },
+    );
+  }
+
+  async function createDirectPermissionBindingIfMissing(
+    subjectType: SubjectType,
+    subjectId: number,
+    permissionId: number,
+    tenantId?: string,
+  ): Promise<boolean> {
+    return insertIfMissing(
+      'direct_permission_binding',
+      [
+        { field: 'permissionId', operator: '=', value: permissionId },
+        { field: 'subjectType', operator: '=', value: subjectType },
+        { field: 'subjectId', operator: '=', value: subjectId },
+        ...tenantWhere(tenantId),
+      ],
+      { permissionId, subjectType, subjectId, tenantId: tenantId ?? null },
+    );
+  }
+
+  async function addUserToGroupIfMissing(groupId: number, userId: number): Promise<boolean> {
+    return insertIfMissing(
+      'group_user',
+      [
+        { field: 'groupId', operator: '=', value: groupId },
+        { field: 'userId', operator: '=', value: userId },
+      ],
+      { groupId, userId },
+    );
+  }
+
   return {
     async checkPermission(
       subject: Subject,
@@ -205,7 +285,8 @@ export function createIamService(
           : { subjectType: subject.type, subjectId: subject.id, ...context?.user },
       };
 
-      const allowed = evaluatePermissions(permissions, resource, action, evaluationMode, enrichedContext);
+      const allowed = withinCredentialScope(context?.credentialScopes, resource, action)
+        && evaluatePermissions(permissions, resource, action, evaluationMode, enrichedContext);
       const durationSeconds = (performance.now() - start) / 1000;
 
       // Span only on deny — allow is metric fodder, deny is security-interesting.
@@ -274,31 +355,33 @@ export function createIamService(
       await db.delete({ model: 'role_permission', where: [{ field: 'roleId', operator: '=', value: roleId }] });
       await db.delete({ model: 'role_binding', where: [{ field: 'roleId', operator: '=', value: roleId }] });
       await db.delete({ model: 'role', where: [{ field: 'id', operator: '=', value: roleId }] });
+      // M6 fix: a deleted role can affect any subject via group bindings.
+      // We don't know which subjects were bound to it across tenants, so a
+      // global cache invalidation is the only safe option — without this,
+      // a stale ALLOW could survive in cache for up to `cache.ttlSeconds`.
+      cache?.invalidateAll();
       emit({ eventType: 'ROLE_DELETED', targetId: roleId, targetType: 'role' });
     },
 
     async bindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string): Promise<void> {
-      await db.create({
-        model: 'role_binding',
-        data: { roleId, subjectType, subjectId, tenantId: tenantId ?? null },
-      });
+      const inserted = await createRoleBindingIfMissing(subjectType, subjectId, roleId, tenantId);
+      if (!inserted)
+        return;
       emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId, tenantId } });
     },
 
     async bindRoleToUser(userId: number, roleId: number, tenantId?: string): Promise<void> {
-      await db.create({
-        model: 'role_binding',
-        data: { roleId, subjectType: 'USER', subjectId: userId, tenantId: tenantId ?? null },
-      });
+      const inserted = await createRoleBindingIfMissing('USER', userId, roleId, tenantId);
+      if (!inserted)
+        return;
       cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'ROLE_BOUND', actorId: userId, targetId: roleId, targetType: 'role', metadata: { subjectType: 'USER', tenantId } });
     },
 
     async bindRoleToGroup(groupId: number, roleId: number, tenantId?: string): Promise<void> {
-      await db.create({
-        model: 'role_binding',
-        data: { roleId, subjectType: 'GROUP', subjectId: groupId, tenantId: tenantId ?? null },
-      });
+      const inserted = await createRoleBindingIfMissing('GROUP', groupId, roleId, tenantId);
+      if (!inserted)
+        return;
       cache?.invalidateAll();
       emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType: 'GROUP', groupId, tenantId } });
     },
@@ -322,10 +405,9 @@ export function createIamService(
     async bindPermissionToUser(userId: number, permission: PermissionInput, tenantId?: string): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
-      await db.create({
-        model: 'direct_permission_binding',
-        data: { permissionId: perm.id, subjectType: 'USER', subjectId: userId, tenantId: tenantId ?? null },
-      });
+      const inserted = await createDirectPermissionBindingIfMissing('USER', userId, perm.id, tenantId);
+      if (!inserted)
+        return;
       cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'USER', tenantId } });
     },
@@ -333,10 +415,9 @@ export function createIamService(
     async bindPermissionToGroup(groupId: number, permission: PermissionInput, tenantId?: string): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
-      await db.create({
-        model: 'direct_permission_binding',
-        data: { permissionId: perm.id, subjectType: 'GROUP', subjectId: groupId, tenantId: tenantId ?? null },
-      });
+      const inserted = await createDirectPermissionBindingIfMissing('GROUP', groupId, perm.id, tenantId);
+      if (!inserted)
+        return;
       cache?.invalidateAll();
       emit({ eventType: 'PERMISSION_CHANGED', targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'GROUP', groupId, tenantId } });
     },
@@ -375,10 +456,9 @@ export function createIamService(
     },
 
     async addUserToGroup(groupId: number, userId: number): Promise<void> {
-      await db.create({
-        model: 'group_user',
-        data: { groupId, userId },
-      });
+      const inserted = await addUserToGroupIfMissing(groupId, userId);
+      if (!inserted)
+        return;
       cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'GROUP_MEMBER_ADDED', actorId: userId, targetId: groupId, targetType: 'group' });
     },
@@ -775,15 +855,9 @@ export function createIamService(
       roleId: number,
       tenantId?: string,
     ): Promise<void> {
-      await db.create({
-        model: 'role_binding',
-        data: {
-          roleId,
-          subjectType: 'SERVICE_ACCOUNT',
-          subjectId: serviceAccountId,
-          tenantId: tenantId ?? null,
-        },
-      });
+      const inserted = await createRoleBindingIfMissing('SERVICE_ACCOUNT', serviceAccountId, roleId, tenantId);
+      if (!inserted)
+        return;
       cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));
       emit({
         eventType: 'ROLE_BOUND',
@@ -821,15 +895,9 @@ export function createIamService(
     ): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
-      await db.create({
-        model: 'direct_permission_binding',
-        data: {
-          permissionId: perm.id,
-          subjectType: 'SERVICE_ACCOUNT',
-          subjectId: serviceAccountId,
-          tenantId: tenantId ?? null,
-        },
-      });
+      const inserted = await createDirectPermissionBindingIfMissing('SERVICE_ACCOUNT', serviceAccountId, perm.id, tenantId);
+      if (!inserted)
+        return;
       cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));
       emit({
         eventType: 'PERMISSION_CHANGED',
