@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.2] - 2026-06-06
 
 ### Security
 - Remediation pass for the 2026-06-05 independent review (tenancy plugin skeleton findings remain deferred/unmounted):
