@@ -68,18 +68,30 @@ optional `rawQuery`) so even non-SQL stores are workable.
 
 ## What the CI matrix runs today
 
-The shipped GitHub Actions workflow
-([`docs/ci/github-actions.yml`](./ci/github-actions.yml)) currently runs
-on **Bun latest, ubuntu-latest** against the test adapter (SQLite). The
-maintainer also runs a periodic local matrix:
+The repository workflow ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml))
+executes:
 
-- Bun + better-sqlite3
-- Node 20 + better-sqlite3
-- Node 20 + Postgres via testcontainers (slow; not in CI)
-- Deno + better-sqlite3 (smoke only)
+- **`lint`** — eslint + `tsc --noEmit` (Bun, ubuntu-latest).
+- **`unit`** — the full SQLite test suite across a runtime matrix:
+  **Bun**, **Node 20**, and **Node 22**. Bun runs `bun:sqlite`; the Node
+  jobs run the same vitest suite under `better-sqlite3`, keeping the
+  Node-compatible build honest.
+- **`integration`** — the PostgreSQL suite via testcontainers
+  (`bun run test:integration`), covering the `pg` dialect, the tenancy
+  connection-pinning / `search_path` isolation, the migration upgrade
+  fixture, and the framework adapters end-to-end. This is the heavier job,
+  so it runs on pull requests, pushes to `main`, and a **nightly cron**
+  rather than every branch push.
+- **`jsr-check`** — `deno publish --dry-run` to guard JSR publishability.
 
-Expanding the public CI matrix to cover all three runtimes + Postgres
-is tracked as a future ops task.
+The consumer-facing drop-in workflow
+([`docs/ci/github-actions.yml`](./ci/github-actions.yml)) is a separate
+template that gates *your* deploys on Fortress's drift checkers
+(`runFortressChecks`); it is not the library's own matrix.
+
+> Deno and Cloudflare Workers remain smoke-tested locally rather than in
+> the public matrix (no first-class GitHub runner for the workerd DB
+> story). MySQL is smoke-tested only.
 
 ## What's intentionally out of scope
 

@@ -1,0 +1,36 @@
+-- Fortress migration 0002: initial Fortress schema (SQLite) — rollback
+
+DROP TABLE IF EXISTS fortress_webauthn_challenge;
+DROP TABLE IF EXISTS fortress_webauthn_credential;
+DROP TABLE IF EXISTS fortress_webhook_delivery;
+DROP TABLE IF EXISTS fortress_webhook_endpoint;
+DROP TABLE IF EXISTS fortress_audit_log;
+DROP TABLE IF EXISTS fortress_account_lockout;
+DROP TABLE IF EXISTS fortress_user_scope_assignment;
+DROP TABLE IF EXISTS fortress_oauth_signing_key;
+DROP TABLE IF EXISTS fortress_oauth_pending_flow;
+DROP TABLE IF EXISTS fortress_oauth_refresh_token;
+DROP TABLE IF EXISTS fortress_oauth_access_token;
+DROP TABLE IF EXISTS fortress_oauth_authorization_code;
+DROP TABLE IF EXISTS fortress_oauth_client;
+DROP TABLE IF EXISTS fortress_tenant_user;
+DROP TABLE IF EXISTS fortress_tenant;
+DROP TABLE IF EXISTS fortress_social_account;
+DROP TABLE IF EXISTS fortress_trusted_device;
+DROP TABLE IF EXISTS fortress_backup_code;
+DROP TABLE IF EXISTS fortress_two_factor_secret;
+DROP TABLE IF EXISTS fortress_api_key;
+DROP TABLE IF EXISTS fortress_magic_link_token;
+DROP TABLE IF EXISTS fortress_email_verification_token;
+DROP TABLE IF EXISTS fortress_direct_permission_binding;
+DROP TABLE IF EXISTS fortress_role_binding;
+DROP TABLE IF EXISTS fortress_role_permission;
+DROP TABLE IF EXISTS fortress_role;
+DROP TABLE IF EXISTS fortress_permission;
+DROP TABLE IF EXISTS fortress_resource;
+DROP TABLE IF EXISTS fortress_service_account;
+DROP TABLE IF EXISTS fortress_group_user;
+DROP TABLE IF EXISTS fortress_group;
+DROP TABLE IF EXISTS fortress_refresh_token;
+DROP TABLE IF EXISTS fortress_login_identifier;
+DROP TABLE IF EXISTS fortress_user;

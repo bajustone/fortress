@@ -86,10 +86,77 @@ export interface ChainVerificationResult {
   brokenLinks: { entryId: number; expected: string; actual: string | null }[];
 }
 
+/** Serialization formats supported by {@link AuditLogMethods.exportEntries}. */
+export type AuditLogExportFormat = 'json' | 'csv';
+
 export interface AuditLogMethods {
   getAuditLog: (options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>;
   logCustomEvent: (event: CustomAuditEvent) => Promise<void>;
   verifyChain: () => Promise<ChainVerificationResult>;
+  exportEntries: (format?: AuditLogExportFormat, options?: AuditLogQueryOptions) => Promise<string>;
+}
+
+/** Stable column order for the CSV export. */
+const AUDIT_EXPORT_COLUMNS = [
+  'id',
+  'timestamp',
+  'eventType',
+  'actorId',
+  'actorType',
+  'targetId',
+  'targetType',
+  'ipAddress',
+  'userAgent',
+  'outcome',
+  'metadata',
+  'previousHash',
+  'createdAt',
+] as const;
+
+// RFC 4180: a cell must be quoted when it contains a comma, quote, or newline.
+const CSV_SPECIAL_RE = /[",\n\r]/;
+
+function toCsvCell(value: unknown): string {
+  if (value == null)
+    return '';
+  const str = value instanceof Date ? value.toISOString() : String(value);
+  // Quote and escape embedded quotes by doubling them.
+  if (CSV_SPECIAL_RE.test(str))
+    return `"${str.replace(/"/g, '""')}"`;
+  return str;
+}
+
+function entriesToCsv(entries: AuditLogEntry[]): string {
+  const header = AUDIT_EXPORT_COLUMNS.join(',');
+  const rows = entries.map((entry) => {
+    const record = entry as unknown as Record<string, unknown>;
+    return AUDIT_EXPORT_COLUMNS.map(column => toCsvCell(record[column])).join(',');
+  });
+  return [header, ...rows].join('\n');
+}
+
+async function queryAuditLog(
+  db: import('../../adapters/database').DatabaseAdapter,
+  options?: AuditLogQueryOptions,
+): Promise<AuditLogEntry[]> {
+  const where: WhereClause[] = [];
+
+  if (options?.userId != null)
+    where.push({ field: 'actorId', operator: '=', value: options.userId });
+  if (options?.eventType)
+    where.push({ field: 'eventType', operator: '=', value: options.eventType });
+  if (options?.from)
+    where.push({ field: 'timestamp', operator: '>=', value: options.from });
+  if (options?.to)
+    where.push({ field: 'timestamp', operator: '<=', value: options.to });
+
+  return db.findMany<AuditLogEntry>({
+    model: 'audit_log',
+    where: where.length > 0 ? where : undefined,
+    limit: options?.limit,
+    offset: options?.offset,
+    sortBy: { field: 'timestamp', direction: 'desc' },
+  });
 }
 /**
  * Audit log plugin factory. Returns a {@link FortressPlugin} that records
@@ -251,31 +318,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
 
     methods: ctx => ({
       async getAuditLog(options?: AuditLogQueryOptions): Promise<AuditLogEntry[]> {
-        const where: WhereClause[] = [];
-
-        if (options?.userId != null) {
-          where.push({ field: 'actorId', operator: '=', value: options.userId });
-        }
-
-        if (options?.eventType) {
-          where.push({ field: 'eventType', operator: '=', value: options.eventType });
-        }
-
-        if (options?.from) {
-          where.push({ field: 'timestamp', operator: '>=', value: options.from });
-        }
-
-        if (options?.to) {
-          where.push({ field: 'timestamp', operator: '<=', value: options.to });
-        }
-
-        return ctx.db.findMany<AuditLogEntry>({
-          model: 'audit_log',
-          where: where.length > 0 ? where : undefined,
-          limit: options?.limit,
-          offset: options?.offset,
-          sortBy: { field: 'timestamp', direction: 'desc' },
-        });
+        return queryAuditLog(ctx.db, options);
       },
 
       async logCustomEvent(event: CustomAuditEvent): Promise<void> {
@@ -295,6 +338,16 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
           outcome: event.outcome ?? 'success',
           metadata: event.metadata ? JSON.stringify(event.metadata) : null,
         });
+      },
+
+      async exportEntries(
+        format: AuditLogExportFormat = 'json',
+        options?: AuditLogQueryOptions,
+      ): Promise<string> {
+        const entries = await queryAuditLog(ctx.db, options);
+        if (format === 'csv')
+          return entriesToCsv(entries);
+        return JSON.stringify(entries, null, 2);
       },
 
       async verifyChain(): Promise<ChainVerificationResult> {

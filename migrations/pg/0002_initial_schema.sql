@@ -1,0 +1,363 @@
+-- Fortress migration 0002: initial Fortress schema (PostgreSQL)
+
+CREATE TABLE IF NOT EXISTS fortress_user (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  password_hash TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  email_verified BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_login_identifier (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  type VARCHAR(20) NOT NULL,
+  value VARCHAR(255) NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS fortress_refresh_token (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  token_hash VARCHAR(64) NOT NULL UNIQUE,
+  token_family VARCHAR(64) NOT NULL,
+  is_revoked BOOLEAN NOT NULL DEFAULT false,
+  expires_at TIMESTAMP NOT NULL,
+  ip_address VARCHAR(45),
+  user_agent TEXT,
+  device_name TEXT,
+  last_active_at TIMESTAMP,
+  fingerprint_hash VARCHAR(64),
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_group (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL UNIQUE,
+  description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fortress_group_user (
+  group_id INTEGER NOT NULL REFERENCES fortress_group(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS fortress_service_account (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL UNIQUE,
+  display_name VARCHAR(255),
+  description TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_resource (
+  name VARCHAR(100) PRIMARY KEY,
+  description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fortress_permission (
+  id SERIAL PRIMARY KEY,
+  resource VARCHAR(100) NOT NULL REFERENCES fortress_resource(name) ON DELETE CASCADE,
+  action VARCHAR(100) NOT NULL,
+  effect VARCHAR(10) NOT NULL DEFAULT 'ALLOW',
+  conditions JSONB,
+  description TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_permission_no_conditions
+  ON fortress_permission (resource, action, effect)
+  WHERE conditions IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_permission_with_conditions
+  ON fortress_permission (resource, action, effect, conditions)
+  WHERE conditions IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fortress_role (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL UNIQUE,
+  description TEXT,
+  is_system BOOLEAN NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS fortress_role_permission (
+  role_id INTEGER NOT NULL REFERENCES fortress_role(id) ON DELETE CASCADE,
+  permission_id INTEGER NOT NULL REFERENCES fortress_permission(id) ON DELETE CASCADE,
+  PRIMARY KEY (role_id, permission_id)
+);
+
+CREATE TABLE IF NOT EXISTS fortress_role_binding (
+  id SERIAL PRIMARY KEY,
+  role_id INTEGER NOT NULL REFERENCES fortress_role(id) ON DELETE CASCADE,
+  subject_type VARCHAR(20) NOT NULL,
+  subject_id INTEGER NOT NULL,
+  tenant_id VARCHAR(100),
+  UNIQUE (role_id, subject_type, subject_id, tenant_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_role_binding_global
+  ON fortress_role_binding (role_id, subject_type, subject_id)
+  WHERE tenant_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_role_binding_tenant
+  ON fortress_role_binding (role_id, subject_type, subject_id, tenant_id)
+  WHERE tenant_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fortress_direct_permission_binding (
+  id SERIAL PRIMARY KEY,
+  permission_id INTEGER NOT NULL REFERENCES fortress_permission(id) ON DELETE CASCADE,
+  subject_type VARCHAR(20) NOT NULL,
+  subject_id INTEGER NOT NULL,
+  tenant_id VARCHAR(100),
+  UNIQUE (permission_id, subject_type, subject_id, tenant_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_direct_permission_binding_global
+  ON fortress_direct_permission_binding (permission_id, subject_type, subject_id)
+  WHERE tenant_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_direct_permission_binding_tenant
+  ON fortress_direct_permission_binding (permission_id, subject_type, subject_id, tenant_id)
+  WHERE tenant_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  token TEXT NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_magic_link_token (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255) NOT NULL,
+  token VARCHAR(64) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_api_key (
+  id SERIAL PRIMARY KEY,
+  subject_type VARCHAR(20) NOT NULL,
+  subject_id INTEGER NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  key_hash VARCHAR(64) NOT NULL UNIQUE,
+  key_prefix VARCHAR(20) NOT NULL,
+  scopes TEXT,
+  expires_at TIMESTAMP,
+  last_used_at TIMESTAMP,
+  is_revoked BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS api_key_subject_idx ON fortress_api_key (subject_type, subject_id);
+
+CREATE TABLE IF NOT EXISTS fortress_two_factor_secret (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL UNIQUE REFERENCES fortress_user(id) ON DELETE CASCADE,
+  secret TEXT NOT NULL,
+  is_enabled BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_backup_code (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  is_used BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_trusted_device (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  device_hash VARCHAR(64) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  last_used_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_social_account (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  provider VARCHAR(50) NOT NULL,
+  provider_account_id VARCHAR(255) NOT NULL,
+  email VARCHAR(255),
+  access_token TEXT,
+  refresh_token TEXT,
+  token_expires_at TIMESTAMP,
+  profile JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now(),
+  UNIQUE (user_id, provider)
+);
+
+CREATE TABLE IF NOT EXISTS fortress_tenant (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  tax_id VARCHAR(100) NOT NULL UNIQUE,
+  description TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_tenant_user (
+  tenant_id INTEGER NOT NULL REFERENCES fortress_tenant(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY (tenant_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS fortress_oauth_client (
+  id SERIAL PRIMARY KEY,
+  client_id VARCHAR(255) NOT NULL UNIQUE,
+  client_secret_hash TEXT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  redirect_uris TEXT NOT NULL,
+  grant_types TEXT NOT NULL,
+  allowed_scopes TEXT,
+  token_endpoint_auth_method TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
+  id SERIAL PRIMARY KEY,
+  code VARCHAR(255) NOT NULL UNIQUE,
+  client_id VARCHAR(255) NOT NULL,
+  user_id INTEGER NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  scope TEXT,
+  code_challenge TEXT,
+  code_challenge_method VARCHAR(10),
+  nonce TEXT,
+  auth_time INTEGER,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
+  id SERIAL PRIMARY KEY,
+  token VARCHAR(255) NOT NULL UNIQUE,
+  client_id VARCHAR(255) NOT NULL,
+  user_id INTEGER,
+  scope TEXT,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_oauth_refresh_token (
+  id SERIAL PRIMARY KEY,
+  token VARCHAR(255) NOT NULL UNIQUE,
+  family_id VARCHAR(64) NOT NULL,
+  client_id VARCHAR(255) NOT NULL,
+  user_id INTEGER NOT NULL,
+  scope TEXT,
+  issued_at TIMESTAMP NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,
+  parent_id INTEGER,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
+  id SERIAL PRIMARY KEY,
+  flow_id TEXT NOT NULL UNIQUE,
+  client_id VARCHAR(255) NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  scope TEXT,
+  state VARCHAR(255) NOT NULL,
+  code_challenge TEXT,
+  code_challenge_method VARCHAR(10),
+  nonce TEXT,
+  user_id INTEGER,
+  used_at TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_oauth_signing_key (
+  id SERIAL PRIMARY KEY,
+  kid VARCHAR(64) NOT NULL UNIQUE,
+  alg VARCHAR(16) NOT NULL,
+  public_jwk TEXT NOT NULL,
+  private_jwk TEXT NOT NULL,
+  rotated_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_user_scope_assignment (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  scope_name VARCHAR(100) NOT NULL,
+  scope_value VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_account_lockout (
+  id SERIAL PRIMARY KEY,
+  identifier VARCHAR(255) NOT NULL UNIQUE,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  last_failed_at TIMESTAMP,
+  locked_until TIMESTAMP,
+  lockout_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_audit_log (
+  id SERIAL PRIMARY KEY,
+  timestamp TIMESTAMP NOT NULL DEFAULT now(),
+  event_type VARCHAR(100) NOT NULL,
+  actor_id INTEGER,
+  actor_type VARCHAR(20) NOT NULL DEFAULT 'USER',
+  target_id INTEGER,
+  target_type VARCHAR(50),
+  ip_address VARCHAR(45),
+  user_agent TEXT,
+  outcome VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
+  metadata JSONB,
+  previous_hash TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
+  id SERIAL PRIMARY KEY,
+  url TEXT NOT NULL,
+  events TEXT NOT NULL,
+  secret TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_webhook_delivery (
+  id SERIAL PRIMARY KEY,
+  endpoint_id INTEGER NOT NULL REFERENCES fortress_webhook_endpoint(id) ON DELETE CASCADE,
+  event_type VARCHAR(100) NOT NULL,
+  payload TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at TIMESTAMP,
+  next_retry_at TIMESTAMP,
+  response_status INTEGER,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_webauthn_credential (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  credential_id TEXT NOT NULL UNIQUE,
+  public_key TEXT NOT NULL,
+  counter INTEGER NOT NULL DEFAULT 0,
+  device_type VARCHAR(20) NOT NULL,
+  backed_up BOOLEAN NOT NULL DEFAULT false,
+  transports TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fortress_webauthn_challenge (
+  id SERIAL PRIMARY KEY,
+  challenge TEXT NOT NULL UNIQUE,
+  user_id INTEGER,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);

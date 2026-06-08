@@ -162,6 +162,33 @@ If a row is deleted or altered, the hash chain breaks. Auditors can walk the cha
 
 **Note:** The hash chain adds one read query per write (to fetch the last entry). For high-throughput systems where write latency matters more than tamper evidence, leave it disabled and rely on your database's own integrity guarantees.
 
+### Exporting for compliance
+
+`exportEntries` serializes audit entries to a string for retention,
+hand-off to a SIEM, or a compliance request. It accepts the same
+`AuditLogQueryOptions` as `getAuditLog`, so you can scope the export by
+user, event type, or time window.
+
+```ts
+const audit = fortress.plugins['audit-log'];
+
+// Full JSON export (default format)
+const json = await audit.exportEntries();
+
+// CSV export of one user's last quarter, for a data-subject request
+const csv = await audit.exportEntries('csv', {
+  userId: 42,
+  from: new Date('2026-01-01'),
+  to: new Date('2026-03-31'),
+});
+```
+
+The CSV output is RFC 4180-compliant: a fixed header row, one row per
+entry, with cells containing commas, quotes, or newlines quoted and their
+embedded quotes doubled. `Date` columns are emitted as ISO 8601 strings.
+Both formats stream the rows in the same order as `getAuditLog` (newest
+first).
+
 ## API Reference
 
 ### Factory
@@ -175,6 +202,9 @@ If a row is deleted or altered, the hash chain breaks. Auditors can walk the cha
 | Method | Signature | Description |
 |---|---|---|
 | `getAuditLog` | `(options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>` | Query audit log entries with optional filters |
+| `logCustomEvent` | `(event: CustomAuditEvent) => Promise<void>` | Append an application-defined event |
+| `verifyChain` | `() => Promise<ChainVerificationResult>` | Walk the hash chain and report broken links |
+| `exportEntries` | `(format?: 'json' \| 'csv', options?: AuditLogQueryOptions) => Promise<string>` | Serialize entries for compliance export (defaults to `json`) |
 
 ### Types
 

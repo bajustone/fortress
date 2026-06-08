@@ -1,19 +1,63 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  schedule:
+    # Nightly full run — exercises the heavier PostgreSQL/testcontainers matrix
+    # even on quiet days so dialect drift is caught before a release.
+    - cron: '0 6 * * *'
 
 jobs:
-  lint-test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - uses: oven-sh/setup-bun@v2
       - run: bun install
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun run test
+
+  # Unit suite (SQLite test adapter) across every supported runtime. Bun is the
+  # primary runtime; the Node jobs run the same vitest suite under Node's
+  # better-sqlite3 path so the Node-compatible build stays honest.
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [bun, node20, node22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - if: matrix.runtime == 'node20'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - if: matrix.runtime == 'node22'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bun install
+      - name: Test (bun)
+        if: matrix.runtime == 'bun'
+        run: bun run test
+      - name: Test (node)
+        if: matrix.runtime != 'bun'
+        # vitest's shebang runs it under the Node selected above.
+        run: ./node_modules/.bin/vitest run
+
+  # PostgreSQL integration suite via testcontainers. Covers the pg dialect, the
+  # tenancy connection-pinning/search_path isolation, and the framework
+  # adapters end-to-end. Heavier, so it runs on PRs, pushes to main, and the
+  # nightly schedule rather than every branch push.
+  integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run test:integration
 
   jsr-check:
     runs-on: ubuntu-latest

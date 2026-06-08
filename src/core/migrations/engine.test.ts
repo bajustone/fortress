@@ -17,21 +17,21 @@ describe('migration engine', () => {
 
     const before = await getMigrationStatus(db, dialect);
     expect(before.currentVersion).toBe(0);
-    expect(before.latestVersion).toBe(1);
-    expect(before.pending.map(migration => migration.version)).toEqual([1]);
+    expect(before.latestVersion).toBe(2);
+    expect(before.pending.map(migration => migration.version)).toEqual([1, 2]);
 
     const up = await migrateUp(db, dialect);
-    expect(up).toMatchObject({ fromVersion: 0, toVersion: 1 });
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version']);
+    expect(up).toMatchObject({ fromVersion: 0, toVersion: 2 });
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema']);
 
     const after = await getMigrationStatus(db, dialect);
-    expect(after.currentVersion).toBe(1);
+    expect(after.currentVersion).toBe(2);
     expect(after.upToDate).toBe(true);
     expect(hasMigrationDrift(await detectMigrationDrift(db, dialect))).toBe(false);
 
     const down = await migrateDown(db, dialect);
-    expect(down).toMatchObject({ fromVersion: 1, toVersion: 0 });
-    expect(down.rolledBack.map(migration => migration.name)).toEqual(['schema_version']);
+    expect(down).toMatchObject({ fromVersion: 2, toVersion: 0 });
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['initial_schema', 'schema_version']);
 
     const final = await getMigrationStatus(db, dialect);
     expect(final.hasVersionTable).toBe(false);
@@ -52,6 +52,33 @@ describe('migration engine', () => {
     const db = createTestAdapter();
     const drift = await detectMigrationDrift(db, dialect);
     expect(drift.missingTables).toEqual([]);
+    expect(drift.missingColumns).toEqual([]);
     expect(FORTRESS_TABLES.length).toBeGreaterThan(30);
+  });
+
+  it('reports a present-but-stale table missing a column as drift', async () => {
+    const db = createTestAdapter();
+    // Recreate fortress_oauth_pending_flow without the H6 `user_id` column to
+    // simulate a database provisioned before that migration landed.
+    await db.rawQuery!('DROP TABLE fortress_oauth_pending_flow');
+    await db.rawQuery!(`CREATE TABLE fortress_oauth_pending_flow (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      flow_id TEXT NOT NULL UNIQUE,
+      client_id TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      scope TEXT,
+      state TEXT NOT NULL,
+      code_challenge TEXT,
+      code_challenge_method TEXT,
+      nonce TEXT,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`);
+
+    const drift = await detectMigrationDrift(db, dialect);
+    expect(drift.missingTables).toEqual([]);
+    const flowDrift = drift.missingColumns.find(entry => entry.table === 'fortress_oauth_pending_flow');
+    expect(flowDrift?.columns).toEqual(expect.arrayContaining(['user_id', 'used_at']));
+    expect(hasMigrationDrift(drift)).toBe(true);
   });
 });

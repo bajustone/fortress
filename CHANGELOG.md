@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0] - 2026-06-08
+
+### Added
+- SQL-first initial-schema migration baseline with deep drift detection.
+- CI matrix coverage and audit export pipeline.
+- Phase 0 + Phase 1 + most of Phase 2 work from the library plan (see commit 8b94985 for scope).
+
+### Changed
+- Tenancy plugin hardened: claim-based resolution and atomic schema isolation.
+- Repo hygiene: ephemeral planning/review docs moved to `scratch/` and untracked.
+
 ## [0.1.2] - 2026-06-06
 
 ### Security
@@ -59,6 +70,14 @@
 - Observability event + alert catalog (P2-13): expanded `docs/observability.md` with the full Auth/IAM event catalog (every `eventType` Fortress emits), recommended dashboards (auth, IAM, OAuth, database), starting-point alert thresholds, and audit-log integration recipe.
 - Compatibility matrix (P2-11): `docs/compatibility.md` documenting the tested runtime/framework/database matrix and what's intentionally out of scope.
 - Hardening guide (P2-14): `docs/hardening.md` — prescriptive production hardening checklist covering identity/credentials, authorization, transport/edge, data isolation, audit/logging, crypto, and deployment hygiene. Linked from `SECURITY.md`.
+- Full initial-schema migration (P0-1): new bundled `0002_initial_schema` migration (SQLite + PostgreSQL) creates every Fortress-owned table, index, and constraint, so `migrateUp` now provisions a brand-new database end-to-end through the adapter's `rawQuery` — no Drizzle/`drizzle-kit` dependency at runtime. The migrations are the SQL-first source of truth: `createTestAdapter()` derives its schema from them via `getMigrationUpSql()`, so the test adapter and a production `migrateUp` can no longer drift. Per-release guide at `docs/migrations/0002-initial-schema.md`.
+- Deep migration drift detection: `detectMigrationDrift` now reports `missingColumns` — tables that exist but are missing a column the bundled DDL defines (partial/stale schema). Expected columns are parsed straight from the migration SQL, so the check stays adapter-agnostic. Surfaced by `checkMigrationDrift` and `fortress migrate:check`.
+- PostgreSQL migration upgrade fixture (testcontainers): provisions a bare real Postgres from the bundled migrations and asserts zero drift, catching dialect-specific issues (SERIAL, partial unique indexes, JSONB, FK drop ordering) the SQLite fixture can't.
+- Audit-log export: `auditLog.exportEntries(format?, options?)` serializes entries to JSON or RFC 4180 CSV for compliance/retention, honouring the same `AuditLogQueryOptions` filters as `getAuditLog`. Docs in `docs/plugins/audit-log.md`.
+- Public CI matrix: `.github/workflows/ci.yml` now runs the unit suite across Bun + Node 20 + Node 22, plus a PostgreSQL/testcontainers `integration` job (pg dialect, tenancy isolation, migration fixture, framework adapters) on PRs/main and a nightly cron.
+
+### Changed
+- The migration version row is now stamped solely by the runner (`migrateUp`/`migrateDown`); the `0001_schema_version` forward SQL no longer self-inserts a version row, giving a single source of version truth.
 - Examples scenario index (P2-12): `examples/README.md` maps the six plan-specified scenarios (cookie+CSRF, bearer-only API, API-key + service account, OAuth/OIDC provider, admin bootstrap + policy sync, tenancy) to the existing reference apps and recipe docs.
 - Formal security-review packet and threat model docs covering OAuth/OIDC, refresh rotation, CSRF/cookies, IAM/RBAC, API-key/service-account flows, tenancy isolation, and drift controls.
 - Tenancy: `deleteTenant`, `getMyTenants`, opt-in `/tenancy/*` routes, `onSchemaCreated`, and `dropSchemaOnDelete`.
