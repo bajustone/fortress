@@ -953,11 +953,86 @@ describe('pg: tenancy plugin', () => {
     await fortress.plugins.tenancy.addUserToTenant(user.id, t1.id);
     await fortress.plugins.tenancy.addUserToTenant(user.id, t2.id);
 
-    await fortress.plugins.tenancy.switchTenant(user.id, 't2');
+    await fortress.plugins.tenancy.switchTenant({ taxId: 't2', userId: user.id });
 
     const login = await fortress.auth.login('switch@test.com', 'password-123');
     const claims = await fortress.auth.verifyToken(login.accessToken as string);
     expect(claims.customClaims?.tenantCode).toBe('t2');
+  });
+
+  it('isolates tenant data via the transaction-pinned search_path (H2/H3)', async () => {
+    // Each tenant gets an `items` table in its own schema via onSchemaCreated.
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [
+        tenancy({
+          onSchemaCreated: async (schemaName, rawQuery) => {
+            await rawQuery(`CREATE TABLE IF NOT EXISTS ${schemaName}.items (id SERIAL PRIMARY KEY, name TEXT NOT NULL)`);
+          },
+        }),
+      ],
+    });
+
+    const tenantPlugin = fortress.config.plugins![0];
+    const base = fortress.config.database;
+
+    const tA = await fortress.plugins.tenancy.createTenant({ name: 'A', taxId: 'iso-a' });
+    const tB = await fortress.plugins.tenancy.createTenant({ name: 'B', taxId: 'iso-b' });
+
+    const dbA = tenantPlugin.wrapAdapter!(base, { tenantId: tA.id });
+    const dbB = tenantPlugin.wrapAdapter!(base, { tenantId: tB.id });
+
+    // Writes route to each tenant's schema because the wrapped transaction pins
+    // `search_path` on the same connection before the unqualified INSERT runs.
+    await dbA.transaction(async tx => tx.rawQuery!(`INSERT INTO items (name) VALUES ('a-only')`));
+    await dbB.transaction(async tx => tx.rawQuery!(`INSERT INTO items (name) VALUES ('b-only')`));
+
+    const rowsA = await dbA.transaction(async tx => tx.rawQuery!<{ name: string }>(`SELECT name FROM items`));
+    const rowsB = await dbB.transaction(async tx => tx.rawQuery!<{ name: string }>(`SELECT name FROM items`));
+
+    // The load-bearing assertion: A cannot see B's rows and vice versa.
+    expect(rowsA.map(r => r.name)).toEqual(['a-only']);
+    expect(rowsB.map(r => r.name)).toEqual(['b-only']);
+
+    // Fail closed: with no tenant claim, wrapAdapter is a pass-through. The
+    // unqualified `items` table is not on the public search_path → it errors
+    // rather than silently reading another tenant's schema.
+    const dbNone = tenantPlugin.wrapAdapter!(base, {});
+    expect(dbNone).toBe(base);
+    await expect(
+      dbNone.transaction(async tx => tx.rawQuery!(`SELECT name FROM items`)),
+    ).rejects.toThrow();
+  });
+
+  it('drops the tenant schema on delete only when opted in', async () => {
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createPgAdapter(),
+      plugins: [
+        tenancy({
+          dropSchemaOnDelete: true,
+          onSchemaCreated: async (schemaName, rawQuery) => {
+            await rawQuery(`CREATE TABLE IF NOT EXISTS ${schemaName}.items (id SERIAL PRIMARY KEY)`);
+          },
+        }),
+      ],
+    });
+
+    const tenant = await fortress.plugins.tenancy.createTenant({ name: 'Drop', taxId: 'drop-me' });
+    const schemaName = `tenant_${tenant.id}`;
+
+    const before = await pgClient.unsafe(
+      `SELECT 1 FROM information_schema.schemata WHERE schema_name = '${schemaName}'`,
+    );
+    expect(before).toHaveLength(1);
+
+    await fortress.plugins.tenancy.deleteTenant({ id: tenant.id });
+
+    const after = await pgClient.unsafe(
+      `SELECT 1 FROM information_schema.schemata WHERE schema_name = '${schemaName}'`,
+    );
+    expect(after).toHaveLength(0);
   });
 });
 

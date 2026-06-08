@@ -7,10 +7,12 @@ import { tenancy } from './index';
 const SECRET = 'tenancy-test-secret-at-least-32!!';
 
 interface TenancyMethods {
-  createTenant: (data: { name: string; taxId: string; description?: string }) => Promise<{ id: number; name: string; taxId: string }>;
+  createTenant: (input: { name: string; taxId: string; description?: string }) => Promise<{ id: number; name: string; taxId: string }>;
+  deleteTenant: (input: { id: number | string }) => Promise<{ ok: true }>;
   addUserToTenant: (userId: number, tenantId: number) => Promise<void>;
   getUserTenants: (userId: number) => Promise<{ id: number; name: string; taxId: string }[]>;
-  switchTenant: (userId: number, taxId: string) => Promise<void>;
+  getMyTenants: (input: { userId?: number }, routeCtx?: { userId?: number }) => Promise<{ id: number; name: string; taxId: string }[]>;
+  switchTenant: (input: { taxId: string; userId?: number }, routeCtx?: { userId?: number }) => Promise<{ ok: true }>;
 }
 
 describe('tenancy plugin', () => {
@@ -99,7 +101,7 @@ describe('tenancy plugin', () => {
       await methods.addUserToTenant(userId, t1.id);
       await methods.addUserToTenant(userId, t2.id);
 
-      await methods.switchTenant(userId, 'beta-001');
+      await methods.switchTenant({ taxId: 'beta-001', userId });
 
       // Verify via enrichTokenClaims
       const plugin = fortress.config.plugins![0];
@@ -115,14 +117,66 @@ describe('tenancy plugin', () => {
       await methods.createTenant({ name: 'Acme', taxId: 'acme-001' });
 
       await expect(
-        methods.switchTenant(userId, 'acme-001'),
+        methods.switchTenant({ taxId: 'acme-001', userId }),
       ).rejects.toThrow('does not belong');
     });
 
     it('rejects non-existent tenant', async () => {
       await expect(
-        methods.switchTenant(userId, 'nonexistent'),
+        methods.switchTenant({ taxId: 'nonexistent', userId }),
       ).rejects.toThrow('not found');
+    });
+
+    it('derives the caller from routeCtx, not the body', async () => {
+      const t1 = await methods.createTenant({ name: 'Acme', taxId: 'acme-001' });
+      const t2 = await methods.createTenant({ name: 'Beta', taxId: 'beta-001' });
+      await methods.addUserToTenant(userId, t1.id);
+      await methods.addUserToTenant(userId, t2.id);
+
+      // userId in body is ignored when a routeCtx is present.
+      await methods.switchTenant({ taxId: 'beta-001', userId: 999_999 }, { userId });
+
+      const tenants = await methods.getMyTenants({}, { userId });
+      expect(tenants.map(t => t.taxId).sort()).toEqual(['acme-001', 'beta-001']);
+    });
+
+    it('requires an authenticated caller via routeCtx', async () => {
+      await expect(
+        methods.switchTenant({ taxId: 'acme-001' }, {}),
+      ).rejects.toThrow('Not authenticated');
+    });
+  });
+
+  describe('deleteTenant', () => {
+    it('removes the tenant and its memberships', async () => {
+      const tenant = await methods.createTenant({ name: 'Acme', taxId: 'acme-001' });
+      await methods.addUserToTenant(userId, tenant.id);
+
+      const result = await methods.deleteTenant({ id: tenant.id });
+      expect(result).toEqual({ ok: true });
+
+      const tenants = await methods.getUserTenants(userId);
+      expect(tenants).toEqual([]);
+    });
+
+    it('rejects an unknown tenant', async () => {
+      await expect(methods.deleteTenant({ id: 999_999 })).rejects.toThrow('not found');
+    });
+  });
+
+  describe('wrapAdapter', () => {
+    it('is a pass-through on non-pg adapters even with a tenant claim', () => {
+      const plugin = fortress.config.plugins![0];
+      const base = fortress.config.database;
+      const wrapped = plugin.wrapAdapter!(base, { tenantId: 1 });
+      // SQLite test adapter: no schema switching, returns the adapter unchanged.
+      expect(wrapped).toBe(base);
+    });
+
+    it('is a pass-through when no tenant claim is present', () => {
+      const plugin = fortress.config.plugins![0];
+      const base = fortress.config.database;
+      expect(plugin.wrapAdapter!(base, {})).toBe(base);
     });
   });
 

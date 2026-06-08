@@ -2,19 +2,21 @@
 
 ## Overview
 
-The `tenancy` plugin adds schema-per-tenant isolation to Fortress for PostgreSQL. Each tenant gets its own database schema, providing strong data isolation at the database level. The plugin automatically enriches JWT claims with tenant information and wraps the database adapter to scope all queries to the correct schema.
+The `tenancy` plugin adds schema-per-tenant isolation for PostgreSQL. Each tenant gets its own schema named from its numeric database id (by default `tenant_<id>`), and request-scoped database operations run with that tenant schema on PostgreSQL's `search_path`.
 
-This plugin is PostgreSQL-specific. For row-level isolation that works with any database, see the [Data Isolation](./data-isolation.md) plugin.
+Tenant selection is derived from the verified JWT claim produced by `enrichTokenClaims`: `claims.customClaims.tenantId`. It is never read from client-supplied tenant context. A caller can therefore only get a tenant claim after being a member of that tenant via `tenant_user`.
 
-### Service accounts and tenancy
+Isolation is transaction-pinned and fail-closed: each wrapped operation starts a transaction, calls `set_config('search_path', $1, true)` with a bound parameter on the pinned connection, then runs the operation. If there is no verified tenant claim, or the adapter is not PostgreSQL, the adapter is returned unchanged. Business tables should live only in tenant schemas, so missing tenant context fails by not finding those tables rather than silently reading another tenant.
 
-Service accounts are **not members of a tenant** in the membership sense — there is no `tenant_service_account` join table. Instead, service accounts are global identities that hold tenant-scoped grants via `role_binding.tenantId`, the same mechanism users use. A single service account can hold tenant-scoped or global bindings at the same time without any schema change.
+This plugin is PostgreSQL-specific. For database-agnostic row-level isolation, see [Data Isolation](./data-isolation.md).
 
-The `tenancy` plugin's `enrichTokenClaims` hook reads `tenant_user` to find a user's default tenant; service accounts have no entry there, so the claim simply won't fire for them. Service-account-authenticated requests typically carry the tenant header (`X-Tenant-Code`) explicitly, and `fortress.iam.checkPermission({ type: 'SERVICE_ACCOUNT', id }, resource, action, { tenantId })` resolves the permission against bindings scoped to that tenant.
+## Service accounts and tenancy
+
+Service accounts have no `tenant_user` membership, so `enrichTokenClaims` does not add a tenant claim for them and the tenancy adapter wrapper does not switch schemas. That is intentional fail-closed behavior.
+
+Tenant-scoped *permissions* for service accounts are unaffected. IAM still resolves grants through `role_binding.tenantId` when you pass an explicit `tenantId` to `fortress.iam.checkPermission(...)`; this is separate from schema switching and does not rely on any tenant header.
 
 ## Installation
-
-Import the `tenancy` factory and pass it in the `plugins` array when creating a Fortress instance:
 
 ```ts
 import { createFortress } from '@bajustone/fortress';
@@ -25,134 +27,79 @@ const fortress = createFortress({
   database: adapter,
   plugins: [
     tenancy({
-      headerName: 'X-Tenant-Code',
       schemaPrefix: 'tenant_',
+      routes: false,
+      onSchemaCreated: async (schemaName, rawQuery) => {
+        await rawQuery(`CREATE TABLE IF NOT EXISTS ${schemaName}.widgets (id SERIAL PRIMARY KEY)`);
+      },
+      dropSchemaOnDelete: false,
     }),
   ],
 });
 ```
 
-Once registered, methods are available at `fortress.plugins['tenancy']` with full type safety.
+Programmatic methods are always available at `fortress.plugins.tenancy`. HTTP routes are mounted only when `routes: true`.
 
 ## Configuration
 
-All fields on `TenancyConfig` are optional:
-
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `headerName` | `string` | `'X-Tenant-Code'` | HTTP header name used to identify the current tenant in requests. |
-| `schemaPrefix` | `string` | `'tenant_'` | Prefix for PostgreSQL schema names. A tenant with `taxId` of `acme` gets schema `tenant_acme`. |
+| `schemaPrefix` | `string` | `'tenant_'` | Prefix for tenant schemas. Must match `^[a-z_][a-z0-9_]*$`. Full schema name is `${schemaPrefix}${tenant.id}`. |
+| `routes` | `boolean` | `false` | Mount opt-in HTTP routes under `/tenancy/*`. |
+| `onSchemaCreated` | `(schemaName, rawQuery) => Promise<void>` | `undefined` | Runs inside the `createTenant` transaction after `CREATE SCHEMA`. Use for per-tenant DDL/migrations. |
+| `dropSchemaOnDelete` | `boolean` | `false` | When `true`, `deleteTenant` drops the tenant schema with `CASCADE`. |
 
-## How It Works
+## HTTP Routes
 
-The plugin provides three integration points:
+Enable with `tenancy({ routes: true })`.
 
-1. **`enrichTokenClaims`** -- When a user logs in, the plugin looks up their default tenant membership and adds `tenantId` and `tenantCode` to the JWT claims.
+| Method | Path | Handler | Auth |
+|---|---|---|---|
+| `POST` | `/tenancy/tenants` | `createTenant` | Bearer + `fortress:manageTenants` |
+| `DELETE` | `/tenancy/tenants/:id` | `deleteTenant` | Bearer + `fortress:manageTenants` |
+| `GET` | `/tenancy/tenants/mine` | `getMyTenants` | Bearer; caller derived from token |
+| `POST` | `/tenancy/switch` | `switchTenant` | Bearer; caller derived from token |
 
-2. **`wrapAdapter`** -- On each request, the plugin wraps the database adapter. If a `tenantCode` is present in the request context, every database operation is preceded by `SET LOCAL search_path TO tenant_{code}, public`. This transparently scopes all SQL to the tenant's schema.
-
-3. **`methods`** -- CRUD operations for managing tenants and user-tenant memberships.
+Self-service routes ignore any `userId` in the body when a route context is present.
 
 ## API Reference
 
 | Method | Signature | Returns |
 |---|---|---|
-| `createTenant` | `(data: { name: string; taxId: string; description?: string })` | `Promise<TenantRecord>` |
-| `addUserToTenant` | `(userId: number, tenantId: number)` | `Promise<void>` |
-| `getUserTenants` | `(userId: number)` | `Promise<TenantRecord[]>` |
-| `switchTenant` | `(userId: number, taxId: string)` | `Promise<void>` |
+| `createTenant` | `({ name, taxId, description? })` | `Promise<TenantRecord>` |
+| `deleteTenant` | `({ id })` | `Promise<{ ok: true }>` |
+| `addUserToTenant` | `(userId, tenantId)` | `Promise<void>` |
+| `getUserTenants` | `(userId)` | `Promise<TenantRecord[]>` |
+| `getMyTenants` | `({ userId? }, routeCtx?)` | `Promise<TenantRecord[]>` |
+| `switchTenant` | `({ taxId, userId? }, routeCtx?)` | `Promise<{ ok: true }>` |
 
 ### createTenant
 
-Creates a new tenant and its PostgreSQL schema:
+Creates the tenant row and, on PostgreSQL, schema `tenant_<id>` (or your configured prefix) in one transaction:
 
 ```ts
-const tenant = await fortress.plugins['tenancy'].createTenant({
+const tenant = await fortress.plugins.tenancy.createTenant({
   name: 'Acme Corp',
-  taxId: 'acme-corp',          // unique identifier, used in schema name
-  description: 'Enterprise customer',
+  taxId: 'acme-corp', // unique external code; not used in schema names
 });
-// tenant.id, tenant.name, tenant.taxId, tenant.description, tenant.createdAt, tenant.updatedAt
 ```
 
-If the database adapter supports `rawQuery`, a PostgreSQL schema `{schemaPrefix}{taxId}` is created via `CREATE SCHEMA IF NOT EXISTS`.
+### deleteTenant
 
-Throws `Conflict` if a tenant with the given `taxId` already exists.
-
-### addUserToTenant
-
-Adds a user to a tenant. The first tenant assigned to a user automatically becomes their default:
+Removes tenant memberships and the tenant row. The schema is only dropped when `dropSchemaOnDelete: true`.
 
 ```ts
-await fortress.plugins['tenancy'].addUserToTenant(userId, tenant.id);
-```
-
-If the user is already a member of the tenant, this is a no-op.
-
-### getUserTenants
-
-Returns all tenants a user belongs to:
-
-```ts
-const tenants = await fortress.plugins['tenancy'].getUserTenants(userId);
-// Array of { id, name, taxId, description, createdAt, updatedAt }
+await fortress.plugins.tenancy.deleteTenant({ id: tenant.id });
 ```
 
 ### switchTenant
 
-Changes the user's default tenant. The new default is used for JWT claims on the next token refresh:
+Sets the user's default tenant after verifying membership. The new tenant takes effect on the next login/token refresh because tenant data is stored in JWT custom claims.
 
 ```ts
-await fortress.plugins['tenancy'].switchTenant(userId, 'acme-corp');
+await fortress.plugins.tenancy.switchTenant({ taxId: 'acme-corp', userId });
 ```
 
-Throws:
-- `NotFound` -- Tenant with the given `taxId` does not exist.
-- `Forbidden` -- User does not belong to the specified tenant.
+## JWT staleness tradeoff
 
-## JWT Claims
-
-When a user has a default tenant, the following claims are added to their JWT:
-
-```json
-{
-  "tenantId": 1,
-  "tenantCode": "acme-corp"
-}
-```
-
-## Example
-
-```ts
-import { createFortress } from '@bajustone/fortress';
-import { tenancy } from '@bajustone/fortress/plugins/tenancy';
-
-const fortress = createFortress({
-  jwt: { secret: 'your-secret-at-least-32-bytes!!' },
-  database: adapter,
-  plugins: [
-    tenancy({ schemaPrefix: 'org_' }),
-  ],
-});
-
-// Create tenants
-const acme = await fortress.plugins['tenancy'].createTenant({
-  name: 'Acme Corp',
-  taxId: 'acme',
-});
-
-const globex = await fortress.plugins['tenancy'].createTenant({
-  name: 'Globex',
-  taxId: 'globex',
-});
-
-// Assign user to tenants
-await fortress.plugins['tenancy'].addUserToTenant(userId, acme.id);
-await fortress.plugins['tenancy'].addUserToTenant(userId, globex.id);
-
-// List tenants
-const tenants = await fortress.plugins['tenancy'].getUserTenants(userId);
-
-// Switch default tenant
-await fortress.plugins['tenancy'].switchTenant(userId, 'globex');
-```
+Tenant access is encoded in short-lived JWT access tokens. If a user is removed from a tenant, an already-issued token can retain its old `tenantId` claim until it expires or is refreshed. Keep access-token lifetimes short and force session/token revocation for immediate removal.

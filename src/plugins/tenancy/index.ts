@@ -5,18 +5,65 @@
  * resolved tenant, providing strong data isolation between tenants without
  * touching application code. Requires a PostgreSQL-backed Drizzle adapter.
  *
+ * The active tenant is read from the **verified** `tenantId` JWT claim (set by
+ * {@link enrichTokenClaims} from the user's default `tenant_user` membership),
+ * never from a client-supplied header — so a caller can only ever reach a
+ * tenant they belong to. Switching tenants requires {@link switchTenant} plus a
+ * token refresh.
+ *
+ * Isolation is enforced atomically: each database operation runs inside a
+ * transaction that first pins `search_path` via a bound `set_config(..., true)`
+ * call, so the schema selection and the query share one pooled connection and
+ * the path cannot leak or be discarded.
+ *
+ * HTTP endpoints are opt-in: pass `tenancy({ routes: true })` to mount the
+ * routes under `/tenancy/*`. The programmatic methods on
+ * `fortress.plugins.tenancy` are always available regardless of the flag.
+ *
  * @module
  */
 
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { FortressPlugin, PluginContext } from '../../core/plugin';
+import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
 import { Errors } from '../../core/errors';
+import { arr, bool, endpoint, int, obj, ref, str } from '../../core/schema-builder';
+
+/**
+ * Callback invoked once, inside the creation transaction, after a tenant's
+ * schema is created — the hook for per-tenant table DDL / migrations.
+ */
+export type OnSchemaCreated = (
+  schemaName: string,
+  rawQuery: <T>(sql: string, params?: unknown[]) => Promise<T[]>,
+) => Promise<void>;
 
 export interface TenancyConfig {
-  /** Header name to read tenant code from (default: 'X-Tenant-Code') */
-  headerName?: string;
-  /** Schema prefix for tenant schemas (default: 'tenant_') */
+  /**
+   * Schema prefix for tenant schemas (default: 'tenant_'). Must match
+   * `^[a-z_][a-z0-9_]*$` — validated at factory time.
+   */
   schemaPrefix?: string;
+  /**
+   * Mount HTTP routes under `/tenancy/*`. Default `false`. The programmatic
+   * methods on `fortress.plugins.tenancy` are always available; this flag only
+   * controls HTTP mounting.
+   */
+  routes?: boolean;
+  /**
+   * Run once inside the `createTenant` transaction, right after the tenant's
+   * PostgreSQL schema is created. Use it to create the tenant's business
+   * tables (or run a migration) against the new schema. The supplied
+   * `rawQuery` is bound to the same connection/transaction as the schema
+   * creation, so statements should reference the schema explicitly (e.g.
+   * `CREATE TABLE "${schemaName}".widgets (...)`).
+   */
+  onSchemaCreated?: OnSchemaCreated;
+  /**
+   * When `true`, `deleteTenant` also issues `DROP SCHEMA IF EXISTS <schema>
+   * CASCADE`, destroying all tenant data. Default `false` — destructive drops
+   * must be opted into explicitly.
+   */
+  dropSchemaOnDelete?: boolean;
 }
 
 interface TenantRecord {
@@ -35,18 +82,126 @@ interface TenantUserRecord {
 }
 
 export interface TenancyMethods {
-  createTenant: (data: { name: string; taxId: string; description?: string }) => Promise<{ id: number; name: string; taxId: string; description: string | null; createdAt: Date; updatedAt: Date }>;
+  createTenant: (
+    input: { name: string; taxId: string; description?: string },
+    routeCtx?: PluginRouteContext,
+  ) => Promise<TenantRecord>;
+  deleteTenant: (
+    input: { id: number | string },
+    routeCtx?: PluginRouteContext,
+  ) => Promise<{ ok: true }>;
   addUserToTenant: (userId: number, tenantId: number) => Promise<void>;
-  getUserTenants: (userId: number) => Promise<{ id: number; name: string; taxId: string; description: string | null; createdAt: Date; updatedAt: Date }[]>;
-  switchTenant: (userId: number, taxId: string) => Promise<void>;
+  getUserTenants: (userId: number) => Promise<TenantRecord[]>;
+  getMyTenants: (
+    input: { userId?: number },
+    routeCtx?: PluginRouteContext,
+  ) => Promise<TenantRecord[]>;
+  switchTenant: (
+    input: { taxId: string; userId?: number },
+    routeCtx?: PluginRouteContext,
+  ) => Promise<{ ok: true }>;
 }
+
+const SAFE_SCHEMA_PREFIX = /^[a-z_][a-z0-9_]*$/;
+
+/**
+ * Validate the configured schema prefix once, at factory time. The full
+ * schema name is `${prefix}${numericId}`, so a safe prefix guarantees a safe
+ * identifier — no per-value escaping is needed.
+ */
+function assertSafeSchemaPrefix(prefix: string): void {
+  if (!SAFE_SCHEMA_PREFIX.test(prefix))
+    throw Errors.badRequest(`Invalid tenancy schemaPrefix '${prefix}': must match ${SAFE_SCHEMA_PREFIX}`);
+}
+
+// ── Routes ──────────────────────────────────────────────────────────
+
+const errorRef = ref('ErrorResponse');
+
+const tenantResponse = obj({
+  id: int('Tenant id'),
+  name: str('Tenant name'),
+  taxId: str('Unique tenant tax id / external code'),
+  description: str('Optional description'),
+  createdAt: str('ISO 8601 creation timestamp'),
+  updatedAt: str('ISO 8601 update timestamp'),
+}, 'id', 'name', 'taxId');
+
+const tenancyRoutes = {
+  createTenant: endpoint('POST', '/tenancy/tenants')
+    .summary('Create a tenant')
+    .description('Create a new tenant and its PostgreSQL schema. Requires the `fortress:manageTenants` permission.')
+    .tags('Tenancy')
+    .security('bearer')
+    .permission('fortress', 'manageTenants')
+    .body(obj({
+      name: str('Human-readable tenant name'),
+      taxId: str('Unique tenant tax id / external code'),
+      description: str('Optional description'),
+    }, 'name', 'taxId'))
+    .response(201, 'Tenant created', tenantResponse)
+    .response(401, 'Not authenticated', errorRef)
+    .response(403, 'Insufficient permissions', errorRef)
+    .response(409, 'taxId already exists', errorRef)
+    .handler('createTenant')
+    .build(),
+
+  deleteTenant: endpoint('DELETE', '/tenancy/tenants/:id')
+    .summary('Delete a tenant')
+    .description('Remove a tenant, its memberships, and (when `dropSchemaOnDelete` is enabled) its schema. Requires the `fortress:manageTenants` permission.')
+    .tags('Tenancy')
+    .security('bearer')
+    .permission('fortress', 'manageTenants')
+    .params(obj({ id: str('Tenant id') }, 'id'))
+    .response(200, 'Tenant deleted', obj({ ok: bool('Always true') }, 'ok'))
+    .response(401, 'Not authenticated', errorRef)
+    .response(403, 'Insufficient permissions', errorRef)
+    .response(404, 'Tenant not found', errorRef)
+    .handler('deleteTenant')
+    .build(),
+
+  getMyTenants: endpoint('GET', '/tenancy/tenants/mine')
+    .summary('List the caller\'s tenants')
+    .description('Return the tenants the authenticated caller belongs to.')
+    .tags('Tenancy')
+    .security('bearer')
+    .response(200, 'Tenants', obj({ tenants: arr(tenantResponse, 'Tenants the caller belongs to') }, 'tenants'))
+    .response(401, 'Not authenticated', errorRef)
+    .handler('getMyTenants')
+    .build(),
+
+  switchTenant: endpoint('POST', '/tenancy/switch')
+    .summary('Switch the caller\'s default tenant')
+    .description('Set the authenticated caller\'s default tenant. The new tenant takes effect on the next token refresh.')
+    .tags('Tenancy')
+    .security('bearer')
+    .body(obj({ taxId: str('Tax id of the tenant to switch to') }, 'taxId'))
+    .response(200, 'Switched', obj({ ok: bool('Always true') }, 'ok'))
+    .response(401, 'Not authenticated', errorRef)
+    .response(403, 'Caller does not belong to this tenant', errorRef)
+    .response(404, 'Tenant not found', errorRef)
+    .handler('switchTenant')
+    .build(),
+} as const;
+
+// ── Plugin Factory ──────────────────────────────────────────────────
+
 /**
  * Tenancy plugin factory (PostgreSQL only). Returns a {@link FortressPlugin}
- * that switches the active PostgreSQL `search_path` per request based on
- * the resolved tenant, providing schema-level isolation between tenants.
+ * that switches the active PostgreSQL `search_path` per request based on the
+ * verified `tenantId` JWT claim, providing schema-level isolation between
+ * tenants. Pass `{ routes: true }` to mount the HTTP routes under `/tenancy/*`.
  */
 export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly name: 'tenancy' } {
   const schemaPrefix = config.schemaPrefix ?? 'tenant_';
+  assertSafeSchemaPrefix(schemaPrefix);
+  const mountRoutes = config.routes === true;
+
+  /**
+   * Schema name for a tenant. `id` is numeric, so the result is always a
+   * valid, non-injectable identifier.
+   */
+  const tenantSchemaName = (id: number): string => `${schemaPrefix}${id}`;
 
   return {
     name: 'tenancy',
@@ -72,6 +227,8 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
         },
       },
     ],
+
+    ...(mountRoutes ? { routes: tenancyRoutes } : {}),
 
     async enrichTokenClaims(userId: number, ctx: PluginContext): Promise<Record<string, unknown>> {
       // Find user's default tenant
@@ -101,113 +258,84 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
     },
 
     wrapAdapter(adapter: DatabaseAdapter, requestContext: Record<string, unknown>): DatabaseAdapter {
-      const tenantCode = requestContext.tenantCode as string | undefined;
-      if (!tenantCode)
+      const tenantId = requestContext.tenantId as number | undefined;
+      // Fail closed: no verified tenant claim ⇒ no schema switch. Business
+      // tables live only in tenant schemas, so they are simply not on the
+      // search path — there is no silent fallback to another tenant's data.
+      if (tenantId == null)
         return adapter;
 
-      const schemaName = `${schemaPrefix}${tenantCode}`;
+      const isPg = adapter.dialect === 'pg' && !!adapter.rawQuery;
+      // For SQLite/MySQL there is no schema-per-tenant model; pass through.
+      if (!isPg)
+        return adapter;
 
-      // Wrap adapter to execute SET LOCAL search_path before queries (PostgreSQL only)
-      // For SQLite/MySQL, this is a no-op pass-through
+      const schemaName = tenantSchemaName(tenantId);
+
+      // Pin search_path on the transaction's pinned connection. `$1` is a bound
+      // parameter (never SQL), and `set_config(..., true)` is transaction-local,
+      // so the path applies to exactly the operation that follows on the same
+      // connection.
+      const setPath = (tx: DatabaseAdapter): Promise<unknown> =>
+        tx.rawQuery!(`SELECT set_config('search_path', $1, true)`, [`${schemaName}, public`]);
+
       return {
         ...adapter,
         async create<T>(params: Parameters<DatabaseAdapter['create']>[0]): Promise<T> {
-          if (adapter.rawQuery && adapter.dialect === 'pg') {
-            await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
-          }
-          return adapter.create<T>(params);
+          return adapter.transaction(async (tx) => {
+            await setPath(tx);
+            return tx.create<T>(params);
+          });
         },
         async findOne<T>(params: Parameters<DatabaseAdapter['findOne']>[0]): Promise<T | null> {
-          if (adapter.rawQuery && adapter.dialect === 'pg') {
-            await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
-          }
-          return adapter.findOne<T>(params);
+          return adapter.transaction(async (tx) => {
+            await setPath(tx);
+            return tx.findOne<T>(params);
+          });
         },
         async findMany<T>(params: Parameters<DatabaseAdapter['findMany']>[0]): Promise<T[]> {
-          if (adapter.rawQuery && adapter.dialect === 'pg') {
-            await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
-          }
-          return adapter.findMany<T>(params);
+          return adapter.transaction(async (tx) => {
+            await setPath(tx);
+            return tx.findMany<T>(params);
+          });
         },
         async update<T>(params: Parameters<DatabaseAdapter['update']>[0]): Promise<T | null> {
-          if (adapter.rawQuery && adapter.dialect === 'pg') {
-            await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
-          }
-          return adapter.update<T>(params);
+          return adapter.transaction(async (tx) => {
+            await setPath(tx);
+            return tx.update<T>(params);
+          });
         },
         async delete(params: Parameters<DatabaseAdapter['delete']>[0]): Promise<void> {
-          if (adapter.rawQuery && adapter.dialect === 'pg') {
-            await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
-          }
-          return adapter.delete(params);
+          return adapter.transaction(async (tx) => {
+            await setPath(tx);
+            return tx.delete(params);
+          });
         },
         async count(params: Parameters<DatabaseAdapter['count']>[0]): Promise<number> {
-          if (adapter.rawQuery && adapter.dialect === 'pg') {
-            await adapter.rawQuery(`SET LOCAL search_path TO ${schemaName}, public`);
-          }
-          return adapter.count(params);
+          return adapter.transaction(async (tx) => {
+            await setPath(tx);
+            return tx.count(params);
+          });
+        },
+        async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {
+          // Pin once for the whole transaction so every op inside the caller's
+          // callback runs against the tenant schema.
+          return adapter.transaction(async (tx) => {
+            await setPath(tx);
+            return fn(tx);
+          });
         },
       };
     },
 
-    methods: ctx => ({
-      async createTenant(data: { name: string; taxId: string; description?: string }): Promise<TenantRecord> {
-        const existing = await ctx.db.findOne<TenantRecord>({
+    methods: (ctx) => {
+      const findTenantByTaxId = (taxId: string): Promise<TenantRecord | null> =>
+        ctx.db.findOne<TenantRecord>({
           model: 'tenant',
-          where: [{ field: 'taxId', operator: '=', value: data.taxId }],
+          where: [{ field: 'taxId', operator: '=', value: taxId }],
         });
 
-        if (existing)
-          throw Errors.conflict(`Tenant with taxId '${data.taxId}' already exists`);
-
-        const tenant = await ctx.db.create<TenantRecord>({
-          model: 'tenant',
-          data: {
-            name: data.name,
-            taxId: data.taxId,
-            description: data.description ?? null,
-          },
-        });
-
-        // Create tenant schema if rawQuery is available (PostgreSQL)
-        if (ctx.db.rawQuery && ctx.db.dialect === 'pg') {
-          const schemaName = `${schemaPrefix}${data.taxId}`;
-          await ctx.db.rawQuery(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
-        }
-
-        return tenant;
-      },
-
-      async addUserToTenant(userId: number, tenantId: number): Promise<void> {
-        // Check if user already belongs to this tenant
-        const existing = await ctx.db.findOne<TenantUserRecord>({
-          model: 'tenant_user',
-          where: [
-            { field: 'userId', operator: '=', value: userId },
-            { field: 'tenantId', operator: '=', value: tenantId },
-          ],
-        });
-
-        if (existing)
-          return; // Already a member
-
-        // Check if user has any tenants — if not, make this the default
-        const memberships = await ctx.db.findMany<TenantUserRecord>({
-          model: 'tenant_user',
-          where: [{ field: 'userId', operator: '=', value: userId }],
-        });
-
-        await ctx.db.create({
-          model: 'tenant_user',
-          data: {
-            tenantId,
-            userId,
-            isDefault: memberships.length === 0, // First tenant becomes default
-          },
-        });
-      },
-
-      async getUserTenants(userId: number): Promise<TenantRecord[]> {
+      const listUserTenants = async (userId: number): Promise<TenantRecord[]> => {
         const memberships = await ctx.db.findMany<TenantUserRecord>({
           model: 'tenant_user',
           where: [{ field: 'userId', operator: '=', value: userId }],
@@ -221,59 +349,166 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
           model: 'tenant',
           where: [{ field: 'id', operator: 'in', value: tenantIds }],
         });
-      },
+      };
 
-      async switchTenant(userId: number, taxId: string): Promise<void> {
-        const tenant = await ctx.db.findOne<TenantRecord>({
-          model: 'tenant',
-          where: [{ field: 'taxId', operator: '=', value: taxId }],
-        });
+      const requireUserId = (input: { userId?: number }, routeCtx?: PluginRouteContext): number => {
+        const userId = routeCtx?.userId ?? input.userId;
+        if (userId == null) {
+          if (routeCtx)
+            throw Errors.unauthorized('Not authenticated');
+          throw Errors.badRequest('userId is required for programmatic calls');
+        }
+        return userId;
+      };
 
-        if (!tenant)
-          throw Errors.notFound(`Tenant '${taxId}' not found`);
+      return {
+        async createTenant(input: { name: string; taxId: string; description?: string }): Promise<TenantRecord> {
+          const existing = await findTenantByTaxId(input.taxId);
+          if (existing)
+            throw Errors.conflict(`Tenant with taxId '${input.taxId}' already exists`);
 
-        // Verify user belongs to this tenant
-        const membership = await ctx.db.findOne<TenantUserRecord>({
-          model: 'tenant_user',
-          where: [
-            { field: 'userId', operator: '=', value: userId },
-            { field: 'tenantId', operator: '=', value: tenant.id },
-          ],
-        });
+          // Create the row and its schema atomically: PostgreSQL DDL is
+          // transactional, so a failed schema/DDL step rolls the tenant row back.
+          return ctx.db.transaction(async (tx) => {
+            const tenant = await tx.create<TenantRecord>({
+              model: 'tenant',
+              data: {
+                name: input.name,
+                taxId: input.taxId,
+                description: input.description ?? null,
+              },
+            });
 
-        if (!membership)
-          throw Errors.forbidden('User does not belong to this tenant');
+            if (tx.dialect === 'pg' && tx.rawQuery) {
+              const schemaName = tenantSchemaName(tenant.id); // numeric id ⇒ safe
+              await tx.rawQuery(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
+              if (config.onSchemaCreated)
+                await config.onSchemaCreated(schemaName, tx.rawQuery.bind(tx));
+            }
 
-        // Unset current default
-        const currentDefaults = await ctx.db.findMany<TenantUserRecord>({
-          model: 'tenant_user',
-          where: [
-            { field: 'userId', operator: '=', value: userId },
-            { field: 'isDefault', operator: '=', value: true },
-          ],
-        });
+            return tenant;
+          });
+        },
 
-        for (const m of currentDefaults) {
+        async deleteTenant(input: { id: number | string }): Promise<{ ok: true }> {
+          const id = Number(input.id);
+          if (!Number.isInteger(id))
+            throw Errors.badRequest('id must be an integer');
+
+          const tenant = await ctx.db.findOne<TenantRecord>({
+            model: 'tenant',
+            where: [{ field: 'id', operator: '=', value: id }],
+          });
+          if (!tenant)
+            throw Errors.notFound(`Tenant '${id}' not found`);
+
+          await ctx.db.transaction(async (tx) => {
+            await tx.delete({
+              model: 'tenant_user',
+              where: [{ field: 'tenantId', operator: '=', value: id }],
+            });
+            await tx.delete({
+              model: 'tenant',
+              where: [{ field: 'id', operator: '=', value: id }],
+            });
+            if (config.dropSchemaOnDelete && tx.dialect === 'pg' && tx.rawQuery) {
+              const schemaName = tenantSchemaName(id); // numeric id ⇒ safe
+              await tx.rawQuery(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+            }
+          });
+
+          return { ok: true };
+        },
+
+        async addUserToTenant(userId: number, tenantId: number): Promise<void> {
+          // Check if user already belongs to this tenant
+          const existing = await ctx.db.findOne<TenantUserRecord>({
+            model: 'tenant_user',
+            where: [
+              { field: 'userId', operator: '=', value: userId },
+              { field: 'tenantId', operator: '=', value: tenantId },
+            ],
+          });
+
+          if (existing)
+            return; // Already a member
+
+          // Check if user has any tenants — if not, make this the default
+          const memberships = await ctx.db.findMany<TenantUserRecord>({
+            model: 'tenant_user',
+            where: [{ field: 'userId', operator: '=', value: userId }],
+          });
+
+          await ctx.db.create({
+            model: 'tenant_user',
+            data: {
+              tenantId,
+              userId,
+              isDefault: memberships.length === 0, // First tenant becomes default
+            },
+          });
+        },
+
+        async getUserTenants(userId: number): Promise<TenantRecord[]> {
+          return listUserTenants(userId);
+        },
+
+        async getMyTenants(input: { userId?: number }, routeCtx?: PluginRouteContext): Promise<TenantRecord[]> {
+          return listUserTenants(requireUserId(input, routeCtx));
+        },
+
+        async switchTenant(input: { taxId: string; userId?: number }, routeCtx?: PluginRouteContext): Promise<{ ok: true }> {
+          const userId = requireUserId(input, routeCtx);
+
+          const tenant = await findTenantByTaxId(input.taxId);
+          if (!tenant)
+            throw Errors.notFound(`Tenant '${input.taxId}' not found`);
+
+          // Verify user belongs to this tenant
+          const membership = await ctx.db.findOne<TenantUserRecord>({
+            model: 'tenant_user',
+            where: [
+              { field: 'userId', operator: '=', value: userId },
+              { field: 'tenantId', operator: '=', value: tenant.id },
+            ],
+          });
+
+          if (!membership)
+            throw Errors.forbidden('User does not belong to this tenant');
+
+          // Unset current default(s)
+          const currentDefaults = await ctx.db.findMany<TenantUserRecord>({
+            model: 'tenant_user',
+            where: [
+              { field: 'userId', operator: '=', value: userId },
+              { field: 'isDefault', operator: '=', value: true },
+            ],
+          });
+
+          for (const m of currentDefaults) {
+            await ctx.db.update({
+              model: 'tenant_user',
+              where: [
+                { field: 'userId', operator: '=', value: userId },
+                { field: 'tenantId', operator: '=', value: m.tenantId },
+              ],
+              data: { isDefault: false },
+            });
+          }
+
+          // Set new default
           await ctx.db.update({
             model: 'tenant_user',
             where: [
               { field: 'userId', operator: '=', value: userId },
-              { field: 'tenantId', operator: '=', value: m.tenantId },
+              { field: 'tenantId', operator: '=', value: tenant.id },
             ],
-            data: { isDefault: false },
+            data: { isDefault: true },
           });
-        }
 
-        // Set new default
-        await ctx.db.update({
-          model: 'tenant_user',
-          where: [
-            { field: 'userId', operator: '=', value: userId },
-            { field: 'tenantId', operator: '=', value: tenant.id },
-          ],
-          data: { isDefault: true },
-        });
-      },
-    }),
+          return { ok: true };
+        },
+      };
+    },
   };
 }

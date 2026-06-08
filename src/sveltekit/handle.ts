@@ -219,8 +219,9 @@ function populateLocals(
   scopes: string[] | null | undefined,
 ): void {
   const plugins = fortress.config.plugins ?? [];
+  // Tenant comes from the verified JWT claim, never a client header.
   const requestContext: Record<string, unknown> = {
-    tenantCode: event.request.headers.get('x-tenant-code') ?? undefined,
+    tenantId: claims?.customClaims?.tenantId,
     ipAddress:
       event.request.headers.get('x-forwarded-for')
       ?? event.request.headers.get('x-real-ip')

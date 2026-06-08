@@ -102,8 +102,9 @@ export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
         req.fortressScopes = scopes;
 
       const plugins = fortress.config.plugins ?? [];
+      // Tenant comes from the verified JWT claim, never a client header.
       const requestContext: Record<string, unknown> = {
-        tenantCode: req.headers['x-tenant-code'],
+        tenantId: claims?.customClaims?.tenantId,
         ipAddress: req.headers['x-forwarded-for'] ?? req.headers['x-real-ip'],
         userAgent: req.headers['user-agent'],
       };

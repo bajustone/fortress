@@ -70,10 +70,12 @@ export function createAuthMiddleware(
     if (scopes !== undefined)
       c.set('fortressScopes', scopes);
 
-    // Build request context from headers for plugin adapter wrappers
+    // Build request context for plugin adapter wrappers. The tenant is taken
+    // from the verified JWT claim (set by tenancy's enrichTokenClaims), never
+    // a client header — so a caller can only reach a tenant they belong to.
     const plugins = fortress.config.plugins ?? [];
     const requestContext: Record<string, unknown> = {
-      tenantCode: c.req.header('X-Tenant-Code'),
+      tenantId: claims?.customClaims?.tenantId,
       ipAddress:
         c.req.header('X-Forwarded-For') ?? c.req.header('X-Real-IP'),
       userAgent: c.req.header('User-Agent'),

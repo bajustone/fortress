@@ -206,7 +206,7 @@ Users who only need JWT or password hashing shouldn't pull in the full system. E
 
 ### 7. Database-Agnostic Core
 
-The Drizzle adapter works with PostgreSQL, MySQL, and SQLite. Only the tenancy plugin (schema-per-tenant via `SET LOCAL search_path`) is PostgreSQL-specific. For database-agnostic multi-tenancy, use the data isolation plugin with row-level filtering.
+The Drizzle adapter works with PostgreSQL, MySQL, and SQLite. Only the tenancy plugin (schema-per-tenant via a transaction-pinned `search_path`) is PostgreSQL-specific. For database-agnostic multi-tenancy, use the data isolation plugin with row-level filtering.
 
 ### 8. Transport-Agnostic Permissions (Resource + Action)
 
@@ -1015,8 +1015,8 @@ When a plugin method is called **programmatically** (e.g. `fortress.plugins.admi
 | `hooks` | Intercept auth lifecycle | 2FA (afterLogin), email verification (beforeLogin), account lockout (beforeLogin, onLoginFailure) |
 | `methods` | Expose operations | All plugins — e.g., `fortress.plugins['two-factor'].enable(userId)` |
 | `routes` | Add HTTP endpoints | OAuth (`/oauth/token`), social login (`/auth/social/:provider/callback`) — handlers receive `(input, ctx: PluginRouteContext)` where `ctx` carries the verified caller id/claims, request meta, and raw `Request` |
-| `middleware` | Per-request logic | Tenancy (sets schema search_path) |
-| `wrapAdapter` | Modify DB per-request | Tenancy (schema scoping), data isolation (row filtering) |
+| `middleware` | Per-request logic | Rate limit, audit hooks |
+| `wrapAdapter` | Modify DB per-request | Tenancy (transaction-pinned schema scoping), data isolation (row filtering) |
 | `enrichTokenClaims` | Extend JWT claims | Tenancy (adds `tenantId`, `tenantCode`) |
 | `scopeRules` | Auto-inject WHERE clauses | Data isolation (row-level scoping) |
 
@@ -1280,26 +1280,27 @@ Passkeys/WebAuthn — architecture complete, crypto deferred. Currently throws "
 
 **File:** `src/plugins/tenancy/index.ts`
 
-Schema-per-tenant isolation — **PostgreSQL only**.
+Schema-per-tenant isolation — **PostgreSQL only**. Tenant schemas use the numeric tenant id (`tenant_<id>` by default), not the external `taxId`.
 
 **Config:**
 ```typescript
 {
-  headerName: 'X-Tenant-Code',   // HTTP header for tenant identification
-  schemaPrefix: 'tenant_'        // Schema naming: tenant_{taxId}
+  schemaPrefix: 'tenant_',        // Schema naming: tenant_<id>
+  routes: false,                  // Opt in to /tenancy/* HTTP routes
+  onSchemaCreated: async (schemaName, rawQuery) => { /* per-tenant DDL */ },
+  dropSchemaOnDelete: false       // Destructive schema drops are opt-in
 }
 ```
 
 **Models:** `tenant` (`taxId` unique, `name`, `description`), `tenant_user` (userId, tenantId, `isDefault` flag)
 
 **Capabilities used:**
-- `wrapAdapter` — Returns a wrapped `DatabaseAdapter` that executes `SET LOCAL search_path TO tenant_{code}, public` before each operation
-- `enrichTokenClaims` — Adds `tenantId` and `tenantCode` to JWT
-- `afterLogin` — Resolves user's default tenant
+- `wrapAdapter` — Reads `tenantId` from the verified JWT custom claim, then uses a transaction-pinned `set_config('search_path', $1, true)` before each operation; with no claim or non-PG adapters it returns the adapter unchanged (fail closed/no-op)
+- `enrichTokenClaims` — Adds `tenantId` and `tenantCode` to JWT custom claims from the user's default `tenant_user` membership
 
-**Methods:** `createTenant(data)`, `addUserToTenant(userId, tenantId)`, `getUserTenants(userId)`, `switchTenant(userId, taxId)`
+**Methods:** `createTenant(input)`, `deleteTenant(input)`, `addUserToTenant(userId, tenantId)`, `getUserTenants(userId)`, `getMyTenants(input, routeCtx?)`, `switchTenant(input, routeCtx?)`
 
-**Gotcha:** Schema creation requires `rawQuery` — adapters without it can't use this plugin. The Drizzle adapter supports it.
+**Gotcha:** Schema switching/creation requires PostgreSQL `rawQuery`; adapters without it pass through unchanged.
 
 #### Data Isolation (Row-Level)
 

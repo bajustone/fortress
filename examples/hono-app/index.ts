@@ -633,7 +633,8 @@ app.get('/api/tenants', async (c) => {
 app.post('/api/tenants/switch', async (c) => {
   const userId = getUserId(c);
   const { taxId } = await c.req.json();
-  await fortress.plugins.tenancy.switchTenant(userId, taxId);
+  // userId is derived server-side from the verified token, never the body.
+  await fortress.plugins.tenancy.switchTenant({ taxId, userId });
   return c.json({ data: { switched: true } });
 });
 

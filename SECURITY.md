@@ -41,12 +41,24 @@ send either a verification email or an "already have an account" email).
 When using the built-in endpoint publicly, mount the rate-limit plugin with
 `register` protection enabled to slow bulk enumeration.
 
-## Experimental plugins
+## Tenancy isolation model
 
-The tenancy plugin is currently a skeleton and should be treated as
-**experimental / unmounted**. Its SQL identifier handling, fail-closed
-resolution, and tenant-context trust model must be completed before any real
-deployment mounts it.
+The tenancy plugin derives the active tenant from the verified JWT custom
+claim (`claims.customClaims.tenantId`) that is issued from `tenant_user`
+membership, never from a client-controlled header.
+
+Tenant schema names use the numeric tenant id (`tenant_<id>` by default), so
+untrusted tenant codes/tax IDs are not interpolated as SQL identifiers. For
+PostgreSQL requests with a tenant claim, the adapter wrapper pins
+`search_path` with `set_config('search_path', $1, true)` inside the same
+transaction and connection as the operation. Without a tenant claim, the
+adapter is unchanged; tenant business tables should live outside `public`, so
+missing tenant context fails closed.
+
+Tenant access in JWTs has the normal staleness tradeoff: removing a user from
+a tenant does not revoke already-issued access tokens until they expire or are
+refreshed. Use short access-token lifetimes and session/token revocation when
+immediate removal is required.
 
 ## Cookie posture (SvelteKit / `fortress.handleRequest`)
 

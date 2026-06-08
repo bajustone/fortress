@@ -1640,47 +1640,51 @@ Built-in providers: **Google**, **GitHub**, **Microsoft** (with tenant support),
 
 ### Tenancy
 
-> **Experimental / do not mount in production yet.** The tenancy plugin is a
-> skeleton and was explicitly out of scope for the 2026-06-05 remediation
-> pass. Known hardening work remains around tenant identifier handling,
-> fail-closed tenant resolution, and trusted tenant context. Leave it
-> unmounted until those items are completed.
-
-Schema-per-tenant isolation for PostgreSQL. Each tenant gets its own database schema, providing strong data isolation at the database level.
+Schema-per-tenant isolation for PostgreSQL. Each tenant gets its own schema named from its numeric id (`tenant_<id>` by default). The active tenant comes from the verified JWT custom claim, not a client header.
 
 ```typescript
 import { tenancy } from '@bajustone/fortress/plugins/tenancy';
 
 tenancy({
-  headerName: 'X-Tenant-Code',    // default: read tenant from this header
-  schemaPrefix: 'tenant_',         // default: schema naming convention
+  schemaPrefix: 'tenant_',
+  routes: false, // opt in to /tenancy/* HTTP routes with true
+  onSchemaCreated: async (schemaName, rawQuery) => {
+    await rawQuery(`CREATE TABLE IF NOT EXISTS ${schemaName}.widgets (id SERIAL PRIMARY KEY)`);
+  },
+  dropSchemaOnDelete: false,
 })
 ```
 
 **Methods:**
 
 ```typescript
-// Create a new tenant (creates a PostgreSQL schema)
+// Create a new tenant (creates PostgreSQL schema tenant_<id>)
 const tenant = await fortress.plugins['tenancy'].createTenant({
   name: 'Acme Corp',
-  taxId: 'acme-corp',          // unique identifier, used in schema name
+  taxId: 'acme-corp', // unique external code; not used in schema names
   description: 'Enterprise customer',
 });
 
 // Add a user to a tenant (first tenant becomes default)
 await fortress.plugins['tenancy'].addUserToTenant(userId, tenant.id);
 
-// List a user's tenants
+// List tenants
 const tenants = await fortress.plugins['tenancy'].getUserTenants(userId);
+const mine = await fortress.plugins['tenancy'].getMyTenants({ userId });
 
-// Switch the user's default tenant
-await fortress.plugins['tenancy'].switchTenant(userId, 'acme-corp');
+// Switch the user's default tenant; token refresh/login picks it up
+await fortress.plugins['tenancy'].switchTenant({ taxId: 'acme-corp', userId });
+
+// Delete tenant row/memberships; schema drop requires dropSchemaOnDelete
+await fortress.plugins['tenancy'].deleteTenant({ id: tenant.id });
 ```
 
 The plugin automatically:
-- Enriches JWT claims with `tenantId` and `tenantCode`
-- Wraps the database adapter to inject `SET LOCAL search_path` on every query
-- Scopes all data access to the tenant's schema transparently
+- Enriches JWT custom claims with `tenantId` and `tenantCode`
+- Pins PostgreSQL `search_path` transaction-locally with a bound parameter
+- Fails closed when no verified tenant claim is present
+
+JWT staleness note: removing a user from a tenant takes effect when existing access tokens expire or are refreshed; revoke sessions for immediate removal.
 
 ---
 
