@@ -1100,7 +1100,10 @@ See [docs/route-manifest.md](docs/route-manifest.md) for drift-checking in CI.
 ### Host-Owned Protected Routes
 
 When your app owns a route but wants Fortress's security pipeline, wrap it with
-`protect()` (core) or an adapter `protectedRoute()` helper. The route's endpoint
+`protect()` (core) or an adapter `protectedRoute()` helper — both are now
+generic over the `EndpointDefinition` you pass, so `ctx.body` / `ctx.query`
+/ `ctx.params` / `ctx.input` are typed from the endpoint's schemas with no
+casts in your handler. The route's endpoint
 metadata supplies CSRF, auth, RBAC, validation, plugin middleware, and optional
 auth-cookie attachment.
 

@@ -35,6 +35,31 @@ const response = await handler(request);
 
 `target` may be an `EndpointDefinition` or a unique endpoint `handler` name. If a handler name maps to multiple routes, pass the definition directly or set `method`.
 
+### Typed input inference
+
+`protect()` is generic over the endpoint you pass it. When `target` is the value returned by `endpoint(...).build()`, its phantom `<TBody, TQuery, TParams, TResponses>` generics flow into the `ProtectedRouteContext`:
+
+```ts
+const createThing = endpoint('POST', '/things/:id')
+  .summary('Create thing')
+  .security('bearer')
+  .permission('thing', 'write')
+  .body(obj({ name: str() }, 'name'))
+  .params(obj({ id: int() }, 'id'))
+  .response(201, 'Created', obj({ ok: str() }, 'ok'))
+  .handler('createThing')
+  .build();
+
+const handler = protect(fortress, createThing, async (ctx) => {
+  // ctx.body is { name: string } | undefined
+  // ctx.params is { id: number }
+  // ctx.input is { name: string; id: number }
+  return { ok: ctx.body!.name };
+});
+```
+
+Passing a string handler name keeps the looser `Record<string, unknown>` / `unknown` typing (no inference source available). Runtime validation and coercion are identical in both cases — this is purely a typing improvement.
+
 ## Hono
 
 ```ts

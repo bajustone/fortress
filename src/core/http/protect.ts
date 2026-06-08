@@ -7,7 +7,13 @@
  * validation, and auth-cookie attachment.
  */
 
-import type { EndpointDefinition } from '../endpoint';
+import type {
+  EndpointDefinition,
+  InferEndpointBody,
+  InferEndpointCallInput,
+  InferEndpointParams,
+  InferEndpointQuery,
+} from '../endpoint';
 import type { Fortress } from '../fortress';
 import type { RouteManifestEntry } from '../manifest/route-manifest';
 import type { Subject, TokenClaims } from '../types';
@@ -20,7 +26,26 @@ import { buildRouteTable, matchRoute } from './match';
 import { runPluginMiddleware } from './plugin-middleware';
 import { tryPluginPrincipal } from './principal';
 
-export type ProtectedRouteTarget = string | EndpointDefinition;
+/**
+ * What you point `protect()` at: an `EndpointDefinition` (preferred — its
+ * phantom `<TBody, TQuery, TParams, TResponses>` types flow into the
+ * `ProtectedRouteContext`) or a handler name from `fortress.endpoints`
+ * (looser typing, falls back to `Record<string, unknown>` / `unknown`).
+ */
+
+export type ProtectedRouteTarget<E extends EndpointDefinition<any, any, any, any> = EndpointDefinition>
+  = string | E;
+
+/**
+ * Widen `{}` (the `EndpointDefinition` default for an unspecified input slot)
+ * back to `Record<string, unknown>` so adapter callers that pass a string
+ * target — or an untyped `EndpointDefinition` — keep the loose ergonomics
+ * they had before generics existed. A real declared schema produces a
+ * narrow object type, which passes through unchanged.
+ */
+type WidenObj<T> = [keyof T] extends [never] ? Record<string, unknown> : T;
+/** Same idea for the body slot, but the loose fallback is `unknown`. */
+type WidenBody<T> = [keyof T] extends [never] ? unknown : T;
 
 export interface ProtectOptions {
   /**
@@ -37,23 +62,42 @@ export interface ProtectOptions {
   attachAuthCookies?: boolean;
 }
 
-export interface ProtectedRouteContext {
+/**
+ * Per-request context handed to the host callback. When `target` is a
+ * typed `EndpointDefinition`, `body` / `query` / `params` / `input` are
+ * inferred from its phantom generics; when `target` is a handler name
+ * string, they fall back to `Record<string, unknown>` / `unknown`.
+ */
+export interface ProtectedRouteContext<
+
+  E extends EndpointDefinition<any, any, any, any> = EndpointDefinition,
+> {
   request: Request;
-  endpoint: EndpointDefinition;
+  /** The resolved endpoint definition (typed when the target was typed). */
+  endpoint: E;
   manifest: RouteManifestEntry;
   subject?: Subject;
   userId?: number;
   claims?: TokenClaims;
   scopes?: string[] | null;
-  params: Record<string, unknown>;
-  query: Record<string, unknown>;
-  body?: unknown;
-  /** Merged `{ ...body, ...query, ...params }` input after URL coercion. */
-  input: Record<string, unknown>;
+  params: WidenObj<InferEndpointParams<E>>;
+  query: WidenObj<InferEndpointQuery<E>>;
+  body?: WidenBody<InferEndpointBody<E>>;
+  /**
+   * Merged `{ ...body, ...query, ...params }` input after URL coercion.
+   * Typed as the same intersection the `fortress.call.*` proxy uses.
+   */
+  input: [keyof InferEndpointCallInput<E>] extends [never]
+    ? Record<string, unknown>
+    : InferEndpointCallInput<E>;
 }
 
-export type ProtectedRouteHandler<TResult = unknown> = (
-  ctx: ProtectedRouteContext,
+export type ProtectedRouteHandler<
+
+  E extends EndpointDefinition<any, any, any, any> = EndpointDefinition,
+  TResult = unknown,
+> = (
+  ctx: ProtectedRouteContext<E>,
 ) => TResult | Response | Promise<TResult | Response>;
 
 function targetLabel(target: ProtectedRouteTarget): string {
@@ -149,11 +193,38 @@ function maybeAttachAuthCookies(fortress: Fortress, result: Response | unknown, 
  * Build a web-standard protected route handler for a host-owned route.
  * Adapter-specific helpers wrap this function for Hono, Express, and
  * SvelteKit ergonomics.
+ *
+ * Two overloads:
+ *
+ * - **Typed target** — pass an `EndpointDefinition` (e.g. the value produced
+ *   by `endpoint(...).build()`). Its `<TBody, TQuery, TParams, TResponses>`
+ *   phantoms flow into `ctx.body` / `ctx.query` / `ctx.params` / `ctx.input`.
+ * - **String target** — pass a unique `handler` name. Inputs fall back to
+ *   `Record<string, unknown>` / `unknown`, matching pre-0.2.x behaviour.
+ *
+ * The runtime is identical in both forms; this is purely typing.
  */
+export function protect<
+
+  E extends EndpointDefinition<any, any, any, any>,
+  TResult = unknown,
+>(
+  fortress: Fortress,
+  target: E,
+  handler: ProtectedRouteHandler<E, TResult>,
+  options?: ProtectOptions,
+): (request: Request) => Promise<Response>;
 export function protect<TResult = unknown>(
   fortress: Fortress,
+  target: string,
+  handler: ProtectedRouteHandler<EndpointDefinition, TResult>,
+  options?: ProtectOptions,
+): (request: Request) => Promise<Response>;
+export function protect(
+  fortress: Fortress,
   target: ProtectedRouteTarget,
-  handler: ProtectedRouteHandler<TResult>,
+
+  handler: ProtectedRouteHandler<any, unknown>,
   options: ProtectOptions = {},
 ): (request: Request) => Promise<Response> {
   const endpoint = findEndpoint(fortress, target, options.method);
@@ -250,7 +321,10 @@ export function protect<TResult = unknown>(
         query,
         body,
         input,
-      });
+        // Cast: the runtime values are untyped records; the generic context
+        // type narrows them for the caller, but the impl signature uses the
+        // loose `ProtectedRouteContext<EndpointDefinition>`.
+      } as ProtectedRouteContext);
 
       response = result instanceof Response ? result : jsonResponse(result, successStatus(endpoint));
       if (options.attachAuthCookies ?? true)

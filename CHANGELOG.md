@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **Typing (breaking, types-only):** `protect()` and the Hono / Express / SvelteKit `protectedRoute()` wrappers are now generic over the `EndpointDefinition` you point them at. Passing a typed endpoint (the value produced by `endpoint(...).build()`) flows its phantom `<TBody, TQuery, TParams, TResponses>` generics into `ctx.body` / `ctx.query` / `ctx.params` / `ctx.input` — no more `unknown` / `Record<string, unknown>` at the call boundary, and no more local casts in host apps. Passing a string `handler` name keeps the previous loose typing. The runtime is identical; this is a `.d.ts`-only change.
+- Hono `protectedRoute()` renames its environment type parameter from `E` to `HEnv` so it no longer collides with the new endpoint generic. Callers who relied on positional type-argument inference are unaffected; callers that passed the env explicitly should rename the slot.
+
 ## [0.2.0] - 2026-06-08
 
 ### Added
