@@ -28,7 +28,11 @@ CREATE TABLE IF NOT EXISTS fortress_schema_version (
 );
 ```
 
-Then insert/update singleton row `id = 1, version = 1`.
+The singleton version row (`id = 1`) is **not** written by this SQL — the
+migration runner (`migrateUp`) stamps it after each migration applies, so
+version tracking has a single source of truth. Applying the raw SQL by
+hand creates the table at version 0; run `migrateUp` (or the CLI) to stamp
+the current version.
 
 ## Rollback
 

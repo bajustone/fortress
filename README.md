@@ -1129,16 +1129,23 @@ and SvelteKit examples.
 ### Migration Tooling
 
 Fortress ships versioned SQL migrations for Fortress-owned tables and indexes
-under `migrations/{sqlite,pg}`. Runtime helpers compare your live database's
-`fortress_schema_version` singleton row against the bundled catalog.
+under `migrations/{sqlite,pg}`. The bundled `0002_initial_schema` migration
+creates every Fortress table, so `migrateUp` provisions a brand-new database
+end-to-end through the adapter's `rawQuery` — no Drizzle or `drizzle-kit`
+dependency at runtime. Runtime helpers compare your live database's
+`fortress_schema_version` singleton row (and the actual tables/columns)
+against the bundled catalog.
 
 ```typescript
-import { getMigrationStatus, migrateUp } from '@bajustone/fortress';
+import { detectMigrationDrift, hasMigrationDrift, migrateUp } from '@bajustone/fortress';
 
-const status = await getMigrationStatus(fortress.config.database);
-if (!status.upToDate) {
-  await migrateUp(fortress.config.database);
-}
+// Provision (or upgrade) a database — idempotent, safe on every deploy.
+await migrateUp(fortress.config.database);
+
+// Preflight: fails closed on missing tables OR missing columns.
+const drift = await detectMigrationDrift(fortress.config.database);
+if (hasMigrationDrift(drift))
+  throw new Error('Schema drift detected');
 ```
 
 CLI helpers expose the bundled catalog and SQL:
@@ -1149,8 +1156,10 @@ fortress migrate:up --dialect pg --out migrations.sql
 fortress migrate:check --dialect sqlite
 ```
 
-See [docs/migrations/0001-schema-version.md](docs/migrations/0001-schema-version.md)
-and the [migration upgrade guide](docs/migrations/upgrade-guide.md).
+See the per-release notes
+([0001](docs/migrations/0001-schema-version.md),
+[0002](docs/migrations/0002-initial-schema.md)) and the
+[migration upgrade guide](docs/migrations/upgrade-guide.md).
 
 ### Drizzle Adapter
 
@@ -1884,6 +1893,13 @@ await fortress.plugins['audit-log'].logCustomEvent({
 // Verify hash chain integrity (tamper detection)
 const result = await fortress.plugins['audit-log'].verifyChain();
 // result.valid, result.totalEntries, result.brokenLinks
+
+// Export for compliance/retention — JSON (default) or RFC 4180 CSV,
+// using the same filters as getAuditLog
+const csv = await fortress.plugins['audit-log'].exportEntries('csv', {
+  userId: 42,
+  from: new Date('2026-01-01'),
+});
 ```
 
 When `hashChain` is enabled, each log entry stores a SHA-256 hash of the previous entry. `verifyChain()` walks the entire chain and reports any mismatches.

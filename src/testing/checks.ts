@@ -141,8 +141,8 @@ export function checkPublicRoutes(
 /**
  * Run the migration drift detector and return a {@link CheckResult}.
  * Reports missing version table, pending migrations, an unknown
- * future version (DB ahead of the bundled catalog), and missing
- * Fortress-owned tables.
+ * future version (DB ahead of the bundled catalog), missing
+ * Fortress-owned tables, and present-but-stale tables missing columns.
  */
 export async function checkMigrationDrift(
   db: DatabaseAdapter,
@@ -158,6 +158,13 @@ export async function checkMigrationDrift(
     messages.push(`Database is at version ${drift.currentVersion} but bundled catalog stops at ${drift.latestVersion}`);
   if (drift.missingTables.length > 0)
     messages.push(`Missing Fortress tables: ${drift.missingTables.join(', ')}`);
+  if (drift.missingColumns.length > 0) {
+    messages.push(
+      `Stale Fortress tables missing columns: ${drift.missingColumns
+        .map(entry => `${entry.table} (${entry.columns.join(', ')})`)
+        .join('; ')}`,
+    );
+  }
   return { ok: !hasMigrationDrift(drift), drift, messages };
 }
 

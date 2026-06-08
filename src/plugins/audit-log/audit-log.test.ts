@@ -1,5 +1,5 @@
 import type { Fortress } from '../../core/fortress';
-import type { AuditLogEntry, AuditLogQueryOptions, ChainVerificationResult } from './index';
+import type { AuditLogEntry, AuditLogMethods, AuditLogQueryOptions, ChainVerificationResult } from './index';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
@@ -315,6 +315,59 @@ describe('audit-log plugin', () => {
       const entry = entries.find(e => e.eventType === 'GROUP_CREATED');
       expect(entry).toBeDefined();
       expect(entry!.targetType).toBe('group');
+    });
+  });
+
+  describe('exportEntries method', () => {
+    it('exports entries as JSON by default', async () => {
+      const methods = fortress.plugins['audit-log'] as AuditLogMethods;
+
+      await fortress.auth.createUser({ email: 'export@example.com', name: 'Export', password: 'password-123' });
+      await fortress.auth.login('export@example.com', 'password-123');
+
+      const json = await methods.exportEntries();
+      const parsed = JSON.parse(json) as { eventType: string }[];
+      expect(parsed.length).toBeGreaterThanOrEqual(1);
+      expect(parsed.some(entry => entry.eventType === 'LOGIN_SUCCESS')).toBe(true);
+    });
+
+    it('exports entries as CSV with a stable header row', async () => {
+      const methods = fortress.plugins['audit-log'] as AuditLogMethods;
+
+      await fortress.auth.createUser({ email: 'csv@example.com', name: 'Csv', password: 'password-123' });
+      await fortress.auth.login('csv@example.com', 'password-123');
+
+      const csv = await methods.exportEntries('csv');
+      const lines = csv.split('\n');
+      expect(lines[0]).toBe('id,timestamp,eventType,actorId,actorType,targetId,targetType,ipAddress,userAgent,outcome,metadata,previousHash,createdAt');
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+      expect(csv).toContain('LOGIN_SUCCESS');
+    });
+
+    it('escapes CSV cells containing commas and quotes (RFC 4180)', async () => {
+      const methods = fortress.plugins['audit-log'] as AuditLogMethods;
+
+      await methods.logCustomEvent({
+        eventType: 'ROLE_CREATED',
+        metadata: { note: 'a, b "quoted"' },
+      });
+
+      const csv = await methods.exportEntries('csv');
+      // The metadata JSON contains a comma and quotes, so the cell must be
+      // wrapped and its embedded quotes doubled.
+      expect(csv).toContain('""note""');
+    });
+
+    it('honours query filters when exporting', async () => {
+      const methods = fortress.plugins['audit-log'] as AuditLogMethods;
+
+      await fortress.auth.createUser({ email: 'filter@example.com', name: 'Filter', password: 'password-123' });
+      await fortress.auth.login('filter@example.com', 'password-123');
+
+      const json = await methods.exportEntries('json', { eventType: 'REGISTER' });
+      const parsed = JSON.parse(json) as { eventType: string }[];
+      expect(parsed.length).toBeGreaterThanOrEqual(1);
+      expect(parsed.every(entry => entry.eventType === 'REGISTER')).toBe(true);
     });
   });
 

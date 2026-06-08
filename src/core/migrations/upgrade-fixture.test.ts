@@ -19,6 +19,7 @@ import {
   migrateDown,
   migrateUp,
 } from './engine';
+import { FORTRESS_TABLES } from './migrations';
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';
 
@@ -42,7 +43,7 @@ function createBareSqliteAdapter(): DatabaseAdapter {
 }
 
 describe('migration upgrade fixture (bare sqlite)', () => {
-  it('reports a bare DB as drifted and applies the schema-version baseline', async () => {
+  it('provisions a bare DB end-to-end from the bundled migrations', async () => {
     const db = createBareSqliteAdapter();
 
     const initial = await getMigrationStatus(db, 'sqlite');
@@ -53,25 +54,42 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     expect(hasMigrationDrift(initialDrift)).toBe(true);
     expect(initialDrift.missingVersionTable).toBe(true);
     // A bare DB is missing every Fortress table.
-    expect(initialDrift.missingTables.length).toBeGreaterThan(30);
+    expect(initialDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
 
     const up = await migrateUp(db, 'sqlite');
     expect(up.fromVersion).toBe(0);
-    expect(up.toVersion).toBe(1);
+    expect(up.toVersion).toBe(2);
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema']);
 
     const after = await getMigrationStatus(db, 'sqlite');
     expect(after.hasVersionTable).toBe(true);
-    expect(after.currentVersion).toBe(1);
+    expect(after.currentVersion).toBe(2);
     expect(after.upToDate).toBe(true);
+
+    // The full schema is now installed: no missing tables, no missing columns.
+    const afterDrift = await detectMigrationDrift(db, 'sqlite');
+    expect(hasMigrationDrift(afterDrift)).toBe(false);
+    expect(afterDrift.missingTables).toEqual([]);
+    expect(afterDrift.missingColumns).toEqual([]);
+
+    // The provisioned schema is actually usable, not just present.
+    const user = await db.create<{ id: number }>({
+      model: 'user',
+      data: { email: 'fixture@test.com', name: 'Fixture', passwordHash: 'h', isActive: true },
+    });
+    expect(user.id).toBeGreaterThan(0);
 
     // Re-running is idempotent.
     const reapply = await migrateUp(db, 'sqlite');
     expect(reapply.applied).toEqual([]);
 
-    // Roll back below 0 leaves the DB without the version table again.
+    // Roll back below 0 drops every Fortress table again.
     const down = await migrateDown(db, 'sqlite');
     expect(down.toVersion).toBe(0);
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['initial_schema', 'schema_version']);
     const final = await getMigrationStatus(db, 'sqlite');
     expect(final.hasVersionTable).toBe(false);
+    const finalDrift = await detectMigrationDrift(db, 'sqlite');
+    expect(finalDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
   });
 });

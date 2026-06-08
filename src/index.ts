@@ -98,7 +98,7 @@ export type { RouteClassification, RouteManifestEntry } from './core/manifest/ro
 /** Fortress schema migration metadata and runner helpers. */
 export { detectMigrationDrift, getMigrationStatus, hasMigrationDrift, migrateDown, migrateUp } from './core/migrations/engine';
 export type { MigrationApplyResult, MigrationDownResult, MigrationDrift, MigrationStatus } from './core/migrations/engine';
-export { FORTRESS_TABLES, fortressMigrations, getFortressMigrations, getLatestMigrationVersion } from './core/migrations/migrations';
+export { FORTRESS_TABLES, fortressMigrations, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion, getMigrationUpSql } from './core/migrations/migrations';
 export type { FortressMigration, MigrationDialect } from './core/migrations/migrations';
 
 /**

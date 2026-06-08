@@ -1,7 +1,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressMigration, MigrationDialect } from './migrations';
 import { Errors } from '../errors';
-import { FORTRESS_TABLES, getFortressMigrations, getLatestMigrationVersion } from './migrations';
+import { FORTRESS_TABLES, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion } from './migrations';
 
 export interface MigrationStatus {
   dialect: MigrationDialect;
@@ -41,6 +41,16 @@ export interface MigrationDrift {
    * dump. Compared against {@link FORTRESS_TABLES}.
    */
   missingTables: string[];
+  /**
+   * Per-table columns that the bundled migration DDL defines but the live
+   * database is missing. Surfaces a partially-applied or hand-patched
+   * schema where the table exists but is missing a column added by a later
+   * migration. Expected columns are parsed from the migration SQL itself
+   * (see `getExpectedColumns`), so this works for any adapter. Only tables
+   * that are present in the live DB are inspected — fully missing tables are
+   * reported via {@link missingTables} instead.
+   */
+  missingColumns: { table: string; columns: string[] }[];
 }
 
 function assertRawQuery(db: DatabaseAdapter): NonNullable<DatabaseAdapter['rawQuery']> {
@@ -105,6 +115,31 @@ async function listFortressTables(
     'SELECT table_name FROM information_schema.tables WHERE table_schema = \'public\' AND table_name LIKE \'fortress_%\'',
   );
   return new Set(rows.map(row => row.table_name));
+}
+
+/**
+ * List the columns of a single Fortress table from the live database.
+ * Returns an empty set if the table does not exist. Uses catalog
+ * introspection (`PRAGMA table_info` / `information_schema.columns`) through
+ * `rawQuery`, so it stays adapter-agnostic. The table name is sourced from
+ * Fortress's own `FORTRESS_TABLES`, never user input.
+ */
+async function listColumns(
+  db: DatabaseAdapter,
+  dialect: MigrationDialect,
+  table: string,
+): Promise<Set<string>> {
+  const rawQuery = assertRawQuery(db);
+  if (dialect === 'sqlite') {
+    const rows = await rawQuery<{ name: string }>(`PRAGMA table_info(${table})`);
+    return new Set(rows.map(row => row.name.toLowerCase()));
+  }
+
+  const rows = await rawQuery<{ column_name: string }>(
+    'SELECT column_name FROM information_schema.columns WHERE table_schema = \'public\' AND table_name = $1',
+    [table],
+  );
+  return new Set(rows.map(row => row.column_name.toLowerCase()));
 }
 
 async function readCurrentVersion(db: DatabaseAdapter, dialect: MigrationDialect): Promise<{ version: number; hasVersionTable: boolean }> {
@@ -205,6 +240,22 @@ export async function detectMigrationDrift(
   const status = await getMigrationStatus(db, dialect);
   const present = await listFortressTables(db, dialect);
   const missingTables = FORTRESS_TABLES.filter(name => !present.has(name));
+
+  // Column-level drift: inspect only tables that actually exist (fully
+  // missing tables are already reported above). Expected columns come from
+  // the bundled migration DDL, so this catches a table that was created
+  // from an older schema and never got a later migration's new column.
+  const expectedColumns = getExpectedColumns(dialect);
+  const missingColumns: { table: string; columns: string[] }[] = [];
+  for (const [table, columns] of Object.entries(expectedColumns)) {
+    if (!present.has(table))
+      continue;
+    const live = await listColumns(db, dialect, table);
+    const missing = columns.filter(column => !live.has(column));
+    if (missing.length > 0)
+      missingColumns.push({ table, columns: missing });
+  }
+
   return {
     dialect,
     currentVersion: status.currentVersion,
@@ -213,6 +264,7 @@ export async function detectMigrationDrift(
     unknownFutureVersion: status.currentVersion > status.latestVersion,
     pendingVersions: status.pending.map(migration => migration.version),
     missingTables,
+    missingColumns,
   };
 }
 
@@ -220,5 +272,6 @@ export function hasMigrationDrift(drift: MigrationDrift): boolean {
   return drift.missingVersionTable
     || drift.unknownFutureVersion
     || drift.pendingVersions.length > 0
-    || drift.missingTables.length > 0;
+    || drift.missingTables.length > 0
+    || drift.missingColumns.length > 0;
 }

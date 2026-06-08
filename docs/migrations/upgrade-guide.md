@@ -42,7 +42,7 @@ const down = await migrateDown(adapter, 'sqlite', 0);
 
 const drift = await detectMigrationDrift(adapter);
 //   { currentVersion, latestVersion, missingVersionTable, unknownFutureVersion,
-//     pendingVersions, missingTables }
+//     pendingVersions, missingTables, missingColumns }
 if (hasMigrationDrift(drift)) throw new Error('Schema drift detected');
 ```
 
@@ -72,37 +72,47 @@ CLI cannot access secrets or per-environment connection strings safely).
 | `missingVersionTable` | `fortress_schema_version` does not exist | Run `migrateUp` |
 | `pendingVersions` | Migrations the runtime has but the DB has not applied | Run `migrateUp` |
 | `unknownFutureVersion` | DB is at a higher version than the bundled migrations | Upgrade the Fortress version before deploying |
-| `missingTables` | Any `FORTRESS_TABLES` entry not present in the DB | Provision the DB from `src/drizzle/schema.ts` / `src/testing/index.ts` or finish the migration run |
+| `missingTables` | Any `FORTRESS_TABLES` entry not present in the DB | Run `migrateUp`, or finish the interrupted migration run |
+| `missingColumns` | A table that exists but is missing a column the bundled DDL defines | Apply the migration that adds the column (or recreate the table from the bundled DDL) |
 
-`missingTables` is the broadest check — it catches the case where the
-version table claims everything is applied but a table is genuinely
-missing (manual DROP, partial restore, drizzle-kit catching up). Wire
-`hasMigrationDrift()` into your deploy preflight and your CI smoke
-tests.
+`missingTables` and `missingColumns` are the deep checks — they catch the
+case where the version table claims everything is applied but the schema
+is genuinely incomplete (manual DROP, partial restore, a table created
+from an older schema dump). Expected columns are parsed straight out of
+the bundled migration DDL, so the check works for any adapter — not just
+Drizzle. Wire `hasMigrationDrift()` into your deploy preflight and your CI
+smoke tests.
 
 ## Current baseline (v0.1.x)
 
-The committed `0001_schema_version` migration only installs the
-`fortress_schema_version` table — Fortress tables are still provisioned
-from the Drizzle schema definitions (`src/drizzle/{,pg/}schema.ts`) the
-first time you deploy. The drift checker reports this state honestly:
-on a fresh database with no Fortress tables, `missingTables` lists every
-expected table even after `migrateUp` runs.
+Two migrations ship today:
 
-A full initial-schema migration is in progress — it will be generated
-from the Drizzle schemas via `drizzle-kit` so the SQL stays mechanically
-in sync with the source of truth. Until then, treat the schema-version
-checkpoint as the upgrade marker, not the only thing the drift checker
-covers.
+- **`0001_schema_version`** — installs the `fortress_schema_version`
+  checkpoint table.
+- **`0002_initial_schema`** — creates every Fortress-owned table, index,
+  and constraint. This is plain SQL run through the adapter's `rawQuery`,
+  so `migrateUp` provisions a brand-new database (SQLite **or**
+  PostgreSQL) with no external tooling and no Drizzle dependency at
+  runtime.
 
-### Provisioning a new database today
+The migrations are the SQL-first source of truth: `src/testing/index.ts`
+derives the test adapter's schema from them, and the column-drift checker
+parses expected columns from them, so the test adapter and a production
+`migrateUp` cannot diverge.
 
-1. Run your Drizzle schema setup (or `createTestAdapter()` for tests) to
-   create the Fortress tables.
-2. Call `migrateUp(adapter)` to stamp `fortress_schema_version` at the
-   latest bundled version.
-3. Call `detectMigrationDrift(adapter)` to confirm `missingTables` is
-   empty.
+### Provisioning a new database
+
+1. Point Fortress at an empty database (any adapter with `rawQuery`).
+2. Call `migrateUp(adapter)` — this creates the checkpoint table, all
+   Fortress tables, and stamps `fortress_schema_version` at the latest
+   version.
+3. Call `detectMigrationDrift(adapter)` to confirm `missingTables` and
+   `missingColumns` are empty.
+
+> Drizzle users may still provision tables directly from
+> `src/drizzle/{,pg/}schema.ts` if they prefer to own schema management;
+> `migrateUp` is idempotent (`CREATE TABLE IF NOT EXISTS`) and will simply
+> stamp the version row in that case.
 
 ### Upgrading an existing database
 
@@ -123,9 +133,12 @@ rollback leaves the previous version recorded — re-run after fixing the
 underlying issue.
 
 Always take a backup before rolling back across an irreversible change
-(table drops, column drops, type narrowing). The bundled
-`0001_schema_version` down step drops the version table; that is safe
-because it only removes the checkpoint, not any application data.
+(table drops, column drops, type narrowing). The `0001_schema_version`
+down step only removes the checkpoint table. **`0002_initial_schema`'s
+down step drops every Fortress table** (PostgreSQL uses `CASCADE`), so
+rolling back below version 2 is destructive — it deletes all users,
+tokens, roles, and audit history. Only do this against a database you
+intend to re-provision, and back up first.
 
 ## Custom / additional migrations
 
