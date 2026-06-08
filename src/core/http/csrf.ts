@@ -78,7 +78,7 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * matched at segment boundaries (so `/foo` doesn't accidentally skip
  * `/foobar`).
  */
-function matchesSkipPath(path: string, skipPaths: string[]): boolean {
+export function matchesSkipPath(path: string, skipPaths: string[]): boolean {
   for (const skip of skipPaths) {
     if (path === skip)
       return true;

@@ -270,9 +270,16 @@ export function createIamService(
           permissions = fromCache;
           cached = true;
         }
+        else if (cache) {
+          // Capture the cache generation before the load so a revocation that
+          // invalidates mid-load is not clobbered by this (now stale) write.
+          const generationBeforeLoad = cache.generation();
+          permissions = await adapter.getSubjectPermissions(subject);
+          if (cache.generation() === generationBeforeLoad)
+            cache.set(cacheKey, permissions);
+        }
         else {
           permissions = await adapter.getSubjectPermissions(subject);
-          cache?.set(cacheKey, permissions);
         }
       }
 

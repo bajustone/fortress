@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from 'hono';
+import { matchesSkipPath } from '../../core/http/csrf';
 
 /** Options accepted by {@link createCsrfMiddleware}. */
 export interface CsrfConfig {
@@ -33,13 +34,14 @@ export function createCsrfMiddleware(config?: CsrfConfig): MiddlewareHandler {
       return;
     }
 
-    // Check skip paths
+    // Check skip paths. Reuse the core matcher so this helper and the
+    // pipeline agree: skips match at segment boundaries only (an exact match
+    // or a `${skip}/` prefix), so `/api/public` never silently skips a
+    // sibling like `/api/public-keys`.
     const path = new URL(c.req.url).pathname;
-    for (const skipPath of skipPaths) {
-      if (path === skipPath || path.startsWith(skipPath)) {
-        await next();
-        return;
-      }
+    if (matchesSkipPath(path, skipPaths)) {
+      await next();
+      return;
     }
 
     // Check Sec-Fetch-Site header - reject cross-site requests

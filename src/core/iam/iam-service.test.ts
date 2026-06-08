@@ -655,3 +655,34 @@ describe('remediation regressions (P3.1, P3.3)', () => {
     expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'doc', 'read')).toBe(true);
   });
 });
+
+describe('iam-service: RBAC decision cache invalidation (F5)', () => {
+  let fortress: Fortress;
+
+  beforeEach(() => {
+    fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      rbac: { cache: { ttlSeconds: 30 } },
+    });
+  });
+
+  it('a revocation is reflected immediately even though the ALLOW was cached', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'cache@test.com',
+      name: 'Cache',
+      password: 'password-123',
+    });
+    const role = await fortress.iam.createRole('editor', [{ resource: 'post', action: 'delete' }]);
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+
+    // Populate the cache with an ALLOW.
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'delete')).toBe(true);
+
+    // Revoke — this invalidates the cache entry (and bumps its generation).
+    await fortress.iam.unbindRole('USER', user.id, role.id);
+
+    // The very next check must NOT serve the stale cached ALLOW.
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'post', 'delete')).toBe(false);
+  });
+});

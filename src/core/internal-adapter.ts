@@ -148,6 +148,18 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
           return [];
       }
 
+      // Same second line of defense for users: a deactivated or deleted user
+      // resolves no permissions, even if a stale credential (e.g. an API key)
+      // somehow reaches this point.
+      if (subject.type === 'USER') {
+        const user = await db.findOne<{ id: number; isActive: boolean }>({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: subject.id }],
+        });
+        if (!user || !user.isActive)
+          return [];
+      }
+
       // Optimized path: single JOIN query when rawQuery is available
       if (db.rawQuery) {
         const rbTenant = tenantFilter ? ' AND (rb.tenant_id = ? OR rb.tenant_id IS NULL)' : '';

@@ -93,4 +93,33 @@ describe('permissionCache', () => {
     expect(saPerms).toHaveLength(1);
     expect(saPerms![0].resource).toBe('deploy');
   });
+
+  describe('generation (F5 TOCTOU guard)', () => {
+    it('starts at 0 and increments on invalidate and invalidateAll', () => {
+      const cache = createPermissionCache(30_000, 100);
+      expect(cache.generation()).toBe(0);
+
+      cache.invalidate(userKey(1));
+      expect(cache.generation()).toBe(1);
+
+      cache.invalidateAll();
+      expect(cache.generation()).toBe(2);
+    });
+
+    it('lets a read-through detect that an invalidation raced its load', () => {
+      const cache = createPermissionCache(30_000, 100);
+      // Mirrors the checkPermission read-through ordering:
+      const gen = cache.generation(); // captured before the (awaited) DB load
+      cache.invalidate(userKey(1)); // a revocation fires mid-load
+      // Guard: the load is now stale, so the caller must NOT write it back.
+      expect(cache.generation() !== gen).toBe(true);
+    });
+
+    it('does not bump generation on get or set (only revocations advance it)', () => {
+      const cache = createPermissionCache(30_000, 100);
+      cache.set(userKey(1), [perm(1)]);
+      cache.get(userKey(1));
+      expect(cache.generation()).toBe(0);
+    });
+  });
 });

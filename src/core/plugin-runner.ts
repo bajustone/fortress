@@ -134,7 +134,10 @@ export function wrapAdapterWithScopeRules(
     }): Promise<T> =>
       adapter.create<T>({
         ...params,
-        data: { ...defaults, ...params.data },
+        // Scope defaults are spread LAST so they are authoritative: a caller
+        // cannot override the resolved scope field (e.g. orgId/tenantId) in
+        // its payload to write a row into another scope.
+        data: { ...params.data, ...defaults },
       }),
 
     findOne: <T>(params: {
@@ -166,6 +169,11 @@ export function wrapAdapterWithScopeRules(
       adapter.update<T>({
         ...params,
         where: [...params.where, ...filters],
+        // Re-assert the scope field on writes too: the WHERE filters only
+        // ensure the targeted row is already in the caller's scope, they do
+        // not stop the payload from rewriting the scope field to move the row
+        // into another scope. Spreading defaults last forces it back.
+        data: { ...params.data, ...defaults },
       }),
 
     delete: (params: { model: string; where: WhereClause[] }): Promise<void> =>

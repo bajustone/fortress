@@ -255,6 +255,18 @@ export async function resolveApiKey(
       return null;
   }
 
+  // Enforce isActive (and existence) for user owners. Without this a key
+  // outlives account deactivation/deletion — the JWT path blocks inactive
+  // users at login/refresh, so the API-key credential must gate too.
+  if (record.subjectType === 'USER') {
+    const user = await db.findOne<{ id: number; isActive: boolean }>({
+      model: 'user',
+      where: [{ field: 'id', operator: '=', value: record.subjectId }],
+    });
+    if (!user || !user.isActive)
+      return null;
+  }
+
   await db.update({
     model: 'api_key',
     where: [{ field: 'id', operator: '=', value: record.id }],

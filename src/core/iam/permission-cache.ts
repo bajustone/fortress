@@ -19,10 +19,19 @@ export interface PermissionCache {
   set: (key: string, permissions: Permission[]) => void;
   invalidate: (key: string) => void;
   invalidateAll: () => void;
+  /**
+   * Monotonic counter bumped on every `invalidate`/`invalidateAll`. Callers
+   * doing a read-through (miss → load from DB → set) capture this before the
+   * load and skip the `set` if it advanced, closing the TOCTOU window where a
+   * revocation that fires mid-load would otherwise be clobbered by a stale
+   * write and keep a revoked subject authorized until the entry expires.
+   */
+  generation: () => number;
 }
 
 export function createPermissionCache(ttlMs: number, maxEntries: number): PermissionCache {
   const store = new Map<string, CacheEntry>();
+  let generation = 0;
 
   return {
     get(key: string): Permission[] | undefined {
@@ -48,10 +57,16 @@ export function createPermissionCache(ttlMs: number, maxEntries: number): Permis
 
     invalidate(key: string): void {
       store.delete(key);
+      generation++;
     },
 
     invalidateAll(): void {
       store.clear();
+      generation++;
+    },
+
+    generation(): number {
+      return generation;
     },
   };
 }

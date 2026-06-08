@@ -9,6 +9,7 @@ import {
   collectScopeRules,
   mergeTokenClaims,
   processPlugins,
+  wrapAdapterWithScopeRules,
 } from './plugin-runner';
 
 const mockDb = {} as DatabaseAdapter;
@@ -181,5 +182,64 @@ describe('collectScopeRules', () => {
     const result = await collectScopeRules(plugins, 1, 'sale', { db: mockDb, config: mockConfig });
     expect(result?.filters).toHaveLength(2);
     expect(result?.defaults).toEqual({ orgId: 7, siteId: 3 });
+  });
+});
+
+describe('wrapAdapterWithScopeRules', () => {
+  function captureAdapter() {
+    const calls: { create: any[]; update: any[] } = { create: [], update: [] };
+    const adapter = {
+      create: vi.fn(async (params: any) => {
+        calls.create.push(params);
+        return params.data;
+      }),
+      update: vi.fn(async (params: any) => {
+        calls.update.push(params);
+        return params.data;
+      }),
+      findOne: vi.fn(),
+      findMany: vi.fn(),
+      delete: vi.fn(),
+      count: vi.fn(),
+      transaction: vi.fn(),
+    } as unknown as DatabaseAdapter;
+    return { adapter, calls };
+  }
+
+  const scopeRule = {
+    filters: [{ field: 'orgId', operator: '=' as const, value: 'attacker' }],
+    defaults: { orgId: 'attacker' },
+  };
+
+  it('create: caller cannot override the scope default (F1)', async () => {
+    const { adapter, calls } = captureAdapter();
+    const scoped = wrapAdapterWithScopeRules(adapter, scopeRule);
+
+    // Attacker tries to plant a row into another org by setting orgId in the body.
+    await scoped.create({ model: 'post', data: { title: 'x', orgId: 'victim' } });
+
+    // The resolved scope default wins — the row is written into the caller's org.
+    expect(calls.create[0].data.orgId).toBe('attacker');
+    expect(calls.create[0].data.title).toBe('x');
+  });
+
+  it('update: caller cannot move a row into another scope (F3)', async () => {
+    const { adapter, calls } = captureAdapter();
+    const scoped = wrapAdapterWithScopeRules(adapter, scopeRule);
+
+    // Attacker owns the row (WHERE is still scoped) but tries to rewrite orgId.
+    await scoped.update({
+      model: 'post',
+      where: [{ field: 'id', operator: '=', value: 10 }],
+      data: { orgId: 'victim', title: 'y' },
+    });
+
+    // Scope filters guard the WHERE clause...
+    expect(calls.update[0].where).toEqual(
+      expect.arrayContaining([{ field: 'orgId', operator: '=', value: 'attacker' }]),
+    );
+    // ...and the scope field is forced back, so the row cannot leave the scope.
+    expect(calls.update[0].data.orgId).toBe('attacker');
+    expect(calls.update[0].data.title).toBe('y');
   });
 });

@@ -465,9 +465,9 @@ describe('csrf middleware', () => {
     expect(good.status).toBe(200);
   });
 
-  it('supports skip paths', async () => {
+  it('supports skip paths (segment-boundary match)', async () => {
     const skipApp = new Hono();
-    skipApp.use('*', createCsrfMiddleware({ skipPaths: ['/webhook/'] }));
+    skipApp.use('*', createCsrfMiddleware({ skipPaths: ['/webhook'] }));
     skipApp.post('/webhook/github', c => c.json({ ok: true }));
     skipApp.post('/api/data', c => c.json({ ok: true }));
 
@@ -482,6 +482,29 @@ describe('csrf middleware', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
+    });
+    expect(enforced.status).toBe(403);
+  });
+
+  it('does not skip a sibling route that shares a string prefix with a skip path', async () => {
+    // Regression for the fail-open prefix match: skipping `/api/public` must
+    // NOT also skip `/api/public-keys`.
+    const skipApp = new Hono();
+    skipApp.use('*', createCsrfMiddleware({ skipPaths: ['/api/public'] }));
+    skipApp.post('/api/public', c => c.json({ ok: true }));
+    skipApp.delete('/api/public-keys', c => c.json({ ok: true }));
+
+    const skipped = await skipApp.request('/api/public', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(skipped.status).toBe(200);
+
+    // The sibling is a distinct path segment → CSRF still enforced.
+    const enforced = await skipApp.request('/api/public-keys', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
     });
     expect(enforced.status).toBe(403);
   });

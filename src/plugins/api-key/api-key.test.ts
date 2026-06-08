@@ -64,12 +64,13 @@ async function setup(config: ApiKeyConfig = { prefix: 'test', maxKeysPerSubject:
 }
 
 describe('api-key plugin — programmatic methods', () => {
+  let fortress: Fortress<any>;
   let methods: ApiKeyMethods;
   let userId: number;
   let otherUserId: number;
 
   beforeEach(async () => {
-    ({ methods, userId, otherUserId } = await setup());
+    ({ fortress, methods, userId, otherUserId } = await setup());
   });
 
   describe('createKey', () => {
@@ -210,6 +211,26 @@ describe('api-key plugin — programmatic methods', () => {
 
       keys = await methods.listKeys({ subject: userSubject(userId) });
       expect(keys[0].lastUsedAt).toBeTruthy();
+    });
+
+    it('rejects a key whose owning user has been deactivated (F2)', async () => {
+      const { key } = await methods.createKey({ subject: userSubject(userId), name: 'Owner Key' });
+      // Sanity: resolves while the user is active.
+      expect(await methods.resolveKey(key)).not.toBeNull();
+
+      await fortress.auth.updateUser(userId, { isActive: false });
+
+      // The key must stop authenticating once the user is deactivated.
+      expect(await methods.resolveKey(key)).toBeNull();
+    });
+
+    it('rejects a key whose owning user has been deleted (F2)', async () => {
+      const { key } = await methods.createKey({ subject: userSubject(userId), name: 'Owner Key' });
+      expect(await methods.resolveKey(key)).not.toBeNull();
+
+      await fortress.auth.deleteUser(userId);
+
+      expect(await methods.resolveKey(key)).toBeNull();
     });
 
     it('returns null for an unknown key', async () => {
