@@ -19,6 +19,7 @@ export interface DrizzleAdapterOptions {
 
 function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema): Record<string, Table> {
   return {
+    schema_version: schema.schemaVersion,
     user: schema.users,
     login_identifier: schema.loginIdentifiers,
     refresh_token: schema.refreshTokens,
@@ -154,6 +155,14 @@ function normalizeRawRows<T>(result: unknown): T[] {
   if (Array.isArray(rows))
     return rows as T[];
   return [];
+}
+
+function sqliteStatementReturnsRows(sqlText: string): boolean {
+  const normalized = sqlText.trimStart().toLowerCase();
+  return normalized.startsWith('select')
+    || normalized.startsWith('with')
+    || normalized.startsWith('pragma')
+    || normalized.includes(' returning ');
 }
 
 /**
@@ -306,8 +315,12 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
       async rawQuery<T>(sqlText: string, params?: unknown[]): Promise<T[]> {
         const query = buildRawSql(sqlText, params ?? []);
         if (isSqlite) {
-          if (typeof (drizzle as any).all === 'function')
+          if (typeof (drizzle as any).all === 'function' && sqliteStatementReturnsRows(sqlText))
             return normalizeRawRows<T>((drizzle as any).all(query));
+          if (typeof (drizzle as any).run === 'function') {
+            (drizzle as any).run(query);
+            return [];
+          }
           if (typeof (drizzle as any).execute === 'function')
             return normalizeRawRows<T>(await (drizzle as any).execute(query));
           throw Errors.badRequest('rawQuery is not supported by this SQLite Drizzle driver');

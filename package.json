@@ -91,7 +91,7 @@
       }
     }
   },
-  "files": ["dist", "src", "docs", "examples", "README.md", "LICENSE", "SECURITY.md", "CHANGELOG.md"],
+  "files": ["dist", "src", "docs", "examples", "migrations", "README.md", "LICENSE", "SECURITY.md", "CHANGELOG.md"],
   "scripts": {
     "dev": "bun run --watch examples/hono-app/index.ts",
     "lint": "eslint .",

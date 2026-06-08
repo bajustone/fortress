@@ -1,0 +1,47 @@
+{
+  "$comment": "Example Fortress policy-as-code document. Place at the root of your repo as fortress.policy.json (optionally fortress.policy.<env>.json).",
+  "resources": [
+    {
+      "name": "article",
+      "actions": ["create", "read", "update", "delete", "publish"],
+      "description": "Blog articles"
+    },
+    {
+      "name": "audit-log",
+      "actions": ["read", "export"],
+      "description": "Audit-log entries"
+    }
+  ],
+  "roles": [
+    {
+      "name": "editor",
+      "description": "Can author and publish articles",
+      "permissions": [
+        { "resource": "article", "action": "create" },
+        { "resource": "article", "action": "read" },
+        { "resource": "article", "action": "update" },
+        { "resource": "article", "action": "publish" }
+      ]
+    },
+    {
+      "name": "compliance-reviewer",
+      "description": "Read-only access to audit logs",
+      "permissions": [
+        { "resource": "audit-log", "action": "read" }
+      ]
+    }
+  ],
+  "groups": [
+    { "name": "engineering", "description": "Engineering team" },
+    { "name": "compliance", "description": "Compliance / risk team" }
+  ],
+  "serviceAccounts": [
+    {
+      "name": "ci-bot",
+      "displayName": "CI Bot",
+      "description": "GitHub Actions service account",
+      "isActive": true,
+      "roles": ["editor"]
+    }
+  ]
+}

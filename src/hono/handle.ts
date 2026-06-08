@@ -52,7 +52,7 @@ export function mountFortress<E extends Env = Env>(
   // Matching against the table catches every endpoint (auth, iam, plugin
   // routes including OpenAPI's flat `/openapi.json` and `/openapi`) without
   // needing per-prefix heuristics.
-  const routeTable = buildRouteTable(fortress.endpoints);
+  const routeTable = buildRouteTable(fortress.manifest.filter(route => route.mounted));
 
   app.use('*', async (c, next) => {
     const url = new URL(c.req.url);

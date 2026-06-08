@@ -4,6 +4,8 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     hono: 'src/hono/index.ts',
+    express: 'src/express/index.ts',
+    sveltekit: 'src/sveltekit/index.ts',
     drizzle: 'src/drizzle/index.ts',
     testing: 'src/testing/index.ts',
     crypto: 'src/core/auth/password.ts',

@@ -49,7 +49,7 @@ export function mountFortress(
   // Pre-build the route table once at startup. The middleware uses it to
   // detect whether a request is for a Fortress endpoint (catches every
   // declared endpoint, not just the IAM/oauth-prefix ones).
-  const routeTable = buildRouteTable(fortress.endpoints);
+  const routeTable = buildRouteTable(fortress.manifest.filter(route => route.mounted));
 
   const middleware: ExpressMiddleware = async (req, res, next) => {
     let pathname = req.path;

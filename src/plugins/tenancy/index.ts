@@ -264,6 +264,8 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
       // search path — there is no silent fallback to another tenant's data.
       if (tenantId == null)
         return adapter;
+      if (!Number.isInteger(tenantId))
+        throw Errors.forbidden('Invalid tenant claim');
 
       const isPg = adapter.dialect === 'pg' && !!adapter.rawQuery;
       // For SQLite/MySQL there is no schema-per-tenant model; pass through.

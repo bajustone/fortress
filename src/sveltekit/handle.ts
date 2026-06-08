@@ -64,7 +64,7 @@ export function createSvelteKitHandle(
   const basePath = options.basePath ?? '';
   // Pre-build the route table at startup so the handle hook can quickly
   // detect whether a path is a Fortress endpoint without re-parsing.
-  const routeTable = buildRouteTable(fortress.endpoints);
+  const routeTable = buildRouteTable(fortress.manifest.filter(route => route.mounted));
   const skipPatterns = (options.skipPaths ?? []).map(p => pathToRegex(p));
   const routeMap = options.routeMap ?? {};
 

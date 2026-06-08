@@ -1074,7 +1074,83 @@ mountFortress(app, fortress, {
 });
 ```
 
+### Route Security Manifest
+
+`fortress.manifest` is the generated route-security inventory used by the Hono,
+Express, and SvelteKit adapters to identify Fortress-managed paths. It derives
+from endpoint metadata and classifies each route as `public`, `authenticated`,
+`rbac`, `oauth-protocol`, or `default-deny`, including permissions, CSRF
+applicability, rate-limit coverage, and plugin origin.
+
+```typescript
+for (const route of fortress.manifest) {
+  console.log(route.method, route.path, route.classification, route.permission);
+}
+```
+
+CLI helpers are available for the core auth/IAM surface:
+
+```sh
+fortress manifest --out route-manifest.json
+fortress manifest:check
+```
+
+See [docs/route-manifest.md](docs/route-manifest.md) for drift-checking in CI.
+
+### Host-Owned Protected Routes
+
+When your app owns a route but wants Fortress's security pipeline, wrap it with
+`protect()` (core) or an adapter `protectedRoute()` helper. The route's endpoint
+metadata supplies CSRF, auth, RBAC, validation, plugin middleware, and optional
+auth-cookie attachment.
+
+```typescript
+import { endpoint, obj, str } from '@bajustone/fortress';
+import { protectedRoute } from '@bajustone/fortress/hono';
+
+const statsEndpoint = endpoint('GET', '/api/stats')
+  .summary('Stats')
+  .security('bearer')
+  .permission('stats', 'read')
+  .response(200, 'OK', obj({ ok: str() }, 'ok'))
+  .handler('stats')
+  .build();
+
+app.get('/api/stats', protectedRoute(fortress, statsEndpoint, async (_c, ctx) => {
+  return { ok: ctx.subject?.type ?? 'unknown' };
+}));
+```
+
+See [docs/host-owned-routes.md](docs/host-owned-routes.md) for Hono, Express,
+and SvelteKit examples.
+
 ## Database Adapters
+
+### Migration Tooling
+
+Fortress ships versioned SQL migrations for Fortress-owned tables and indexes
+under `migrations/{sqlite,pg}`. Runtime helpers compare your live database's
+`fortress_schema_version` singleton row against the bundled catalog.
+
+```typescript
+import { getMigrationStatus, migrateUp } from '@bajustone/fortress';
+
+const status = await getMigrationStatus(fortress.config.database);
+if (!status.upToDate) {
+  await migrateUp(fortress.config.database);
+}
+```
+
+CLI helpers expose the bundled catalog and SQL:
+
+```sh
+fortress migrate:status --dialect sqlite
+fortress migrate:up --dialect pg --out migrations.sql
+fortress migrate:check --dialect sqlite
+```
+
+See [docs/migrations/0001-schema-version.md](docs/migrations/0001-schema-version.md)
+and the [migration upgrade guide](docs/migrations/upgrade-guide.md).
 
 ### Drizzle Adapter
 
@@ -2330,6 +2406,9 @@ The test adapter auto-detects the runtime: Bun uses `bun:sqlite`, Node/Vitest us
 
 - [Architecture](docs/architecture.md) -- full technical design
 - [Security](docs/security.md) -- JWT, password hashing, token storage, CSRF, audit logging
+- [Threat model](docs/threat-model.md) -- OAuth/OIDC, refresh rotation, CSRF, IAM/RBAC, API keys, tenancy, and drift controls
+- [Route manifest](docs/route-manifest.md) and [host-owned routes](docs/host-owned-routes.md)
+- [Production deployment guide](docs/deployment.md), [migration upgrade guide](docs/migrations/upgrade-guide.md), [threat model](docs/threat-model.md), [typed adapter helpers](docs/adapter-typed-helpers.md), [CI checks](docs/ci.md), [policy-as-code](docs/policy-as-code.md), [admin recipes](docs/admin-recipes.md), [hardening guide](docs/hardening.md), [compatibility matrix](docs/compatibility.md), [examples](examples/README.md)
 - Plugin guides: [Admin](docs/plugins/admin.md), [Rate Limit](docs/plugins/rate-limit.md), [Account Lockout](docs/plugins/account-lockout.md), [Email Verification](docs/plugins/email-verification.md), [Two-Factor](docs/plugins/two-factor.md), [Magic Link](docs/plugins/magic-link.md), [API Key](docs/plugins/api-key.md), [Social Login](docs/plugins/social-login.md), [Tenancy](docs/plugins/tenancy.md), [Data Isolation](docs/plugins/data-isolation.md), [Audit Log](docs/plugins/audit-log.md), [Webhook](docs/plugins/webhook.md), [OAuth](docs/plugins/oauth.md), [WebAuthn](docs/plugins/webauthn.md), [OpenAPI](docs/plugins/openapi.md)
 
 ## License

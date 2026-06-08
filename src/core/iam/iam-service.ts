@@ -114,6 +114,7 @@ export interface IamService {
   createPermission: (permission: PermissionInput) => Promise<Permission>;
   deletePermission: (permissionId: number) => Promise<void>;
   addPermissionToRole: (roleId: number, permission: PermissionInput) => Promise<void>;
+  removePermissionFromRole: (roleId: number, permission: PermissionInput) => Promise<void>;
 
   // ── Service Accounts ───────────────────────────────────────────
   createServiceAccount: (input: CreateServiceAccountInput) => Promise<ServiceAccount>;
@@ -714,6 +715,28 @@ export function createIamService(
 
       cache?.invalidateAll();
       emit({ eventType: 'ROLE_PERMISSION_ADDED', targetId: roleId, targetType: 'role', metadata: { permissionId: perm.id, resource: permission.resource, action: permission.action } });
+    },
+
+    async removePermissionFromRole(roleId: number, permission: PermissionInput): Promise<void> {
+      // Resolve the permission row (must already exist; if not, nothing to
+      // unlink). Uses the same uniqueness key as `addPermissionToRole`
+      // (resource+action+effect+conditions) so the lookup matches the row
+      // that was previously linked.
+      const perm = await adapter.findOrCreatePermission(permission);
+      await db.delete({
+        model: 'role_permission',
+        where: [
+          { field: 'roleId', operator: '=', value: roleId },
+          { field: 'permissionId', operator: '=', value: perm.id },
+        ],
+      });
+      cache?.invalidateAll();
+      emit({
+        eventType: 'ROLE_PERMISSION_REMOVED',
+        targetId: roleId,
+        targetType: 'role',
+        metadata: { permissionId: perm.id, resource: permission.resource, action: permission.action },
+      });
     },
 
     // ── Service Accounts ─────────────────────────────────────────

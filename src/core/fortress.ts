@@ -5,6 +5,7 @@ import type { AuthCookiePayload } from './http/cookie-serialize';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { ResolvedPrincipal } from './http/principal';
 import type { IamEvent, IamService, PermissionCheckEvent } from './iam/iam-service';
+import type { RouteManifestEntry } from './manifest/route-manifest';
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
 import type { FortressPlugin, MiddlewareDefinition } from './plugin';
@@ -21,6 +22,7 @@ import { resolveRequestPrincipal as resolveRequestPrincipalFn } from './http/pri
 import { extractAccessToken as extractAccessTokenFn } from './http/token-extraction';
 import { iamEndpoints } from './iam/iam-endpoints';
 import { createIamService } from './iam/iam-service';
+import { buildRouteManifest } from './manifest/route-manifest';
 import { instrumentAdapter } from './observability/db-instrumentation';
 import { SILENT_LOGGER } from './observability/logger';
 import { NO_OP_TELEMETRY } from './observability/types';
@@ -74,6 +76,8 @@ export interface Fortress<
   config: Readonly<FortressConfig>;
   /** All endpoint definitions (auth + IAM + plugins) with JSON Schema metadata. */
   endpoints: EndpointDefinition[];
+  /** Canonical generated route-security manifest derived from endpoint metadata. */
+  manifest: RouteManifestEntry[];
   /** Resolved auth-cookie names and attributes (NODE_ENV-aware). */
   cookies: ResolvedCookieConfig;
   /** Resolved logger (defaults to a silent no-op when `config.logger` is unset). */
@@ -326,6 +330,8 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   // and `call` both get bound after the instance is constructed because
   // they need the assembled `Fortress` object (route table is built from
   // `endpoints`; `call` delegates to `handleRequest`).
+  let routeManifest: RouteManifestEntry[] | undefined;
+
   const instance: Fortress<InferPlugins<T>, TypedCall<T>> = {
     auth,
     iam,
@@ -333,6 +339,10 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     call: {} as TypedCall<T>,
     config,
     endpoints,
+    get manifest(): RouteManifestEntry[] {
+      routeManifest ??= buildRouteManifest(this as Fortress);
+      return routeManifest;
+    },
     cookies,
     logger,
     telemetry,

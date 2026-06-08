@@ -27,7 +27,15 @@ Note: Fortress is pre-1.0; breaking changes may ship in any minor version. Pin t
 
 ## Security Best Practices
 
-See [docs/security.md](docs/security.md) for comprehensive security guidance.
+### Route security manifest
+
+Use `fortress.manifest` (or `fortress manifest` for the core auth/IAM surface) to review which routes are public, authenticated, RBAC-protected, OAuth self-managed, CSRF-applicable, and rate-limited. Add `detectRouteManifestDrift()` to CI when generating OpenAPI specs or mounting plugin routes so route protection metadata cannot silently drift.
+
+For app-owned routes that call Fortress services directly, prefer `protect()` / adapter `protectedRoute()` wrappers so CSRF, auth, RBAC, validation, and plugin middleware still run from endpoint metadata. See [docs/host-owned-routes.md](docs/host-owned-routes.md).
+
+Track Fortress-owned table/index upgrades with `fortress_schema_version`, `getMigrationStatus()`, and the bundled SQL under `migrations/{sqlite,pg}`. Auth, IAM, OAuth, API-key, tenancy, and audit-log tables are security-critical; do not skip migration drift checks during upgrades.
+
+See [docs/security.md](docs/security.md) for comprehensive security guidance, [docs/threat-model.md](docs/threat-model.md) for the current formal threat model, [docs/hardening.md](docs/hardening.md) for the production hardening checklist, [docs/deployment.md](docs/deployment.md) for the production deployment guide (JWT secret rotation, cookies behind reverse proxies, CSRF/CORS recipes, HTTPS requirements, OAuth/OIDC RP setup), and [docs/migrations/upgrade-guide.md](docs/migrations/upgrade-guide.md) for the migration runbook.
 
 ## Registration account-enumeration tradeoff
 

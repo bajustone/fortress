@@ -3,6 +3,14 @@ import type { AnySQLiteTable } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { index, integer, primaryKey, sqliteTable, text, unique, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
+// --- Schema Versioning ---
+
+const schemaVersion = sqliteTable('fortress_schema_version', {
+  id: integer('id').primaryKey().default(1),
+  version: integer('version').notNull(),
+  appliedAt: integer('applied_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
 // --- Core Identity ---
 
 const users = sqliteTable('fortress_user', {
@@ -442,6 +450,7 @@ const webauthnChallenges = sqliteTable('fortress_webauthn_challenge', {
  * pass it via `createDrizzleAdapter(db, { tables })`.
  */
 export const fortressSchema: Record<string, AnySQLiteTable> = {
+  schemaVersion,
   users,
   loginIdentifiers,
   refreshTokens,

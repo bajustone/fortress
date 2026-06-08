@@ -100,6 +100,23 @@ Sets the user's default tenant after verifying membership. The new tenant takes 
 await fortress.plugins.tenancy.switchTenant({ taxId: 'acme-corp', userId });
 ```
 
+## Migration notes for pre-hardening schemas
+
+Older experimental builds derived schema names from tenant codes/tax IDs (for example `tenant_acme-001`) and trusted `X-Tenant-Code` as request context. Hardened Fortress no longer reads that header and no longer uses tax IDs in SQL identifiers.
+
+For existing deployments:
+
+1. For every row in `fortress_tenant`, compute the hardened schema name as `${schemaPrefix}${tenant.id}` (default: `tenant_<numeric id>`).
+2. Rename each old tenant schema to the hardened name, or recreate it and copy data:
+   ```sql
+   ALTER SCHEMA old_schema_name RENAME TO tenant_123;
+   ```
+3. Ensure all tenant business tables live only in tenant schemas, not `public`, so missing tenant context fails closed.
+4. Remove any app code that forwards or depends on `X-Tenant-Code`.
+5. Have users log in or refresh tokens after `switchTenant`; the active tenant comes from `claims.customClaims.tenantId`.
+
+No Fortress-owned table shape changes are required beyond the normal migration catalog/version checks.
+
 ## JWT staleness tradeoff
 
 Tenant access is encoded in short-lived JWT access tokens. If a user is removed from a tenant, an already-issued token can retain its old `tenantId` claim until it expires or is refreshed. Keep access-token lifetimes short and force session/token revocation for immediate removal.

@@ -1,0 +1,279 @@
+/**
+ * Host-owned route protection.
+ *
+ * Lets adapters and framework-less hosts run the same Fortress security
+ * pipeline used by `fortress.handleRequest()` around handlers they register
+ * themselves: plugin middleware, CSRF, principal resolution, RBAC,
+ * validation, and auth-cookie attachment.
+ */
+
+import type { EndpointDefinition } from '../endpoint';
+import type { Fortress } from '../fortress';
+import type { RouteManifestEntry } from '../manifest/route-manifest';
+import type { Subject, TokenClaims } from '../types';
+import { Errors, FortressError } from '../errors';
+import { coerceBySchema, validateRequest } from '../validation';
+import { enforceCsrf, resolveCsrfConfig } from './csrf';
+import { errorToResponse, withCookies } from './error-response';
+import { enforceFortressPermission } from './fortress-rbac';
+import { buildRouteTable, matchRoute } from './match';
+import { runPluginMiddleware } from './plugin-middleware';
+import { tryPluginPrincipal } from './principal';
+
+export type ProtectedRouteTarget = string | EndpointDefinition;
+
+export interface ProtectOptions {
+  /**
+   * Canonical path to use for plugin middleware / CSRF matching when the
+   * host-owned route is mounted at a path different from the endpoint path.
+   * Defaults to the incoming request pathname.
+   */
+  path?: string;
+  /** Override HTTP method for manifest lookup. Defaults to request.method. */
+  method?: string;
+  /** Explicit params for host paths that do not match the endpoint path. */
+  params?: Record<string, string>;
+  /** Attach auth cookies when the handler returns `{ accessToken, refreshToken? }`. Default `true`. */
+  attachAuthCookies?: boolean;
+}
+
+export interface ProtectedRouteContext {
+  request: Request;
+  endpoint: EndpointDefinition;
+  manifest: RouteManifestEntry;
+  subject?: Subject;
+  userId?: number;
+  claims?: TokenClaims;
+  scopes?: string[] | null;
+  params: Record<string, unknown>;
+  query: Record<string, unknown>;
+  body?: unknown;
+  /** Merged `{ ...body, ...query, ...params }` input after URL coercion. */
+  input: Record<string, unknown>;
+}
+
+export type ProtectedRouteHandler<TResult = unknown> = (
+  ctx: ProtectedRouteContext,
+) => TResult | Response | Promise<TResult | Response>;
+
+function targetLabel(target: ProtectedRouteTarget): string {
+  return typeof target === 'string' ? target : `${target.method} ${target.path}`;
+}
+
+function routeKey(route: Pick<EndpointDefinition, 'method' | 'path'>): string {
+  return `${route.method.toUpperCase()} ${route.path}`;
+}
+
+function findEndpoint(fortress: Fortress, target: ProtectedRouteTarget, method?: string): EndpointDefinition {
+  if (typeof target !== 'string') {
+    return target;
+  }
+
+  const matches = fortress.endpoints.filter(endpoint => endpoint.handler === target);
+  if (matches.length === 0)
+    throw Errors.notFound(`No endpoint found for handler '${target}'`);
+
+  if (method) {
+    const byMethod = matches.find(endpoint => endpoint.method.toUpperCase() === method.toUpperCase());
+    if (byMethod)
+      return byMethod;
+  }
+
+  if (matches.length > 1) {
+    throw Errors.badRequest(
+      `Handler '${target}' maps to multiple endpoints; pass the EndpointDefinition or ProtectOptions.method.`,
+    );
+  }
+
+  return matches[0];
+}
+
+function findManifestEntry(fortress: Fortress, endpoint: EndpointDefinition): RouteManifestEntry {
+  const key = routeKey(endpoint);
+  const entry = fortress.manifest.find(route => `${route.method.toUpperCase()} ${route.path}` === key);
+  if (!entry)
+    throw Errors.notFound(`No route manifest entry found for ${key}`);
+  return entry;
+}
+
+function rewriteRequestPath(request: Request, pathname: string): Request {
+  const current = new URL(request.url);
+  if (current.pathname === pathname)
+    return request;
+  const rewritten = new URL(request.url);
+  rewritten.pathname = pathname;
+  return new Request(rewritten, request);
+}
+
+async function parseJsonBody(request: Request): Promise<unknown> {
+  if (request.method === 'GET' || request.method === 'HEAD')
+    return undefined;
+  if (!(request.headers.get('content-type') ?? '').includes('json'))
+    return undefined;
+  return request.clone().json().catch(() => undefined);
+}
+
+function objectOrEmpty(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function successStatus(endpoint: EndpointDefinition): number {
+  const status = Object.keys(endpoint.responses ?? {})
+    .map(Number)
+    .find(code => code >= 200 && code < 300);
+  return status ?? 200;
+}
+
+function jsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body ?? { ok: true }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function maybeAttachAuthCookies(fortress: Fortress, result: Response | unknown, response: Response): Response {
+  if (result instanceof Response)
+    return response;
+  const obj = result as { accessToken?: unknown; refreshToken?: unknown } | undefined;
+  if (typeof obj?.accessToken !== 'string')
+    return response;
+  return withCookies(response, fortress.serializeAuthCookies({
+    accessToken: obj.accessToken,
+    refreshToken: typeof obj.refreshToken === 'string' ? obj.refreshToken : null,
+  }));
+}
+
+/**
+ * Build a web-standard protected route handler for a host-owned route.
+ * Adapter-specific helpers wrap this function for Hono, Express, and
+ * SvelteKit ergonomics.
+ */
+export function protect<TResult = unknown>(
+  fortress: Fortress,
+  target: ProtectedRouteTarget,
+  handler: ProtectedRouteHandler<TResult>,
+  options: ProtectOptions = {},
+): (request: Request) => Promise<Response> {
+  const endpoint = findEndpoint(fortress, target, options.method);
+  const manifest = findManifestEntry(fortress, endpoint);
+  const endpointRouteTable = buildRouteTable([endpoint]);
+  const csrfConfig = resolveCsrfConfig(fortress.config.csrf);
+  const plugins = fortress.config.plugins ?? [];
+
+  return async function protectedRequestHandler(request: Request): Promise<Response> {
+    let response: Response | undefined;
+    try {
+      const url = new URL(request.url);
+      const pipelinePath = options.path ?? url.pathname;
+      const pipelineRequest = rewriteRequestPath(request, pipelinePath);
+
+      await runPluginMiddleware(plugins, fortress.config, 'before-auth', { request: pipelineRequest });
+      enforceCsrf(pipelineRequest, pipelinePath, csrfConfig, fortress.cookies);
+
+      let subject: Subject | undefined;
+      let userId: number | undefined;
+      let claims: TokenClaims | undefined;
+      let scopes: string[] | null | undefined;
+      const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
+
+      if (!selfManagedBearer) {
+        const pluginResolved = await tryPluginPrincipal(fortress, pipelineRequest);
+        if (pluginResolved) {
+          subject = pluginResolved.subject;
+          claims = pluginResolved.claims;
+          scopes = pluginResolved.scopes;
+        }
+      }
+
+      const requiresBearer = !selfManagedBearer && (endpoint.meta?.security?.includes('bearer') ?? false);
+      if (!subject && requiresBearer) {
+        const token = fortress.extractAccessToken(pipelineRequest);
+        if (!token)
+          throw Errors.unauthorized('Missing access token');
+        try {
+          claims = await fortress.auth.verifyToken(token);
+          subject = { type: claims.subjectType, id: claims.sub };
+        }
+        catch (err) {
+          if (err instanceof FortressError)
+            throw err;
+          throw Errors.unauthorized('Invalid access token');
+        }
+      }
+
+      if (subject?.type === 'USER')
+        userId = subject.id;
+
+      await runPluginMiddleware(plugins, fortress.config, 'after-auth', {
+        request: pipelineRequest,
+        fortressSubject: subject,
+        fortressUserId: userId,
+        fortressClaims: claims,
+        fortressScopes: scopes,
+      });
+
+      if (!selfManagedBearer) {
+        await enforceFortressPermission(endpoint, subject, {
+          checkPermission: (subj, resource, action, credentialScopes): Promise<boolean> =>
+            fortress.iam.checkPermission(subj, resource, action, { credentialScopes }),
+        }, scopes);
+      }
+
+      await runPluginMiddleware(plugins, fortress.config, 'after-rbac', {
+        request: pipelineRequest,
+        fortressSubject: subject,
+        fortressUserId: userId,
+        fortressClaims: claims,
+        fortressScopes: scopes,
+      });
+
+      const body = await parseJsonBody(request);
+      const rawQuery = Object.fromEntries(url.searchParams);
+      const match = matchRoute(endpointRouteTable, endpoint.method, options.path ?? url.pathname);
+      const rawParams = options.params ?? match?.params ?? {};
+      const query = coerceBySchema(endpoint.input?.query, rawQuery) ?? rawQuery;
+      const params = coerceBySchema(endpoint.input?.params, rawParams) ?? rawParams;
+      await validateRequest(endpoint.input, { body, query, params });
+
+      const input = { ...objectOrEmpty(body), ...query, ...params };
+      const result = await handler({
+        request,
+        endpoint,
+        manifest,
+        subject,
+        userId,
+        claims,
+        scopes,
+        params,
+        query,
+        body,
+        input,
+      });
+
+      response = result instanceof Response ? result : jsonResponse(result, successStatus(endpoint));
+      if (options.attachAuthCookies ?? true)
+        response = maybeAttachAuthCookies(fortress, result, response);
+      return response;
+    }
+    catch (err) {
+      response = errorToResponse(err, fortress.logger);
+      return response;
+    }
+  };
+}
+
+/** Resolve an endpoint eagerly; useful for adapter wrappers and diagnostics. */
+export function resolveProtectedEndpoint(
+  fortress: Fortress,
+  target: ProtectedRouteTarget,
+  method?: string,
+): EndpointDefinition {
+  return findEndpoint(fortress, target, method);
+}
+
+/** Human-readable name for errors/logs. */
+export function describeProtectedTarget(target: ProtectedRouteTarget): string {
+  return targetLabel(target);
+}

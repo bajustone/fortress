@@ -41,7 +41,7 @@ export type { ConvertRoutesOptions, ExternalRoute, ToJSONSchemaConverter } from 
 export { mountFortress } from './handle';
 export type { MountFortressOptions } from './handle';
 export { getClaims, getDb, getScopedDb, getSubject, getUserId } from './helpers';
-export type { FortressEnv } from './middleware/auth';
+export type { FortressContext, FortressEnv, FortressVariables } from './middleware/auth';
 export { createCsrfMiddleware } from './middleware/csrf';
 export type { CsrfConfig } from './middleware/csrf';
 export { createPluginMiddleware } from './middleware/plugin-middleware';
@@ -50,6 +50,8 @@ export { createSecurityHeadersMiddleware } from './middleware/security-headers';
 export type { SecurityHeadersConfig } from './middleware/security-headers';
 export { buildRouteDefinition, getFortressRoutes, mountFortressOpenAPI } from './openapi';
 export type { SchemaConverter } from './openapi';
+export { protectedRoute } from './protect';
+export type { HonoProtectedRouteHandler, ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './protect';
 export { vBody, vParam, vQuery } from './validated';
 export type { InferOutput } from './validated';
 

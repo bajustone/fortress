@@ -8,17 +8,23 @@
 
 import type { EndpointDefinition } from '../endpoint';
 
-/** Route table entry built from an {@link EndpointDefinition}. */
-export interface RouteEntry {
-  endpoint: EndpointDefinition;
+/** Minimal route shape accepted by the matcher. */
+export interface RouteLike {
+  method: string;
+  path: string;
+}
+
+/** Route table entry built from an {@link EndpointDefinition} or manifest entry. */
+export interface RouteEntry<T extends RouteLike = EndpointDefinition> {
+  endpoint: T;
   method: string;
   segments: string[];
   paramNames: string[];
 }
 
-/** Successful match: the endpoint plus extracted path parameters. */
-export interface RouteMatch {
-  endpoint: EndpointDefinition;
+/** Successful match: the endpoint/route plus extracted path parameters. */
+export interface RouteMatch<T extends RouteLike = EndpointDefinition> {
+  endpoint: T;
   params: Record<string, string>;
 }
 
@@ -26,7 +32,7 @@ export interface RouteMatch {
  * Pre-build a route table from endpoint definitions. Adapters call this once
  * at startup and hand the result to {@link matchRoute} on every request.
  */
-export function buildRouteTable(endpoints: readonly EndpointDefinition[]): RouteEntry[] {
+export function buildRouteTable<T extends RouteLike>(endpoints: readonly T[]): RouteEntry<T>[] {
   return endpoints.map((ep) => {
     const segments = ep.path.split('/').filter(Boolean);
     const paramNames: string[] = [];
@@ -53,11 +59,11 @@ export function buildRouteTable(endpoints: readonly EndpointDefinition[]): Route
  * priority because they're checked first; the iteration order follows the
  * order in which endpoints were registered.
  */
-export function matchRoute(
-  table: RouteEntry[],
+export function matchRoute<T extends RouteLike>(
+  table: RouteEntry<T>[],
   method: string,
   pathname: string,
-): RouteMatch | null {
+): RouteMatch<T> | null {
   const upperMethod = method.toUpperCase();
   const pathSegments = pathname.split('/').filter(Boolean);
 

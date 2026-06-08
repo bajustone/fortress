@@ -3,6 +3,14 @@ import type { AnyPgTable } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
 
+// --- Schema Versioning ---
+
+const schemaVersion = pgTable('fortress_schema_version', {
+  id: integer('id').primaryKey().default(1),
+  version: integer('version').notNull(),
+  appliedAt: timestamp('applied_at').notNull().defaultNow(),
+});
+
 // --- Core Identity ---
 
 const users = pgTable('fortress_user', {
@@ -437,6 +445,7 @@ const webauthnChallenges = pgTable('fortress_webauthn_challenge', {
  * pass it via `createDrizzleAdapter(db, { tables })`.
  */
 export const fortressPgSchema: Record<string, AnyPgTable> = {
+  schemaVersion,
   users,
   loginIdentifiers,
   refreshTokens,

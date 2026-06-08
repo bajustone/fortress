@@ -76,12 +76,30 @@ export type { Fortress, TypedCall } from './core/fortress';
 /** Typed in-process client builder and per-call options. */
 export { buildCall } from './core/http/call';
 export type { CallOptions } from './core/http/call';
+export { describeProtectedTarget, protect, resolveProtectedEndpoint } from './core/http/protect';
+export type { ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';
+
+/** Permission debugging helper — "why does subject X have / not have permission Y?". */
+export { explainPermission } from './core/iam/explain';
+export type { PermissionExplanation, PermissionExplanationSource } from './core/iam/explain';
 
 /** Pre-built endpoint definitions and component schemas for the core IAM routes. */
 export { iamComponentSchemas, iamEndpoints } from './core/iam/iam-endpoints';
 
 /** JSON Schema types and the inferred TypeScript type helpers used by the schema builder. */
 export type { FortressSchema, Infer, JSONSchema, Simplify } from './core/json-schema';
+
+/** Canonical route-security manifest and drift checker. */
+export { detectRouteManifestDrift, hasRouteManifestDrift } from './core/manifest/drift';
+export type { DetectRouteManifestDriftOptions, RouteManifestDrift } from './core/manifest/drift';
+export { buildRouteManifest } from './core/manifest/route-manifest';
+export type { RouteClassification, RouteManifestEntry } from './core/manifest/route-manifest';
+
+/** Fortress schema migration metadata and runner helpers. */
+export { detectMigrationDrift, getMigrationStatus, hasMigrationDrift, migrateDown, migrateUp } from './core/migrations/engine';
+export type { MigrationApplyResult, MigrationDownResult, MigrationDrift, MigrationStatus } from './core/migrations/engine';
+export { FORTRESS_TABLES, fortressMigrations, getFortressMigrations, getLatestMigrationVersion } from './core/migrations/migrations';
+export type { FortressMigration, MigrationDialect } from './core/migrations/migrations';
 
 /**
  * Plugin authoring types — implement {@link FortressPlugin} to extend fortress
@@ -103,6 +121,14 @@ export type {
 
 /** Type-level mapping helpers used to expose plugin methods and typed call maps on the fortress instance. */
 export type { CallableForEndpoints, InferPluginCallMap, InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
+
+/** Declarative policy-as-code: loader, diff, and apply primitives. */
+export { applyPolicyPlan, applyResourceOps } from './core/policy/apply';
+export type { ApplyPolicyResult } from './core/policy/apply';
+export { diffPolicy } from './core/policy/diff';
+export { DEFAULT_POLICY_FILE, loadPolicy, resolvePolicyPath } from './core/policy/loader';
+export type { LoadPolicyOptions } from './core/policy/loader';
+export type { DiffPolicyOptions, PolicyDocument, PolicyGroup, PolicyOp, PolicyPermission, PolicyPlan, PolicyResource, PolicyRole, PolicyServiceAccount } from './core/policy/types';
 
 /**
  * Fluent JSON Schema builder DSL. Compose `obj`, `str`, `int`, `arr`, etc.

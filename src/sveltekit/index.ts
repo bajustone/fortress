@@ -59,6 +59,8 @@ export type { SvelteKitRouteHandler } from './catch-all';
 export { clearAuthCookies, replayCookies, setAuthCookies } from './cookies';
 export { createSvelteKitHandle } from './handle';
 export { getClaims, getDb, getScopedDb, getSubject, getUserId } from './helpers';
+export { protectedRoute } from './protect';
+export type { ProtectedRouteContext, ProtectedRouteTarget, ProtectOptions, SvelteKitProtectedRouteHandler } from './protect';
 export type {
   FortressLocals,
   SvelteKitAction,

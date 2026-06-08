@@ -12,11 +12,22 @@ import {
 
 // Minimal Express-compatible types so users bring their own express version
 
-/** Minimal Express request shape fortress reads from. Compatible with any modern Express version. */
-export interface ExpressRequest {
-  headers: Record<string, string | string[] | undefined>;
-  method: string;
-  path: string;
+/**
+ * Fortress-specific fields attached to the Express `Request` by
+ * {@link createAuthMiddleware}. Exported so host apps can declaration-merge
+ * them into express's native `Request` type for typed access without casts.
+ *
+ * @example
+ * ```ts
+ * // src/types/express.d.ts
+ * import type { FortressExpressFields } from '@bajustone/fortress/express';
+ *
+ * declare module 'express-serve-static-core' {
+ *   interface Request extends FortressExpressFields {}
+ * }
+ * ```
+ */
+export interface FortressExpressFields {
   /**
    * The resolved principal — set for every authenticated request regardless
    * of credential type (JWT, api-key, future OAuth client_credentials, mTLS).
@@ -32,6 +43,13 @@ export interface ExpressRequest {
   fortressScopes?: string[] | null;
   fortressDb?: DatabaseAdapter;
   fortressGetScopedDb?: (model: string) => Promise<DatabaseAdapter>;
+}
+
+/** Minimal Express request shape fortress reads from. Compatible with any modern Express version. */
+export interface ExpressRequest extends FortressExpressFields {
+  headers: Record<string, string | string[] | undefined>;
+  method: string;
+  path: string;
 }
 
 /** Minimal Express response shape fortress writes to. */

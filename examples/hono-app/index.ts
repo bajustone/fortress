@@ -18,7 +18,7 @@
  * Or:   bun run examples/hono-app/index.ts
  */
 import { Hono } from 'hono';
-import { createFortress, obj, str } from '../../src';
+import { createFortress, endpoint, int, obj, str } from '../../src';
 import {
   convertRoutes,
   createCsrfMiddleware,
@@ -30,6 +30,7 @@ import {
   getSubject,
   getUserId,
   mountFortress,
+  protectedRoute,
   vBody,
   vParam,
   vQuery,
@@ -56,6 +57,16 @@ import { createTestAdapter } from '../../src/testing';
 // ═══════════════════════════════════════════════════════════════════════════
 
 const db = createTestAdapter();
+
+const hostOwnedStatsEndpoint = endpoint('GET', '/api/host-owned-stats')
+  .summary('Host-owned route protected by Fortress metadata')
+  .description('Demonstrates protectedRoute(): this Hono handler is app-owned, but Fortress supplies auth, RBAC, plugin middleware, and validation from endpoint metadata.')
+  .tags('App')
+  .security('bearer')
+  .permission('fortress', 'viewResources')
+  .response(200, 'Host route stats', obj({ users: int(), subjectType: str() }, 'users', 'subjectType'))
+  .handler('hostOwnedStats')
+  .build();
 
 // ── Observability (optional but demonstrated) ─────────────────────────────
 // A minimal console-backed logger satisfies the FortressLogger interface.
@@ -184,6 +195,11 @@ const fortress = createFortress({
       },
     }),
 
+    // ── Host-owned routes metadata ──
+    // protectedRoute() below uses this endpoint metadata for auth/RBAC and
+    // OpenAPI can include it alongside Fortress-owned endpoints.
+    { name: 'host-routes', routes: { hostOwnedStats: hostOwnedStatsEndpoint } },
+
     // ── OpenAPI (API docs) ──
     // convertRoutes turns createRoute-style objects into EndpointDefinitions
     // using your own schema converter (Zod, Valibot, TypeBox, etc.)
@@ -237,6 +253,17 @@ fortress.iam.addPermissionCheckObserver((event) => {
     );
   }
 });
+
+// Route-security manifest: the same generated inventory adapters use to
+// decide which paths are Fortress-managed. Useful for CI drift checks or
+// startup visibility.
+logger.info(
+  {
+    routes: fortress.manifest.length,
+    rbacRoutes: fortress.manifest.filter(route => route.classification === 'rbac').length,
+  },
+  'fortress route manifest generated',
+);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 2. Create Hono app + middleware
@@ -662,6 +689,15 @@ app.use('/api/groups', authMiddleware);
 app.use('/api/users', rbacMiddleware);
 app.use('/api/groups/*', rbacMiddleware);
 app.use('/api/groups', rbacMiddleware);
+
+// Host-owned route protected by endpoint metadata instead of an adapter routeMap.
+// Runs the same core protections as fortress-managed routes, then calls this
+// Hono handler. Register before mountFortress so the app-owned handler wins.
+// curl http://localhost:3000/api/host-owned-stats -H 'Authorization: Bearer <token>'
+app.get('/api/host-owned-stats', protectedRoute(fortress, hostOwnedStatsEndpoint, async (_c, ctx) => {
+  const users = await fortress.config.database.count({ model: 'user' });
+  return { users, subjectType: ctx.subject?.type ?? 'UNKNOWN' };
+}));
 
 // curl http://localhost:3000/api/users -H 'Authorization: Bearer <token>'
 app.get('/api/users', async (c) => {

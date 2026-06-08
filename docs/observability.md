@@ -266,3 +266,120 @@ createFortress({ /* ... */ observability: customTelemetry });
 ```
 
 This is the escape hatch — most users should stick with `createOtelTelemetry()` because the OpenTelemetry SDK ecosystem already has exporters for every major backend.
+
+## 4. Event catalog (P2-13)
+
+Fortress emits structured events through three observer surfaces:
+
+- `fortress.auth.addAuthObserver(listener)` — user-lifecycle and token events.
+- `fortress.iam.addIamObserver(listener)` — IAM mutation events.
+- `fortress.iam.addPermissionCheckObserver(listener)` — every allow/deny check.
+
+The `audit-log` plugin subscribes to `addIamObserver` automatically so IAM events flow into the audit-log table without extra wiring. Wire your own `addAuthObserver` if you want auth events in the same log.
+
+### Auth events (`AuthEvent.eventType`)
+
+| Event | Outcome | Security weight | Recommended alert |
+|---|---|---|---|
+| `LOGIN_SUCCESS` | `success` | low | none |
+| `LOGIN_FAILURE` | `invalid_credentials` \| `account_locked` \| `account_inactive` \| `2fa_required` \| ... | medium | spike alert (>N per window per IP) |
+| `REGISTER` | `success` | low | spike alert (>N per window per IP) |
+| `LOGOUT` | `success` | low | none |
+| `TOKEN_REFRESH` | `success` \| `invalid` \| `expired` | low | none |
+| `TOKEN_REUSE_DETECTED` | `success` (revocation succeeded) | **high** | page on-call — indicates stolen refresh token |
+| `TOKEN_FINGERPRINT_MISMATCH` | `success` (revocation succeeded) | **high** | page on-call — indicates session hijack |
+| `IMPERSONATE` | `success` | medium | log to immutable trail |
+
+### IAM events (`IamEvent.eventType`)
+
+| Event | Where | Recommended alert |
+|---|---|---|
+| `ROLE_CREATED` / `ROLE_DELETED` / `ROLE_UPDATED` | `fortress.iam.createRole / deleteRole / updateRole` | log only |
+| `ROLE_PERMISSION_ADDED` / `ROLE_PERMISSION_REMOVED` | role-permission diff | log only |
+| `ROLE_BOUND` / `ROLE_UNBOUND` | role-binding mutations | log only |
+| `PERMISSION_CHANGED` | direct-permission mutations | log only |
+| `GROUP_CREATED` / `GROUP_MEMBER_ADDED` / `GROUP_MEMBER_REMOVED` | group mutations | log only |
+| `SERVICE_ACCOUNT_CREATED` / `SERVICE_ACCOUNT_UPDATED` / `SERVICE_ACCOUNT_DELETED` | service-account mutations | log only |
+
+All IAM mutation events carry `targetType`, `targetId`, and a `metadata` object suitable for audit-log persistence.
+
+### Permission-check events (`PermissionCheckEvent`)
+
+| Field | Description |
+|---|---|
+| `subjectType` | `'USER'` \| `'GROUP'` \| `'SERVICE_ACCOUNT'` |
+| `subjectId` | numeric id (kept off metric attributes by Fortress — stays on the in-process event) |
+| `resource`, `action` | what was checked |
+| `allowed` | final decision |
+| `cached` | whether the result was served from the permission cache |
+| `durationSeconds` | check latency |
+
+The handler is **synchronous and hot-path**. Keep it bounded — update a counter, push to an in-memory channel, never await a network call.
+
+## 5. Recommended dashboards and alerts (P2-13)
+
+### Auth dashboard
+
+- **Login success rate** = `rate(fortress.auth.events.total{event="LOGIN_SUCCESS"}[5m]) / rate(fortress.auth.events.total{event=~"LOGIN_.*"}[5m])`.
+- **Failure breakdown** by `outcome` attribute. A sudden spike in `invalid_credentials` from one IP range is credential-stuffing.
+- **Refresh churn** = `rate(fortress.auth.events.total{event="TOKEN_REFRESH",outcome="success"}[5m])`. Higher than expected (multiple per minute per user) indicates a misbehaving client.
+- **Token reuse** = `increase(fortress.auth.events.total{event="TOKEN_REUSE_DETECTED"}[1h])`. Any non-zero value is a paging incident — a refresh token was used after rotation.
+- **Impersonation** = `increase(fortress.auth.events.total{event="IMPERSONATE"}[1d])`. Audit weekly.
+
+### IAM dashboard
+
+- **Permission check rate**, separated by `result` (`allow` vs `deny`). A deny ratio over ~5% sustained indicates either a misconfig or active probing.
+- **Cache hit ratio** = `rate(fortress.iam.permission_check.cache.hits[5m]) / (rate(fortress.iam.permission_check.cache.hits[5m]) + rate(fortress.iam.permission_check.cache.misses[5m]))`. Healthy services see >90% after warm-up; a drop indicates churn (frequent role changes, cache invalidations).
+- **p99 check latency** = `histogram_quantile(0.99, sum by (le)(rate(fortress.iam.permission_check.duration_bucket[5m])))`. Target <10ms with cache, <100ms cache-miss.
+
+### OAuth dashboard (if mounted)
+
+- **Token-endpoint error rate** by `error` label from the response body shape; spike alert on `invalid_client`, `invalid_grant`.
+- **PKCE rejections** = audit-log `OAUTH_PKCE_REQUIRED` rows (if you mirror them into a counter via an `addAuthObserver`).
+- **Refresh-token family revocations** = `TOKEN_REUSE_DETECTED` events scoped to OAuth refresh tokens.
+
+### Database dashboard
+
+- **p99 query latency** = `histogram_quantile(0.99, sum by (le, db_operation_name)(rate(db_client_operation_duration_bucket[5m])))`. Triage slow queries by `db.operation.name` attribute.
+- **Operation rate** by `db.collection.name`. Useful when adding indexes or tuning the IAM cache.
+
+### Suggested alerts (production)
+
+| Alert | Expression / rule | Severity |
+|---|---|---|
+| Token-reuse detected | any `TOKEN_REUSE_DETECTED` event in 5m | **page** |
+| Token-fingerprint mismatch | any `TOKEN_FINGERPRINT_MISMATCH` event in 5m | **page** |
+| Login failure surge (per IP) | >100 failures from one IP in 10m | warn |
+| Permission-check deny ratio | `deny / total > 0.20` over 15m | warn |
+| Permission-check p99 latency | `p99 > 100ms` over 15m | warn |
+| Audit-log chain broken | `verifyChain().ok === false` from a scheduled job | **page** |
+| OAuth `invalid_client` surge | `>20/m` over 10m | warn |
+| Schema-version drift | `fortress migrate:check` non-zero exit in deploy preflight | **page** |
+
+All thresholds are starting points — tune to your traffic shape after a baseline week.
+
+## 6. Audit-log integration
+
+The `audit-log` plugin persists every `IamEvent` to `fortress_audit_log` automatically and can be configured to hash-chain entries (`auditLog({ hashChain: true })`) so deletions are detectable. Recommended pattern:
+
+```ts
+import { auditLog } from '@bajustone/fortress/plugins/audit-log';
+
+createFortress({
+  // ...
+  plugins: [auditLog({ hashChain: true })],
+});
+
+// Mirror auth events into the same log:
+fortress.auth.addAuthObserver((event) => {
+  fortress.plugins['audit-log'].logCustomEvent(event).catch((err) => {
+    fortress.logger.error({ err, event }, 'failed to persist auth event');
+  });
+});
+
+// Schedule a verifier (e.g. nightly cron):
+const result = await fortress.plugins['audit-log'].verifyChain();
+if (!result.ok) {
+  // Page on-call — someone tampered with the audit table.
+}
+```

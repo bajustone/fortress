@@ -20,7 +20,28 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import { createDrizzleAdapter } from '../drizzle/adapter';
 
+export {
+  checkMigrationDrift,
+  checkPublicRoutes,
+  checkRouteManifestDrift,
+  runFortressChecks,
+  smokeTestAuth,
+} from './checks';
+export type {
+  AuthSmokeTestOptions,
+  CheckResult,
+  FortressChecksResult,
+  PublicRouteCheckOptions,
+  RunFortressChecksOptions,
+} from './checks';
+
 const CREATE_TABLES_SQL = `
+  CREATE TABLE IF NOT EXISTS fortress_schema_version (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    version INTEGER NOT NULL,
+    applied_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
   CREATE TABLE IF NOT EXISTS fortress_user (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL UNIQUE,

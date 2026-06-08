@@ -1,0 +1,59 @@
+# Drop-in GitHub Actions workflow that runs the Fortress CI checks.
+#
+# Save as `.github/workflows/fortress-ci.yml` in your repo. Adapt:
+#   - Node/Bun version if you pin a different one.
+#   - The path to your fortress instance (the example assumes
+#     `src/lib/fortress.ts` exports a configured `fortress`).
+#   - Install command (`bun install` / `pnpm i` / `npm ci`).
+#
+# What it runs:
+#   - `fortress manifest:check`     → route-security manifest drift
+#   - `fortress check:public-routes` → catches `.security('none')` on routes
+#     that shouldn't be public (against the bundled Fortress allow-list)
+#   - `fortress migrate:check`      → bundled migration catalog consistency
+#   - `bun run test`                → your suite, which should include
+#     `runFortressChecks()` against your real fortress instance with the
+#     test adapter (see docs/ci.md for a sample test file).
+
+name: fortress-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fortress-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Fortress route-manifest drift
+        run: bunx fortress manifest:check
+
+      - name: Fortress public-route allow-list
+        run: bunx fortress check:public-routes
+
+      - name: Fortress migration catalog
+        run: bunx fortress migrate:check
+
+      - name: Unit tests
+        run: bun run test
+
+      # Optional: build artifact for verifying types compile cleanly
+      - name: Library build (publish dry-run)
+        run: bunx tsup

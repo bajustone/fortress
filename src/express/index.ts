@@ -50,8 +50,11 @@ export type {
   ExpressNextFunction,
   ExpressRequest,
   ExpressResponse,
+  FortressExpressFields,
   RbacOptions,
   RouteMapping,
 } from './middleware';
+export { protectedRoute } from './protect';
+export type { ExpressProtectedRouteHandler, ProtectedRouteContext, ProtectedRouteTarget, ProtectOptions } from './protect';
 export { vBody, vParam, vQuery } from './validated';
 export type { ExpressRequestLike, InferOutput } from './validated';

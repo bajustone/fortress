@@ -1,3 +1,4 @@
+import type { DatabaseAdapter } from '../../adapters/database';
 import type { Fortress } from '../../core/fortress';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
@@ -5,6 +6,27 @@ import { createTestAdapter } from '../../testing';
 import { tenancy } from './index';
 
 const SECRET = 'tenancy-test-secret-at-least-32!!';
+
+function createFakePgAdapter(calls: Array<{ sql: string; params?: unknown[]; op?: string }>): DatabaseAdapter {
+  const adapter: DatabaseAdapter = {
+    dialect: 'pg',
+    rawQuery: async <T>(sql: string, params?: unknown[]): Promise<T[]> => {
+      calls.push({ sql, params });
+      return [];
+    },
+    create: async <T>(): Promise<T> => ({ ok: true } as T),
+    findOne: async <T>(): Promise<T | null> => null,
+    findMany: async <T>(): Promise<T[]> => {
+      calls.push({ sql: '', op: 'findMany' });
+      return [];
+    },
+    update: async <T>(): Promise<T | null> => null,
+    delete: async (): Promise<void> => {},
+    count: async (): Promise<number> => 0,
+    transaction: async <T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> => fn(adapter),
+  };
+  return adapter;
+}
 
 interface TenancyMethods {
   createTenant: (input: { name: string; taxId: string; description?: string }) => Promise<{ id: number; name: string; taxId: string }>;
@@ -35,6 +57,25 @@ describe('tenancy plugin', () => {
       password: 'password-123',
     });
     userId = user.id;
+  });
+
+  describe('route mounting', () => {
+    it('keeps HTTP routes opt-in while methods are always available', () => {
+      const withoutRoutes = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [tenancy()],
+      });
+      const withRoutes = createFortress({
+        jwt: { secret: SECRET },
+        database: createTestAdapter(),
+        plugins: [tenancy({ routes: true })],
+      });
+
+      expect(withoutRoutes.plugins.tenancy).toBeDefined();
+      expect(withoutRoutes.endpoints.some(endpoint => endpoint.path.startsWith('/tenancy/'))).toBe(false);
+      expect(withRoutes.endpoints.some(endpoint => endpoint.path.startsWith('/tenancy/'))).toBe(true);
+    });
   });
 
   describe('createTenant', () => {
@@ -177,6 +218,26 @@ describe('tenancy plugin', () => {
       const plugin = fortress.config.plugins![0];
       const base = fortress.config.database;
       expect(plugin.wrapAdapter!(base, {})).toBe(base);
+    });
+
+    it('rejects an invalid tenant claim instead of interpolating it into search_path', () => {
+      const plugin = fortress.config.plugins![0];
+      const base = createFakePgAdapter([]);
+      expect(() => plugin.wrapAdapter!(base, { tenantId: '1;DROP SCHEMA public' })).toThrow('Invalid tenant claim');
+    });
+
+    it('pins PostgreSQL search_path inside the operation transaction using a bound parameter', async () => {
+      const plugin = fortress.config.plugins![0];
+      const calls: Array<{ sql: string; params?: unknown[]; op?: string }> = [];
+      const wrapped = plugin.wrapAdapter!(createFakePgAdapter(calls), { tenantId: 7 });
+
+      await wrapped.findMany({ model: 'document' });
+
+      expect(calls[0]).toEqual({
+        sql: `SELECT set_config('search_path', $1, true)`,
+        params: ['tenant_7, public'],
+      });
+      expect(calls[1]).toEqual({ sql: '', op: 'findMany' });
     });
   });
 
