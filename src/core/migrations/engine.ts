@@ -191,7 +191,7 @@ export async function getMigrationStatus(
 export async function migrateUp(
   db: DatabaseAdapter,
   dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
-  targetVersion = getLatestMigrationVersion(dialect),
+  targetVersion: number = getLatestMigrationVersion(dialect),
 ): Promise<MigrationApplyResult> {
   const before = await getMigrationStatus(db, dialect);
   const toApply = getFortressMigrations(dialect)
@@ -213,7 +213,7 @@ export async function migrateUp(
 export async function migrateDown(
   db: DatabaseAdapter,
   dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
-  targetVersion = 0,
+  targetVersion: number = 0,
 ): Promise<MigrationDownResult> {
   const before = await getMigrationStatus(db, dialect);
   const toRollback = getFortressMigrations(dialect)

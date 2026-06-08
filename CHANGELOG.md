@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0] - 2026-06-08
+
+### Added
+- SQL-first initial-schema migration baseline with deep drift detection.
+- CI matrix coverage and audit export pipeline.
+- Phase 0 + Phase 1 + most of Phase 2 work from the library plan (see commit 8b94985 for scope).
+
+### Changed
+- Tenancy plugin hardened: claim-based resolution and atomic schema isolation.
+- Repo hygiene: ephemeral planning/review docs moved to `scratch/` and untracked.
+
 ## [0.1.2] - 2026-06-06
 
 ### Security
