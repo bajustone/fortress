@@ -51,12 +51,15 @@ const createThing = endpoint('POST', '/things/:id')
   .build();
 
 const handler = protect(fortress, createThing, async (ctx) => {
-  // ctx.body is { name: string } | undefined
+  // ctx.body is { name: string } — non-optional, because a body schema is
+  // declared and validation already ran before the handler executes.
   // ctx.params is { id: number }
   // ctx.input is { name: string; id: number }
-  return { ok: ctx.body!.name };
+  return { ok: ctx.body.name };
 });
 ```
+
+When the endpoint declares a body schema, `ctx.body` is narrowed to a non-optional `T` — use it directly, no `!` and no detour through `ctx.input`. Endpoints with no declared body schema keep the loose `unknown` body.
 
 Passing a string handler name keeps the looser `Record<string, unknown>` / `unknown` typing (no inference source available). Runtime validation and coercion are identical in both cases — this is purely a typing improvement.
 

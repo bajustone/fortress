@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-10
+
+### Changed
+- **`ctx.body` is now non-optional when a body schema is declared.** `protect()` / `protectedRoute()` only invoke the handler after the declared body passes Standard Schema validation, so `ProtectedRouteContext['body']` narrows to `T` (not `T | undefined`) for endpoints with a `.body(...)` schema — use `ctx.body` directly without `!` or `ctx.input`. Endpoints with no declared body schema keep the loose `unknown`. Types-only change; runtime is identical.
+
 ## [0.2.4] - 2026-06-09
 
 ### Fixed
