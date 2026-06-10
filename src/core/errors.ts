@@ -6,9 +6,11 @@ export type FortressErrorCode
     | 'BAD_REQUEST'
     | 'NOT_FOUND'
     | 'CONFLICT'
+    | 'UNPROCESSABLE_ENTITY'
     | 'RATE_LIMITED'
     | 'DATABASE_ERROR'
-    | 'VALIDATION_ERROR';
+    | 'VALIDATION_ERROR'
+    | 'SERVICE_UNAVAILABLE';
 
 /**
  * Machine-readable error codes defined by RFC 6749 §5.2 (token endpoint) and
@@ -87,12 +89,16 @@ export const Errors = {
     new FortressError('BAD_REQUEST', message, 400),
   notFound: (message = 'Not found'): FortressError =>
     new FortressError('NOT_FOUND', message, 404),
-  conflict: (message = 'Conflict'): FortressError =>
-    new FortressError('CONFLICT', message, 409),
+  conflict: (message = 'Conflict', options?: { cause?: unknown; details?: unknown }): FortressError =>
+    new FortressError('CONFLICT', message, 409, options),
+  unprocessable: (message = 'Unprocessable entity', options?: { cause?: unknown; details?: unknown }): FortressError =>
+    new FortressError('UNPROCESSABLE_ENTITY', message, 422, options),
   rateLimited: (retryAfter: number): FortressError =>
     new FortressError('RATE_LIMITED', 'Too many requests', 429, { retryAfter }),
   database: (message = 'Database error', cause?: unknown): FortressError =>
     new FortressError('DATABASE_ERROR', message, 500, { cause }),
+  serviceUnavailable: (message = 'Service unavailable', options?: { cause?: unknown; retryAfter?: number }): FortressError =>
+    new FortressError('SERVICE_UNAVAILABLE', message, 503, options),
   validationError: (issues: Array<{ path?: unknown; message: string }>): FortressError =>
     new FortressError('VALIDATION_ERROR', 'Validation failed', 422, { details: issues }),
 
@@ -156,9 +162,11 @@ function isFortressErrorCode(code: string): code is FortressErrorCode {
     || code === 'BAD_REQUEST'
     || code === 'NOT_FOUND'
     || code === 'CONFLICT'
+    || code === 'UNPROCESSABLE_ENTITY'
     || code === 'RATE_LIMITED'
     || code === 'DATABASE_ERROR'
     || code === 'VALIDATION_ERROR'
+    || code === 'SERVICE_UNAVAILABLE'
   );
 }
 
@@ -172,9 +180,11 @@ function statusToErrorCode(status: number): FortressErrorCode {
   if (status === 409)
     return 'CONFLICT';
   if (status === 422)
-    return 'VALIDATION_ERROR';
+    return 'UNPROCESSABLE_ENTITY';
   if (status === 429)
     return 'RATE_LIMITED';
+  if (status === 503)
+    return 'SERVICE_UNAVAILABLE';
   if (status >= 500)
     return 'DATABASE_ERROR';
   return 'BAD_REQUEST';

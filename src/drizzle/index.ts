@@ -23,6 +23,7 @@
 
 export { createDrizzleAdapter } from './adapter';
 export type { DrizzleAdapterOptions, DrizzleDialect } from './adapter';
+export { findSqlstate, rethrowPgError } from './pg-error-map';
 // Re-export only the schema objects — individual table exports cause JSR "slow types"
 // errors because sqliteTable()/pgTable() return types are too complex for JSR to infer.
 // Consumers access tables via: fortressSchema.users, fortressPgSchema.roles, etc.

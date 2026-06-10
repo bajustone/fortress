@@ -209,8 +209,24 @@ const fortress = createFortress({
   },
 
   plugins: [/* ... */],
+
+  // Host-application endpoint metadata, registered with the manifest,
+  // OpenAPI, and protect()/protectedRoute() without authoring a one-field
+  // FortressPlugin. Keyed by handler name, matching the `routes` field on
+  // a plugin.
+  routes: appEndpoints, // Record<handlerName, EndpointDefinition>
 });
 ```
+
+`routes` is a shorthand for the boilerplate plugin every host app would otherwise write:
+
+```ts
+plugins: [{ name: 'host-routes', routes: appEndpoints }]
+```
+
+Fortress synthesizes that plugin internally under the reserved name `__host`. Declaring a user plugin named `__host` alongside `routes` is a configuration error.
+
+Top-level `routes` are metadata-only: they do not create `fortress.call.*` entries because no handler methods are registered. If you need typed in-process callables for custom routes, use a real plugin with both `routes` and matching `methods`.
 
 ### Secret Rotation
 
@@ -587,6 +603,54 @@ Resource file format:
 }
 ```
 
+### Seed permissions from the manifest
+
+Every endpoint declared with `.permission(resource, action)` is a permission your
+database needs to exist before any role can grant it. Instead of writing a seed
+script that walks `fortress.endpoints` and calls `iam.createPermission(...)` for
+each, call `fortress.syncPermissionsFromManifest()`:
+
+```typescript
+await fortress.syncPermissionsFromManifest({
+  defaultRoles: {
+    admin: '*',                            // bind every discovered permission
+    member: ['school:read', 'school:list'], // bind only the named pairs
+  },
+});
+```
+
+Idempotent — re-running only adds what's missing and never revokes. `'*'` binds
+only the permissions discovered from the supplied endpoint manifest, not stale
+or unrelated rows already in the database. Returns a report of how many
+permissions were discovered, how many already existed, and how many role
+bindings were newly added during this run.
+
+## Bootstrap and Migrations
+
+Run Fortress's own migrations plus your app's schema migrations in one call:
+
+```typescript
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
+
+await fortress.migrate({
+  // Optional — runs after fortress migrations complete. Any thrown error
+  // propagates after fortress migrations have already been applied.
+  migrateApp: () => migrate(drizzleDb, { migrationsFolder: './drizzle' }),
+});
+```
+
+Fortress migrations always run first because app schemas commonly reference
+fortress tables (FKs to `user.id`, etc.). Omit `migrateApp` to run only
+fortress's migrations. Pair this with `syncPermissionsFromManifest()` for a
+full, idempotent bootstrap on a fresh database:
+
+```typescript
+await fortress.migrate({ migrateApp: runAppMigrations });
+await fortress.syncPermissionsFromManifest({
+  defaultRoles: { admin: '*' },
+});
+```
+
 ## Schema Builder
 
 Fortress includes a typed schema builder that produces `FortressSchema<T>` objects. Each schema is simultaneously:
@@ -619,6 +683,28 @@ recordOf(str())              // FortressSchema<Record<string, string>>
 ref('User')                  // $ref to component schema
 oneOf(str(), int())          // FortressSchema<string | number>
 ```
+
+### Canonical error envelope
+
+Fortress exports `ErrorEnvelope` — a schema that matches the exact wire shape `FortressError.toJSON()` emits:
+
+```typescript
+import { ErrorEnvelope, endpoint, obj, str } from '@bajustone/fortress';
+
+// Inferred type:
+// { code: string; message: string; statusCode: number; details?: unknown }
+
+endpoint('GET', '/schools/:id')
+  .summary('Get a school')
+  .params(obj({ id: str() }, 'id'))
+  .response(200, 'OK', SchoolEnvelope)
+  .errorResponse(404, 'School not found')   // shorthand for .response(404, ..., ErrorEnvelope)
+  .errorResponse(403, 'Forbidden')
+  .handler('getSchool')
+  .build();
+```
+
+Referencing `ErrorEnvelope` from host endpoints means clients only need one error parser — every Fortress and Fortress-hosted route emits the same `{ code, message, statusCode, details? }` body.
 
 ### Standard Schema V1
 
@@ -1202,6 +1288,35 @@ const db = createDrizzleAdapter(drizzleDb, { dialect: 'pg' });
 > normal fortress usage. If you want to query the fortress tables directly
 > with full column inference, declare your own typed Drizzle tables matching
 > the same names and pass them via `createDrizzleAdapter(db, { tables })`.
+
+**Postgres SQLSTATE → `FortressError` mapping.** On `pg`, the adapter
+translates the common Postgres constraint and concurrency states into the
+matching `FortressError`, so `protect()` serializes them as the right HTTP
+status without every host writing a try/catch around inserts and updates:
+
+| SQLSTATE | Postgres meaning | Fortress error | HTTP |
+| -------- | ---------------- | -------------- | ---- |
+| `23505` | unique_violation | `CONFLICT` | 409 |
+| `23503` | foreign_key_violation | `UNPROCESSABLE_ENTITY` | 422 |
+| `23502` | not_null_violation | `BAD_REQUEST` | 400 |
+| `23514` | check_violation | `UNPROCESSABLE_ENTITY` | 422 |
+| `40001` | serialization_failure | `CONFLICT` | 409 |
+| `40P01` | deadlock_detected | `CONFLICT` | 409 |
+| `57014` | query_canceled | `SERVICE_UNAVAILABLE` | 503 |
+
+Unrecognized SQLSTATEs and errors from other dialects pass through unchanged.
+The mapper is also exported for host routes that use raw Drizzle directly:
+
+```typescript
+import { rethrowPgError } from '@bajustone/fortress/drizzle';
+
+try {
+  await db.insert(schools).values(input).returning();
+}
+catch (err) {
+  rethrowPgError(err, 'pg');
+}
+```
 
 #### MySQL
 
@@ -2183,7 +2298,33 @@ See [WebAuthn plugin docs](docs/plugins/webauthn.md) for the full configuration 
 
 ### OpenAPI
 
-Generates an OpenAPI 3.1 spec from all fortress endpoints (auth, IAM, plugins) and serves a Scalar interactive UI. Use `additionalEndpoints` with `convertRoutes` to merge your app's own routes into a single unified spec.
+Fortress can emit an OpenAPI 3.1 spec directly from the endpoint definitions it knows about — core auth/IAM routes, plugin routes, and any top-level host `routes` registered on `createFortress`.
+
+For env/DB-free codegen/build scripts, call the standalone helper with your endpoint list:
+
+```typescript
+import { toOpenAPI } from '@bajustone/fortress';
+import { appEndpointList } from './routes/v1/endpoints';
+
+const spec = toOpenAPI(appEndpointList, {
+  title: 'My API',
+  version: '1.0.0',
+  servers: [{ url: 'http://localhost:3001', description: 'Local development' }],
+  tags: [{ name: 'Schools' }],
+});
+
+await writeFile('openapi.json', `${JSON.stringify(spec, null, 2)}\n`);
+```
+
+If you already have a configured Fortress instance, use `fortress.toOpenAPI()` instead; it defaults the endpoint list to everything the instance knows about:
+
+```typescript
+const spec = fortress.toOpenAPI({ title: 'My API', version: '1.0.0' });
+```
+
+By default, both helpers use each endpoint's `handler` as the OpenAPI `operationId` (for example `schools.get`). Pass `operationId: 'methodPath'` to use Fortress's historical generated IDs.
+
+For a mounted JSON spec + Scalar UI, use the OpenAPI plugin:
 
 ```typescript
 import { openapi } from '@bajustone/fortress/plugins/openapi';
@@ -2218,6 +2359,8 @@ Config options:
 | `version` | `'1.0.0'` | API version |
 | `description` | — | API description |
 | `servers` | — | Server URL(s) for the spec |
+| `tags` | — | Top-level OpenAPI tags |
+| `operationId` | generated method+path IDs | Operation ID strategy: `'methodPath'`, `'handler'`, or a callback |
 | `specPath` | `'/openapi.json'` | Path to serve the JSON spec |
 | `uiPath` | `'/openapi'` | Path to serve the Scalar UI |
 | `disableUI` | `false` | Disable Scalar UI |

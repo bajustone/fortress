@@ -13,7 +13,7 @@ import type { ComponentSchemas, EndpointDefinition } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
 import type { JSONSchema } from '../../core/json-schema';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
-import type { OpenAPISpec } from './spec-builder';
+import type { OpenAPISpec, SpecBuilderOptions } from './spec-builder';
 import { authComponentSchemas, authEndpoints } from '../../core/auth/auth-endpoints';
 import { iamComponentSchemas, iamEndpoints } from '../../core/iam/iam-endpoints';
 import { buildOpenAPISpec } from './spec-builder';
@@ -27,6 +27,10 @@ export interface OpenAPIConfig {
   description?: string;
   /** Server URL(s) for the spec */
   servers?: Array<{ url: string; description?: string }>;
+  /** Optional top-level OpenAPI tags. */
+  tags?: Array<{ name: string; description?: string }>;
+  /** Operation ID strategy. Default: historical method+path IDs. */
+  operationId?: SpecBuilderOptions['operationId'];
   /** Path to serve the JSON spec (default: '/openapi.json') */
   specPath?: string;
   /** Path to serve the Scalar UI (default: '/openapi') */
@@ -228,6 +232,14 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
           allEndpoints.push(...Object.values(iamEndpoints) as EndpointDefinition[]);
         }
 
+        // Add top-level host routes. These are synthesized into the
+        // Fortress instance at runtime, but ctx.config keeps the caller's
+        // original object; include them explicitly so the OpenAPI plugin sees
+        // `createFortress({ routes })` just like `fortress.toOpenAPI()` does.
+        if (ctx.config.routes) {
+          allEndpoints.push(...Object.values(ctx.config.routes) as EndpointDefinition[]);
+        }
+
         // Add plugin endpoints (excluding our own)
         for (const plugin of plugins) {
           if (plugin.name === 'openapi' || !plugin.routes)
@@ -263,6 +275,8 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
           version,
           description: config.description,
           servers: config.servers,
+          tags: config.tags,
+          operationId: config.operationId,
         });
 
         return cachedSpec;
