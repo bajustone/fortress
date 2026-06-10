@@ -13,6 +13,7 @@ import type {
   InferEndpointCallInput,
   InferEndpointParams,
   InferEndpointQuery,
+  InferEndpointResponses,
 } from '../endpoint';
 import type { Fortress } from '../fortress';
 import type { RouteManifestEntry } from '../manifest/route-manifest';
@@ -90,6 +91,34 @@ export interface ProtectedRouteContext<
   input: [keyof InferEndpointCallInput<E>] extends [never]
     ? Record<string, unknown>
     : InferEndpointCallInput<E>;
+  /**
+   * Build a typed JSON response for a status declared on the endpoint.
+   *
+   * When `target` was a typed `EndpointDefinition`, `status` is narrowed
+   * to the response codes that endpoint actually declares and `body` is
+   * narrowed to that response's schema output. Use this instead of
+   * hand-rolling `new Response(JSON.stringify(...), { status })` for
+   * non-2xx returns:
+   *
+   * ```ts
+   * protectedRoute(fortress, getSchool, async (ctx) => {
+   *   const school = await loadSchool(ctx.params.id);
+   *   if (!school)
+   *     return ctx.respond(404, { code: 'NOT_FOUND', message: 'School not found', statusCode: 404 });
+   *   return { data: school };  // 2xx success returned as a plain object
+   * });
+   * ```
+   *
+   * For string-target / untyped endpoints, both arguments fall back to
+   * `number` / `unknown`, matching the loose ergonomics elsewhere in the
+   * context.
+   */
+  respond: [keyof InferEndpointResponses<E>] extends [never]
+    ? (status: number, body: unknown) => Response
+    : <S extends keyof InferEndpointResponses<E> & number>(
+        status: S,
+        body: InferEndpointResponses<E>[S],
+      ) => Response;
 }
 
 export type ProtectedRouteHandler<
@@ -321,6 +350,7 @@ export function protect(
         query,
         body,
         input,
+        respond: (status: number, responseBody: unknown) => jsonResponse(responseBody, status),
         // Cast: the runtime values are untyped records; the generic context
         // type narrows them for the caller, but the impl signature uses the
         // loose `ProtectedRouteContext<EndpointDefinition>`.

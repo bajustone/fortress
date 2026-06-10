@@ -71,35 +71,41 @@ export type { FortressErrorCode } from './core/errors';
 export { createFortress, getPluginMethods } from './core/fortress';
 
 /** The fortress instance type returned by {@link createFortress}, plus the typed call-map helper. */
-export type { Fortress, TypedCall } from './core/fortress';
-
+export type { Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, TypedCall } from './core/fortress';
 /** Typed in-process client builder and per-call options. */
 export { buildCall } from './core/http/call';
 export type { CallOptions } from './core/http/call';
+
 export { describeProtectedTarget, protect, resolveProtectedEndpoint } from './core/http/protect';
 export type { ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';
 
 /** Permission debugging helper — "why does subject X have / not have permission Y?". */
 export { explainPermission } from './core/iam/explain';
 export type { PermissionExplanation, PermissionExplanationSource } from './core/iam/explain';
-
 /** Pre-built endpoint definitions and component schemas for the core IAM routes. */
 export { iamComponentSchemas, iamEndpoints } from './core/iam/iam-endpoints';
+/** Manifest-driven RBAC permission seeding. See {@link Fortress.syncPermissionsFromManifest}. */
+export { runPermissionSync } from './core/iam/permission-sync';
 
+export type { PermissionSyncOptions, PermissionSyncResult } from './core/iam/permission-sync';
 /** JSON Schema types and the inferred TypeScript type helpers used by the schema builder. */
 export type { FortressSchema, Infer, JSONSchema, Simplify } from './core/json-schema';
 
 /** Canonical route-security manifest and drift checker. */
 export { detectRouteManifestDrift, hasRouteManifestDrift } from './core/manifest/drift';
+
 export type { DetectRouteManifestDriftOptions, RouteManifestDrift } from './core/manifest/drift';
+
 export { buildRouteManifest } from './core/manifest/route-manifest';
 export type { RouteClassification, RouteManifestEntry } from './core/manifest/route-manifest';
-
 /** Fortress schema migration metadata and runner helpers. */
 export { detectMigrationDrift, getMigrationStatus, hasMigrationDrift, migrateDown, migrateUp } from './core/migrations/engine';
 export type { MigrationApplyResult, MigrationDownResult, MigrationDrift, MigrationStatus } from './core/migrations/engine';
+
 export { FORTRESS_TABLES, fortressMigrations, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion, getMigrationUpSql } from './core/migrations/migrations';
 export type { FortressMigration, MigrationDialect } from './core/migrations/migrations';
+export { toOpenAPI } from './core/openapi';
+export type { ToOpenAPIOptions } from './core/openapi';
 
 /**
  * Plugin authoring types — implement {@link FortressPlugin} to extend fortress
@@ -143,6 +149,7 @@ export {
   endpoint,
   EndpointBuilder,
   enums,
+  ErrorEnvelope,
   extractJsonSchema,
   int,
   isFortressSchema,
@@ -164,7 +171,6 @@ export type { SchemaInput } from './core/schema-builder';
 
 /** Standard Schema v1 interop type — fortress schemas implement this. */
 export type { StandardSchemaV1 } from './core/standard-schema';
-
 /**
  * Core domain types — users, identifiers, groups, roles, permissions, and
  * the auth response shapes returned by sign-in / refresh / impersonate.
@@ -217,6 +223,8 @@ export type { EmailVerificationMethods } from './plugins/email-verification';
 
 /** Type-safe method surface and request/response shapes for the OAuth server plugin. */
 export type { AuthorizeRequestParams, ClientAuth, OAuthMethods, PendingFlowRecord, TokenRequestBody } from './plugins/oauth';
+
+export type { OpenAPISpec, SpecBuilderOptions } from './plugins/openapi/spec-builder';
 
 /** Type-safe method surface contributed by the social login plugin. */
 export type { SocialLoginMethods } from './plugins/social-login';

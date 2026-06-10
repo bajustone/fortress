@@ -2,9 +2,25 @@
 
 ## Overview
 
-The `openapi` plugin generates an OpenAPI 3.1 specification from all Fortress endpoints (auth, IAM, and plugins) and serves a Scalar interactive API reference UI. It automatically discovers routes from every registered plugin, so the spec stays in sync with your Fortress configuration without manual upkeep.
+The `openapi` plugin generates an OpenAPI 3.1 specification from all Fortress endpoints (auth, IAM, plugins, and top-level host `routes`) and serves a Scalar interactive API reference UI. It automatically discovers routes from your Fortress configuration, so the spec stays in sync without manual upkeep.
 
-Use the `additionalEndpoints` option with the `convertRoutes` utility to merge your application's own routes into a single unified spec.
+If you only need a spec object for a build script or client code generator, use the standalone `toOpenAPI()` helper instead of installing the plugin. This keeps codegen paths env/DB-free:
+
+```ts
+import { toOpenAPI } from '@bajustone/fortress';
+import { appEndpointList } from './routes/v1/endpoints';
+
+const spec = toOpenAPI(appEndpointList, {
+  title: 'My API',
+  version: '1.0.0',
+  servers: [{ url: 'http://localhost:3001', description: 'Local' }],
+  tags: [{ name: 'Schools' }],
+});
+```
+
+If you already have a configured instance, `fortress.toOpenAPI()` emits a spec from `fortress.endpoints` by default.
+
+Use the `additionalEndpoints` option with the `convertRoutes` utility to merge routes that are not already registered as Fortress endpoint definitions.
 
 ## Installation
 
@@ -46,6 +62,8 @@ All fields on `OpenAPIConfig` are optional:
 | `version` | `string` | `'1.0.0'` | API version. |
 | `description` | `string` | -- | API description included in the spec's `info` block. |
 | `servers` | `Array<{ url: string; description?: string }>` | -- | Server URL(s) for the spec. |
+| `tags` | `Array<{ name: string; description?: string }>` | -- | Top-level OpenAPI tags. |
+| `operationId` | `'methodPath' \| 'handler' \| ((endpoint) => string \| undefined)` | `'methodPath'` | Operation ID strategy. |
 | `specPath` | `string` | `'/openapi.json'` | Path to serve the JSON spec. |
 | `uiPath` | `string` | `'/openapi'` | Path to serve the Scalar UI. |
 | `disableUI` | `boolean` | `false` | When `true`, only the JSON spec route is registered. |

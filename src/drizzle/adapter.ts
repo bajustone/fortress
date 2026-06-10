@@ -5,6 +5,7 @@ import type { WhereClause } from '../adapters/database/types';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { and, eq, getTableColumns, gt, gte, inArray, isNull, like, lt, lte, ne, sql } from 'drizzle-orm';
 import { Errors } from '../core/errors';
+import { rethrowPgError } from './pg-error-map';
 import { fortressPgSchema } from './pg/schema';
 import { fortressSchema } from './schema';
 
@@ -233,8 +234,17 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
 
       async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
         const table = getTable(params.model);
-        const result = await execOne<T>((drizzle as any).insert(table).values(sanitizeData(params.data) as any).returning());
-        return result as T;
+        try {
+          const result = await execOne<T>((drizzle as any).insert(table).values(sanitizeData(params.data) as any).returning());
+          return result as T;
+        }
+        catch (err) {
+          // Translate Postgres SQLSTATEs (23505, 23503, ...) into the matching
+          // FortressError so unique-violation / FK-violation / etc. surface as
+          // CONFLICT / UNPROCESSABLE_ENTITY without every host writing the
+          // same try/catch. No-op for non-pg dialects.
+          rethrowPgError(err, dialect);
+        }
       },
 
       async findOne<T>(params: { model: string; where: WhereClause[] }): Promise<T | null> {
@@ -281,22 +291,34 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
         const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
         const query = (drizzle as any).update(table).set(sanitizeData(params.data) as any).where(condition).returning();
-        // SQLite drivers only step the statement for rows that are read from
-        // RETURNING. Use .all() so UPDATEs that match multiple rows actually
-        // apply to every row (family/session revocation depends on this),
-        // while preserving the adapter contract of returning one row/null.
-        if (isSqlite) {
-          const rows = query.all() as T[];
-          return rows[0] ?? null;
+        try {
+          // SQLite drivers only step the statement for rows that are read from
+          // RETURNING. Use .all() so UPDATEs that match multiple rows actually
+          // apply to every row (family/session revocation depends on this),
+          // while preserving the adapter contract of returning one row/null.
+          if (isSqlite) {
+            const rows = query.all() as T[];
+            return rows[0] ?? null;
+          }
+          const result = await execOne<T>(query);
+          return (result as T) ?? null;
         }
-        const result = await execOne<T>(query);
-        return (result as T) ?? null;
+        catch (err) {
+          rethrowPgError(err, dialect);
+        }
       },
 
       async delete(params: { model: string; where: WhereClause[] }): Promise<void> {
         const table = getTable(params.model);
         const condition = buildWhereCondition(table, params.where);
-        await execRun((drizzle as any).delete(table).where(condition));
+        try {
+          await execRun((drizzle as any).delete(table).where(condition));
+        }
+        catch (err) {
+          // FK violation (23503) on delete is the common case here — surfaces
+          // as UNPROCESSABLE_ENTITY rather than a raw driver error.
+          rethrowPgError(err, dialect);
+        }
       },
 
       async count(params: { model: string; where?: WhereClause[] }): Promise<number> {

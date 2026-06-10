@@ -1,7 +1,7 @@
 import type { Infer } from './json-schema';
 import type { StandardSchemaV1 } from './standard-schema';
 import { describe, expect, it } from 'vitest';
-import { anyOf, arr, bool, endpoint, enums, extractJsonSchema, int, isFortressSchema, isStandardSchema, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat } from './schema-builder';
+import { anyOf, arr, bool, endpoint, enums, ErrorEnvelope, extractJsonSchema, int, isFortressSchema, isStandardSchema, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat } from './schema-builder';
 
 /** Assert validation fails and return issues. */
 function expectIssues(result: StandardSchemaV1.Result<any>): void {
@@ -385,5 +385,45 @@ describe('endpoint builder', () => {
   it('supports multiple tags', () => {
     const ep = endpoint('GET', '/test').summary('Test').tags('Auth', 'Admin').handler('test').build();
     expect(ep.meta?.tags).toEqual(['Auth', 'Admin']);
+  });
+});
+
+describe('errorEnvelope + .errorResponse()', () => {
+  it('exports ErrorEnvelope as a fortress schema matching FortressError.toJSON()', () => {
+    expect(isFortressSchema(ErrorEnvelope)).toBe(true);
+    const json = extractJsonSchema(ErrorEnvelope);
+    expect(json.type).toBe('object');
+    expect(json.required).toEqual(['code', 'message', 'statusCode']);
+    expect(json.properties?.code?.type).toBe('string');
+    expect(json.properties?.message?.type).toBe('string');
+    expect(json.properties?.statusCode?.type).toBe('integer');
+    expect(json.properties?.details).toBeDefined();
+  });
+
+  it('validates a canonical error body', () => {
+    const ok = ErrorEnvelope['~standard'].validate({
+      code: 'NOT_FOUND',
+      message: 'gone',
+      statusCode: 404,
+    });
+    expect('issues' in ok && ok.issues !== undefined).toBe(false);
+  });
+
+  it('rejects bodies missing required fields', () => {
+    const bad = ErrorEnvelope['~standard'].validate({ code: 'NOT_FOUND' }) as StandardSchemaV1.Result<any>;
+    expectIssues(bad);
+  });
+
+  it('.errorResponse() wires ErrorEnvelope into a response declaration', () => {
+    const ep = endpoint('GET', '/schools/:id')
+      .summary('Get school')
+      .errorResponse(404, 'Not found')
+      .errorResponse(403, 'Forbidden')
+      .handler('getSchool')
+      .build();
+
+    expect(ep.responses?.[404]?.description).toBe('Not found');
+    expect(ep.responses?.[404]?.schema?.required).toEqual(['code', 'message', 'statusCode']);
+    expect(ep.responses?.[403]?.schema?.properties?.code?.type).toBe('string');
   });
 });

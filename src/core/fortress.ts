@@ -1,3 +1,4 @@
+import type { OpenAPISpec } from '../plugins/openapi/spec-builder';
 import type { AuthEvent, AuthService } from './auth/auth-service';
 import type { FortressConfig, ResolvedCookieConfig } from './config';
 import type { EndpointDefinition } from './endpoint';
@@ -5,9 +6,12 @@ import type { AuthCookiePayload } from './http/cookie-serialize';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { ResolvedPrincipal } from './http/principal';
 import type { IamEvent, IamService, PermissionCheckEvent } from './iam/iam-service';
+import type { PermissionSyncOptions, PermissionSyncResult } from './iam/permission-sync';
 import type { RouteManifestEntry } from './manifest/route-manifest';
+import type { MigrationApplyResult } from './migrations/engine';
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
+import type { ToOpenAPIOptions } from './openapi';
 import type { FortressPlugin, MiddlewareDefinition } from './plugin';
 import type { CallableForEndpoints, InferPluginCallMap, InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
@@ -22,10 +26,13 @@ import { resolveRequestPrincipal as resolveRequestPrincipalFn } from './http/pri
 import { extractAccessToken as extractAccessTokenFn } from './http/token-extraction';
 import { iamEndpoints } from './iam/iam-endpoints';
 import { createIamService } from './iam/iam-service';
+import { runPermissionSync } from './iam/permission-sync';
 import { buildRouteManifest } from './manifest/route-manifest';
+import { migrateUp } from './migrations/engine';
 import { instrumentAdapter } from './observability/db-instrumentation';
 import { SILENT_LOGGER } from './observability/logger';
 import { NO_OP_TELEMETRY } from './observability/types';
+import { toOpenAPI as endpointsToOpenAPI } from './openapi';
 import { processPlugins } from './plugin-runner';
 
 /**
@@ -124,6 +131,101 @@ export interface Fortress<
    * configured token expiries.
    */
   serializeAuthCookies: (payload: AuthCookiePayload) => string[];
+  /**
+   * Run Fortress's pending schema migrations against the configured database
+   * and, optionally, an application-supplied migration step afterwards.
+   *
+   * Fortress migrations always run first because app schemas commonly
+   * reference fortress tables (foreign keys to `user.id`, etc.). The
+   * `migrateApp` callback (when provided) is awaited after Fortress
+   * migrations complete, so a host can do something like:
+   *
+   * ```ts
+   * await fortress.migrate({
+   *   migrateApp: () => migrate(db, { migrationsFolder: './drizzle' }),
+   * });
+   * ```
+   *
+   * Eliminates the two-step "forget to call `migrateUp` and silently
+   * have no auth tables" footgun.
+   */
+  migrate: (opts?: MigrateOptions) => Promise<MigrateResult>;
+  /**
+   * Seed permissions discovered on registered endpoints (`fortress.endpoints`)
+   * into the IAM database and, optionally, bind them onto a set of default
+   * roles. Idempotent — re-running adds only what's missing and never
+   * revokes anything that was already there.
+   *
+   * Typical bootstrap sequence:
+   *
+   * ```ts
+   * await fortress.migrate({ migrateApp: () => migrate(db, '...') });
+   * await fortress.syncPermissionsFromManifest({
+   *   defaultRoles: { admin: '*', member: ['school:read', 'school:list'] },
+   * });
+   * ```
+   *
+   * Replaces the seed script every consumer used to write that walked
+   * `fortress.endpoints`, deduped `(resource, action)` pairs, and called
+   * `iam.createPermission(...)` for each.
+   */
+  syncPermissionsFromManifest: (opts?: PermissionSyncOptions) => Promise<PermissionSyncResult>;
+  /**
+   * Emit a complete OpenAPI 3.1 spec from the endpoint definitions Fortress
+   * knows about: core auth/IAM routes, plugin routes, and any top-level
+   * host `routes` registered on {@link FortressConfig}.
+   *
+   * This is the programmatic companion to the OpenAPI plugin. Use it when
+   * you already own the docs route or when a build script needs to write
+   * `openapi.json` for client codegen:
+   *
+   * ```ts
+   * const spec = fortress.toOpenAPI({
+   *   title: 'My API',
+   *   version: '0.0.0',
+   *   servers: [{ url: 'http://localhost:3001', description: 'Local' }],
+   *   tags: [{ name: 'Schools' }],
+   * });
+   * ```
+   *
+   * Defaults to endpoint `handler` names for `operationId`, matching most
+   * host route-contract files. Pass `operationId: 'methodPath'` to keep the
+   * historical OpenAPI-plugin ID style.
+   */
+  toOpenAPI: (opts?: FortressToOpenAPIOptions) => OpenAPISpec;
+}
+
+/** Options accepted by {@link Fortress.toOpenAPI}. */
+export interface FortressToOpenAPIOptions extends ToOpenAPIOptions {
+  /** Override the endpoints to emit. Defaults to `fortress.endpoints`. */
+  endpoints?: EndpointDefinition[];
+}
+
+/** Options accepted by {@link Fortress.migrate}. */
+export interface MigrateOptions {
+  /**
+   * Optional host-app migration step. Runs after Fortress migrations
+   * complete; any thrown error propagates after Fortress migrations have
+   * already been applied. Library-agnostic: pass any `() => Promise<void>`
+   * — e.g. drizzle's `migrate(db, { migrationsFolder })`, Knex's
+   * `db.migrate.latest()`, a hand-rolled SQL runner.
+   */
+  migrateApp?: () => Promise<void>;
+  /**
+   * Override the migration dialect. Defaults to the adapter's `dialect`
+   * property (matches the behavior of {@link migrateUp}).
+   */
+  dialect?: 'sqlite' | 'pg';
+  /** Stop applying Fortress migrations after this version. Defaults to the latest. */
+  targetVersion?: number;
+}
+
+/** Result returned by {@link Fortress.migrate}. */
+export interface MigrateResult {
+  /** Result of the Fortress-managed migration step. */
+  fortress: MigrationApplyResult;
+  /** `true` if `migrateApp` was supplied and ran to completion. */
+  appRan: boolean;
 }
 
 /**
@@ -173,7 +275,25 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     }
   }
 
-  const plugins = config.plugins ?? [];
+  // Synthesize a virtual plugin from any top-level `routes` field so host
+  // apps don't have to hand-roll a one-field plugin just to register their
+  // own endpoints. Prepended to the plugin list so its routes appear before
+  // explicit plugins in the manifest, matching the registration order a
+  // user would write themselves.
+  const HOST_ROUTES_PLUGIN_NAME = '__host';
+  const userPlugins = config.plugins ?? [];
+  if (config.routes) {
+    const collision = userPlugins.find(p => p.name === HOST_ROUTES_PLUGIN_NAME);
+    if (collision) {
+      throw Errors.badRequest(
+        `Plugin name '${HOST_ROUTES_PLUGIN_NAME}' is reserved for top-level \`routes\`; rename your plugin.`,
+      );
+    }
+  }
+  const hostRoutesPlugin: FortressPlugin | null = config.routes
+    ? { name: HOST_ROUTES_PLUGIN_NAME, routes: config.routes }
+    : null;
+  const plugins = hostRoutesPlugin ? [hostRoutesPlugin, ...userPlugins] : userPlugins;
 
   // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
   // zero-allocation singletons — if the caller doesn't opt in, Fortress
@@ -356,6 +476,24 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
         access: config.jwt.accessTokenExpirySeconds ?? 900,
         refresh: config.jwt.refreshTokenExpirySeconds ?? 604_800,
       }),
+    async migrate(opts?: MigrateOptions): Promise<MigrateResult> {
+      // Fortress migrations first — app schemas commonly FK to fortress
+      // tables, so this order is the safe default. Unwrap the instrumented
+      // adapter so `db.dialect` reflects the underlying engine.
+      const fortressResult = await migrateUp(db, opts?.dialect, opts?.targetVersion);
+      let appRan = false;
+      if (opts?.migrateApp) {
+        await opts.migrateApp();
+        appRan = true;
+      }
+      return { fortress: fortressResult, appRan };
+    },
+    syncPermissionsFromManifest(opts?: PermissionSyncOptions): Promise<PermissionSyncResult> {
+      return runPermissionSync(iam, opts?.endpoints ?? instance.endpoints, opts);
+    },
+    toOpenAPI(opts?: FortressToOpenAPIOptions): OpenAPISpec {
+      return endpointsToOpenAPI(opts?.endpoints ?? instance.endpoints, opts);
+    },
   };
 
   instance.handleRequest = buildHandleRequest(instance as Fortress);
@@ -368,6 +506,13 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     ...(iamEndpoints as unknown as Record<string, EndpointDefinition>),
   };
   for (const plugin of plugins) {
+    // Top-level `routes` are metadata for manifest/OpenAPI/protected host
+    // routes; they do not come with plugin methods, so exposing them through
+    // `fortress.call.*` would create a runtime `NOT_FOUND` footgun. If a
+    // consumer wants typed in-process callables for custom routes, use a real
+    // plugin that supplies both `routes` and matching `methods`.
+    if (plugin.name === HOST_ROUTES_PLUGIN_NAME)
+      continue;
     if (plugin.routes)
       Object.assign(callEndpoints, plugin.routes);
   }

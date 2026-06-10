@@ -277,6 +277,35 @@ export function extractJsonSchema(schema: FortressSchema<any> | StandardSchemaV1
 /** Schema input accepted by `EndpointBuilder.body/query/params` — a fortress schema or any Standard Schema V1 implementation. */
 export type SchemaInput = FortressSchema<any> | StandardSchemaV1<any>;
 
+// ── Canonical error envelope ───────────────────────────────────────
+
+/**
+ * Canonical fortress error response body — the exact wire shape emitted by
+ * {@link import('./errors').FortressError.toJSON}. Reference this from
+ * endpoint `.response(4xx|5xx, ...)` declarations so host APIs document the
+ * same error contract Fortress's own routes produce, and so clients can use
+ * a single error parser everywhere.
+ *
+ * Shape:
+ * ```ts
+ * {
+ *   code: string,       // FortressErrorCode
+ *   message: string,    // human-readable
+ *   statusCode: number, // HTTP status
+ *   details?: unknown,  // optional structured payload (e.g. validation issues)
+ * }
+ * ```
+ *
+ * See {@link EndpointBuilder.errorResponse} for a shorthand that wires this
+ * schema into a status declaration in one call.
+ */
+export const ErrorEnvelope = obj({
+  code: str('Machine-readable error code'),
+  message: str('Human-readable error message'),
+  statusCode: int('HTTP status code'),
+  details: toFortressSchema<unknown>({ description: 'Optional structured error details' }),
+}, 'code', 'message', 'statusCode');
+
 // ── Endpoint Builder ────────────────────────────────────────────────
 
 /**
@@ -402,6 +431,30 @@ export class EndpointBuilder<
     }
     this._responses[status] = stored;
     return this as unknown as EndpointBuilder<TBody, TQuery, TParams, any>;
+  }
+
+  /**
+   * Declare an error response that returns the canonical {@link ErrorEnvelope}
+   * body. Shorthand for `.response(status, description, ErrorEnvelope)`.
+   *
+   * Aligns host endpoint error responses with what Fortress's own routes
+   * emit, so a single client-side error parser works everywhere.
+   *
+   * ```ts
+   * endpoint('GET', '/schools/:id')
+   *   .summary('Get a school')
+   *   .params(obj({ id: str() }, 'id'))
+   *   .response(200, 'OK', SchoolEnvelope)
+   *   .errorResponse(404, 'School not found')
+   *   .errorResponse(403, 'Forbidden')
+   *   .build();
+   * ```
+   */
+  errorResponse<S extends number>(
+    status: S,
+    description: string,
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }> {
+    return this.response(status, description, ErrorEnvelope);
   }
 
   handler(name: string): this {

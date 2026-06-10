@@ -6,6 +6,7 @@ export interface OpenAPISpec {
   openapi: string;
   info: { title: string; version: string; description?: string };
   servers?: Array<{ url: string; description?: string }>;
+  tags?: Array<{ name: string; description?: string }>;
   paths: Record<string, Record<string, OpenAPIOperation>>;
   components: {
     schemas: Record<string, JSONSchema>;
@@ -53,6 +54,14 @@ export interface SpecBuilderOptions {
   version: string;
   description?: string;
   servers?: Array<{ url: string; description?: string }>;
+  /** Optional top-level OpenAPI tags. */
+  tags?: Array<{ name: string; description?: string }>;
+  /**
+   * Operation ID strategy. Defaults to the historical Fortress method+path
+   * generator. `fortress.toOpenAPI()` defaults this to `'handler'` so host
+   * specs match the endpoint contract names consumers already chose.
+   */
+  operationId?: 'methodPath' | 'handler' | ((endpoint: EndpointDefinition) => string | undefined);
 }
 
 const SECURITY_SCHEMES: Record<string, OpenAPISecurityScheme> = {
@@ -126,6 +135,38 @@ function toOpenAPIPath(path: string): string {
   return path.replace(/:(\w+)/g, '{$1}');
 }
 
+/**
+ * Deep-clean Standard Schema / runtime-only fields from schema objects before
+ * embedding them in OpenAPI. Fortress schemas are JSON Schema objects with a
+ * `~standard` validator attached; external schema adapters can also hang
+ * functions or undefined values off the object. OpenAPI must receive pure
+ * JSON-serializable JSON Schema, so strip any key beginning with `~`, any
+ * function value, and any `undefined` value recursively.
+ */
+function cleanSchema<T>(value: T): T {
+  if (Array.isArray(value))
+    return value.map(cleanSchema) as T;
+
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !key.startsWith('~'))
+        .filter(([, entry]) => typeof entry !== 'function' && entry !== undefined)
+        .map(([key, entry]) => [key, cleanSchema(entry)]),
+    ) as T;
+  }
+
+  return value;
+}
+
+function resolveOperationId(endpoint: EndpointDefinition, options: SpecBuilderOptions): string | undefined {
+  if (typeof options.operationId === 'function')
+    return options.operationId(endpoint);
+  if (options.operationId === 'handler')
+    return endpoint.handler;
+  return toOperationId(endpoint.method, endpoint.path);
+}
+
 /** Walk every endpoint definition and component-schemas record and emit a complete OpenAPI 3.1 {@link OpenAPISpec}. */
 export function buildOpenAPISpec(
   endpoints: EndpointDefinition[],
@@ -144,7 +185,7 @@ export function buildOpenAPISpec(
     }
 
     const operation: OpenAPIOperation = {
-      operationId: toOperationId(ep.method, ep.path),
+      operationId: resolveOperationId(ep, options),
       responses: {},
     };
 
@@ -177,8 +218,8 @@ export function buildOpenAPISpec(
 
     // Parameters
     const params: OpenAPIParameter[] = [
-      ...extractPathParams(ep.path, ep.input?.params),
-      ...extractQueryParams(ep.input?.query),
+      ...extractPathParams(ep.path, cleanSchema(ep.input?.params)),
+      ...extractQueryParams(cleanSchema(ep.input?.query)),
     ];
     if (params.length > 0) {
       operation.parameters = params;
@@ -188,7 +229,7 @@ export function buildOpenAPISpec(
     if (ep.input?.body) {
       operation.requestBody = {
         required: true,
-        content: { 'application/json': { schema: ep.input.body } },
+        content: { 'application/json': { schema: cleanSchema(ep.input.body) } },
       };
     }
 
@@ -199,7 +240,7 @@ export function buildOpenAPISpec(
           description: resp.description,
         };
         if (resp.schema) {
-          entry.content = { 'application/json': { schema: resp.schema } };
+          entry.content = { 'application/json': { schema: cleanSchema(resp.schema) } };
         }
         operation.responses[status] = entry;
       }
@@ -230,13 +271,16 @@ export function buildOpenAPISpec(
     },
     paths,
     components: {
-      schemas: componentSchemas,
+      schemas: cleanSchema(componentSchemas),
       securitySchemes,
     },
   };
 
   if (options.servers && options.servers.length > 0) {
     spec.servers = options.servers;
+  }
+  if (options.tags && options.tags.length > 0) {
+    spec.tags = options.tags;
   }
 
   return spec;

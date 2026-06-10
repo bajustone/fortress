@@ -60,6 +60,32 @@ const handler = protect(fortress, createThing, async (ctx) => {
 
 Passing a string handler name keeps the looser `Record<string, unknown>` / `unknown` typing (no inference source available). Runtime validation and coercion are identical in both cases — this is purely a typing improvement.
 
+### Typed status returns with `ctx.respond`
+
+For non-2xx returns, use `ctx.respond(status, body)` instead of hand-rolling a `Response`. When the target is a typed endpoint, both arguments narrow against the response declarations:
+
+```ts
+const getThing = endpoint('GET', '/things/:id')
+  .summary('Get thing')
+  .security('bearer')
+  .params(obj({ id: int() }, 'id'))
+  .response(200, 'OK', obj({ data: str() }, 'data'))
+  .errorResponse(404, 'Not found')
+  .handler('getThing')
+  .build();
+
+const handler = protect(fortress, getThing, async (ctx) => {
+  const thing = await load(ctx.params.id);
+  if (!thing)
+    return ctx.respond(404, { code: 'NOT_FOUND', message: 'no such thing', statusCode: 404 });
+  //                  ^^^                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  //          must be a declared status          typed against responses[404].schema (ErrorEnvelope)
+  return { data: thing };
+});
+```
+
+String-target endpoints fall back to `(status: number, body: unknown) => Response` — same ergonomics as before, no narrowing.
+
 ## Hono
 
 ```ts
@@ -74,12 +100,17 @@ const statsEndpoint = endpoint('GET', '/api/stats')
   .handler('stats')
   .build();
 
-// Include the endpoint in a small metadata plugin so it appears in
-// fortress.endpoints / fortress.manifest / OpenAPI.
+// Include the endpoint so it appears in
+// fortress.endpoints / fortress.manifest / OpenAPI. Either pass it via the
+// top-level `routes` shorthand (preferred) or as a one-field plugin.
 const fortress = createFortress({
   // ...
-  plugins: [{ name: 'host-routes', routes: { stats: statsEndpoint } }],
+  routes: { stats: statsEndpoint },
 });
+
+// Equivalent long-form (use this if you want to colocate host endpoints with
+// other plugin metadata in the same record):
+// plugins: [{ name: 'host-routes', routes: { stats: statsEndpoint } }],
 
 app.get('/api/stats', protectedRoute(fortress, statsEndpoint, async (_c, ctx) => {
   return { ok: ctx.subject?.type ?? 'unknown' };

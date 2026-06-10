@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { authComponentSchemas, authEndpoints } from '../../core/auth/auth-endpoints';
 import { createFortress } from '../../core/fortress';
-import { endpoint } from '../../core/schema-builder';
+import { toOpenAPI } from '../../core/openapi';
+import { endpoint, obj, str } from '../../core/schema-builder';
 import { oauth } from '../../plugins/oauth';
 import { createTestAdapter } from '../../testing';
 import { openapi } from './index';
@@ -117,6 +118,81 @@ describe('spec-builder', () => {
     expect(spec.paths['/health'].get).toBeDefined();
     expect(spec.paths['/health'].get.responses['200']).toBeDefined();
   });
+
+  it('strips Standard Schema/runtime internals from embedded schemas', () => {
+    const runtimeSchema = {
+      'type': 'object',
+      'properties': {
+        name: { 'type': 'string', '~standard': { validate: () => ({ value: 'x' }) } },
+      },
+      'required': ['name'],
+      '~standard': { validate: () => ({ value: {} }) },
+      'extraFn': () => undefined,
+      'undef': undefined,
+    } as any;
+    const ep = endpoint('POST', '/schools')
+      .summary('Create school')
+      .body(runtimeSchema)
+      .response(201, 'Created', runtimeSchema)
+      .handler('schools.create')
+      .build();
+
+    const spec = buildOpenAPISpec([ep], {}, { title: 'Test', version: '1.0.0' });
+    const serialized = JSON.stringify(spec);
+    expect(serialized).not.toContain('~standard');
+    expect(serialized).not.toContain('extraFn');
+    expect(spec.paths['/schools'].post.requestBody!.content['application/json'].schema).toEqual({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    });
+  });
+
+  it('supports root tags and handler operationIds when requested', () => {
+    const ep = endpoint('GET', '/api/v1/schools/:id')
+      .summary('Get school')
+      .params(obj({ id: str() }, 'id'))
+      .response(200, 'OK')
+      .handler('schools.get')
+      .build();
+
+    const spec = buildOpenAPISpec([ep], {}, {
+      title: 'REB EdIT API',
+      version: '0.0.0',
+      tags: [{ name: 'Schools' }],
+      operationId: 'handler',
+    });
+
+    expect(spec.tags).toEqual([{ name: 'Schools' }]);
+    expect(spec.paths['/api/v1/schools/{id}'].get.operationId).toBe('schools.get');
+  });
+});
+
+describe('standalone toOpenAPI helper', () => {
+  it('builds a pure spec from endpoint definitions without a Fortress instance', () => {
+    const school = endpoint('GET', '/api/v1/schools/:id')
+      .summary('Get school')
+      .tags('Schools')
+      .security('none')
+      .params(obj({ id: str() }, 'id'))
+      .response(200, 'OK', obj({ data: str() }, 'data'))
+      .handler('schools.get')
+      .build();
+
+    const spec = toOpenAPI([school], {
+      title: 'REB EdIT API',
+      version: '0.0.0',
+      servers: [{ url: 'http://localhost:3001', description: 'Local development' }],
+      tags: [{ name: 'Schools' }],
+    });
+
+    expect(spec.info.title).toBe('REB EdIT API');
+    expect(spec.paths['/api/v1/schools/{id}'].get.operationId).toBe('schools.get');
+    expect(spec.paths['/api/v1/schools/{id}'].get.responses['200'].content?.['application/json'].schema).toMatchObject({
+      type: 'object',
+      required: ['data'],
+    });
+  });
 });
 
 describe('openapi plugin', () => {
@@ -161,6 +237,26 @@ describe('openapi plugin', () => {
     expect(spec.paths['/oauth/token']).toBeDefined();
     expect(spec.paths['/oauth/introspect']).toBeDefined();
     expect(spec.paths['/oauth/userinfo']).toBeDefined();
+  });
+
+  it('includes top-level host routes in spec', async () => {
+    const hostEndpoint = endpoint('GET', '/api/v1/schools')
+      .summary('List schools')
+      .tags('Schools')
+      .security('none')
+      .response(200, 'OK')
+      .handler('schools.list')
+      .build();
+    const fortress = createFortress({
+      jwt: { secret: SECRET },
+      database: createTestAdapter(),
+      routes: { listSchools: hostEndpoint },
+      plugins: [openapi({ includeCoreAuth: false, includeCoreIam: false, operationId: 'handler' })],
+    });
+
+    const spec = await fortress.plugins.openapi.generateSpec();
+    expect(spec.paths['/api/v1/schools']).toBeDefined();
+    expect(spec.paths['/api/v1/schools'].get.operationId).toBe('schools.list');
   });
 
   it('excludes core auth when configured', async () => {

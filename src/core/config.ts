@@ -1,5 +1,6 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { PasswordPolicyConfig } from './auth/password-policy';
+import type { EndpointDefinition } from './endpoint';
 import type { CsrfConfig } from './http/csrf';
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
@@ -67,6 +68,31 @@ export interface FortressConfig {
     maxTtlSeconds?: number;
   };
   plugins?: readonly FortressPlugin[];
+  /**
+   * Host-application endpoint definitions to register with the manifest,
+   * OpenAPI generation, and `protect()` / adapter `protectedRoute()` helpers
+   * without authoring a one-field plugin. Equivalent to passing a
+   * `FortressPlugin` whose only field is `routes` — fortress synthesizes
+   * exactly that plugin under the reserved name `__host`.
+   *
+   * Top-level `routes` are metadata-only: they do not add `fortress.call.*`
+   * entries because no handler methods are registered. If you need typed
+   * in-process callables for custom routes, declare a real plugin with both
+   * `routes` and matching `methods`.
+   *
+   * Keyed by handler name, matching {@link FortressPlugin.routes}:
+   *
+   * ```ts
+   * createFortress({
+   *   database, jwt, cookies,
+   *   routes: appEndpoints,
+   * });
+   * ```
+   *
+   * The name `__host` is reserved — declaring a plugin called `__host`
+   * alongside `routes` is a configuration error.
+   */
+  routes?: Record<string, EndpointDefinition>;
   /** Auth-cookie naming and attributes used by `fortress.handleRequest` and framework adapters. */
   cookies?: CookieConfig;
   /**

@@ -163,4 +163,28 @@ describe('protect()', () => {
 
     expect(res.headers.getSetCookie().length).toBeGreaterThanOrEqual(2);
   });
+
+  it('exposes ctx.respond for typed non-success status returns', async () => {
+    const ep = testEndpoint();
+    const fortress = createFortress({
+      database: createTestAdapter(),
+      jwt: { secret },
+      csrf: { enabled: false },
+      plugins: [{ name: 'host-routes', routes: { createHostThing: ep } }],
+      cookies: { secure: false },
+    });
+
+    const handler = protect(fortress, ep, (ctx) => {
+      return ctx.respond(404, { code: 'NOT_FOUND', message: 'no thing', statusCode: 404 } as any);
+    });
+
+    const res = await handler(new Request('http://localhost/host/things/1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'alpha' }),
+    }));
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ code: 'NOT_FOUND', message: 'no thing', statusCode: 404 });
+  });
 });
