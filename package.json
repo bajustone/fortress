@@ -1,6 +1,6 @@
 {
   "name": "@bajustone/fortress",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Framework-agnostic, adapter-based authentication and authorization library for TypeScript. Core auth (JWT, refresh tokens, password hashing) plus IAM (resource+action permissions, groups, roles) with a plugin system for OAuth, 2FA, tenancy, WebAuthn, magic links, audit logging, rate limiting, and more.",
   "type": "module",
   "module": "src/index.ts",
@@ -91,7 +91,17 @@
       }
     }
   },
-  "files": ["dist", "src", "docs", "examples", "migrations", "README.md", "LICENSE", "SECURITY.md", "CHANGELOG.md"],
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "examples",
+    "migrations",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "dev": "bun run --watch examples/hono-app/index.ts",
     "lint": "eslint .",

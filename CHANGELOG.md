@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.8] - 2026-06-10
+
+### Fixed
+- fix(release): keep jsr.json version in sync with package.json
+
 ## [0.2.7] - 2026-06-10
 
 ### Fixed
