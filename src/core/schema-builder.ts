@@ -299,7 +299,14 @@ export type SchemaInput = FortressSchema<any> | StandardSchemaV1<any>;
  * See {@link EndpointBuilder.errorResponse} for a shorthand that wires this
  * schema into a status declaration in one call.
  */
-export const ErrorEnvelope = obj({
+export interface ErrorEnvelopeBody {
+  code: string;
+  message: string;
+  statusCode: number;
+  details?: unknown;
+}
+
+export const ErrorEnvelope: FortressSchema<ErrorEnvelopeBody> = obj({
   code: str('Machine-readable error code'),
   message: str('Human-readable error message'),
   statusCode: int('HTTP status code'),

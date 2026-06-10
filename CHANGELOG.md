@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.2.2] - 2026-06-09
+## [0.2.3] - 2026-06-09
 
 ### Added
 - **Programmatic OpenAPI emission** — new standalone `toOpenAPI(endpoints, options)` helper plus `fortress.toOpenAPI(options)`. The standalone helper is env/DB-free for build scripts and client codegen; the instance method defaults to the endpoint definitions Fortress knows about: core auth/IAM routes, plugin routes, and top-level host `routes`. Supports `title`, `version`, `description`, `servers`, top-level `tags`, custom `schemas`, explicit endpoint override, and `operationId` strategy. Defaults `operationId` to endpoint `handler` names for host-app codegen use cases. This replaces hand-rolled builders like `reb-edit/apps/api/src/openapi.ts`. (Wishlist #2.)
