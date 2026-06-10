@@ -6,6 +6,23 @@ const root = join(import.meta.dirname, '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
 const version = pkg.version;
 
+// Keep jsr.json's version in lockstep with package.json. JSR publishes from
+// jsr.json, so a drift here ships the wrong (or an already-taken) version and
+// the new release never reaches the registry. Do this before the no-commit
+// early-exits below so the sync happens on every bump. Targeted line replace
+// preserves the file's formatting instead of reserializing the whole JSON.
+const jsrPath = join(root, 'jsr.json');
+const jsrRaw = readFileSync(jsrPath, 'utf-8');
+const jsrSynced = jsrRaw.replace(
+  /("version"\s*:\s*)"[^"]*"/,
+  `$1"${version}"`,
+);
+if (jsrSynced !== jsrRaw) {
+  writeFileSync(jsrPath, jsrSynced);
+  execSync('git add jsr.json', { cwd: root });
+  console.log(`Synced jsr.json version to ${version}`);
+}
+
 // Find the previous tag
 const tags = execSync('git tag --sort=-v:refname', { encoding: 'utf-8' })
   .trim()

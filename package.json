@@ -101,7 +101,9 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
     "version": "bun scripts/changelog.ts",
-    "publish:dry": "npx jsr publish --dry-run --allow-dirty",
+    "check:version": "bun scripts/check-version-sync.ts",
+    "publish": "bun run check:version && npx jsr publish",
+    "publish:dry": "bun run check:version && npx jsr publish --dry-run --allow-dirty",
     "prepublishOnly": "tsup",
     "prepare": "husky"
   },

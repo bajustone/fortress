@@ -4,7 +4,20 @@ on:
     tags: ['v*']
 
 jobs:
+  # Gate the release on the committed package.json/jsr.json being in sync. The
+  # publish-jsr job re-syncs jsr.json before publishing, which would otherwise
+  # silently mask drift in the committed source; this job surfaces it so a
+  # tagged release fails loudly instead. Mirrors the local pre-push hook.
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run check:version
+
   publish-jsr:
+    needs: verify-version
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,6 +33,7 @@ jobs:
       - run: npx jsr publish --allow-dirty
 
   publish-npm:
+    needs: verify-version
     runs-on: ubuntu-latest
     permissions:
       contents: read
