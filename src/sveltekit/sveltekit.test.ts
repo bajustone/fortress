@@ -8,6 +8,7 @@ import type { Fortress } from '../core/fortress';
 import type { Subject } from '../core/types';
 import type { FortressLocals, SvelteKitCookieOptions, SvelteKitCookies, SvelteKitRequestEvent } from './types';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { signAccessToken } from '../core/auth/jwt';
 import { createFortress } from '../core/fortress';
 import { apiKey } from '../plugins/api-key';
 import { createTestAdapter } from '../testing';
@@ -186,34 +187,34 @@ describe('createSvelteKitHandle: user routes', () => {
   });
 
   it('auto-refreshes an expired access token using the refresh cookie', async () => {
-    // Build a second fortress against the SAME database with a 1-second
-    // access token expiry. Issue a fresh login through it, wait for the
-    // access token to expire, then run the handle and assert refresh.
-    const expired = createFortress({
-      jwt: { secret: SECRET, accessTokenExpirySeconds: 1 },
-      database: fortress.config.database,
-    });
-    const freshLogin = await expired.auth.login('a@b.co', 'password123');
+    // Issue a normal login to get a valid refresh token, then pair it with a
+    // deliberately expired access token. This avoids the previous 1-second
+    // expiry + sleep race: on slow CI, the freshly refreshed 1-second access
+    // token could expire before the adapter verified it and populated locals.
+    const freshLogin = await fortress.auth.login('a@b.co', 'password123');
     if (freshLogin.status !== 'success')
       throw new Error('expected success');
-    const expiredAccess = freshLogin.accessToken;
     const validRefresh = freshLogin.refreshToken;
+    const expiredAccess = await signAccessToken({
+      sub: freshLogin.user.id,
+      subjectType: 'USER',
+      name: freshLogin.user.name,
+      groups: [],
+      iss: 'fortress',
+    }, SECRET, -1);
 
-    // Wait long enough for the access token to expire (1s + clock skew).
-    await new Promise(r => setTimeout(r, 1500));
-
-    const handle = createSvelteKitHandle(expired);
+    const handle = createSvelteKitHandle(fortress);
     const event = fakeEvent({
       url: 'http://localhost/dashboard',
       cookies: {
-        [expired.cookies.accessName]: expiredAccess,
-        [expired.cookies.refreshName]: validRefresh,
+        [fortress.cookies.accessName]: expiredAccess,
+        [fortress.cookies.refreshName]: validRefresh,
       },
     });
     await handle({ event, resolve: async () => new Response() });
     // After auto-refresh, the cookie store should have a NEW access token
     // (different from the expired one) and locals.fortress.userId set.
-    const newAccess = event.cookies._store.get(expired.cookies.accessName);
+    const newAccess = event.cookies._store.get(fortress.cookies.accessName);
     expect(newAccess).toBeTruthy();
     expect(newAccess).not.toBe(expiredAccess);
     expect((event.locals as { fortress?: { userId?: number } }).fortress?.userId).toBeGreaterThan(0);
@@ -223,30 +224,30 @@ describe('createSvelteKitHandle: user routes', () => {
     // A silent refresh rotates the refresh token, so it must not be triggered
     // by an unsafe (cross-site-reachable) request. SSR loads are GETs; an
     // expired-access POST should fall through with no subject and no rotation.
-    const expired = createFortress({
-      jwt: { secret: SECRET, accessTokenExpirySeconds: 1 },
-      database: fortress.config.database,
-    });
-    const freshLogin = await expired.auth.login('a@b.co', 'password123');
+    const freshLogin = await fortress.auth.login('a@b.co', 'password123');
     if (freshLogin.status !== 'success')
       throw new Error('expected success');
-    const expiredAccess = freshLogin.accessToken;
     const validRefresh = freshLogin.refreshToken;
+    const expiredAccess = await signAccessToken({
+      sub: freshLogin.user.id,
+      subjectType: 'USER',
+      name: freshLogin.user.name,
+      groups: [],
+      iss: 'fortress',
+    }, SECRET, -1);
 
-    await new Promise(r => setTimeout(r, 1500));
-
-    const handle = createSvelteKitHandle(expired);
+    const handle = createSvelteKitHandle(fortress);
     const event = fakeEvent({
       method: 'POST',
       url: 'http://localhost/dashboard',
       cookies: {
-        [expired.cookies.accessName]: expiredAccess,
-        [expired.cookies.refreshName]: validRefresh,
+        [fortress.cookies.accessName]: expiredAccess,
+        [fortress.cookies.refreshName]: validRefresh,
       },
     });
     await handle({ event, resolve: async () => new Response() });
     // No rotation: access cookie unchanged, no authenticated subject.
-    expect(event.cookies._store.get(expired.cookies.accessName)).toBe(expiredAccess);
+    expect(event.cookies._store.get(fortress.cookies.accessName)).toBe(expiredAccess);
     expect((event.locals as { fortress?: { userId?: number } }).fortress?.userId).toBeUndefined();
   });
 });

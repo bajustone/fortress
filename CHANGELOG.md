@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-09
+
+### Fixed
+- Stabilized the SvelteKit auto-refresh test by using a deliberately expired access token instead of a 1-second token plus sleep. Slow CI runners could expire the freshly refreshed 1-second access token before locals were populated.
+
 ## [0.2.3] - 2026-06-09
 
 ### Added
