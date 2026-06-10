@@ -676,6 +676,8 @@ describe('rate-limit plugin', () => {
       });
 
       // Well past the default register limit — should all succeed.
+      // Each createUser does a full Argon2id hash, so the loop dominates the
+      // clock; bump the timeout like the login: { disabled } sibling above.
       for (let i = 0; i < 10; i++) {
         await fortress.auth.createUser({
           email: `reg-off-${i}@t.com`,
@@ -683,6 +685,6 @@ describe('rate-limit plugin', () => {
           password: 'password-123',
         });
       }
-    });
+    }, 20000);
   });
 });
