@@ -1,11 +1,15 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin } from '../plugin';
+import type { ProtectedRouteContext } from './protect';
 import { describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 import { buildRouteManifest } from '../manifest/route-manifest';
-import { int, obj, str } from '../schema-builder';
+import { endpoint, int, obj, str } from '../schema-builder';
 import { protect } from './protect';
+
+/** Compile-time assertion that two types are identical. */
+type Expect<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 const secret = 'test-secret-minimum-32-bytes-long!!';
 
@@ -186,5 +190,32 @@ describe('protect()', () => {
 
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ code: 'NOT_FOUND', message: 'no thing', statusCode: 404 });
+  });
+
+  it('narrows ctx.body to non-optional T when a body schema is declared (type-level)', () => {
+    const withBody = endpoint('POST', '/things')
+      .body(obj({ name: str() }, 'name'))
+      .response(201, 'Created', obj({ ok: str() }, 'ok'))
+      .handler('createThing')
+      .build();
+    const noBody = endpoint('GET', '/things/:id')
+      .params(obj({ id: int() }, 'id'))
+      .response(200, 'OK', obj({ ok: str() }, 'ok'))
+      .handler('getThing')
+      .build();
+
+    type WithBodyCtx = ProtectedRouteContext<typeof withBody>;
+    type NoBodyCtx = ProtectedRouteContext<typeof noBody>;
+
+    // Declared body schema → non-optional `{ name: string }` (no `| undefined`).
+    const _bodyNonOptional: Expect<WithBodyCtx['body'], { name: string }> = true;
+    // No body schema → loose `unknown`.
+    const _bodyLoose: Expect<NoBodyCtx['body'], unknown> = true;
+
+    // Touch the runtime values so they aren't flagged as type-only.
+    expect(withBody.handler).toBe('createThing');
+    expect(noBody.handler).toBe('getThing');
+    expect(_bodyNonOptional).toBe(true);
+    expect(_bodyLoose).toBe(true);
   });
 });

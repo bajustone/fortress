@@ -45,8 +45,6 @@ export type ProtectedRouteTarget<E extends EndpointDefinition<any, any, any, any
  * narrow object type, which passes through unchanged.
  */
 type WidenObj<T> = [keyof T] extends [never] ? Record<string, unknown> : T;
-/** Same idea for the body slot, but the loose fallback is `unknown`. */
-type WidenBody<T> = [keyof T] extends [never] ? unknown : T;
 
 export interface ProtectOptions {
   /**
@@ -83,7 +81,19 @@ export interface ProtectedRouteContext<
   scopes?: string[] | null;
   params: WidenObj<InferEndpointParams<E>>;
   query: WidenObj<InferEndpointQuery<E>>;
-  body?: WidenBody<InferEndpointBody<E>>;
+  /**
+   * Parsed request body.
+   *
+   * When the endpoint declares a body schema, the handler only runs after
+   * that body passes Standard Schema validation, so `body` is narrowed to a
+   * non-optional `T` — use it directly without `!` or reaching for
+   * `ctx.input`. Endpoints with no declared body schema fall back to the
+   * loose `unknown` (which still admits `undefined`), matching the
+   * pre-generics ergonomics for string / untyped targets.
+   */
+  body: [keyof InferEndpointBody<E>] extends [never]
+    ? unknown
+    : InferEndpointBody<E>;
   /**
    * Merged `{ ...body, ...query, ...params }` input after URL coercion.
    * Typed as the same intersection the `fortress.call.*` proxy uses.
