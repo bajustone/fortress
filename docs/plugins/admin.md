@@ -2,9 +2,9 @@
 
 ## Overview
 
-The `admin` plugin provides a complete set of endpoints for managing Fortress's own resources: users, roles, groups, permissions, role bindings, permission bindings, and resource sync. It ships 35 endpoints plus a bootstrap endpoint for first-time admin setup.
+The `admin` plugin provides a complete set of endpoints for managing Fortress's own resources: users, roles, groups, permissions, role bindings, permission bindings, and resource sync. The first-admin bootstrap endpoint is opt-in and protected by a one-time secret.
 
-All admin endpoints are protected by `fortress:*` permissions enforced through the RBAC middleware. Until a user has been bootstrapped with the `fortress-admin` role, no one can access these routes. Optionally, a set of `adminUserIds` can be designated as superadmins who bypass all permission checks entirely.
+All admin endpoints are protected by `fortress:*` permissions enforced through the RBAC middleware. Until a user has been bootstrapped with the `fortress-admin` role, no one can access these routes. There is no ambient superadmin bypass.
 
 ## Installation
 
@@ -18,7 +18,7 @@ const fortress = createFortress({
   jwt: { key: 'your-secret-at-least-32-bytes!!' },
   database: adapter,
   plugins: [
-    admin({ adminUserIds: [1] }),
+    admin({ bootstrap: { enabled: true, secret: process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET } }),
   ],
 });
 ```
@@ -29,17 +29,20 @@ All fields on `AdminPluginOptions` are optional:
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `adminUserIds` | `number[]` | `[]` | User IDs that bypass all permission checks (superadmins). These users can access any fortress admin endpoint without being assigned the corresponding permissions. |
 | `resource` | `string` | `'fortress'` | Resource name used in permission declarations. Change this if `fortress` conflicts with your application's resource naming. |
+| `bootstrap` | `{ enabled: boolean; secret?: string }` | disabled | Mount the one-time first-admin bootstrap route. `secret` defaults to `FORTRESS_ADMIN_BOOTSTRAP_SECRET`. |
 | `apiKeyRoutes` | `boolean` | `false` | Mount the admin-side api-key management endpoints under `/admin/users/:userId/api-keys/*` and `/admin/service-accounts/:id/api-keys/*`. Requires the `api-key` plugin to also be registered. See [API Key Management](#api-key-management) below. |
 
 ## Bootstrap
 
-Before any admin endpoints can be used, you must bootstrap the first admin user. The bootstrap endpoint creates the `fortress-admin` role, registers all required permissions (auto-discovered from endpoint definitions across all plugins), and binds them to the specified user.
+Before any admin endpoints can be used, you must bootstrap the first admin user. The bootstrap route is **not mounted by default**; enable it only during setup. It creates the `fortress-admin` role, registers all required permissions (auto-discovered from endpoint definitions across all plugins), and binds them to the specified user.
 
 ```ts
-// Via the plugin method
-await fortress.plugins.admin.bootstrap({ userId: 1 });
+// Via the plugin method or HTTP, while bootstrap.enabled is true.
+await fortress.plugins.admin.bootstrap({
+  userId: '1',
+  secret: process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET!,
+});
 ```
 
 Or via HTTP:
@@ -49,10 +52,10 @@ POST /iam/admin/bootstrap
 Authorization: Bearer <access-token>
 Content-Type: application/json
 
-{ "userId": 1 }
+{ "userId": "1", "secret": "<one-time-secret>" }
 ```
 
-Bootstrap can only be called once. After the `fortress-admin` role exists, only superadmins (those in `adminUserIds`) can re-bootstrap.
+Bootstrap succeeds only while zero `fortress-admin` bindings exist and the supplied secret matches the configured one-time secret. It cannot be used to re-bootstrap.
 
 ### What bootstrap does
 
@@ -360,17 +363,11 @@ Mounted only when `admin({ apiKeyRoutes: true })`. All six require the `apiKey:m
 | GET | `/iam/resources` | `fortress:viewResources` |
 | POST | `/iam/sync` | `fortress:managePermissions` |
 
-## Superadmin Bypass
+## Bootstrap Hardening
 
-When `adminUserIds` is provided, the plugin registers middleware on `/iam/*`, `/auth/users/*`, and `/auth/users` paths. For requests from a user whose ID is in the `adminUserIds` set, all permission checks are bypassed -- the request proceeds regardless of whether the user holds the required permissions.
+The bootstrap endpoint is intentionally not mounted unless `bootstrap.enabled` is true. A request must be authenticated and must include the configured one-time secret. The secret is compared in constant time, and a successful bootstrap permanently closes the path by creating the first `fortress-admin` binding.
 
-This is useful for:
-
-- Initial setup before bootstrap has been run.
-- Emergency access when role bindings are misconfigured.
-- Automated scripts that need unrestricted fortress access.
-
-The superadmin bypass is framework-agnostic. It extracts the user ID from Hono's context (`c.get('fortressUserId')`) or Express's request object (`req.fortressUserId`), depending on which adapter is in use.
+For emergency access after bootstrap, grant or repair IAM role bindings out-of-band using a trusted migration/seed process with direct database access; the HTTP bootstrap route will not re-open.
 
 ## Permissions Reference
 
@@ -399,7 +396,7 @@ The admin plugin uses all fortress permissions declared across admin and core IA
 
 ## How It Works
 
-1. **Default deny** -- All admin endpoints declare a `permission` in their endpoint metadata. The RBAC middleware enforces these permissions automatically. Without the `fortress-admin` role (or superadmin status), every request is denied.
+1. **Default deny** -- All admin endpoints declare a `permission` in their endpoint metadata. The RBAC middleware enforces these permissions automatically. Without the `fortress-admin` role, every request is denied.
 2. **Auto-discovery** -- The bootstrap method scans all registered endpoint definitions (core + plugins) to discover every `{ resource, action }` pair. This means adding new plugins with permission-protected endpoints automatically includes those permissions in the bootstrap role.
 3. **Delegation** -- Admin methods delegate to the core `auth` and `iam` services. The plugin does not duplicate business logic; it provides the permission-gated route layer on top of existing service methods.
-4. **Plugin middleware** -- When `adminUserIds` is configured, the plugin registers `after-auth` middleware that checks whether the authenticated user is a superadmin. If so, subsequent permission checks are bypassed. Non-superadmin requests pass through to the standard RBAC enforcement.
+4. **Bootstrap is one-time** -- The bootstrap route is opt-in, secret-gated, and refuses to run after any `fortress-admin` role binding exists.

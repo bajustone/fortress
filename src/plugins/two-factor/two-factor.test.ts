@@ -63,6 +63,14 @@ describe('two-factor plugin', () => {
       expect(result.verified).toBe(true);
     });
 
+    it('rejects replay of a captured TOTP code', async () => {
+      const setup = await methods.enable(userId);
+      const code = await generateTOTP(setup.secret, 30, 6);
+
+      await expect(methods.verify(userId, code)).resolves.toEqual({ verified: true });
+      await expect(methods.verify(userId, code)).rejects.toThrow('already been used');
+    });
+
     it('rejects invalid TOTP code', async () => {
       await methods.enable(userId);
       await expect(methods.verify(userId, '000000')).rejects.toThrow('Invalid two-factor code');

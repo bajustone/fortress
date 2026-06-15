@@ -125,7 +125,7 @@ src/
     webhook/index.ts                    # Standard Webhooks spec (HMAC-SHA256, retries)
     magic-link/index.ts                 # Passwordless token-based auth
     webauthn/index.ts                   # Passkeys/WebAuthn (registration, passwordless auth, 2FA mode)
-    admin/index.ts                      # Full IAM admin: 35 endpoints, bootstrap, superadmin bypass
+    admin/index.ts                      # Full IAM admin: protected endpoints + opt-in secret bootstrap
 
 bin/
   fortress.ts                           # CLI tool: init, sync:push, sync:pull, sync:types, generate-secret
@@ -568,7 +568,7 @@ Two evaluation modes (configured via `config.rbac.evaluationMode`):
 - **Optimized path:** If `db.rawQuery` is available, uses a single SQL JOIN query across `role_binding` → `role_permission` → `permission` tables
 - **Fallback path:** Multiple sequential `findMany` calls — slower but correct for adapters without `rawQuery`
 - Permissions come from: direct user bindings + group memberships (via `group_user` → group's role bindings)
-- Tenant filtering: Includes bindings where `tenantId IS NULL` (global) OR `tenantId = requested`
+- Tenant filtering: With a requested tenant, includes global (`tenantId IS NULL`) and matching tenant grants. Without a requested tenant, only global grants match.
 
 ### Permission Cache
 
@@ -1248,21 +1248,22 @@ OAuth/OIDC consumer for authenticating via external providers.
     // Custom OIDC: { name: 'corporate-sso', clientId, clientSecret, issuer: 'https://sso.company.com' }
   ],
   autoRegister: true,    // JIT user provisioning on first social login
-  linkAccounts: true     // Link social identity to existing user by email match
+  linkAccounts: true,    // Link social identity only by provider-verified email
+  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY // 32-byte AES-256-GCM key
 }
 ```
 
 **Built-in providers** (`src/plugins/social-login/providers/`): Google, Microsoft Entra ID, GitHub, Apple, Discord. Each defines `authorizationUrl`, `tokenUrl`, `userInfoUrl`, `defaultScopes`, and `profileMapper`.
 
-**Generic OIDC:** Any standards-compliant provider via `issuer` URL (uses `.well-known/openid-configuration` discovery).
+**Generic OIDC:** Any standards-compliant provider via `issuer` URL (uses `.well-known/openid-configuration` discovery). OIDC providers verify `id_token` signatures and `iss`/`aud`/`exp`/`nonce` via JWKS before linking or provisioning.
 
-**Models:** `social_account` — `provider`, `providerAccountId`, `profile` (JSON), `accessTokenEncrypted`, `refreshTokenEncrypted`, `tokenExpiresAt`
+**Models:** `social_account` — `provider`, `providerAccountId`, `profile` (JSON), encrypted `accessToken`/`refreshToken`, `tokenExpiresAt`; unique on `(userId, provider)` and `(provider, providerAccountId)`.
 
-**Flow:** `getAuthorizationUrl()` → redirect to provider → `handleCallback()` → exchange code for tokens → resolve user profile → JIT provision or link → issue Fortress tokens
+**Flow:** `getAuthorizationUrl()` → store `{ state, codeVerifier, nonce }` and redirect to provider → `handleCallback()` verifies returned state + ID-token nonce, exchanges code, resolves user profile, then JIT provisions or links inside one transaction.
 
-**Security:** PKCE (S256) on all flows, `state` parameter for CSRF, provider tokens encrypted at rest (AES-256-GCM).
+**Security:** PKCE (S256) on all flows, timing-safe `state` comparison for CSRF, separate OIDC `nonce`, verified-email-only by-email linking, active-user guard, unique social-account constraints, and provider tokens encrypted at rest (AES-256-GCM).
 
-**Methods:** `getAuthorizationUrl(provider, redirectUri)`, `handleCallback(provider, code, state, codeVerifier)`, `getLinkedAccounts(userId)`, `unlinkAccount(userId, provider)`, `getProviders()`
+**Methods:** `getAuthorizationUrl(provider, redirectUri)`, `handleCallback(provider, code, redirectUri, codeVerifier, returnedState, storedState, storedNonce)`, `getLinkedAccounts(userId)`, `getProviderTokens(userId, provider)`, `unlinkAccount(userId, provider)`, `getProviders()`
 
 #### WebAuthn (Stub)
 
@@ -1406,15 +1407,15 @@ Protects IAM routes and provides full admin management endpoints. Mounts all cor
 **Config:**
 ```typescript
 {
-  adminUserIds?: number[],  // User IDs that bypass all permission checks (superadmins)
+  bootstrap?: { enabled: boolean; secret?: string }, // opt-in one-time first-admin bootstrap
   resource?: string,        // Resource name for admin permissions (default: 'fortress')
 }
 ```
 
-**Middleware:** `after-auth` on `/iam/*` and `/auth/users/*` — superadmin bypass for all admin operations.
+**Bootstrap:** `/iam/admin/bootstrap` is mounted only when explicitly enabled and requires a one-time secret; no superadmin middleware/bypass is registered.
 
 **Routes (35 total):**
-- `POST /iam/admin/bootstrap` — Creates `fortress-admin` role with all permissions and assigns it to a user
+- `POST /iam/admin/bootstrap` — Mounted only with `bootstrap.enabled`; creates `fortress-admin` while zero admin bindings exist and the one-time secret matches
 - `POST /iam/sync` — Push/pull resource definitions
 - **User management:** `GET /auth/users`, `GET /auth/users/:id`, `POST /auth/users`, `PUT /auth/users/:id`, `DELETE /auth/users/:id`
 - **Role management:** `GET /iam/roles`, `GET /iam/roles/:id`, `POST /iam/roles`, `PUT /iam/roles/:id`, `DELETE /iam/roles/:id`, `POST /iam/roles/:id/permissions`

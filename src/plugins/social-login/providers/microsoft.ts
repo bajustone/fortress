@@ -7,6 +7,7 @@ export function createMicrosoftProvider(options?: { tenant?: string }): Provider
   return {
     name: 'microsoft',
     discoveryUrl: `https://login.microsoftonline.com/${tenant}/v2.0/.well-known/openid-configuration`,
+    issuer: `https://login.microsoftonline.com/${tenant}/v2.0`,
     authorizationUrl: `${base}/authorize`,
     tokenUrl: `${base}/token`,
     userInfoUrl: 'https://graph.microsoft.com/v1.0/me',
@@ -15,6 +16,7 @@ export function createMicrosoftProvider(options?: { tenant?: string }): Provider
       return {
         id: String(raw.id ?? raw.sub ?? ''),
         email: String(raw.mail ?? raw.userPrincipalName ?? raw.email ?? ''),
+        emailVerified: raw.email_verified === undefined ? true : raw.email_verified === true || raw.email_verified === 'true',
         name: raw.givenName && raw.surname
           ? `${raw.givenName} ${raw.surname}`
           : String(raw.name ?? raw.displayName ?? ''),

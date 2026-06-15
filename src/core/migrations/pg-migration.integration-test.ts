@@ -82,12 +82,14 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(afterDrift.missingColumns).toEqual([]);
 
     // The provisioned schema is usable: insert a row through the adapter,
-    // exercising SERIAL ids and timestamp defaults.
+    // exercising SERIAL ids (stringified at the adapter boundary, see the
+    // v0.2.x `stringifyIds` change in CHANGELOG) and timestamp defaults.
     const user = await db.create<{ id: string; createdAt: Date }>({
       model: 'user',
       data: { email: 'pg-migrate@test.com', name: 'PG Migrate', passwordHash: 'h', isActive: true },
     });
-    expect(user.id).toBeGreaterThan(0);
+    expect(typeof user.id).toBe('string');
+    expect(user.id.length).toBeGreaterThan(0);
     expect(user.createdAt).toBeInstanceOf(Date);
 
     // Re-running is idempotent.

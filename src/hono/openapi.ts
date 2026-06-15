@@ -13,7 +13,6 @@
 import type { EndpointDefinition } from '../core/endpoint';
 import type { Fortress } from '../core/fortress';
 import type { JSONSchema } from '../core/json-schema';
-import { FortressError } from '../core/errors';
 
 /**
  * A function that converts a JSON Schema to whatever schema type your
@@ -222,163 +221,17 @@ export function getFortressRoutes<T>(
 
 // ── Auto-handler wiring ──────���──────────────────────────────────────
 
-function createAutoHandler(fortress: Fortress, ep: EndpointDefinition): (c: any) => Promise<Response> {
+function createAutoHandler(fortress: Fortress, _ep: EndpointDefinition): (c: any) => Promise<Response> {
   return async (c: any) => {
-    try {
-      const result = await invokeHandler(fortress, ep, c);
-      const statusCodes = ep.responses ? Object.keys(ep.responses).map(Number) : [200];
-      const successCode = statusCodes.find(s => s >= 200 && s < 300) ?? 200;
-      return c.json(result ?? { ok: true }, successCode);
-    }
-    catch (error) {
-      if (error instanceof FortressError) {
-        return c.json(
-          { code: error.code, message: error.message, statusCode: error.statusCode },
-          error.statusCode,
-        );
-      }
-      throw error;
-    }
+    const raw = c.req?.raw as Request | undefined;
+    if (raw)
+      return fortress.handleRequest(raw);
+
+    const request = new Request(c.req.url, {
+      method: c.req.method,
+      headers: c.req.raw?.headers ?? undefined,
+      body: ['GET', 'HEAD'].includes(c.req.method) ? undefined : await c.req.text(),
+    });
+    return fortress.handleRequest(request);
   };
-}
-
-async function invokeHandler(fortress: Fortress, ep: EndpointDefinition, c: any): Promise<unknown> {
-  const body = ['POST', 'PUT', 'PATCH'].includes(ep.method)
-    ? await c.req.json().catch(() => ({}))
-    : Object.fromEntries(new URL(c.req.url).searchParams);
-
-  const params = c.req.param?.() ?? {};
-  const userId = c.get?.('fortressUserId') as string | undefined;
-
-  if (ep.path.startsWith('/auth/')) {
-    return invokeAuthHandler(fortress, ep.handler, body, params, userId, c);
-  }
-
-  // Check plugin routes first (plugins can register routes under /iam/ etc.)
-  const plugins = fortress.config.plugins ?? [];
-  for (const plugin of plugins) {
-    if (!plugin.routes)
-      continue;
-    const match = (Object.values(plugin.routes) as EndpointDefinition[]).find(r => r.path === ep.path && r.method === ep.method);
-    if (match) {
-      const methods = (fortress.plugins as Record<string, Record<string, (...args: any[]) => any>>)[plugin.name];
-      if (methods?.[ep.handler]) {
-        return methods[ep.handler]({ ...body, ...params });
-      }
-    }
-  }
-
-  // Core IAM handlers
-  if (ep.path.startsWith('/iam/')) {
-    return invokeIamHandler(fortress, ep.handler, body, params);
-  }
-
-  return { ok: true };
-}
-
-async function invokeAuthHandler(
-  fortress: Fortress,
-  handler: string,
-  body: any,
-  params: Record<string, string>,
-  userId: string | undefined,
-  c: any,
-): Promise<unknown> {
-  const meta = {
-    ipAddress: c.req.header?.('x-forwarded-for') ?? c.req.header?.('x-real-ip'),
-    userAgent: c.req.header?.('user-agent'),
-  };
-
-  switch (handler) {
-    case 'login':
-      return fortress.auth.login(body.identifier, body.password, meta);
-    case 'createUser':
-      return fortress.auth.createUser(body);
-    case 'refresh':
-      return fortress.auth.refresh(body.refreshToken, meta);
-    case 'logout':
-      await fortress.auth.logout(body.refreshToken);
-      return { ok: true };
-    case 'me':
-      return fortress.auth.me(userId!);
-    case 'listSessions':
-      return fortress.auth.listSessions(userId!);
-    case 'revokeSession':
-      await fortress.auth.revokeSession(userId!, params.id);
-      return { ok: true };
-    case 'revokeAllOtherSessions':
-      await fortress.auth.revokeAllOtherSessions(userId!, body.currentTokenId);
-      return { ok: true };
-    case 'addLoginIdentifier':
-      await fortress.auth.addLoginIdentifier(userId!, body.type, body.value);
-      return { ok: true };
-    case 'removeLoginIdentifier':
-      await fortress.auth.removeLoginIdentifier(userId!, body.type, body.value);
-      return { ok: true };
-    case 'getLoginIdentifiers':
-      return fortress.auth.getLoginIdentifiers(userId!);
-    case 'impersonate':
-      return fortress.auth.impersonate(userId!, body.targetUserId, {
-        reason: body.reason,
-        expirySeconds: body.expirySeconds,
-      });
-    default:
-      return { ok: true };
-  }
-}
-
-async function invokeIamHandler(
-  fortress: Fortress,
-  handler: string,
-  body: any,
-  params: Record<string, string>,
-): Promise<unknown> {
-  switch (handler) {
-    case 'getResources':
-      return fortress.iam.getResources();
-    case 'getRoles':
-      return fortress.iam.getRoles();
-    case 'createRole':
-      return fortress.iam.createRole(body.name, body.permissions, body.description);
-    case 'deleteRole':
-      await fortress.iam.deleteRole(params.id);
-      return { ok: true };
-    case 'bindRoleToUser':
-      await fortress.iam.bindRoleToUser(body.userId, params.id, body.tenantId);
-      return { ok: true };
-    case 'bindRoleToGroup':
-      await fortress.iam.bindRoleToGroup(body.groupId, params.id, body.tenantId);
-      return { ok: true };
-    case 'unbindRole':
-      await fortress.iam.unbindRole(body.subjectType, body.subjectId, params.id, body.tenantId);
-      return { ok: true };
-    case 'createGroup':
-      return fortress.iam.createGroup(body.name, body.description);
-    case 'addUserToGroup':
-      await fortress.iam.addUserToGroup(params.id, body.userId);
-      return { ok: true };
-    case 'removeUserFromGroup':
-      await fortress.iam.removeUserFromGroup(params.id, params.userId);
-      return { ok: true };
-    case 'getUserPermissions':
-      return fortress.iam.getPermissionsForSubject({ type: 'USER', id: params.id }, body?.tenantId);
-    case 'checkPermission': {
-      const allowed = await fortress.iam.checkPermission({ type: 'USER', id: body.userId }, body.resource, body.action, body.context);
-      return { allowed };
-    }
-    case 'bindPermissionToUser':
-      await fortress.iam.bindPermissionToUser(body.userId, body.permission, body.tenantId);
-      return { ok: true };
-    case 'bindPermissionToGroup':
-      await fortress.iam.bindPermissionToGroup(body.groupId, body.permission, body.tenantId);
-      return { ok: true };
-    case 'unbindPermissionFromUser':
-      await fortress.iam.unbindPermissionFromUser(body.userId, body.permissionId, body.tenantId);
-      return { ok: true };
-    case 'unbindPermissionFromGroup':
-      await fortress.iam.unbindPermissionFromGroup(body.groupId, body.permissionId, body.tenantId);
-      return { ok: true };
-    default:
-      return { ok: true };
-  }
 }

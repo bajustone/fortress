@@ -16,6 +16,7 @@ export const discordProvider: ProviderDefinition = {
     return {
       id,
       email: String(raw.email ?? ''),
+      emailVerified: raw.verified === true,
       name: String(raw.username ?? ''),
       displayName: String(raw.global_name ?? raw.username ?? ''),
       avatar,

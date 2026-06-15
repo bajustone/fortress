@@ -350,7 +350,7 @@ export function createAuthService(
         refreshToken: tokens.refreshToken,
       };
 
-      const afterCtx: AfterHookContext = { db, config, meta, responseHeaders: new Headers() };
+      const afterCtx: AfterHookContext = { db, config, meta, responseHeaders: new Headers(), identifier };
       response = await runAfterLoginHooks(afterCtx, response);
 
       if (authEventListeners.size() > 0) {
@@ -915,6 +915,7 @@ export function createAuthService(
         updateData.email = data.email;
       if (data.isActive !== undefined)
         updateData.isActive = data.isActive;
+      let credentialChanged = false;
       if (data.password !== undefined) {
         // Match createUser semantics: validate unconditionally and await.
         // The original code missed the await on a Promise — a breached or
@@ -923,6 +924,7 @@ export function createAuthService(
         const normalizedPassword = normalizePasswordInput(data.password);
         await validatePassword(normalizedPassword, config.passwordPolicy);
         updateData.passwordHash = await hasher.hash(normalizedPassword);
+        credentialChanged = true;
       }
 
       const updated = await db.update<FortressUser & { passwordHash?: string }>({
@@ -945,6 +947,17 @@ export function createAuthService(
             { field: 'value', operator: '=', value: existing.email },
           ],
           data: { value: data.email },
+        });
+      }
+
+      if (credentialChanged) {
+        await db.update({
+          model: 'refresh_token',
+          where: [
+            { field: 'userId', operator: '=', value: userId },
+            { field: 'isRevoked', operator: '=', value: false },
+          ],
+          data: { isRevoked: true },
         });
       }
 

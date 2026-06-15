@@ -165,3 +165,15 @@ requires zero-friction multi-tab opens, consider:
   overlap)
 - Storing the refresh attempt in a per-user lock (custom plugin)
 - Falling back to a server-side session table for the refresh side
+
+## Social login hardening
+
+Social-login callbacks verify OAuth `state` with a timing-safe comparison and keep it separate from the OIDC `nonce`. OIDC providers must return an `id_token`; Fortress verifies its JWS signature through the provider JWKS and validates issuer, audience, expiry, and nonce before account linking or provisioning. By-email account linking requires `emailVerified === true` and an active local user. Stored provider access and refresh tokens are encrypted at rest with AES-256-GCM using `socialLogin({ tokenEncryptionKey })`; token persistence fails closed without a key.
+
+## Admin bootstrap hardening
+
+The admin bootstrap endpoint is not mounted by default. Enable it explicitly with `admin({ bootstrap: { enabled: true, secret } })` (or `FORTRESS_ADMIN_BOOTSTRAP_SECRET`). It succeeds only while no `fortress-admin` role bindings exist and only when the one-time secret matches; there is no `adminUserIds` superadmin bypass.
+
+## Tenant-less permission checks
+
+Tenant-less permission checks match only tenant-less (`tenant_id IS NULL`) role/direct-permission bindings. Tenant-scoped grants are considered only when the check supplies the matching tenant id.

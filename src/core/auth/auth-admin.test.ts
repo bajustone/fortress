@@ -130,6 +130,17 @@ describe('auth admin: user management', () => {
       expect(identifiers.some(i => i.value === 'new@test.com')).toBe(true);
     });
 
+    it('revokes active refresh tokens when password changes', async () => {
+      await createUsers(1);
+      const login = await fortress.auth.login('user1@test.com', 'Password123!');
+      if (login.status !== 'success')
+        throw new Error('expected login success');
+
+      await fortress.auth.updateUser(login.user.id, { password: 'NewPassword123!' });
+
+      await expect(fortress.auth.refresh(login.refreshToken)).rejects.toThrow();
+    });
+
     it('updates isActive', async () => {
       await createUsers(1);
       const { users } = await fortress.auth.listUsers({});

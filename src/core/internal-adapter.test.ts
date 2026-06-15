@@ -168,6 +168,26 @@ describe('getSubjectPermissions', () => {
     expect(permissions[0].action).toBe('write');
   });
 
+  it('does not let tenant-scoped role bindings satisfy tenant-less permission resolution', async () => {
+    const user = await db.create<{ id: string }>({
+      model: 'user',
+      data: { email: 'tenant@example.com', name: 'Tenant User', passwordHash: 'hashed', isActive: true },
+    });
+    await db.create({ model: 'resource', data: { name: 'invoice' } });
+    const permission = await db.create<{ id: string }>({
+      model: 'permission',
+      data: { resource: 'invoice', action: 'read', effect: 'ALLOW', description: 'read invoice' },
+    });
+    const role = await db.create<{ id: string }>({ model: 'role', data: { name: 'tenant-reader' } });
+    await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
+    await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'USER', subjectId: user.id, tenantId: 'tenant-a' } });
+
+    expect(await adapter.getSubjectPermissions({ type: 'USER', id: user.id })).toEqual([]);
+    const tenantPermissions = await adapter.getSubjectPermissions({ type: 'USER', id: user.id }, 'tenant-a');
+    expect(tenantPermissions).toHaveLength(1);
+    expect(tenantPermissions[0].resource).toBe('invoice');
+  });
+
   it('returns empty array for user with no roles', async () => {
     const user = await db.create<{ id: string }>({
       model: 'user',

@@ -23,10 +23,14 @@ import { pullResources } from '../../core/iam/resource-sync';
 import { listKeysForSubject, revokeKeyAsAdmin } from '../api-key/core';
 
 export interface AdminPluginOptions {
-  /** User IDs that bypass all permission checks (superadmins) */
-  adminUserIds?: string[];
   /** Resource name for fortress admin permissions. Default: 'fortress'. */
   resource?: string;
+  /** Opt-in one-time bootstrap route. Disabled by default. */
+  bootstrap?: {
+    enabled: boolean;
+    /** One-time secret. Defaults to process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET. */
+    secret?: string;
+  };
   /**
    * Mount admin-side api-key management routes under
    * `/admin/users/:userId/api-keys/*` and
@@ -91,6 +95,18 @@ function boolSchema(desc: string): { type: 'boolean'; description: string } {
  * JWT `sub`, and per the v0.3.0 lock-in audit). Numeric inputs are accepted
  * and stringified — numeric-keyed adapters keep working transparently.
  */
+const encoder = new TextEncoder();
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const left = encoder.encode(a);
+  const right = encoder.encode(b);
+  const len = Math.max(left.length, right.length);
+  let diff = left.length ^ right.length;
+  for (let i = 0; i < len; i++)
+    diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
+  return diff === 0;
+}
+
 function requireId(v: unknown, name: string): string {
   if (v == null || v === '')
     throw Errors.badRequest(`${name} is required`);
@@ -622,7 +638,7 @@ const bootstrapEndpoint: EndpointDefinition = {
   handler: 'bootstrap',
   meta: {
     summary: 'Bootstrap admin user',
-    description: 'Assigns all fortress admin permissions to the authenticated caller. Superadmins (configured via adminUserIds) may bootstrap another user by passing `userId` in the body; for everyone else the field is ignored and the caller bootstraps themselves. Creates the fortress resource and permissions if they do not exist.',
+    description: 'Opt-in emergency bootstrap. Assigns all fortress admin permissions only while zero fortress-admin bindings exist and only when the caller presents the one-time bootstrap secret. Creates the fortress resource and permissions if they do not exist.',
     tags: ['IAM', 'Admin'],
     security: ['bearer'],
   },
@@ -630,14 +646,15 @@ const bootstrapEndpoint: EndpointDefinition = {
     body: {
       type: 'object',
       properties: {
-        userId: { type: 'integer', description: 'Target user ID (superadmins only). Defaults to the authenticated caller.' },
+        userId: { type: 'integer', description: 'Target user ID. Defaults to the authenticated caller.' },
+        secret: { type: 'string', description: 'One-time bootstrap secret' },
       },
     },
   },
   responses: {
     200: { description: 'Admin bootstrapped', schema: { type: 'object', properties: { ok: { type: 'boolean' }, role: { type: 'object' } } } },
     401: { description: 'Not authenticated' },
-    403: { description: 'Already bootstrapped and caller is not a superadmin' },
+    403: { description: 'Bootstrap disabled, bad secret, or already bootstrapped' },
   },
 };
 
@@ -901,7 +918,7 @@ const adminApiKeyEndpoints: EndpointDefinition[] = [
  * Works with the RBAC middleware's security-aware default deny:
  * - All endpoints declare `permission: { resource: 'fortress', action: '...' }`
  * - RBAC middleware enforces these automatically
- * - Admin plugin adds superadmin bypass and bootstrap functionality
+ * - Admin plugin adds opt-in one-time-secret bootstrap functionality
  *
  * @example
  * ```ts
@@ -909,39 +926,18 @@ const adminApiKeyEndpoints: EndpointDefinition[] = [
  *
  * const fortress = createFortress({
  *   plugins: [
- *     admin({ adminUserIds: [1] }),
+ *     admin({ bootstrap: { enabled: true, secret: process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET } }),
  *   ],
  * });
  * ```
  */
 export function admin(options: AdminPluginOptions = {}): FortressPlugin {
-  const adminUserIds = new Set(options.adminUserIds ?? []);
   const mountApiKeyRoutes = options.apiKeyRoutes === true;
-
-  const superadminMiddleware = {
-    position: 'after-auth' as const,
-    handler: async (_ctx: PluginContext, request: unknown, next: () => Promise<void>): Promise<void> => {
-      const userId = extractUserId(request);
-      // Superadmin bypass — skip all permission checks
-      if (userId && adminUserIds.has(userId)) {
-        await next();
-        return;
-      }
-      // Non-superadmins: let RBAC middleware handle permission enforcement
-      await next();
-    },
-  };
+  const mountBootstrap = options.bootstrap?.enabled === true;
+  const bootstrapSecret = options.bootstrap?.secret ?? process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET;
 
   return {
     name: 'admin',
-
-    middleware: adminUserIds.size > 0
-      ? [
-          { path: '/iam/*', ...superadminMiddleware },
-          { path: '/auth/users/*', ...superadminMiddleware },
-          { path: '/auth/users', ...superadminMiddleware },
-        ]
-      : undefined,
 
     // Admin routes are aggregated from several internal arrays into a
     // record keyed by `${method}_${path}` so collisions with core handler
@@ -950,7 +946,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
     // aren't exposed via the typed `fortress.call.*` surface.
     routes: Object.fromEntries(
       [
-        bootstrapEndpoint,
+        ...(mountBootstrap ? [bootstrapEndpoint] : []),
         syncEndpoint,
         ...adminAuthEndpoints,
         ...adminIamEndpoints,
@@ -965,30 +961,20 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       },
 
       async bootstrap(
-        body: { userId?: string },
+        body: { userId?: string; secret?: string },
         routeCtx?: PluginRouteContext,
       ): Promise<{ ok: boolean; role: Role }> {
-        // Two call paths:
-        //   1. HTTP: dispatcher passes `routeCtx` with the verified JWT
-        //      subject. The caller bootstraps themselves; only superadmins
-        //      (listed in options.adminUserIds) may pass `body.userId` to
-        //      bootstrap someone else.
-        //   2. Programmatic (e.g. seed scripts): no `routeCtx`, so fall back
-        //      to `body.userId`. These callers are trusted — they already
-        //      have a direct reference to `fortress.plugins.admin`.
+        if (!mountBootstrap)
+          throw Errors.notFound('Admin bootstrap route is disabled');
+        if (!bootstrapSecret)
+          throw Errors.forbidden('Admin bootstrap secret is not configured');
+        if (!body.secret || !timingSafeEqual(body.secret, bootstrapSecret))
+          throw Errors.forbidden('Invalid admin bootstrap secret');
+
         const callerId = routeCtx?.userId;
-        const isSuperadmin = callerId != null && adminUserIds.has(callerId);
-        let userId: string | undefined;
-        if (routeCtx) {
-          userId = isSuperadmin && body.userId != null ? body.userId : callerId;
-          if (userId == null)
-            throw Errors.unauthorized('User not authenticated');
-        }
-        else {
-          userId = body.userId;
-          if (userId == null)
-            throw Errors.badRequest('userId is required for programmatic bootstrap');
-        }
+        const userId = body.userId ?? callerId;
+        if (userId == null)
+          throw Errors.unauthorized('User not authenticated');
         const db = ctx.db;
 
         // Verify user exists
@@ -1000,14 +986,20 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
           throw Errors.notFound('User not found');
         }
 
-        // Check if already bootstrapped — only superadmins (or trusted
-        // programmatic callers with no routeCtx) can re-bootstrap.
+        // One-time bootstrap: any existing fortress-admin binding closes
+        // the bootstrap path permanently. A plain authenticated caller can
+        // never self-grant without the secret, and nobody can re-bootstrap.
         const existingRole = await db.findOne<Role>({
           model: 'role',
           where: [{ field: 'name', operator: '=', value: 'fortress-admin' }],
         });
-        if (existingRole && routeCtx && !isSuperadmin) {
-          throw Errors.forbidden('Admin already bootstrapped. Only superadmins can re-bootstrap.');
+        if (existingRole) {
+          const existingAdmins = await db.count({
+            model: 'role_binding',
+            where: [{ field: 'roleId', operator: '=', value: existingRole.id }],
+          });
+          if (existingAdmins > 0)
+            throw Errors.forbidden('Admin already bootstrapped');
         }
 
         // Auto-discover all permissions from endpoint definitions
@@ -1610,25 +1602,4 @@ function getApiKeyMethods(ctx: PluginContext): ApiKeyMethods {
   if (!apiKeyPlugin?.methods)
     throw Errors.database('api-key plugin is not registered');
   return apiKeyPlugin.methods(ctx) as unknown as ApiKeyMethods;
-}
-
-/**
- * Extract userId from a framework-agnostic request object.
- * Supports both Hono Context and Express Request.
- */
-function extractUserId(request: unknown): string | undefined {
-  if (!request || typeof request !== 'object')
-    return undefined;
-
-  // Hono Context: has .get() method
-  if ('get' in request && typeof (request as any).get === 'function') {
-    return (request as any).get('fortressUserId') as string | undefined;
-  }
-
-  // Express Request: has .fortressUserId property
-  if ('fortressUserId' in request) {
-    return (request as any).fortressUserId as string | undefined;
-  }
-
-  return undefined;
 }

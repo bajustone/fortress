@@ -5,6 +5,7 @@ import type { FortressConfig } from './config';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext } from './plugin';
+import { Errors } from './errors';
 
 /**
  * Process registered plugins and return their exposed methods.
@@ -134,7 +135,7 @@ export function wrapAdapterWithScopeRules(
     }): Promise<T> =>
       adapter.create<T>({
         ...params,
-        data: { ...defaults, ...params.data },
+        data: { ...params.data, ...defaults },
       }),
 
     findOne: <T>(params: {
@@ -162,11 +163,16 @@ export function wrapAdapterWithScopeRules(
       model: string;
       where: WhereClause[];
       data: Record<string, unknown>;
-    }): Promise<T | null> =>
-      adapter.update<T>({
+    }): Promise<T | null> => Promise.resolve().then(() => {
+      for (const key of Object.keys(defaults)) {
+        if (Object.hasOwn(params.data, key))
+          throw Errors.forbidden(`Cannot update scoped field '${key}'`);
+      }
+      return adapter.update<T>({
         ...params,
         where: [...params.where, ...filters],
-      }),
+      });
+    }),
 
     delete: (params: { model: string; where: WhereClause[] }): Promise<void> =>
       adapter.delete({

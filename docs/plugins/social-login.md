@@ -18,6 +18,7 @@ const fortress = createFortress({
   jwt: { key: process.env.JWT_SECRET!, issuer: 'my-app' },
   plugins: [
     socialLogin({
+      tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
       providers: [
         {
           name: 'google',
@@ -45,7 +46,9 @@ The plugin registers a `social_account` table that links provider identities to 
 |---|---|---|---|
 | `providers` | `ProviderConfig[]` | (required) | List of configured providers. |
 | `autoRegister` | `boolean` | `true` | Create a new Fortress user on first social login (JIT provisioning). |
-| `linkAccounts` | `boolean` | `true` | When a social login email matches an existing user, link the social identity to that user instead of creating a duplicate. |
+| `linkAccounts` | `boolean` | `true` | When a provider-verified social login email matches an active existing user, link the social identity to that user instead of creating a duplicate. |
+| `persistTokens` | `boolean` | `false` | Persist encrypted provider access/refresh tokens. **Off by default** — set to `true` only if you need server-side access to provider tokens (e.g. to call the provider's API after sign-in); requires `tokenEncryptionKey`. |
+| `tokenEncryptionKey` | `string` | required when `persistTokens` | 32-byte AES-256-GCM key (base64/base64url/hex/raw UTF-8) for provider token encryption. Hard requirement — the plugin throws at construction if `persistTokens` is enabled without one. |
 | `mapProfile` | `(provider, profile) => { email, name }` | `undefined` | Custom mapping from provider profile to Fortress user fields during JIT provisioning. |
 | `onFirstLogin` | `(user, provider, profile) => Promise<void>` | `undefined` | Callback invoked once when a user is created via social login. Useful for assigning default roles, sending welcome emails, etc. |
 
@@ -61,7 +64,9 @@ Each entry in `providers` has these fields:
 | `scopes` | `string[]` | No | Override the default scopes for this provider. |
 | `tenant` | `string` | No | Microsoft only. Azure AD tenant: a tenant ID, `'common'`, or `'organizations'`. Defaults to `'common'`. |
 | `allowedDomains` | `string[]` | No | Restrict sign-in to specific email domains (e.g., `['acme.com']`). |
-| `issuer` | `string` | No | OIDC issuer URL for custom providers. Enables discovery of authorization, token, and userinfo endpoints. |
+| `issuer` | `string` | No | OIDC issuer URL for custom providers. Enables discovery of authorization, token, userinfo, and JWKS endpoints. |
+| `authorizationUrl` / `tokenUrl` / `userInfoUrl` / `jwksUri` | `string` | No | Endpoint overrides for custom OIDC providers. |
+| `teamId` / `keyId` / `privateKey` | `string` | Apple only | Apple ES256 client-secret JWT inputs. |
 
 ## Usage
 
@@ -71,6 +76,7 @@ Each entry in `providers` has these fields:
 
 ```typescript
 socialLogin({
+  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   providers: [
     { name: 'google', clientId: '...', clientSecret: '...' },
     { name: 'github', clientId: '...', clientSecret: '...' },
@@ -84,6 +90,7 @@ socialLogin({
 
 ```typescript
 socialLogin({
+  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   providers: [
     {
       name: 'okta',
@@ -103,25 +110,27 @@ socialLogin({
 
 ### Authorization URL Generation
 
-Redirect the user to the provider's authorization page. The plugin generates a PKCE challenge and nonce automatically.
+Redirect the user to the provider's authorization page. The plugin generates a PKCE challenge, OAuth CSRF state, and OIDC nonce automatically.
 
 ```typescript
-const { url, state } = await fortress.plugins['social-login'].getAuthorizationUrl(
+const { url, state, codeVerifier, nonce } = await fortress.plugins['social-login'].getAuthorizationUrl(
   'google',
   'https://myapp.com/auth/google/callback',
 );
 
-// Store `state` in the user's session (needed for callback verification)
+// Store these in the user's session (needed for callback verification)
 session.set('oauth_state', state);
+session.set('oauth_code_verifier', codeVerifier);
+session.set('oidc_nonce', nonce);
 
 // Redirect the user
 return redirect(url);
 ```
 
-The returned `state` object contains:
-- `provider` -- the provider name
+The returned values are:
+- `state` -- random OAuth CSRF token
 - `codeVerifier` -- PKCE code verifier (required for the callback)
-- `nonce` -- random value for CSRF protection
+- `nonce` -- separate OIDC nonce verified against the provider ID token
 
 ### Handling the Callback
 
@@ -130,13 +139,19 @@ When the provider redirects back to your app, exchange the authorization code fo
 ```typescript
 app.get('/auth/google/callback', async (c) => {
   const code = c.req.query('code');
-  const savedState = session.get('oauth_state');
+  const returnedState = c.req.query('state');
+  const storedState = session.get('oauth_state');
+  const codeVerifier = session.get('oauth_code_verifier');
+  const nonce = session.get('oidc_nonce');
 
   const { user, profile, isNewUser } = await fortress.plugins['social-login'].handleCallback(
-    savedState.provider,
+    'google',
     code,
     'https://myapp.com/auth/google/callback', // must match the redirect URI used above
-    savedState.codeVerifier,
+    codeVerifier,
+    returnedState,
+    storedState,
+    nonce,
   );
 
   // Issue a Fortress session (JWT) for the user
@@ -152,7 +167,7 @@ app.get('/auth/google/callback', async (c) => {
 
 `handleCallback` returns:
 - `user` -- the Fortress user (existing or newly created)
-- `profile` -- normalized provider profile (`id`, `email`, `name`, `avatar`, `raw`)
+- `profile` -- normalized provider profile (`id`, `email`, `emailVerified`, `name`, `avatar`, `raw`)
 - `isNewUser` -- `true` if the user was created during this call (JIT provisioning)
 
 ### JIT User Provisioning
@@ -163,6 +178,7 @@ To customize the user record created during provisioning, use `mapProfile`:
 
 ```typescript
 socialLogin({
+  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   autoRegister: true,
   mapProfile: (provider, profile) => ({
     email: profile.email,
@@ -176,6 +192,7 @@ To run logic after user creation (assign roles, send a welcome email), use `onFi
 
 ```typescript
 socialLogin({
+  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   onFirstLogin: async (user, provider, profile) => {
     await fortress.iam.assignRole(user.id, 'member');
     await sendWelcomeEmail(profile.email, profile.name);
@@ -188,9 +205,9 @@ Set `autoRegister: false` to require users to exist before they can sign in via 
 
 ### Account Linking
 
-When `linkAccounts` is `true` (the default) and a social login email matches an existing Fortress user, the social identity is linked to that user rather than creating a duplicate.
+When `linkAccounts` is `true` (the default) and a provider-verified social login email matches an active existing Fortress user, the social identity is linked to that user rather than creating a duplicate.
 
-This means a user who first registered with email/password and later signs in with Google (using the same email) will have their Google identity attached to their existing account.
+This means a user who first registered with email/password and later signs in with Google (using the same verified email) will have their Google identity attached to their existing account. Unverified provider emails never trigger by-email linking.
 
 ### Domain Restrictions
 
@@ -198,6 +215,7 @@ Restrict sign-in to specific email domains per provider using `allowedDomains`. 
 
 ```typescript
 socialLogin({
+  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   providers: [
     {
       name: 'google',
@@ -289,9 +307,10 @@ All methods are accessed via `fortress.plugins['social-login']`.
 
 | Method | Signature | Description |
 |---|---|---|
-| `getAuthorizationUrl` | `(providerName: string, redirectUri: string) => Promise<{ url: string; state: { provider: string; codeVerifier: string; nonce: string } }>` | Generate the OAuth authorization URL. Store the returned `state` in the user's session. |
-| `handleCallback` | `(providerName: string, code: string, redirectUri: string, codeVerifier: string) => Promise<{ user: FortressUser; profile: ProviderProfile; isNewUser: boolean }>` | Exchange the authorization code, fetch the profile, and resolve or create the Fortress user. |
+| `getAuthorizationUrl` | `(providerName: string, redirectUri: string) => Promise<{ url: string; state: string; codeVerifier: string; nonce: string }>` | Generate the OAuth authorization URL. Store `state`, `codeVerifier`, and `nonce` in the user's session. |
+| `handleCallback` | `(providerName: string, code: string, redirectUri: string, codeVerifier: string, returnedState: string, storedState: string, storedNonce: string) => Promise<{ user: FortressUser; profile: ProviderProfile; isNewUser: boolean }>` | Timing-safe-verify OAuth state, verify OIDC ID-token signature/issuer/audience/expiry/nonce, fetch the profile, and resolve or create the Fortress user. |
 | `getLinkedAccounts` | `(userId: string) => Promise<{ provider: string; providerAccountId: string; email: string \| null }[]>` | List social identities linked to a user. |
+| `getProviderTokens` | `(userId: string, provider: string) => Promise<{ accessToken: string \| null; refreshToken: string \| null; tokenExpiresAt: Date \| null }>` | Return decrypted provider tokens for a linked account. |
 | `unlinkAccount` | `(userId: string, provider: string) => Promise<void>` | Remove a social identity from a user. |
 | `getProviders` | `() => string[]` | List the names of all configured providers. |
 
@@ -303,6 +322,7 @@ The normalized profile returned by `handleCallback`:
 interface ProviderProfile {
   id: string;             // Provider's unique user ID
   email: string;
+  emailVerified: boolean;
   name?: string;
   displayName?: string;
   avatar?: string;

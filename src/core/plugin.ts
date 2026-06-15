@@ -106,6 +106,8 @@ export interface HookContext {
 
 export interface AfterHookContext extends HookContext {
   responseHeaders: Headers;
+  /** Normalized login identifier used for this auth flow, when applicable. */
+  identifier?: string;
 }
 
 export interface HookResult {

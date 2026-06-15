@@ -160,6 +160,7 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL UNIQUE REFERENCES fortress_user(id) ON DELETE CASCADE,
     secret TEXT NOT NULL,
     is_enabled BOOLEAN NOT NULL DEFAULT false,
+    last_used_counter INTEGER,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
 
@@ -1318,6 +1319,10 @@ describe('pg: webhook plugin', () => {
       password: 'password-123',
     });
     await fortress.auth.login('wh@test.com', 'password-123');
+
+    // Delivery is dispatched out-of-band (queueMicrotask); wait for it.
+    for (let i = 0; i < 50 && delivered.length < 1; i++)
+      await new Promise(resolve => setTimeout(resolve, 10));
 
     expect(delivered.length).toBeGreaterThanOrEqual(1);
     const payload = JSON.parse(delivered[0]);

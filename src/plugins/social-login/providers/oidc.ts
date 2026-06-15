@@ -16,7 +16,8 @@ export function createOidcProvider(
   return {
     name,
     discoveryUrl: `${issuer}/.well-known/openid-configuration`,
-    // These are placeholders — the plugin should resolve actual URLs from discovery at runtime
+    issuer,
+    // These are placeholders — resolved from discovery at runtime when available.
     authorizationUrl: `${issuer}/authorize`,
     tokenUrl: `${issuer}/token`,
     userInfoUrl: `${issuer}/userinfo`,
@@ -25,6 +26,7 @@ export function createOidcProvider(
       return {
         id: String(raw.sub ?? ''),
         email: String(raw.email ?? ''),
+        emailVerified: raw.email_verified === true || raw.email_verified === 'true',
         name: String(raw.name ?? ''),
         displayName: String(raw.preferred_username ?? raw.name ?? ''),
         avatar: raw.picture ? String(raw.picture) : undefined,

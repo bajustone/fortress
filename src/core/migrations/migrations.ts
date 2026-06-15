@@ -205,6 +205,7 @@ CREATE TABLE IF NOT EXISTS fortress_two_factor_secret (
   user_id INTEGER NOT NULL UNIQUE REFERENCES fortress_user(id) ON DELETE CASCADE,
   secret TEXT NOT NULL,
   is_enabled INTEGER NOT NULL DEFAULT 0,
+  last_used_counter INTEGER,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -236,7 +237,9 @@ CREATE TABLE IF NOT EXISTS fortress_social_account (
   token_expires_at INTEGER,
   profile TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  UNIQUE (user_id, provider),
+  UNIQUE (provider, provider_account_id)
 );
 
 CREATE TABLE IF NOT EXISTS fortress_tenant (
@@ -608,6 +611,7 @@ CREATE TABLE IF NOT EXISTS fortress_two_factor_secret (
   user_id INTEGER NOT NULL UNIQUE REFERENCES fortress_user(id) ON DELETE CASCADE,
   secret TEXT NOT NULL,
   is_enabled BOOLEAN NOT NULL DEFAULT false,
+  last_used_counter INTEGER,
   created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
@@ -640,7 +644,8 @@ CREATE TABLE IF NOT EXISTS fortress_social_account (
   profile JSONB,
   created_at TIMESTAMP NOT NULL DEFAULT now(),
   updated_at TIMESTAMP NOT NULL DEFAULT now(),
-  UNIQUE (user_id, provider)
+  UNIQUE (user_id, provider),
+  UNIQUE (provider, provider_account_id)
 );
 
 CREATE TABLE IF NOT EXISTS fortress_tenant (

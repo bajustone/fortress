@@ -199,6 +199,7 @@ const twoFactorSecrets = sqliteTable('fortress_two_factor_secret', {
   userId: integer('user_id').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
   secret: text('secret').notNull(), // Base32-encoded TOTP secret
   isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(false),
+  lastUsedCounter: integer('last_used_counter'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
@@ -235,6 +236,7 @@ const socialAccounts = sqliteTable('fortress_social_account', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, table => [
   unique().on(table.userId, table.provider),
+  unique().on(table.provider, table.providerAccountId),
 ]);
 
 // --- Plugins: Tenancy ---

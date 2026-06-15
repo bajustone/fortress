@@ -9,6 +9,7 @@ import {
   collectScopeRules,
   mergeTokenClaims,
   processPlugins,
+  wrapAdapterWithScopeRules,
 } from './plugin-runner';
 
 const mockDb = {} as DatabaseAdapter;
@@ -181,5 +182,30 @@ describe('collectScopeRules', () => {
     const result = await collectScopeRules(plugins, '1', 'sale', { db: mockDb, config: mockConfig });
     expect(result?.filters).toHaveLength(2);
     expect(result?.defaults).toEqual({ orgId: 7, siteId: 3 });
+  });
+});
+
+describe('wrapAdapterWithScopeRules', () => {
+  it('forces scoped defaults on create and rejects scoped-field updates', async () => {
+    const adapter = {
+      ...mockDb,
+      create: vi.fn(async params => params.data),
+      update: vi.fn(async params => params.data),
+      transaction: async (fn: (tx: DatabaseAdapter) => Promise<unknown>) => fn(adapter as unknown as DatabaseAdapter),
+    } as unknown as DatabaseAdapter & { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
+
+    const scoped = wrapAdapterWithScopeRules(adapter, {
+      filters: [{ field: 'orgId', operator: '=', value: 'org-1' }],
+      defaults: { orgId: 'org-1' },
+    });
+
+    await scoped.create({ model: 'post', data: { title: 'hello', orgId: 'attacker-org' } });
+    expect(adapter.create).toHaveBeenCalledWith({ model: 'post', data: { title: 'hello', orgId: 'org-1' } });
+
+    await expect(scoped.update({
+      model: 'post',
+      where: [{ field: 'id', operator: '=', value: '1' }],
+      data: { orgId: 'attacker-org' },
+    })).rejects.toThrow('Cannot update scoped field \'orgId\'');
   });
 });

@@ -36,6 +36,7 @@ interface TwoFactorSecretRecord {
   secret: string;
   isEnabled: boolean;
   createdAt: Date;
+  lastUsedCounter: number | null;
 }
 
 interface BackupCodeRecord {
@@ -111,8 +112,7 @@ function base32Decode(encoded: string): Uint8Array {
  * Generate a TOTP code from a base32 secret. Re-exported from this module
  * for testing — normal callers should use the plugin methods instead.
  */
-async function generateTOTP(secret: string, period: number, digits: number, timeOffset = 0): Promise<string> {
-  const counter = Math.floor((Date.now() / 1000 + timeOffset) / period);
+async function generateTOTPForCounter(secret: string, digits: number, counter: number): Promise<string> {
   const counterBytes = new ArrayBuffer(8);
   const view = new DataView(counterBytes);
   view.setBigUint64(0, BigInt(counter));
@@ -138,19 +138,29 @@ async function generateTOTP(secret: string, period: number, digits: number, time
   return String(code).padStart(digits, '0');
 }
 
+async function generateTOTP(secret: string, period: number, digits: number, timeOffset = 0): Promise<string> {
+  const counter = Math.floor((Date.now() / 1000 + timeOffset) / period);
+  return generateTOTPForCounter(secret, digits, counter);
+}
+
 /**
  * Verify a TOTP code against a base32 secret, allowing ±1 time window for
  * clock drift. Re-exported from this module for testing — normal callers
  * should use the plugin methods instead.
  */
-async function verifyTOTP(secret: string, code: string, period: number, digits: number): Promise<boolean> {
+async function verifyTOTPWithCounter(secret: string, code: string, period: number, digits: number): Promise<number | null> {
+  const currentCounter = Math.floor(Date.now() / 1000 / period);
   // Check current and adjacent time windows (±1) to handle clock drift
-  for (const offset of [0, -period, period]) {
-    const expected = await generateTOTP(secret, period, digits, offset);
+  for (const counter of [currentCounter, currentCounter - 1, currentCounter + 1]) {
+    const expected = await generateTOTPForCounter(secret, digits, counter);
     if (expected === code)
-      return true;
+      return counter;
   }
-  return false;
+  return null;
+}
+
+async function verifyTOTP(secret: string, code: string, period: number, digits: number): Promise<boolean> {
+  return (await verifyTOTPWithCounter(secret, code, period, digits)) !== null;
 }
 
 function buildOtpauthUrl(secret: string, issuer: string, email: string, period: number, digits: number): string {
@@ -208,6 +218,7 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           userId: { type: 'number', required: true, unique: true, references: { model: 'user', field: 'id' } },
           secret: { type: 'string', required: true },
           isEnabled: { type: 'boolean', required: true },
+          lastUsedCounter: { type: 'number' },
           createdAt: { type: 'date', required: true },
         },
       },
@@ -330,7 +341,7 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           // Store secret (not yet enabled — enable after first verify)
           await ctx.db.create({
             model: 'two_factor_secret',
-            data: { userId, secret, isEnabled: false },
+            data: { userId, secret, isEnabled: false, lastUsedCounter: null },
           });
 
           // Store backup code hashes
@@ -353,18 +364,27 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           if (!secretRecord)
             throw Errors.badRequest('Two-factor authentication is not set up');
 
-          // Try TOTP verification
-          const isValidTotp = await verifyTOTP(secretRecord.secret, code, period, digits);
+          // Try TOTP verification. A valid counter can be used only once;
+          // the conditional update makes replay rejection atomic.
+          const matchedCounter = await verifyTOTPWithCounter(secretRecord.secret, code, period, digits);
 
-          if (isValidTotp) {
-            // Enable 2FA on first successful verification
-            if (!secretRecord.isEnabled) {
-              await ctx.db.update({
-                model: 'two_factor_secret',
-                where: [{ field: 'id', operator: '=', value: secretRecord.id }],
-                data: { isEnabled: true },
-              });
-            }
+          if (matchedCounter !== null) {
+            const previousCounter = secretRecord.lastUsedCounter;
+            if (previousCounter !== null && matchedCounter <= previousCounter)
+              throw Errors.unauthorized('Two-factor code has already been used');
+
+            const claimed = await ctx.db.update<TwoFactorSecretRecord>({
+              model: 'two_factor_secret',
+              where: [
+                { field: 'id', operator: '=', value: secretRecord.id },
+                previousCounter === null
+                  ? { field: 'lastUsedCounter', operator: 'isNull', value: null }
+                  : { field: 'lastUsedCounter', operator: '=', value: previousCounter },
+              ],
+              data: { isEnabled: true, lastUsedCounter: matchedCounter },
+            });
+            if (!claimed)
+              throw Errors.unauthorized('Two-factor code has already been used');
 
             // Trust this device if meta is provided
             if (meta?.userAgent) {

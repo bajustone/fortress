@@ -1436,7 +1436,7 @@ await tf.enable(userId);
 
 ### Admin
 
-Full IAM administration: users, roles, groups, permissions, role/permission bindings, and resource sync. Provides 35 endpoints + bootstrap for first admin setup. All endpoints are protected by `fortress:*` permissions and auto-mounted via `mountFortress`.
+Full IAM administration: users, roles, groups, permissions, role/permission bindings, and resource sync. Admin endpoints are protected by `fortress:*` permissions. The first-admin bootstrap route is opt-in and requires a one-time secret.
 
 ```typescript
 import { admin } from '@bajustone/fortress/plugins/admin';
@@ -1445,12 +1445,13 @@ const fortress = createFortress({
   jwt: { key: 'your-secret-at-least-32-bytes!!' },
   database: adapter,
   plugins: [
-    admin({ adminUserIds: [1] }), // superadmin bypass for user ID 1
+    admin({ bootstrap: { enabled: true, secret: process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET } }),
   ],
 });
 
-// Bootstrap: assign all admin permissions to a user
-await fortress.plugins.admin.bootstrap({ userId: 1 });
+// Bootstrap: only succeeds while no fortress-admin bindings exist and the
+// supplied secret matches the configured one-time bootstrap secret.
+await fortress.plugins.admin.bootstrap({ userId: '1', secret: process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET! });
 
 // User management
 const { users, total } = await fortress.plugins.admin.listUsers({ limit: '20', search: 'alice' });
@@ -1775,7 +1776,7 @@ const resolved = await fortress.plugins['api-key'].resolveKey('fortress_sk_a1b2c
 
 ### Social Login
 
-OAuth/OIDC consumer for Google, GitHub, Microsoft, Apple, Discord, and custom OIDC providers. Supports automatic user registration, account linking, and PKCE.
+OAuth/OIDC consumer for Google, GitHub, Microsoft, Apple, Discord, and custom OIDC providers. Supports automatic user registration, verified-email account linking, PKCE, OAuth state validation, OIDC ID-token verification, and AES-256-GCM encryption for stored provider tokens.
 
 ```typescript
 import { socialLogin } from '@bajustone/fortress/plugins/social-login';
@@ -1807,8 +1808,8 @@ socialLogin({
     },
   ],
   autoRegister: true,     // default: true (create user on first social login)
-  linkAccounts: true,      // default: true (link by matching email)
-  allowedDomains: ['company.com'],  // optional: restrict by email domain
+  linkAccounts: true,      // default: true (link by matching verified email only)
+  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!, // 32-byte AES key
   onFirstLogin: async (user, provider, profile) => {
     // Called when a user logs in via social for the first time
   },
@@ -1819,17 +1820,20 @@ socialLogin({
 
 ```typescript
 // Step 1: Get the authorization URL (redirect the user here)
-const { url, state, codeVerifier } = await fortress.plugins['social-login']
+const { url, state, codeVerifier, nonce } = await fortress.plugins['social-login']
   .getAuthorizationUrl('google', 'https://myapp.com/auth/callback');
-// Store state and codeVerifier in the session
+// Store state, codeVerifier, and nonce in the session
 
 // Step 2: Handle the callback (after user authorizes)
 const result = await fortress.plugins['social-login']
-  .handleCallback('google', code, 'https://myapp.com/auth/callback', codeVerifier);
+  .handleCallback('google', code, 'https://myapp.com/auth/callback', codeVerifier, returnedState, state, nonce);
 // result.user, result.profile, result.isNewUser
 
 // List linked social accounts
 const accounts = await fortress.plugins['social-login'].getLinkedAccounts(userId);
+
+// Read decrypted provider tokens when you need to call the provider API
+const providerTokens = await fortress.plugins['social-login'].getProviderTokens(userId, 'google');
 
 // Unlink a social account
 await fortress.plugins['social-login'].unlinkAccount(userId, 'google');

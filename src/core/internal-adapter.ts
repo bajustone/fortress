@@ -134,6 +134,7 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
 
     async getSubjectPermissions(subject: Subject, tenantId?: string): Promise<Permission[]> {
       const tenantFilter = tenantId != null;
+      const tenantlessFilter = tenantId == null;
       const isUser = subject.type === 'USER';
 
       // Inactive service accounts never resolve any permissions. This is the
@@ -150,8 +151,12 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
 
       // Optimized path: single JOIN query when rawQuery is available
       if (db.rawQuery) {
-        const rbTenant = tenantFilter ? ' AND (rb.tenant_id = ? OR rb.tenant_id IS NULL)' : '';
-        const dpbTenant = tenantFilter ? ' AND (dpb.tenant_id = ? OR dpb.tenant_id IS NULL)' : '';
+        const rbTenant = tenantFilter
+          ? ' AND (rb.tenant_id = ? OR rb.tenant_id IS NULL)'
+          : ' AND rb.tenant_id IS NULL';
+        const dpbTenant = tenantFilter
+          ? ' AND (dpb.tenant_id = ? OR dpb.tenant_id IS NULL)'
+          : ' AND dpb.tenant_id IS NULL';
 
         // Role-binding predicate: always match the bare subject.
         // For USER subjects, also union group memberships.
@@ -206,8 +211,8 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       // Fallback: sequential findMany queries
       // Helper to filter bindings by tenant (global bindings always included)
       function matchesTenant<T extends { tenantId?: string | null }>(bindings: T[]): T[] {
-        if (!tenantFilter)
-          return bindings;
+        if (tenantlessFilter)
+          return bindings.filter(b => b.tenantId == null);
         return bindings.filter(b => b.tenantId == null || b.tenantId === tenantId);
       }
 

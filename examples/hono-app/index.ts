@@ -106,7 +106,13 @@ const fortress = createFortress({
   // Plugin order matters — hooks run in array order
   plugins: [
     // ── Admin (IAM route protection + bootstrap) ──
-    admin({ apiKeyRoutes: true }),
+    admin({
+      apiKeyRoutes: true,
+      bootstrap: {
+        enabled: Boolean(process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET),
+        secret: process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET,
+      },
+    }),
 
     // ── Gate plugins (reject early) ──
     rateLimit({
@@ -151,6 +157,7 @@ const fortress = createFortress({
     // Both require the `apiKey:manage` permission (auto-registered into
     // `fortress-admin` via `/iam/admin/bootstrap`).
     socialLogin({
+      tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY ?? 'dev-social-token-key-32-bytes!!!',
       providers: [
         // Placeholder credentials — shows the config API but won't complete real OAuth flows
         { name: 'google', clientId: 'GOOGLE_CLIENT_ID', clientSecret: 'GOOGLE_SECRET' },

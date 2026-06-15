@@ -19,13 +19,19 @@ interface Setup {
   nonAdminToken: string;
 }
 
+const BOOTSTRAP_SECRET = 'test-bootstrap-secret';
+
 async function setup(adminOptions: AdminPluginOptions = { apiKeyRoutes: true }): Promise<Setup> {
+  const resolvedAdminOptions: AdminPluginOptions = {
+    bootstrap: { enabled: true, secret: BOOTSTRAP_SECRET },
+    ...adminOptions,
+  };
   const fortress = createFortress({
     jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins: [
       apiKey({ prefix: 'test', maxKeysPerSubject: 5 }),
-      admin(adminOptions),
+      admin(resolvedAdminOptions),
     ],
   });
 
@@ -64,7 +70,7 @@ async function setup(adminOptions: AdminPluginOptions = { apiKeyRoutes: true }):
       'authorization': `Bearer ${adminLogin.accessToken}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ secret: BOOTSTRAP_SECRET }),
   }));
   if (bootstrapRes.status !== 200) {
     const body = await bootstrapRes.text();
@@ -81,6 +87,42 @@ async function setup(adminOptions: AdminPluginOptions = { apiKeyRoutes: true }):
     nonAdminToken: plainLogin.accessToken,
   };
 }
+
+describe('admin plugin bootstrap hardening', () => {
+  it('does not mount bootstrap by default and rejects a bad one-time secret when enabled', async () => {
+    const defaultFortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [admin()],
+    });
+    const user = await defaultFortress.auth.createUser({ email: 'boot@example.com', name: 'Boot', password: 'password-123' });
+    const login = await defaultFortress.auth.login('boot@example.com', 'password-123');
+    if (login.status !== 'success')
+      throw new Error('expected login success');
+    const notMounted = await defaultFortress.handleRequest(new Request('http://localhost/iam/admin/bootstrap', {
+      method: 'POST',
+      headers: { 'authorization': `Bearer ${login.accessToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: user.id, secret: BOOTSTRAP_SECRET }),
+    }));
+    expect(notMounted.status).toBe(404);
+
+    const enabledFortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [admin({ bootstrap: { enabled: true, secret: BOOTSTRAP_SECRET } })],
+    });
+    const enabledUser = await enabledFortress.auth.createUser({ email: 'boot2@example.com', name: 'Boot2', password: 'password-123' });
+    const enabledLogin = await enabledFortress.auth.login('boot2@example.com', 'password-123');
+    if (enabledLogin.status !== 'success')
+      throw new Error('expected login success');
+    const badSecret = await enabledFortress.handleRequest(new Request('http://localhost/iam/admin/bootstrap', {
+      method: 'POST',
+      headers: { 'authorization': `Bearer ${enabledLogin.accessToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: enabledUser.id, secret: 'wrong-secret' }),
+    }));
+    expect(badSecret.status).toBe(403);
+  });
+});
 
 describe('admin plugin — api-key routes', () => {
   describe('apiKeyRoutes: false (default)', () => {

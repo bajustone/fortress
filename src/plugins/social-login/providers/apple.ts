@@ -8,6 +8,8 @@ import type { ProviderDefinition, ProviderProfile } from '../types';
 export const appleProvider: ProviderDefinition = {
   name: 'apple',
   discoveryUrl: 'https://appleid.apple.com/.well-known/openid-configuration',
+  issuer: 'https://appleid.apple.com',
+  jwksUri: 'https://appleid.apple.com/auth/keys',
   authorizationUrl: 'https://appleid.apple.com/auth/authorize',
   tokenUrl: 'https://appleid.apple.com/auth/token',
   userInfoUrl: undefined, // No userinfo endpoint — profile from ID token
@@ -22,6 +24,7 @@ export const appleProvider: ProviderDefinition = {
     return {
       id: String(raw.sub ?? ''),
       email: String(raw.email ?? ''),
+      emailVerified: raw.email_verified === true || raw.email_verified === 'true',
       name: fullName || undefined,
       displayName: fullName || undefined,
       avatar: undefined, // Apple does not provide avatars

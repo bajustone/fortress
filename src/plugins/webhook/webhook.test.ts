@@ -3,9 +3,14 @@ import type { WebhookEndpoint, WebhookEventType } from './index';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
-import { webhook } from './index';
+import { assertSafeWebhookUrl, webhook } from './index';
 
 const SECRET = 'webhook-test-secret-32chars!!xxx';
+
+async function waitForDeliveries(deliveries: unknown[], count: number): Promise<void> {
+  for (let i = 0; i < 50 && deliveries.length < count; i++)
+    await new Promise(resolve => setTimeout(resolve, 10));
+}
 
 describe('webhook plugin', () => {
   let fortress: Fortress;
@@ -44,6 +49,7 @@ describe('webhook plugin', () => {
       });
 
       await fortress.auth.login('alice@example.com', 'password-123');
+      await waitForDeliveries(deliveries, 1);
 
       const loginDeliveries = deliveries.filter((d) => {
         const body = JSON.parse(d.payload);
@@ -67,6 +73,7 @@ describe('webhook plugin', () => {
       });
 
       await fortress.auth.login('bob@example.com', 'password-123');
+      await waitForDeliveries(deliveries, 1);
 
       const loginDeliveries = deliveries.filter((d) => {
         const body = JSON.parse(d.payload);
@@ -97,6 +104,7 @@ describe('webhook plugin', () => {
       });
 
       await fortress.auth.login('carol@example.com', 'password-123');
+      await waitForDeliveries(deliveries, 2);
 
       const loginDeliveries = deliveries.filter(d => d.url === 'https://example.com/login-hook');
       const registerDeliveries = deliveries.filter(d => d.url === 'https://example.com/register-hook');
@@ -110,6 +118,22 @@ describe('webhook plugin', () => {
       expect(registerDeliveries.length).toBe(1);
       const regBody = JSON.parse(registerDeliveries[0].payload);
       expect(regBody.event).toBe('REGISTER');
+    });
+  });
+
+  describe('ssrf guard', () => {
+    it('rejects IPv4-mapped IPv6 private webhook targets', async () => {
+      // SSRF protection lives in the built-in `defaultDeliver`; custom
+      // transports (like the in-memory deliver this test installs) are
+      // responsible for their own outbound safety, so we assert the exported
+      // helper directly. This is the same guard `defaultDeliver` invokes
+      // before pinning the resolved IP into the outbound request.
+      await expect(
+        assertSafeWebhookUrl('https://[::ffff:169.254.169.254]/hook'),
+      ).rejects.toThrow();
+      await expect(
+        assertSafeWebhookUrl('http://example.com/hook'),
+      ).rejects.toThrow();
     });
   });
 
@@ -127,6 +151,7 @@ describe('webhook plugin', () => {
       });
 
       await fortress.auth.login('dave@example.com', 'password-123');
+      await waitForDeliveries(deliveries, 1);
 
       // No deliveries to the removed endpoint
       expect(deliveries.length).toBe(0);
@@ -172,6 +197,7 @@ describe('webhook plugin', () => {
         name: 'Eve',
         password: 'password-123',
       });
+      await waitForDeliveries(deliveries, 1);
 
       // There should be at least one delivery
       expect(deliveries.length).toBeGreaterThan(0);
@@ -205,6 +231,11 @@ describe('webhook plugin', () => {
         name: 'Frank',
         password: 'password-123',
       });
+      for (let i = 0; i < 50; i++) {
+        if (callCount >= 1)
+          break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
 
       // With maxRetries=1, the first attempt should mark it as failed
       expect(callCount).toBe(1);

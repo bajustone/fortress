@@ -11,6 +11,9 @@
 
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin } from '../../core/plugin';
+import { lookup } from 'node:dns/promises';
+import { request as httpsRequest } from 'node:https';
+import { isIP } from 'node:net';
 
 export interface WebhookConfig {
   /** Events to deliver. Default: all. */
@@ -19,6 +22,8 @@ export interface WebhookConfig {
   maxRetries?: number;
   /** Custom delivery function (for testing or custom transports). */
   deliver?: (url: string, payload: string, headers: Record<string, string>) => Promise<boolean>;
+  /** Delivery timeout in milliseconds. Default: 5000. */
+  timeoutMs?: number;
 }
 
 export type WebhookEventType
@@ -72,18 +77,128 @@ async function signPayload(secret: string, webhookId: string, timestamp: number,
   return b64;
 }
 
-async function defaultDeliver(url: string, payload: string, headers: Record<string, string>): Promise<boolean> {
-  try {
-    const response = await fetch(url, {
+interface SafeWebhookTarget {
+  url: URL;
+  address: string;
+  family: 4 | 6;
+}
+
+function stripIpv6Brackets(host: string): string {
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+}
+
+function parseIpv4(address: string): number[] | null {
+  const parts = address.split('.');
+  if (parts.length !== 4)
+    return null;
+  const octets = parts.map(part => Number(part));
+  if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255))
+    return null;
+  return octets;
+}
+
+function extractMappedIpv4(address: string): string | null {
+  const lower = stripIpv6Brackets(address).toLowerCase();
+  if (!lower.startsWith('::ffff:'))
+    return null;
+  const tail = lower.slice('::ffff:'.length);
+  if (parseIpv4(tail))
+    return tail;
+  const words = tail.split(':');
+  if (words.length !== 2)
+    return null;
+  const hi = Number.parseInt(words[0], 16);
+  const lo = Number.parseInt(words[1], 16);
+  if (!Number.isInteger(hi) || !Number.isInteger(lo) || hi < 0 || hi > 0xFFFF || lo < 0 || lo > 0xFFFF)
+    return null;
+  return `${hi >> 8}.${hi & 0xFF}.${lo >> 8}.${lo & 0xFF}`;
+}
+
+function isPrivateIpv4(address: string): boolean {
+  const octets = parseIpv4(address);
+  if (!octets)
+    return false;
+  const [a, b] = octets;
+  return a === 0
+    || a === 10
+    || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || (a === 198 && (b === 18 || b === 19))
+    || a >= 224;
+}
+
+function isPrivateIp(address: string): boolean {
+  const host = stripIpv6Brackets(address).toLowerCase();
+  const mapped = extractMappedIpv4(host);
+  if (mapped)
+    return isPrivateIpv4(mapped);
+  if (isPrivateIpv4(host))
+    return true;
+  if (host === '::' || host === '::1')
+    return true;
+  return host.startsWith('fc')
+    || host.startsWith('fd')
+    || host.startsWith('fe80:')
+    || host.startsWith('ff');
+}
+
+async function resolveSafeWebhookTarget(url: string): Promise<SafeWebhookTarget> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:')
+    throw new Error('Webhook URL must use https');
+  const host = stripIpv6Brackets(parsed.hostname.toLowerCase());
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local'))
+    throw new Error('Webhook URL host is not allowed');
+
+  const literalFamily = isIP(host);
+  const records = literalFamily === 0
+    ? await lookup(host, { all: true, verbatim: true })
+    : [{ address: host, family: literalFamily }];
+  if (records.length === 0)
+    throw new Error('Webhook URL host did not resolve');
+  if (records.some(record => isPrivateIp(record.address)))
+    throw new Error('Webhook URL resolves to a private address');
+
+  const selected = records[0];
+  return { url: parsed, address: selected.address, family: selected.family as 4 | 6 };
+}
+
+/**
+ * Resolve `url` to an outbound webhook target and throw when it points at a
+ * loopback, link-local, RFC1918, or otherwise non-public address (including
+ * IPv4-mapped IPv6 forms like `::ffff:169.254.169.254`). Exported for tests
+ * and for custom `config.deliver` transports that want to reuse fortress's
+ * SSRF guard. The built-in `defaultDeliver` already calls this and pins the
+ * resolved IP into the outbound request, so callers using the default
+ * transport do not need to invoke it themselves.
+ */
+export async function assertSafeWebhookUrl(url: string): Promise<void> {
+  await resolveSafeWebhookTarget(url);
+}
+
+async function defaultDeliver(url: string, payload: string, headers: Record<string, string>, timeoutMs: number): Promise<boolean> {
+  const target = await resolveSafeWebhookTarget(url);
+  return new Promise((resolve) => {
+    const req = httpsRequest({
+      protocol: target.url.protocol,
+      hostname: target.url.hostname,
+      port: target.url.port || 443,
+      path: `${target.url.pathname}${target.url.search}`,
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
-      body: payload,
+      timeout: timeoutMs,
+      lookup: (_hostname, _options, cb) => cb(null, target.address, target.family),
+    }, (res) => {
+      res.resume();
+      resolve(Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 300));
     });
-    return response.ok;
-  }
-  catch {
-    return false;
-  }
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(false));
+    req.end(payload);
+  });
 }
 
 /**
@@ -94,7 +209,10 @@ async function defaultDeliver(url: string, payload: string, headers: Record<stri
 export function webhook(config: WebhookConfig = {}): FortressPlugin {
   const allowedEvents = config.events ?? null;
   const maxRetries = config.maxRetries ?? 5;
-  const deliver = config.deliver ?? defaultDeliver;
+  const timeoutMs = config.timeoutMs ?? 5000;
+  const deliver = config.deliver
+    ? (url: string, payload: string, headers: Record<string, string>): Promise<boolean> => config.deliver!(url, payload, headers)
+    : (url: string, payload: string, headers: Record<string, string>): Promise<boolean> => defaultDeliver(url, payload, headers, timeoutMs);
 
   function shouldDeliver(eventType: WebhookEventType): boolean {
     if (!allowedEvents)
@@ -117,7 +235,18 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
       'webhook-signature': `v1,${signature}`,
     };
 
-    const success = await deliver(endpoint.url, delivery.payload, headers);
+    // SSRF protection lives inside `defaultDeliver` (it resolves the host
+    // and pins the request to that exact IP, closing the DNS-rebind window).
+    // Custom `config.deliver` transports are responsible for their own
+    // outbound safety — running an extra `dns.lookup` here would just block
+    // offline/CI consumers and inject a TOCTOU gap before their transport.
+    let success = false;
+    try {
+      success = await deliver(endpoint.url, delivery.payload, headers);
+    }
+    catch {
+      success = false;
+    }
     const now = new Date();
 
     if (success) {
@@ -177,7 +306,13 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
     const payloadJson = JSON.stringify(payload);
 
     for (const endpoint of allEndpoints) {
-      const endpointEvents: string[] = JSON.parse(endpoint.events);
+      let endpointEvents: string[];
+      try {
+        endpointEvents = JSON.parse(endpoint.events) as string[];
+      }
+      catch {
+        continue;
+      }
       if (!endpointEvents.includes(eventType)) {
         continue;
       }
@@ -195,6 +330,12 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
 
       await deliverWebhook(db, endpoint, delivery);
     }
+  }
+
+  function scheduleDispatchEvent(db: DatabaseAdapter, eventType: WebhookEventType, payload: Record<string, unknown>): void {
+    queueMicrotask(() => {
+      void dispatchEvent(db, eventType, payload).catch(() => {});
+    });
   }
 
   return {
@@ -234,7 +375,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
         if (!shouldDeliver('LOGIN_SUCCESS'))
           return result;
 
-        await dispatchEvent(ctx.db, 'LOGIN_SUCCESS', {
+        scheduleDispatchEvent(ctx.db, 'LOGIN_SUCCESS', {
           event: 'LOGIN_SUCCESS',
           userId: result.user.id,
           email: result.user.email,
@@ -249,7 +390,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
         if (!shouldDeliver('LOGIN_FAILURE'))
           return;
 
-        await dispatchEvent(ctx.db, 'LOGIN_FAILURE', {
+        scheduleDispatchEvent(ctx.db, 'LOGIN_FAILURE', {
           event: 'LOGIN_FAILURE',
           identifier: ctx.identifier,
           error: ctx.error.message,
@@ -261,7 +402,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
         if (!shouldDeliver('LOGOUT'))
           return;
 
-        await dispatchEvent(ctx.db, 'LOGOUT', {
+        scheduleDispatchEvent(ctx.db, 'LOGOUT', {
           event: 'LOGOUT',
           timestamp: new Date().toISOString(),
           ip: ctx.meta?.ipAddress ?? null,
@@ -272,7 +413,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
         if (!shouldDeliver('REGISTER'))
           return;
 
-        await dispatchEvent(ctx.db, 'REGISTER', {
+        scheduleDispatchEvent(ctx.db, 'REGISTER', {
           event: 'REGISTER',
           userId: user.id,
           email: user.email,
@@ -285,7 +426,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
         if (!shouldDeliver('TOKEN_REFRESH'))
           return result;
 
-        await dispatchEvent(ctx.db, 'TOKEN_REFRESH', {
+        scheduleDispatchEvent(ctx.db, 'TOKEN_REFRESH', {
           event: 'TOKEN_REFRESH',
           timestamp: new Date().toISOString(),
           ip: ctx.meta?.ipAddress ?? null,

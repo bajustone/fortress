@@ -52,6 +52,10 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
   const escalation = config.escalation ?? true;
   const maxLockoutSeconds = config.maxLockoutSeconds ?? 3600;
 
+  function normalizeIdentifier(identifier: string): string {
+    return identifier.trim().toLocaleLowerCase().normalize('NFC');
+  }
+
   function calculateLockoutDuration(lockoutCount: number): number {
     if (!escalation) {
       return lockoutDurationSeconds;
@@ -78,7 +82,7 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
 
     hooks: {
       async beforeLogin(ctx) {
-        const identifier = ctx.email;
+        const identifier = normalizeIdentifier(ctx.email);
 
         const record = await ctx.db.findOne<LockoutRecord>({
           model: 'account_lockout',
@@ -89,57 +93,100 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
           return undefined;
         }
 
-        if (record.lockedUntil && record.lockedUntil > new Date()) {
+        const now = new Date();
+        if (record.lockedUntil && record.lockedUntil > now) {
           throw Errors.unauthorized('Account temporarily locked. Try again later.');
+        }
+
+        if (record.lockedUntil && record.lockedUntil <= now) {
+          await ctx.db.update({
+            model: 'account_lockout',
+            where: [{ field: 'id', operator: '=', value: record.id }],
+            data: { failedAttempts: 0, lockedUntil: null, lastFailedAt: null },
+          });
         }
 
         return undefined;
       },
 
       async onLoginFailure(ctx) {
-        const identifier = ctx.identifier;
-        const now = new Date();
+        if (ctx.error.message.includes('temporarily locked'))
+          return;
+        const identifier = normalizeIdentifier(ctx.identifier);
 
-        let record = await ctx.db.findOne<LockoutRecord>({
-          model: 'account_lockout',
-          where: [{ field: 'identifier', operator: '=', value: identifier }],
-        });
-
-        if (!record) {
-          record = await ctx.db.create<LockoutRecord>({
+        // Compare-and-swap retry loop. DatabaseAdapter has no arithmetic
+        // update expression, so we make the read-then-write safe by including
+        // the observed counters in the UPDATE predicate. A concurrent failure
+        // that wins the race changes those counters and makes our update
+        // return null; we then re-read and retry instead of losing a count.
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const now = new Date();
+          let record = await ctx.db.findOne<LockoutRecord>({
             model: 'account_lockout',
-            data: {
+            where: [{ field: 'identifier', operator: '=', value: identifier }],
+          });
+
+          if (!record) {
+            const newFailedAttempts = 1;
+            const updateData: Record<string, unknown> = {
               identifier,
-              failedAttempts: 0,
-              lastFailedAt: null,
+              failedAttempts: newFailedAttempts,
+              lastFailedAt: now,
               lockedUntil: null,
               lockoutCount: 0,
-            },
+            };
+            if (newFailedAttempts >= maxFailedAttempts) {
+              updateData.lockedUntil = new Date(now.getTime() + calculateLockoutDuration(0) * 1000);
+              updateData.lockoutCount = 1;
+            }
+            try {
+              await ctx.db.create<LockoutRecord>({ model: 'account_lockout', data: updateData });
+              return;
+            }
+            catch {
+              continue;
+            }
+          }
+
+          const expired = record.lockedUntil !== null && record.lockedUntil <= now;
+          const observedFailedAttempts = record.failedAttempts;
+          const observedLockoutCount = record.lockoutCount;
+          if (expired) {
+            record = { ...record, failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
+          }
+
+          const newFailedAttempts = record.failedAttempts + 1;
+          const updateData: Record<string, unknown> = {
+            failedAttempts: newFailedAttempts,
+            lastFailedAt: now,
+            lockedUntil: expired ? null : record.lockedUntil,
+          };
+
+          if (newFailedAttempts >= maxFailedAttempts) {
+            const duration = calculateLockoutDuration(record.lockoutCount);
+            updateData.lockedUntil = new Date(now.getTime() + duration * 1000);
+            updateData.lockoutCount = record.lockoutCount + 1;
+          }
+          else if (expired) {
+            updateData.lockoutCount = record.lockoutCount;
+          }
+
+          const updated = await ctx.db.update<LockoutRecord>({
+            model: 'account_lockout',
+            where: [
+              { field: 'id', operator: '=', value: record.id },
+              { field: 'failedAttempts', operator: '=', value: observedFailedAttempts },
+              { field: 'lockoutCount', operator: '=', value: observedLockoutCount },
+            ],
+            data: updateData,
           });
+          if (updated)
+            return;
         }
-
-        const newFailedAttempts = record.failedAttempts + 1;
-        const updateData: Record<string, unknown> = {
-          failedAttempts: newFailedAttempts,
-          lastFailedAt: now,
-        };
-
-        if (newFailedAttempts >= maxFailedAttempts) {
-          const duration = calculateLockoutDuration(record.lockoutCount);
-          const lockedUntil = new Date(now.getTime() + duration * 1000);
-          updateData.lockedUntil = lockedUntil;
-          updateData.lockoutCount = record.lockoutCount + 1;
-        }
-
-        await ctx.db.update({
-          model: 'account_lockout',
-          where: [{ field: 'id', operator: '=', value: record.id }],
-          data: updateData,
-        });
       },
 
       async afterLogin(ctx, result) {
-        const identifier = result.user.email;
+        const identifier = normalizeIdentifier(ctx.identifier ?? result.user.email);
 
         const record = await ctx.db.findOne<LockoutRecord>({
           model: 'account_lockout',
@@ -163,14 +210,15 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
 
     methods: ctx => ({
       async getLockoutStatus(identifier: string): Promise<LockoutStatus> {
+        const normalized = normalizeIdentifier(identifier);
         const record = await ctx.db.findOne<LockoutRecord>({
           model: 'account_lockout',
-          where: [{ field: 'identifier', operator: '=', value: identifier }],
+          where: [{ field: 'identifier', operator: '=', value: normalized }],
         });
 
         if (!record) {
           return {
-            identifier,
+            identifier: normalized,
             failedAttempts: 0,
             lockoutCount: 0,
             lockedUntil: null,
@@ -193,9 +241,10 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
       },
 
       async resetLockout(identifier: string): Promise<void> {
+        const normalized = normalizeIdentifier(identifier);
         const record = await ctx.db.findOne<LockoutRecord>({
           model: 'account_lockout',
-          where: [{ field: 'identifier', operator: '=', value: identifier }],
+          where: [{ field: 'identifier', operator: '=', value: normalized }],
         });
 
         if (!record) {
