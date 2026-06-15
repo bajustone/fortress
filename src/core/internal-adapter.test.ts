@@ -14,7 +14,7 @@ beforeEach(() => {
 
 describe('findUserByIdentifier', () => {
   it('finds user via login_identifier', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'alice@example.com', name: 'Alice', passwordHash: 'hashed', isActive: true },
     });
@@ -49,13 +49,13 @@ describe('findUserByIdentifier', () => {
 
 describe('getUserGroups', () => {
   it('returns group names for a user', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'alice@example.com', name: 'Alice', passwordHash: 'hashed', isActive: true },
     });
 
-    const g1 = await db.create<{ id: number }>({ model: 'group', data: { name: 'admins' } });
-    const g2 = await db.create<{ id: number }>({ model: 'group', data: { name: 'editors' } });
+    const g1 = await db.create<{ id: string }>({ model: 'group', data: { name: 'admins' } });
+    const g2 = await db.create<{ id: string }>({ model: 'group', data: { name: 'editors' } });
 
     await db.create({ model: 'group_user', data: { groupId: g1.id, userId: user.id } });
     await db.create({ model: 'group_user', data: { groupId: g2.id, userId: user.id } });
@@ -67,7 +67,7 @@ describe('getUserGroups', () => {
   });
 
   it('returns empty array for user with no groups', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'loner@example.com', name: 'Loner', passwordHash: 'hashed', isActive: true },
     });
@@ -79,7 +79,7 @@ describe('getUserGroups', () => {
 
 describe('findRefreshTokenByHash', () => {
   it('finds a refresh token by hash', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'alice@example.com', name: 'Alice', passwordHash: 'hashed', isActive: true },
     });
@@ -112,19 +112,19 @@ describe('findRefreshTokenByHash', () => {
 
 describe('getSubjectPermissions', () => {
   it('resolves permissions through direct role binding', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'alice@example.com', name: 'Alice', passwordHash: 'hashed', isActive: true },
     });
 
     await db.create({ model: 'resource', data: { name: 'document' } });
 
-    const permission = await db.create<{ id: number }>({
+    const permission = await db.create<{ id: string }>({
       model: 'permission',
       data: { resource: 'document', action: 'read', effect: 'ALLOW', description: 'read document' },
     });
 
-    const role = await db.create<{ id: number }>({
+    const role = await db.create<{ id: string }>({
       model: 'role',
       data: { name: 'viewer' },
     });
@@ -139,22 +139,22 @@ describe('getSubjectPermissions', () => {
   });
 
   it('resolves permissions through group role binding', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'bob@example.com', name: 'Bob', passwordHash: 'hashed', isActive: true },
     });
 
-    const group = await db.create<{ id: number }>({ model: 'group', data: { name: 'editors' } });
+    const group = await db.create<{ id: string }>({ model: 'group', data: { name: 'editors' } });
     await db.create({ model: 'group_user', data: { groupId: group.id, userId: user.id } });
 
     await db.create({ model: 'resource', data: { name: 'article' } });
 
-    const permission = await db.create<{ id: number }>({
+    const permission = await db.create<{ id: string }>({
       model: 'permission',
       data: { resource: 'article', action: 'write', effect: 'ALLOW', description: 'write article' },
     });
 
-    const role = await db.create<{ id: number }>({
+    const role = await db.create<{ id: string }>({
       model: 'role',
       data: { name: 'editor' },
     });
@@ -169,7 +169,7 @@ describe('getSubjectPermissions', () => {
   });
 
   it('returns empty array for user with no roles', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'nobody@example.com', name: 'Nobody', passwordHash: 'hashed', isActive: true },
     });
@@ -179,19 +179,19 @@ describe('getSubjectPermissions', () => {
   });
 
   it('resolves permissions through a SERVICE_ACCOUNT role binding', async () => {
-    const sa = await db.create<{ id: number }>({
+    const sa = await db.create<{ id: string }>({
       model: 'service_account',
       data: { name: 'ci-deploy', displayName: 'CI Deploy', description: null, isActive: true },
     });
 
     await db.create({ model: 'resource', data: { name: 'deploy' } });
 
-    const permission = await db.create<{ id: number }>({
+    const permission = await db.create<{ id: string }>({
       model: 'permission',
       data: { resource: 'deploy', action: 'run', effect: 'ALLOW', description: 'run deploy' },
     });
 
-    const role = await db.create<{ id: number }>({
+    const role = await db.create<{ id: string }>({
       model: 'role',
       data: { name: 'deployer' },
     });
@@ -206,13 +206,13 @@ describe('getSubjectPermissions', () => {
   });
 
   it('resolves direct permission bindings for a SERVICE_ACCOUNT', async () => {
-    const sa = await db.create<{ id: number }>({
+    const sa = await db.create<{ id: string }>({
       model: 'service_account',
       data: { name: 'audit-reader', displayName: null, description: null, isActive: true },
     });
 
     await db.create({ model: 'resource', data: { name: 'audit' } });
-    const permission = await db.create<{ id: number }>({
+    const permission = await db.create<{ id: string }>({
       model: 'permission',
       data: { resource: 'audit', action: 'read', effect: 'ALLOW', description: null },
     });
@@ -228,17 +228,17 @@ describe('getSubjectPermissions', () => {
   });
 
   it('returns empty for an inactive SERVICE_ACCOUNT even with a bound role', async () => {
-    const sa = await db.create<{ id: number }>({
+    const sa = await db.create<{ id: string }>({
       model: 'service_account',
       data: { name: 'disabled-sa', displayName: null, description: null, isActive: false },
     });
 
     await db.create({ model: 'resource', data: { name: 'deploy' } });
-    const permission = await db.create<{ id: number }>({
+    const permission = await db.create<{ id: string }>({
       model: 'permission',
       data: { resource: 'deploy', action: 'run', effect: 'ALLOW', description: null },
     });
-    const role = await db.create<{ id: number }>({ model: 'role', data: { name: 'deployer-disabled' } });
+    const role = await db.create<{ id: string }>({ model: 'role', data: { name: 'deployer-disabled' } });
     await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
     await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'SERVICE_ACCOUNT', subjectId: sa.id } });
 
@@ -248,19 +248,19 @@ describe('getSubjectPermissions', () => {
 
   it('service account subjects do not inherit permissions from groups', async () => {
     // Set up a group with a permission, and a user in that group.
-    const group = await db.create<{ id: number }>({ model: 'group', data: { name: 'inheritance-group' } });
+    const group = await db.create<{ id: string }>({ model: 'group', data: { name: 'inheritance-group' } });
     await db.create({ model: 'resource', data: { name: 'article' } });
-    const permission = await db.create<{ id: number }>({
+    const permission = await db.create<{ id: string }>({
       model: 'permission',
       data: { resource: 'article', action: 'read', effect: 'ALLOW', description: null },
     });
-    const role = await db.create<{ id: number }>({ model: 'role', data: { name: 'reader-inherit' } });
+    const role = await db.create<{ id: string }>({ model: 'role', data: { name: 'reader-inherit' } });
     await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
     await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'GROUP', subjectId: group.id } });
 
     // Create a service account with the SAME numeric id as the group — group-walk
     // must not accidentally match service accounts.
-    const sa = await db.create<{ id: number }>({
+    const sa = await db.create<{ id: string }>({
       model: 'service_account',
       data: { name: 'isolated-sa', displayName: null, description: null, isActive: true },
     });

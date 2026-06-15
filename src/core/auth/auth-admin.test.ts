@@ -97,7 +97,7 @@ describe('auth admin: user management', () => {
     });
 
     it('throws NOT_FOUND for missing user', async () => {
-      await expect(fortress.auth.getUserById(99999)).rejects.toThrow('User not found');
+      await expect(fortress.auth.getUserById('99999')).rejects.toThrow('User not found');
     });
   });
 
@@ -151,7 +151,7 @@ describe('auth admin: user management', () => {
 
     it('throws NOT_FOUND for missing user', async () => {
       await expect(
-        fortress.auth.updateUser(99999, { name: 'Test' }),
+        fortress.auth.updateUser('99999', { name: 'Test' }),
       ).rejects.toThrow('User not found');
     });
   });
@@ -171,7 +171,7 @@ describe('auth admin: user management', () => {
     });
 
     it('throws NOT_FOUND for missing user', async () => {
-      await expect(fortress.auth.deleteUser(99999)).rejects.toThrow('User not found');
+      await expect(fortress.auth.deleteUser('99999')).rejects.toThrow('User not found');
     });
   });
 });

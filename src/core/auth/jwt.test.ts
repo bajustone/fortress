@@ -1,3 +1,4 @@
+import { SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import { signAccessToken, verifyAccessToken } from './jwt';
@@ -5,7 +6,7 @@ import { signAccessToken, verifyAccessToken } from './jwt';
 describe('jwt', () => {
   const secret = 'test-secret-at-least-32-chars-long!';
   const claims = {
-    sub: 42,
+    sub: '42',
     subjectType: 'USER' as const,
     name: 'Test User',
     groups: ['admin', 'editor'],
@@ -26,7 +27,7 @@ describe('jwt', () => {
       const token = await signAccessToken(claims, secret, 900);
       const decoded = await verifyAccessToken(token, secret);
 
-      expect(decoded.sub).toBe(42);
+      expect(decoded.sub).toBe('42');
       expect(decoded.name).toBe('Test User');
       expect(decoded.groups).toEqual(['admin', 'editor']);
       expect(decoded.iss).toBe('fortress-test');
@@ -54,14 +55,14 @@ describe('jwt', () => {
     it('verifies a token signed with old secret using [new, old] array', async () => {
       const token = await signAccessToken(claims, oldSecret, 900);
       const decoded = await verifyAccessToken(token, [newSecret, oldSecret]);
-      expect(decoded.sub).toBe(42);
+      expect(decoded.sub).toBe('42');
     });
 
     it('signs with first secret in array', async () => {
       const token = await signAccessToken(claims, [newSecret, oldSecret], 900);
       // Should verify with newSecret alone
       const decoded = await verifyAccessToken(token, newSecret);
-      expect(decoded.sub).toBe(42);
+      expect(decoded.sub).toBe('42');
     });
 
     it('fails if token was signed with a secret not in the array', async () => {
@@ -74,12 +75,12 @@ describe('jwt', () => {
     it('includes custom claims in the token', async () => {
       const claimsWithCustom = {
         ...claims,
-        customClaims: { tenantId: 5, tenantCode: 'acme' },
+        customClaims: { tenantId: '5', tenantCode: 'acme' },
       };
       const token = await signAccessToken(claimsWithCustom, secret, 900);
       const decoded = await verifyAccessToken(token, secret);
 
-      expect(decoded.customClaims?.tenantId).toBe(5);
+      expect(decoded.customClaims?.tenantId).toBe('5');
       expect(decoded.customClaims?.tenantCode).toBe('acme');
     });
 
@@ -94,8 +95,8 @@ describe('jwt', () => {
           ...claims,
           customClaims: {
             // attacker tries to overwrite trusted claims
-            sub: 9999,
-            act: { sub: 1, subjectType: 'USER' },
+            sub: '9999',
+            act: { sub: '1', subjectType: 'USER' },
             groups: ['admin'],
             subjectType: 'SERVICE_ACCOUNT',
             tenantId: 'real-tenant',
@@ -105,7 +106,7 @@ describe('jwt', () => {
         const decoded = await verifyAccessToken(token, secret);
 
         // Real sub/groups/subjectType prevail; forged act dropped.
-        expect(decoded.sub).toBe(42);
+        expect(decoded.sub).toBe('42');
         expect(decoded.subjectType).toBe('USER');
         expect(decoded.groups).toEqual(['admin', 'editor']);
         expect(decoded.act).toBeUndefined();
@@ -132,6 +133,39 @@ describe('jwt', () => {
       await expect(
         verifyAccessToken(token, secret, { issuer: 'someone-else' }),
       ).rejects.toThrow();
+    });
+
+    it('rejects tokens missing Fortress-required claims instead of fabricating defaults', async () => {
+      const token = await new SignJWT({ subjectType: 'USER', groups: [] })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuedAt()
+        .setExpirationTime('900s')
+        .setIssuer('fortress-test')
+        .setSubject('42')
+        .sign(new TextEncoder().encode(secret));
+
+      await expect(verifyAccessToken(token, secret)).rejects.toThrow('Invalid or expired token');
+    });
+
+    it('supports audience and additional required claim verification', async () => {
+      const token = await new SignJWT({ name: 'Test User', subjectType: 'USER', groups: [], tenantId: 'acme' })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuedAt()
+        .setExpirationTime('900s')
+        .setIssuer('fortress-test')
+        .setSubject('42')
+        .setAudience('fortress-api')
+        .sign(new TextEncoder().encode(secret));
+
+      const decoded = await verifyAccessToken(token, secret, {
+        audience: 'fortress-api',
+        requiredClaims: ['tenantId'],
+      });
+      expect(decoded.customClaims?.tenantId).toBe('acme');
+
+      await expect(
+        verifyAccessToken(token, secret, { audience: 'other-api' }),
+      ).rejects.toThrow('Invalid or expired token');
     });
   });
 });

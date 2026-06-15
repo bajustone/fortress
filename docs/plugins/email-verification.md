@@ -39,7 +39,7 @@ All fields on `EmailVerificationConfig` are optional:
 |---|---|---|---|
 | `tokenExpirySeconds` | `number` | `86400` (24 hours) | How long a verification token remains valid, in seconds. |
 | `requireVerification` | `boolean` | `true` | When `true`, unverified users receive an error response on login with `error: 'EMAIL_NOT_VERIFIED'`. |
-| `onSendVerification` | `(email: string, token: string, userId: number) => Promise<void>` | `undefined` | Callback invoked when a verification token is created. Use this to send the verification email. |
+| `onSendVerification` | `(email: string, token: string, userId: string) => Promise<void>` | `undefined` | Callback invoked when a verification token is created. Use this to send the verification email. |
 
 ## How It Works
 
@@ -52,8 +52,8 @@ The plugin uses two lifecycle hooks:
 
 | Method | Signature | Returns |
 |---|---|---|
-| `sendVerification` | `(userId: number, email?: string)` | `Promise<{ token: string }>` |
-| `verify` | `(rawToken: string)` | `Promise<{ userId: number; email: string }>` |
+| `sendVerification` | `(userId: string, email?: string)` | `Promise<{ token: string }>` |
+| `verify` | `(rawToken: string)` | `Promise<{ userId: string; email: string }>` |
 
 ### sendVerification
 

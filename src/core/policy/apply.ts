@@ -53,11 +53,11 @@ export async function applyPolicyPlan(
   const errors: { op: PolicyOp; message: string }[] = [];
 
   // Caches to avoid repeated lookups across ops in the same apply pass.
-  const roleIdByName = new Map<string, number>();
-  const groupIdByName = new Map<string, number>();
-  const saIdByName = new Map<string, number>();
+  const roleIdByName = new Map<string, string>();
+  const groupIdByName = new Map<string, string>();
+  const saIdByName = new Map<string, string>();
 
-  const resolveRoleId = async (name: string): Promise<number> => {
+  const resolveRoleId = async (name: string): Promise<string> => {
     if (roleIdByName.has(name))
       return roleIdByName.get(name)!;
     const roles = await iam.getRoles();
@@ -68,7 +68,7 @@ export async function applyPolicyPlan(
     return id;
   };
 
-  const resolveGroupId = async (name: string): Promise<number> => {
+  const resolveGroupId = async (name: string): Promise<string> => {
     if (groupIdByName.has(name))
       return groupIdByName.get(name)!;
     const { groups } = await iam.listGroups({ limit: 10_000 });
@@ -79,7 +79,7 @@ export async function applyPolicyPlan(
     return id;
   };
 
-  const resolveSaId = async (name: string): Promise<number> => {
+  const resolveSaId = async (name: string): Promise<string> => {
     if (saIdByName.has(name))
       return saIdByName.get(name)!;
     const { serviceAccounts } = await iam.listServiceAccounts({ limit: 10_000 });

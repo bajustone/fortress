@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 import { buildRouteManifest } from '../manifest/route-manifest';
-import { endpoint, int, obj, str } from '../schema-builder';
+import { endpoint, id, int, obj, str } from '../schema-builder';
 import { protect } from './protect';
 
 /** Compile-time assertion that two types are identical. */
@@ -24,8 +24,8 @@ function testEndpoint(): EndpointDefinition {
       bodySchema: obj({ name: str() }, 'name'),
       query: obj({ draft: str() }),
       querySchema: obj({ draft: str() }),
-      params: obj({ id: int() }, 'id'),
-      paramsSchema: obj({ id: int() }, 'id'),
+      params: obj({ id: id() }, 'id'),
+      paramsSchema: obj({ id: id() }, 'id'),
     },
     responses: { 201: { description: 'Created', schema: obj({ ok: str() }, 'ok') } },
   };
@@ -74,8 +74,8 @@ describe('protect()', () => {
 
     const handler = protect(fortress, 'createHostThing', (ctx) => {
       expect(ctx.manifest.classification).toBe('public');
-      expect(ctx.input).toEqual({ name: 'alpha', draft: 'true', id: 123 });
-      expect(ctx.params).toEqual({ id: 123 });
+      expect(ctx.input).toEqual({ name: 'alpha', draft: 'true', id: '123' });
+      expect(ctx.params).toEqual({ id: '123' });
       return { ok: 'yes' };
     });
 
@@ -101,8 +101,8 @@ describe('protect()', () => {
         permission: { resource: 'report', action: 'read' },
       },
       input: {
-        params: obj({ id: int() }, 'id'),
-        paramsSchema: obj({ id: int() }, 'id'),
+        params: obj({ id: id() }, 'id'),
+        paramsSchema: obj({ id: id() }, 'id'),
       },
       responses: { 200: { description: 'OK' } },
     } as EndpointDefinition;
@@ -114,7 +114,7 @@ describe('protect()', () => {
       get manifest() { return buildRouteManifest(this as any); },
       auth: {
         verifyToken: async () => ({
-          sub: 7,
+          sub: '7',
           subjectType: 'USER',
           name: 'User',
           groups: [],
@@ -141,11 +141,11 @@ describe('protect()', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      subject: { type: 'USER', id: 7 },
-      input: { id: 42 },
+      subject: { type: 'USER', id: '7' },
+      input: { id: '42' },
     });
     expect(checked).toHaveLength(1);
-    expect(checked[0]).toEqual([{ type: 'USER', id: 7 }, 'report', 'read', { credentialScopes: undefined }]);
+    expect(checked[0]).toEqual([{ type: 'USER', id: '7' }, 'report', 'read', { credentialScopes: undefined }]);
   });
 
   it('attaches auth cookies for token-shaped handler results', async () => {

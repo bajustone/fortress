@@ -41,7 +41,7 @@ function createApp(fortress: Fortress, options?: Parameters<typeof createHonoMid
   return app;
 }
 
-async function seedAndLogin(fortress: Fortress, app: Hono<FortressEnv>): Promise<{ token: string; userId: number }> {
+async function seedAndLogin(fortress: Fortress, app: Hono<FortressEnv>): Promise<{ token: string; userId: string }> {
   const user = await fortress.auth.createUser({
     email: 'test@example.com',
     name: 'Test User',

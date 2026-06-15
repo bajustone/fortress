@@ -660,11 +660,12 @@ Fortress includes a typed schema builder that produces `FortressSchema<T>` objec
 - **TypeScript typed** -- for compile-time type inference via `Infer<T>`
 
 ```typescript
-import { obj, str, int, bool, arr, enums, nullable, nullType, record, recordOf, ref } from '@bajustone/fortress';
+import { obj, str, int, id, bool, arr, enums, nullable, nullType, record, recordOf, ref } from '@bajustone/fortress';
 
 // Primitives
 str('description')           // FortressSchema<string>
 int('description')           // FortressSchema<number>
+id('description')            // FortressSchema<string> — subject-id (RFC 7519 §4.1.2)
 num('description')           // FortressSchema<number>
 bool('description')          // FortressSchema<boolean>
 strFormat('email', 'desc')   // FortressSchema<string>
@@ -729,7 +730,7 @@ import { endpoint, obj, int } from '@bajustone/fortress';
 
 // Mix fortress schemas and Zod in the same endpoint
 endpoint('POST', '/users/:id')
-  .params(obj({ id: int() }, 'id'))                              // fortress
+  .params(obj({ id: id() }, 'id'))                               // fortress
   .body(z.object({ name: z.string().transform(s => s.trim()) })) // Zod
   .build();
 ```
@@ -1765,7 +1766,7 @@ const newKey = await fortress.plugins['api-key'].rotateKey({
 // Resolve a raw key to its owning subject (used by resolvePrincipal internally;
 // exposed for custom middleware)
 const resolved = await fortress.plugins['api-key'].resolveKey('fortress_sk_a1b2c3...');
-// resolved.subject = { type: 'USER' | 'SERVICE_ACCOUNT', id: number }
+// resolved.subject = { type: 'USER' | 'SERVICE_ACCOUNT', id: string }
 // resolved.scopes = string[] | null
 // Returns null for unknown, revoked, expired, or inactive-subject keys.
 ```

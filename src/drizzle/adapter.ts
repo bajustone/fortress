@@ -115,6 +115,58 @@ function sanitizeData(data: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
+/**
+ * Return true if a column name names a subject-id at the fortress API
+ * surface (RFC 7519 §4.1.2). Used to translate the database-native id type
+ * (commonly bigserial/integer) to fortress's opaque string-id contract on
+ * read — see {@link stringifyIds}.
+ *
+ * Matches:
+ *   - `id` exactly (every model's primary key)
+ *   - any camelCase field ending in `Id` (`userId`, `roleId`, `tenantId`, …)
+ *
+ * Does NOT match:
+ *   - `tokenId`-like fields that are already strings in the schema (the
+ *     transform is a no-op on strings, so this is safe)
+ *   - timestamp fields (no `Id` suffix)
+ */
+const ID_FIELD_RE = /[a-z]Id$/;
+function isIdField(key: string): boolean {
+  return key === 'id' || ID_FIELD_RE.test(key);
+}
+
+/**
+ * Recursively stringify every id-like field in a row. Pure function, runs
+ * on every read path (findOne, findMany, rawQuery, create.returning,
+ * update.returning, delete.returning) so consumers always see string ids
+ * regardless of whether the underlying column is `integer`, `bigserial`,
+ * `uuid`, or `text`.
+ *
+ * - Numbers and bigints ⇒ stringified via `String(...)`.
+ * - Strings ⇒ passed through unchanged.
+ * - `null`/`undefined` ⇒ passed through (nullable FKs).
+ * - Arrays and nested objects are walked (rawQuery results may nest).
+ */
+function stringifyIds<T>(row: T): T {
+  if (row == null || typeof row !== 'object')
+    return row;
+  if (Array.isArray(row))
+    return row.map(stringifyIds) as unknown as T;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row as Record<string, unknown>)) {
+    if (isIdField(key) && (typeof value === 'number' || typeof value === 'bigint')) {
+      out[key] = String(value);
+    }
+    else if (value && typeof value === 'object' && !(value instanceof Date)) {
+      out[key] = stringifyIds(value);
+    }
+    else {
+      out[key] = value;
+    }
+  }
+  return out as T;
+}
+
 function buildRawSql(sqlText: string, params: unknown[] = []): SQL {
   if (params.length === 0)
     return sql.raw(sqlText);
@@ -197,17 +249,18 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
 
   /** Execute a query expecting a single row (or undefined). SQLite uses .get(), PG/MySQL awaits the query. */
   async function execOne<T>(query: any): Promise<T | undefined> {
-    if (isSqlite)
-      return query.get() as T | undefined;
-    const rows = await query;
-    return (rows as T[])[0];
+    const row = isSqlite
+      ? (query.get() as T | undefined)
+      : ((await query) as T[])[0];
+    return row === undefined ? undefined : stringifyIds(row);
   }
 
   /** Execute a query expecting an array of rows. SQLite uses .all(), PG/MySQL awaits the query. */
   async function execMany<T>(query: any): Promise<T[]> {
-    if (isSqlite)
-      return query.all() as T[];
-    return await query as T[];
+    const rows = isSqlite
+      ? (query.all() as T[])
+      : ((await query) as T[]);
+    return rows.map(stringifyIds);
   }
 
   /** Execute a query where the result is discarded. SQLite uses .run(), PG/MySQL awaits the query. */
@@ -297,7 +350,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
           // apply to every row (family/session revocation depends on this),
           // while preserving the adapter contract of returning one row/null.
           if (isSqlite) {
-            const rows = query.all() as T[];
+            const rows = (query.all() as T[]).map(stringifyIds);
             return rows[0] ?? null;
           }
           const result = await execOne<T>(query);
@@ -338,18 +391,18 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
         const query = buildRawSql(sqlText, params ?? []);
         if (isSqlite) {
           if (typeof (drizzle as any).all === 'function' && sqliteStatementReturnsRows(sqlText))
-            return normalizeRawRows<T>((drizzle as any).all(query));
+            return normalizeRawRows<T>((drizzle as any).all(query)).map(stringifyIds);
           if (typeof (drizzle as any).run === 'function') {
             (drizzle as any).run(query);
             return [];
           }
           if (typeof (drizzle as any).execute === 'function')
-            return normalizeRawRows<T>(await (drizzle as any).execute(query));
+            return normalizeRawRows<T>(await (drizzle as any).execute(query)).map(stringifyIds);
           throw Errors.badRequest('rawQuery is not supported by this SQLite Drizzle driver');
         }
         if (typeof (drizzle as any).execute !== 'function')
           throw Errors.badRequest('rawQuery is not supported by this Drizzle driver');
-        return normalizeRawRows<T>(await (drizzle as any).execute(query));
+        return normalizeRawRows<T>(await (drizzle as any).execute(query)).map(stringifyIds);
       },
 
       async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {

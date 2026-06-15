@@ -102,7 +102,7 @@ describe('express adapter', () => {
       headers: {},
       method: 'GET',
       path: '/api/unmapped',
-      fortressUserId: 1,
+      fortressUserId: '1',
     };
     let nextCalled = false;
 

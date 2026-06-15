@@ -85,7 +85,7 @@ describe('chainAdapterWrappers', () => {
   it('passes request context to wrapAdapter', () => {
     const wrapFn = vi.fn(adapter => adapter);
     const plugin = testPlugin({ wrapAdapter: wrapFn });
-    const ctx = { tenantId: 5 };
+    const ctx = { tenantId: '5' };
 
     chainAdapterWrappers([plugin], mockDb, ctx);
     expect(wrapFn).toHaveBeenCalledWith(mockDb, ctx);
@@ -94,7 +94,7 @@ describe('chainAdapterWrappers', () => {
 
 describe('mergeTokenClaims', () => {
   it('returns empty object when no plugins enrich claims', async () => {
-    const result = await mergeTokenClaims([testPlugin()], 1, { db: mockDb, config: mockConfig });
+    const result = await mergeTokenClaims([testPlugin()], '1', { db: mockDb, config: mockConfig });
     expect(result).toEqual({});
   });
 
@@ -102,7 +102,7 @@ describe('mergeTokenClaims', () => {
     const plugins = [
       testPlugin({
         name: 'tenancy',
-        enrichTokenClaims: async () => ({ tenantId: 5 }),
+        enrichTokenClaims: async () => ({ tenantId: '5' }),
       }),
       testPlugin({
         name: 'custom',
@@ -110,8 +110,8 @@ describe('mergeTokenClaims', () => {
       }),
     ];
 
-    const result = await mergeTokenClaims(plugins, 1, { db: mockDb, config: mockConfig });
-    expect(result).toEqual({ tenantId: 5, role: 'admin' });
+    const result = await mergeTokenClaims(plugins, '1', { db: mockDb, config: mockConfig });
+    expect(result).toEqual({ tenantId: '5', role: 'admin' });
   });
 
   it('later plugin wins on key conflict', async () => {
@@ -126,14 +126,14 @@ describe('mergeTokenClaims', () => {
       }),
     ];
 
-    const result = await mergeTokenClaims(plugins, 1, { db: mockDb, config: mockConfig });
+    const result = await mergeTokenClaims(plugins, '1', { db: mockDb, config: mockConfig });
     expect(result.key).toBe('second');
   });
 });
 
 describe('collectScopeRules', () => {
   it('returns null when no plugins have scope rules', async () => {
-    const result = await collectScopeRules([testPlugin()], 1, 'sale', { db: mockDb, config: mockConfig });
+    const result = await collectScopeRules([testPlugin()], '1', 'sale', { db: mockDb, config: mockConfig });
     expect(result).toBeNull();
   });
 
@@ -141,7 +141,7 @@ describe('collectScopeRules', () => {
     const plugin = testPlugin({
       scopeRules: async () => null,
     });
-    const result = await collectScopeRules([plugin], 1, 'sale', { db: mockDb, config: mockConfig });
+    const result = await collectScopeRules([plugin], '1', 'sale', { db: mockDb, config: mockConfig });
     expect(result).toBeNull();
   });
 
@@ -153,7 +153,7 @@ describe('collectScopeRules', () => {
       }),
     });
 
-    const result = await collectScopeRules([plugin], 1, 'sale', { db: mockDb, config: mockConfig });
+    const result = await collectScopeRules([plugin], '1', 'sale', { db: mockDb, config: mockConfig });
     expect(result).toEqual({
       filters: [{ field: 'siteId', operator: '=', value: 3 }],
       defaults: { siteId: 3 },
@@ -178,7 +178,7 @@ describe('collectScopeRules', () => {
       }),
     ];
 
-    const result = await collectScopeRules(plugins, 1, 'sale', { db: mockDb, config: mockConfig });
+    const result = await collectScopeRules(plugins, '1', 'sale', { db: mockDb, config: mockConfig });
     expect(result?.filters).toHaveLength(2);
     expect(result?.defaults).toEqual({ orgId: 7, siteId: 3 });
   });

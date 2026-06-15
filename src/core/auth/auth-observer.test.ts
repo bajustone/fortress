@@ -36,7 +36,7 @@ describe('addAuthObserver', () => {
     const reg = events.find(e => e.eventType === 'REGISTER');
     expect(reg).toBeDefined();
     expect(reg?.outcome).toBe('success');
-    expect(reg?.actorId).toBeGreaterThan(0);
+    expect(reg?.actorId).toBeTruthy();
     expect(reg?.identifier).toBe('register@example.com');
   });
 
@@ -51,7 +51,7 @@ describe('addAuthObserver', () => {
     expect(success).toBeDefined();
     expect(success?.outcome).toBe('success');
     expect(success?.identifier).toBe('auth-obs@example.com');
-    expect(success?.actorId).toBeGreaterThan(0);
+    expect(success?.actorId).toBeTruthy();
     expect(success?.method).toBe('password');
   });
 
@@ -82,7 +82,7 @@ describe('addAuthObserver', () => {
     const refresh = events.find(e => e.eventType === 'TOKEN_REFRESH');
     expect(refresh).toBeDefined();
     expect(refresh?.outcome).toBe('success');
-    expect(refresh?.actorId).toBeGreaterThan(0);
+    expect(refresh?.actorId).toBeTruthy();
   });
 
   it('emits TOKEN_REUSE_DETECTED on reuse of a revoked refresh token', async () => {
@@ -111,7 +111,7 @@ describe('addAuthObserver', () => {
 
     const logout = events.find(e => e.eventType === 'LOGOUT');
     expect(logout).toBeDefined();
-    expect(logout?.actorId).toBeGreaterThan(0);
+    expect(logout?.actorId).toBeTruthy();
   });
 
   it('fires multiple observers in registration order', async () => {

@@ -130,7 +130,7 @@ if (!result) {
   throw new Error('Unauthorized');
 }
 
-console.log(result.subject); // { type: 'USER' | 'SERVICE_ACCOUNT', id: number }
+console.log(result.subject); // { type: 'USER' | 'SERVICE_ACCOUNT', id: string }
 console.log(result.scopes);  // string[] | null
 ```
 
@@ -188,10 +188,10 @@ If no scopes are provided, `resolveKey` returns `scopes: null`, which you can tr
 
 | Method | Signature | Returns |
 |---|---|---|
-| `createKey` | `(input: { subject?: Subject; name: string; scopes?: string[]; expiresAt?: Date }, routeCtx?: PluginRouteContext)` | `Promise<{ key: string; id: number }>` |
+| `createKey` | `(input: { subject?: Subject; name: string; scopes?: string[]; expiresAt?: Date }, routeCtx?: PluginRouteContext)` | `Promise<{ key: string; id: string }>` |
 | `listKeys` | `(input: { subject?: Subject }, routeCtx?: PluginRouteContext)` | `Promise<ApiKeyInfo[]>` |
-| `revokeKey` | `(input: { subject?: Subject; id: number \| string }, routeCtx?: PluginRouteContext)` | `Promise<{ ok: true }>` |
-| `rotateKey` | `(input: { subject?: Subject; id: number \| string }, routeCtx?: PluginRouteContext)` | `Promise<{ key: string; id: number }>` |
+| `revokeKey` | `(input: { subject?: Subject; id: string \| string }, routeCtx?: PluginRouteContext)` | `Promise<{ ok: true }>` |
+| `rotateKey` | `(input: { subject?: Subject; id: string \| string }, routeCtx?: PluginRouteContext)` | `Promise<{ key: string; id: string }>` |
 | `resolveKey` | `(rawKey: string)` | `Promise<{ subject: Subject; scopes: string[] \| null } \| null>` |
 
 **Dual-mode `subject`.** When called from an HTTP route handler with a `routeCtx`, the plugin uses `routeCtx.subject` and ignores any `subject` supplied in `input` — clients can't pick which subject a key is created for. When called programmatically (no `routeCtx`), the plugin uses `input.subject`; programmatic callers are trusted.
@@ -200,7 +200,7 @@ The `ApiKeyInfo` type returned by `listKeys`:
 
 ```ts
 interface ApiKeyInfo {
-  id: number;
+  id: string;
   name: string;
   keyPrefix: string;        // first 12 characters of the raw key
   scopes: string[] | null;

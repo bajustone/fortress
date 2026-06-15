@@ -53,6 +53,20 @@ export function int(description?: string): FortressSchema<number> {
   return toFortressSchema<number>(s);
 }
 
+/**
+ * Build a subject-id {@link FortressSchema}.
+ *
+ * IDs are opaque strings at the fortress API surface (RFC 7519 §4.1.2 for
+ * JWT `sub`). Numeric-keyed adapters stringify on read and parse on write
+ * at the adapter boundary; consumers never see the underlying representation.
+ */
+export function id(description?: string): FortressSchema<string> {
+  const s: JSONSchema = { type: 'string', minLength: 1 };
+  if (description)
+    s.description = description;
+  return toFortressSchema<string>(s);
+}
+
 /** Build a boolean {@link FortressSchema}. */
 export function bool(description?: string): FortressSchema<boolean> {
   const s: JSONSchema = { type: 'boolean' };
@@ -142,7 +156,7 @@ export function ref<T>(name: string, _schema?: FortressSchema<T>): FortressSchem
  *
  * const ep = endpoint('GET', '/me')
  *   .response(200, 'Current user', ref('User'))
- *   //                             ^ FortressSchema<{ id: number; email: string }>
+ *   //                             ^ FortressSchema<{ id: string; email: string }>
  *   .handler('me')
  *   .build();
  * ```

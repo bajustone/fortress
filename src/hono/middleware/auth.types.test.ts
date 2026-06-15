@@ -18,7 +18,7 @@ interface MyEnv {
 }
 
 interface MyCustomClaims {
-  tenantId: number;
+  tenantId: string;
   tenantCode: string;
 }
 
@@ -59,7 +59,7 @@ describe('typed helpers accept any FortressEnv-compatible context', () => {
       const subject = getSubject(c);
       const userId = getUserId(c);
       expectTypeOf(subject).toEqualTypeOf<Subject>();
-      expectTypeOf(userId).toEqualTypeOf<number>();
+      expectTypeOf(userId).toEqualTypeOf<string>();
       return c.json({ subject, userId });
     });
   });
@@ -70,7 +70,7 @@ describe('typed helpers accept any FortressEnv-compatible context', () => {
       const claims = getClaims<MyCustomClaims>(c);
       expectTypeOf(claims).toEqualTypeOf<TokenClaims & { customClaims?: MyCustomClaims }>();
       if (claims.customClaims) {
-        expectTypeOf(claims.customClaims.tenantId).toEqualTypeOf<number>();
+        expectTypeOf(claims.customClaims.tenantId).toEqualTypeOf<string>();
         expectTypeOf(claims.customClaims.tenantCode).toEqualTypeOf<string>();
       }
       return c.json({ ok: true });

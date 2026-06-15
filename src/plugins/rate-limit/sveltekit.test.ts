@@ -16,7 +16,7 @@ function setup(maxPerIp: number) {
   });
 }
 
-function mockEvent(headers: Record<string, string>, userId?: number): SvelteKitRateLimitEvent {
+function mockEvent(headers: Record<string, string>, userId?: string): SvelteKitRateLimitEvent {
   return {
     request: new Request('http://localhost/api/thing', { headers }),
     locals: userId != null ? { fortressUserId: userId } : undefined,
@@ -38,11 +38,11 @@ describe('svelteKitRateLimit (framework wrapper)', () => {
   it('keys by userId from event.locals when keyByUser is on (default)', async () => {
     const fortress = setup(1);
 
-    await svelteKitRateLimit(fortress, 'api', mockEvent({ 'x-forwarded-for': '10.0.0.2' }, 42));
+    await svelteKitRateLimit(fortress, 'api', mockEvent({ 'x-forwarded-for': '10.0.0.2' }, '42'));
 
     // Same IP+user → second hit blocked.
     await expect(
-      svelteKitRateLimit(fortress, 'api', mockEvent({ 'x-forwarded-for': '10.0.0.2' }, 42)),
+      svelteKitRateLimit(fortress, 'api', mockEvent({ 'x-forwarded-for': '10.0.0.2' }, '42')),
     ).rejects.toBeInstanceOf(FortressError);
   });
 

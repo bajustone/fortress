@@ -13,7 +13,7 @@ describe('webhook plugin', () => {
   let mockDeliver: (url: string, payload: string, headers: Record<string, string>) => Promise<boolean>;
   let registerEndpoint: (url: string, events: WebhookEventType[], secret: string) => Promise<WebhookEndpoint>;
   let listEndpoints: () => Promise<WebhookEndpoint[]>;
-  let removeEndpoint: (id: number) => Promise<void>;
+  let removeEndpoint: (id: string) => Promise<void>;
 
   beforeEach(() => {
     deliveries = [];

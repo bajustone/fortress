@@ -10,7 +10,7 @@ import { webauthn } from './index';
 // The dispatcher constructs the real ctx for HTTP calls; unit tests stub
 // just the userId (and a placeholder Request) since the handlers only read
 // routeCtx.userId.
-function httpCtx(uid: number | undefined): PluginRouteContext {
+function httpCtx(uid: string | undefined): PluginRouteContext {
   return {
     userId: uid,
     claims: undefined,
@@ -83,7 +83,7 @@ const simplewebauthn = await import('@simplewebauthn/server') as unknown as {
 describe('webauthn plugin', () => {
   let fortress: Fortress<any>;
   let methods: WebAuthnMethods;
-  let userId: number;
+  let userId: string;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -114,7 +114,7 @@ describe('webauthn plugin', () => {
     });
 
     it('throws if user not found', async () => {
-      await expect(methods.generateRegistrationOptions({}, httpCtx(9999)))
+      await expect(methods.generateRegistrationOptions({}, httpCtx('9999')))
         .rejects
         .toThrow('User not found');
     });
@@ -403,11 +403,11 @@ describe('webauthn plugin', () => {
 
       // The stored challenge row must belong to alice, never bob.
       const adapter = fortress.config.database;
-      const aliceChallenge = await adapter.findOne<{ userId: number | null }>({
+      const aliceChallenge = await adapter.findOne<{ userId: string | null }>({
         model: 'webauthn_challenge',
         where: [{ field: 'userId', operator: '=', value: alice.id }],
       });
-      const bobChallenge = await adapter.findOne<{ userId: number | null }>({
+      const bobChallenge = await adapter.findOne<{ userId: string | null }>({
         model: 'webauthn_challenge',
         where: [{ field: 'userId', operator: '=', value: bob.id }],
       });

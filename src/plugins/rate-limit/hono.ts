@@ -35,7 +35,7 @@ export interface HonoRateLimitOptions {
 }
 
 interface RateLimitCheck {
-  check: (rule: string, keys: { ip?: string; userId?: number | string }) => Promise<void>;
+  check: (rule: string, keys: { ip?: string; userId?: string }) => Promise<void>;
 }
 
 function defaultExtractIp(c: Context): string | undefined {
@@ -66,7 +66,7 @@ export function honoRateLimit(
   return async (c, next) => {
     const ip = extractIp(c);
     const userId = keyByUser
-      ? (c.get('fortressUserId' as never) as number | undefined)
+      ? (c.get('fortressUserId' as never) as string | undefined)
       : undefined;
     await methods.check(ruleName, { ip, userId });
     await next();

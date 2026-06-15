@@ -53,8 +53,8 @@ const createThing = endpoint('POST', '/things/:id')
 const handler = protect(fortress, createThing, async (ctx) => {
   // ctx.body is { name: string } — non-optional, because a body schema is
   // declared and validation already ran before the handler executes.
-  // ctx.params is { id: number }
-  // ctx.input is { name: string; id: number }
+  // ctx.params is { id: string }
+  // ctx.input is { name: string; id: string }
   return { ok: ctx.body.name };
 });
 ```

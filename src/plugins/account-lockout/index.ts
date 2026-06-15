@@ -32,7 +32,7 @@ export interface LockoutStatus {
 }
 
 interface LockoutRecord {
-  id: number;
+  id: string;
   identifier: string;
   failedAttempts: number;
   lastFailedAt: Date | null;

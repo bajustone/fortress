@@ -28,7 +28,7 @@ import { createInternalAdapter } from '../internal-adapter';
 import { createListenerList } from '../observability/listener-list';
 import { SILENT_LOGGER } from '../observability/logger';
 import { signAccessToken, verifyAccessToken } from './jwt';
-import { createDefaultHasher } from './password';
+import { createDefaultHasher, normalizePasswordInput } from './password';
 import { validatePassword } from './password-policy';
 import { generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
 
@@ -287,6 +287,7 @@ export function createAuthService(
 
   return {
     async login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResponse> {
+      const normalizedPassword = normalizePasswordInput(password);
       const hookCtx: HookContext & { email: string } = { db, config, meta, email: identifier };
       const beforeResult = await runBeforeHooks('beforeLogin', hookCtx);
       if (beforeResult?.stop) {
@@ -305,7 +306,7 @@ export function createAuthService(
           // (`$...$dummy`), so hash-wasm's parser threw before running the
           // KDF and the branch completed in ~0.3ms instead of ~100ms — a
           // trivial timing oracle for user enumeration.
-          await hasher.verify(await getDummyHash(), password).catch(() => {});
+          await hasher.verify(await getDummyHash(), normalizedPassword).catch(() => {});
           throw Errors.unauthorized('Invalid credentials');
         }
 
@@ -314,7 +315,7 @@ export function createAuthService(
         // "account exists but disabled" from "wrong password" via timing
         // *or* via error message. Both paths return the generic
         // `Invalid credentials` (M3).
-        const valid = await hasher.verify(user.passwordHash, password);
+        const valid = await hasher.verify(user.passwordHash, normalizedPassword);
         if (!user.isActive || !valid) {
           throw Errors.unauthorized('Invalid credentials');
         }
@@ -599,11 +600,14 @@ export function createAuthService(
         throw Errors.conflict('A user with this email already exists');
       }
 
-      if (data.password) {
-        await validatePassword(data.password, config.passwordPolicy);
+      const normalizedPassword = data.password && data.password.length > 0
+        ? normalizePasswordInput(data.password)
+        : undefined;
+      if (normalizedPassword !== undefined) {
+        await validatePassword(normalizedPassword, config.passwordPolicy);
       }
 
-      const passwordHash = data.password ? await hasher.hash(data.password) : null;
+      const passwordHash = normalizedPassword !== undefined ? await hasher.hash(normalizedPassword) : null;
 
       const user = await db.create<FortressUser>({
         model: 'user',
@@ -916,8 +920,9 @@ export function createAuthService(
         // The original code missed the await on a Promise — a breached or
         // weak password would surface as an unhandled rejection while the
         // hash was happily persisted (M1).
-        await validatePassword(data.password, config.passwordPolicy);
-        updateData.passwordHash = await hasher.hash(data.password);
+        const normalizedPassword = normalizePasswordInput(data.password);
+        await validatePassword(normalizedPassword, config.passwordPolicy);
+        updateData.passwordHash = await hasher.hash(normalizedPassword);
       }
 
       const updated = await db.update<FortressUser & { passwordHash?: string }>({

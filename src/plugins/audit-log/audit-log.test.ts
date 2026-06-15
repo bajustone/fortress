@@ -186,7 +186,7 @@ describe('audit-log plugin', () => {
       const entries = await chainGetAuditLog();
 
       // First entry should have no previousHash
-      const sortedEntries = [...entries].sort((a, b) => a.id - b.id);
+      const sortedEntries = [...entries].sort((a, b) => a.id.localeCompare(b.id));
       expect(sortedEntries[0].previousHash).toBeNull();
 
       // Second entry should have a previousHash linking to the first
@@ -202,9 +202,9 @@ describe('audit-log plugin', () => {
 
       await logCustomEvent({
         eventType: 'ROLE_CREATED',
-        actorId: 1,
+        actorId: '1',
         actorType: 'user',
-        targetId: 10,
+        targetId: '10',
         targetType: 'role',
         outcome: 'success',
         metadata: { name: 'admin' },
@@ -214,8 +214,8 @@ describe('audit-log plugin', () => {
       const entry = entries.find(e => e.eventType === 'ROLE_CREATED');
 
       expect(entry).toBeDefined();
-      expect(entry!.actorId).toBe(1);
-      expect(entry!.targetId).toBe(10);
+      expect(entry!.actorId).toBe('1');
+      expect(entry!.targetId).toBe('10');
       expect(entry!.targetType).toBe('role');
       expect(JSON.parse(entry!.metadata!)).toEqual({ name: 'admin' });
     });
@@ -244,7 +244,7 @@ describe('audit-log plugin', () => {
 
       await chainFortress.auth.createUser({ email: 'a@b.com', name: 'A', password: 'password-123' });
       await chainFortress.auth.login('a@b.com', 'password-123');
-      await logCustomEvent({ eventType: 'ROLE_CREATED', actorId: 1 });
+      await logCustomEvent({ eventType: 'ROLE_CREATED', actorId: '1' });
 
       const result = await verifyChain();
       expect(result.valid).toBe(true);

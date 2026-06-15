@@ -1,7 +1,7 @@
 import type { Infer } from './json-schema';
 import type { StandardSchemaV1 } from './standard-schema';
 import { describe, expect, it } from 'vitest';
-import { anyOf, arr, bool, endpoint, enums, ErrorEnvelope, extractJsonSchema, int, isFortressSchema, isStandardSchema, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat } from './schema-builder';
+import { anyOf, arr, bool, endpoint, enums, ErrorEnvelope, extractJsonSchema, id, int, isFortressSchema, isStandardSchema, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat } from './schema-builder';
 
 /** Assert validation fails and return issues. */
 function expectIssues(result: StandardSchemaV1.Result<any>): void {
@@ -371,12 +371,12 @@ describe('endpoint builder', () => {
   it('supports query and params', () => {
     const ep = endpoint('GET', '/users/:id')
       .summary('Get user')
-      .params(obj({ id: int('User ID') }, 'id'))
+      .params(obj({ id: id('User ID') }, 'id'))
       .query(obj({ include: str('Relations to include') }))
       .handler('getUser')
       .build();
 
-    expect(ep.input?.params?.properties?.id?.type).toBe('integer');
+    expect(ep.input?.params?.properties?.id?.type).toBe('string');
     expect(ep.input?.query?.properties?.include?.type).toBe('string');
     expect(ep.input?.paramsSchema).toBeDefined();
     expect(ep.input?.querySchema).toBeDefined();

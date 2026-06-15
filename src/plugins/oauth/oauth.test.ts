@@ -9,7 +9,7 @@ import { generateCodeChallenge, generateCodeVerifier, matchRedirectUri, oauth, t
 describe('oauth plugin', () => {
   let db: DatabaseAdapter;
   let methods: OAuthMethods;
-  let userId: number;
+  let userId: string;
 
   beforeEach(async () => {
     db = createTestAdapter();
@@ -26,7 +26,7 @@ describe('oauth plugin', () => {
     methods = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as OAuthMethods;
 
     // Create a test user
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'alice@example.com', name: 'Alice', passwordHash: 'hash', isActive: true },
     });
@@ -399,7 +399,7 @@ describe('oauth plugin', () => {
           code_challenge: challenge,
           code_challenge_method: 'S256',
         },
-        { userId: 42 },
+        { userId: '42' },
       );
 
       expect(result.redirectUrl.startsWith('https://app.example.com/oauth/consent?flow=')).toBe(true);
@@ -1095,7 +1095,7 @@ describe('oauth plugin', () => {
           code_challenge: challenge,
           code_challenge_method: 'S256',
         },
-        { userId: 1 },
+        { userId: '1' },
       );
       const flow = await localMethods.getPendingFlow(result.flowId);
       expect(flow.scope).toBe('openid email');
@@ -1142,7 +1142,7 @@ describe('oauth plugin', () => {
             code_challenge: challenge,
             code_challenge_method: 'S256',
           },
-          { userId: 1 },
+          { userId: '1' },
         );
         throw new Error('should have thrown');
       }
@@ -1281,7 +1281,7 @@ describe('oauth plugin', () => {
         config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
 
-      const localUser = await localDb.create<{ id: number }>({
+      const localUser = await localDb.create<{ id: string }>({
         model: 'user',
         data: { email: 'bob@acme.com', name: 'Bob', passwordHash: 'h', isActive: true },
       });
@@ -1314,7 +1314,7 @@ describe('oauth plugin', () => {
     it('toOidcUserinfo: pure mapping function for host-app composition', () => {
       const claims = toOidcUserinfo(
         {
-          id: 7,
+          id: '7',
           email: 'c@example.com',
           name: 'Carol',
           isActive: true,
@@ -1746,7 +1746,7 @@ describe('oauth plugin', () => {
         db: localDb,
         config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
-      const localUser = await localDb.create<{ id: number }>({
+      const localUser = await localDb.create<{ id: string }>({
         model: 'user',
         data: { email: 'd@e.com', name: 'D', passwordHash: 'h', isActive: true },
       });
@@ -2082,7 +2082,7 @@ describe('oauth plugin', () => {
         userId, // bound to user A up-front
       });
       // Create user B.
-      const userB = await db.create<{ id: number }>({
+      const userB = await db.create<{ id: string }>({
         model: 'user',
         data: { email: 'bob@example.com', name: 'Bob', passwordHash: 'h', isActive: true },
       });
@@ -2112,7 +2112,7 @@ describe('oauth plugin', () => {
       // User A reads first — should succeed and bind the flow to them.
       await methods.handleGetFlow(flowId, { userId });
       // User B reads next — should 404.
-      const userB = await db.create<{ id: number }>({
+      const userB = await db.create<{ id: string }>({
         model: 'user',
         data: { email: 'eve@example.com', name: 'Eve', passwordHash: 'h', isActive: true },
       });

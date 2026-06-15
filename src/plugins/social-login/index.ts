@@ -18,8 +18,8 @@ import { builtInProviders, createMicrosoftProvider } from './providers';
 import { createOidcProvider } from './providers/oidc';
 
 interface SocialAccountRecord {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   provider: string;
   providerAccountId: string;
   email: string | null;
@@ -72,8 +72,8 @@ async function generatePKCE(): Promise<{ codeVerifier: string; codeChallenge: st
 export interface SocialLoginMethods {
   getAuthorizationUrl: (providerName: string, redirectUri: string) => Promise<{ url: string; state: { provider: string; codeVerifier: string; nonce: string } }>;
   handleCallback: (providerName: string, code: string, redirectUri: string, codeVerifier: string) => Promise<{ user: FortressUser; profile: ProviderProfile; isNewUser: boolean }>;
-  getLinkedAccounts: (userId: number) => Promise<{ provider: string; providerAccountId: string; email: string | null }[]>;
-  unlinkAccount: (userId: number, provider: string) => Promise<void>;
+  getLinkedAccounts: (userId: string) => Promise<{ provider: string; providerAccountId: string; email: string | null }[]>;
+  unlinkAccount: (userId: string, provider: string) => Promise<void>;
   getProviders: () => string[];
 }
 /**
@@ -328,7 +328,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
       /**
        * List social accounts linked to a user.
        */
-      async getLinkedAccounts(userId: number): Promise<{ provider: string; providerAccountId: string; email: string | null }[]> {
+      async getLinkedAccounts(userId: string): Promise<{ provider: string; providerAccountId: string; email: string | null }[]> {
         const accounts = await ctx.db.findMany<SocialAccountRecord>({
           model: 'social_account',
           where: [{ field: 'userId', operator: '=', value: userId }],
@@ -344,7 +344,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
       /**
        * Unlink a social account from a user.
        */
-      async unlinkAccount(userId: number, provider: string): Promise<void> {
+      async unlinkAccount(userId: string, provider: string): Promise<void> {
         await ctx.db.delete({
           model: 'social_account',
           where: [

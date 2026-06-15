@@ -1,4 +1,5 @@
 import { Errors } from '../errors';
+import { normalizePasswordInput } from './password';
 
 export interface PasswordPolicyConfig {
   /** Minimum password length. Default: 8 (NIST 800-63B). */
@@ -26,19 +27,20 @@ export async function validatePassword(
   password: string,
   config: PasswordPolicyConfig = {},
 ): Promise<void> {
+  const normalizedPassword = normalizePasswordInput(password);
   const minLength = config.minLength ?? DEFAULT_MIN_LENGTH;
   const maxLength = config.maxLength ?? DEFAULT_MAX_LENGTH;
 
-  if (password.length < minLength) {
+  if (normalizedPassword.length < minLength) {
     throw Errors.badRequest(`Password must be at least ${minLength} characters`);
   }
 
-  if (password.length > maxLength) {
+  if (normalizedPassword.length > maxLength) {
     throw Errors.badRequest(`Password must be at most ${maxLength} characters`);
   }
 
   if (config.checkBreached) {
-    const breached = await isPasswordBreached(password, config.breachedCacheTtlMs);
+    const breached = await isPasswordBreached(normalizedPassword, config.breachedCacheTtlMs);
     if (breached) {
       throw Errors.badRequest('This password has appeared in a data breach and cannot be used');
     }
@@ -53,8 +55,8 @@ export async function isPasswordBreached(
   password: string,
   cacheTtlMs: number = DEFAULT_CACHE_TTL_MS,
 ): Promise<boolean> {
-  // SHA-1 hash of the password
-  const encoded = new TextEncoder().encode(password);
+  // SHA-1 hash of the canonical password form.
+  const encoded = new TextEncoder().encode(normalizePasswordInput(password));
   const hashBuffer = await crypto.subtle.digest('SHA-1', encoded);
   const hashHex = Array.from(new Uint8Array(hashBuffer))
     .map(b => b.toString(16).padStart(2, '0'))

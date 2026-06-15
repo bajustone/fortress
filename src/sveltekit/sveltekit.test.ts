@@ -159,11 +159,11 @@ describe('createSvelteKitHandle: user routes', () => {
     await handle({
       event,
       resolve: async () => {
-        observed = (event.locals as { fortress?: { userId?: number } }).fortress?.userId;
+        observed = (event.locals as { fortress?: { userId?: string } }).fortress?.userId;
         return new Response('ok');
       },
     });
-    expect(observed).toBeGreaterThan(0);
+    expect(observed).toBeTruthy();
     expect(getUserId(event as never)).toBe(observed);
   });
 
@@ -174,14 +174,14 @@ describe('createSvelteKitHandle: user routes', () => {
       headers: { authorization: `Bearer ${accessToken}` },
     });
     await handle({ event, resolve: async () => new Response() });
-    expect((event.locals as { fortress?: { userId?: number } }).fortress?.userId).toBeGreaterThan(0);
+    expect((event.locals as { fortress?: { userId?: string } }).fortress?.userId).toBeTruthy();
   });
 
   it('leaves locals empty when no token at all', async () => {
     const handle = createSvelteKitHandle(fortress);
     const event = fakeEvent({ url: 'http://localhost/dashboard' });
     await handle({ event, resolve: async () => new Response() });
-    const locals = (event.locals as { fortress?: { userId?: number } }).fortress;
+    const locals = (event.locals as { fortress?: { userId?: string } }).fortress;
     expect(locals).toBeDefined();
     expect(locals?.userId).toBeUndefined();
   });
@@ -217,7 +217,7 @@ describe('createSvelteKitHandle: user routes', () => {
     const newAccess = event.cookies._store.get(fortress.cookies.accessName);
     expect(newAccess).toBeTruthy();
     expect(newAccess).not.toBe(expiredAccess);
-    expect((event.locals as { fortress?: { userId?: number } }).fortress?.userId).toBeGreaterThan(0);
+    expect((event.locals as { fortress?: { userId?: string } }).fortress?.userId).toBeTruthy();
   });
 
   it('does NOT silently refresh on unsafe methods (CSRF — P1.5/H5)', async () => {
@@ -248,7 +248,7 @@ describe('createSvelteKitHandle: user routes', () => {
     await handle({ event, resolve: async () => new Response() });
     // No rotation: access cookie unchanged, no authenticated subject.
     expect(event.cookies._store.get(fortress.cookies.accessName)).toBe(expiredAccess);
-    expect((event.locals as { fortress?: { userId?: number } }).fortress?.userId).toBeUndefined();
+    expect((event.locals as { fortress?: { userId?: string } }).fortress?.userId).toBeUndefined();
   });
 });
 

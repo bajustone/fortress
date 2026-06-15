@@ -237,8 +237,8 @@ export interface MigrateResult {
  * @example
  * ```ts
  * interface TwoFactorMethods {
- *   setup: (userId: number) => Promise<{ secret: string; qrCode: string }>;
- *   verify: (userId: number, code: string) => Promise<boolean>;
+ *   setup: (userId: string) => Promise<{ secret: string; qrCode: string }>;
+ *   verify: (userId: string, code: string) => Promise<boolean>;
  * }
  *
  * const twoFactor = getPluginMethods<TwoFactorMethods>(fortress, 'two-factor');

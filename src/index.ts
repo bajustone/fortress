@@ -151,6 +151,7 @@ export {
   enums,
   ErrorEnvelope,
   extractJsonSchema,
+  id,
   int,
   isFortressSchema,
   isStandardSchema,

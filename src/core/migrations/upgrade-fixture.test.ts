@@ -73,11 +73,11 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     expect(afterDrift.missingColumns).toEqual([]);
 
     // The provisioned schema is actually usable, not just present.
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'fixture@test.com', name: 'Fixture', passwordHash: 'h', isActive: true },
     });
-    expect(user.id).toBeGreaterThan(0);
+    expect(user.id).toBeTruthy();
 
     // Re-running is idempotent.
     const reapply = await migrateUp(db, 'sqlite');

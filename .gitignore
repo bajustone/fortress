@@ -3,3 +3,4 @@ dist/
 .env
 coverage/
 scratch/
+fortress-audit-report.html

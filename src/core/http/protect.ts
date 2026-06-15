@@ -76,7 +76,7 @@ export interface ProtectedRouteContext<
   endpoint: E;
   manifest: RouteManifestEntry;
   subject?: Subject;
-  userId?: number;
+  userId?: string;
   claims?: TokenClaims;
   scopes?: string[] | null;
   params: WidenObj<InferEndpointParams<E>>;
@@ -283,7 +283,7 @@ export function protect(
       enforceCsrf(pipelineRequest, pipelinePath, csrfConfig, fortress.cookies);
 
       let subject: Subject | undefined;
-      let userId: number | undefined;
+      let userId: string | undefined;
       let claims: TokenClaims | undefined;
       let scopes: string[] | null | undefined;
       const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';

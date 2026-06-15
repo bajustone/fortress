@@ -291,8 +291,8 @@ All methods are accessed via `fortress.plugins['social-login']`.
 |---|---|---|
 | `getAuthorizationUrl` | `(providerName: string, redirectUri: string) => Promise<{ url: string; state: { provider: string; codeVerifier: string; nonce: string } }>` | Generate the OAuth authorization URL. Store the returned `state` in the user's session. |
 | `handleCallback` | `(providerName: string, code: string, redirectUri: string, codeVerifier: string) => Promise<{ user: FortressUser; profile: ProviderProfile; isNewUser: boolean }>` | Exchange the authorization code, fetch the profile, and resolve or create the Fortress user. |
-| `getLinkedAccounts` | `(userId: number) => Promise<{ provider: string; providerAccountId: string; email: string \| null }[]>` | List social identities linked to a user. |
-| `unlinkAccount` | `(userId: number, provider: string) => Promise<void>` | Remove a social identity from a user. |
+| `getLinkedAccounts` | `(userId: string) => Promise<{ provider: string; providerAccountId: string; email: string \| null }[]>` | List social identities linked to a user. |
+| `unlinkAccount` | `(userId: string, provider: string) => Promise<void>` | Remove a social identity from a user. |
 | `getProviders` | `() => string[]` | List the names of all configured providers. |
 
 ### ProviderProfile

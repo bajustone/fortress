@@ -56,7 +56,7 @@ export function chainAdapterWrappers(
  */
 export async function mergeTokenClaims(
   plugins: readonly FortressPlugin[],
-  userId: number,
+  userId: string,
   ctx: PluginContext,
 ): Promise<Record<string, unknown>> {
   const merged: Record<string, unknown> = {};
@@ -87,7 +87,7 @@ export async function mergeTokenClaims(
  */
 export async function collectScopeRules(
   plugins: readonly FortressPlugin[],
-  userId: number,
+  userId: string,
   model: string,
   ctx: PluginContext,
 ): Promise<ScopeRule | null> {

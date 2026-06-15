@@ -80,7 +80,7 @@ describe('github provider', () => {
 
   it('maps GitHub profile with numeric ID', () => {
     const profile = githubProvider.mapProfile({
-      id: 12345,
+      id: '12345',
       login: 'octocat',
       name: 'The Octocat',
       email: 'octocat@github.com',
@@ -95,7 +95,7 @@ describe('github provider', () => {
 
   it('falls back to login when name is missing', () => {
     const profile = githubProvider.mapProfile({
-      id: 99,
+      id: '99',
       login: 'anonymous',
       email: 'anon@example.com',
     });

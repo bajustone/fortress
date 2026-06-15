@@ -29,18 +29,18 @@ function createFakePgAdapter(calls: Array<{ sql: string; params?: unknown[]; op?
 }
 
 interface TenancyMethods {
-  createTenant: (input: { name: string; taxId: string; description?: string }) => Promise<{ id: number; name: string; taxId: string }>;
-  deleteTenant: (input: { id: number | string }) => Promise<{ ok: true }>;
-  addUserToTenant: (userId: number, tenantId: number) => Promise<void>;
-  getUserTenants: (userId: number) => Promise<{ id: number; name: string; taxId: string }[]>;
-  getMyTenants: (input: { userId?: number }, routeCtx?: { userId?: number }) => Promise<{ id: number; name: string; taxId: string }[]>;
-  switchTenant: (input: { taxId: string; userId?: number }, routeCtx?: { userId?: number }) => Promise<{ ok: true }>;
+  createTenant: (input: { name: string; taxId: string; description?: string }) => Promise<{ id: string; name: string; taxId: string }>;
+  deleteTenant: (input: { id: string }) => Promise<{ ok: true }>;
+  addUserToTenant: (userId: string, tenantId: string) => Promise<void>;
+  getUserTenants: (userId: string) => Promise<{ id: string; name: string; taxId: string }[]>;
+  getMyTenants: (input: { userId?: string }, routeCtx?: { userId?: string }) => Promise<{ id: string; name: string; taxId: string }[]>;
+  switchTenant: (input: { taxId: string; userId?: string }, routeCtx?: { userId?: string }) => Promise<{ ok: true }>;
 }
 
 describe('tenancy plugin', () => {
   let fortress: Fortress<any>;
   let methods: TenancyMethods;
-  let userId: number;
+  let userId: string;
 
   beforeEach(async () => {
     fortress = createFortress({
@@ -175,7 +175,7 @@ describe('tenancy plugin', () => {
       await methods.addUserToTenant(userId, t2.id);
 
       // userId in body is ignored when a routeCtx is present.
-      await methods.switchTenant({ taxId: 'beta-001', userId: 999_999 }, { userId });
+      await methods.switchTenant({ taxId: 'beta-001', userId: '999999' }, { userId });
 
       const tenants = await methods.getMyTenants({}, { userId });
       expect(tenants.map(t => t.taxId).sort()).toEqual(['acme-001', 'beta-001']);
@@ -201,7 +201,7 @@ describe('tenancy plugin', () => {
     });
 
     it('rejects an unknown tenant', async () => {
-      await expect(methods.deleteTenant({ id: 999_999 })).rejects.toThrow('not found');
+      await expect(methods.deleteTenant({ id: '999999' })).rejects.toThrow('not found');
     });
   });
 
@@ -209,7 +209,7 @@ describe('tenancy plugin', () => {
     it('is a pass-through on non-pg adapters even with a tenant claim', () => {
       const plugin = fortress.config.plugins![0];
       const base = fortress.config.database;
-      const wrapped = plugin.wrapAdapter!(base, { tenantId: 1 });
+      const wrapped = plugin.wrapAdapter!(base, { tenantId: '1' });
       // SQLite test adapter: no schema switching, returns the adapter unchanged.
       expect(wrapped).toBe(base);
     });
@@ -229,7 +229,7 @@ describe('tenancy plugin', () => {
     it('pins PostgreSQL search_path inside the operation transaction using a bound parameter', async () => {
       const plugin = fortress.config.plugins![0];
       const calls: Array<{ sql: string; params?: unknown[]; op?: string }> = [];
-      const wrapped = plugin.wrapAdapter!(createFakePgAdapter(calls), { tenantId: 7 });
+      const wrapped = plugin.wrapAdapter!(createFakePgAdapter(calls), { tenantId: '7' });
 
       await wrapped.findMany({ model: 'document' });
 

@@ -7,7 +7,7 @@ import { createFortress } from '../fortress';
 let fortress: Fortress;
 const SECRET = 'perm-check-observer-test-32chars!!';
 
-async function seedUserAndRole(): Promise<{ userId: number }> {
+async function seedUserAndRole(): Promise<{ userId: string }> {
   const user = await fortress.auth.createUser({
     email: 'perm@example.com',
     name: 'Perm User',

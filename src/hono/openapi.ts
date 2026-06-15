@@ -248,7 +248,7 @@ async function invokeHandler(fortress: Fortress, ep: EndpointDefinition, c: any)
     : Object.fromEntries(new URL(c.req.url).searchParams);
 
   const params = c.req.param?.() ?? {};
-  const userId = c.get?.('fortressUserId') as number | undefined;
+  const userId = c.get?.('fortressUserId') as string | undefined;
 
   if (ep.path.startsWith('/auth/')) {
     return invokeAuthHandler(fortress, ep.handler, body, params, userId, c);
@@ -281,7 +281,7 @@ async function invokeAuthHandler(
   handler: string,
   body: any,
   params: Record<string, string>,
-  userId: number | undefined,
+  userId: string | undefined,
   c: any,
 ): Promise<unknown> {
   const meta = {
@@ -304,7 +304,7 @@ async function invokeAuthHandler(
     case 'listSessions':
       return fortress.auth.listSessions(userId!);
     case 'revokeSession':
-      await fortress.auth.revokeSession(userId!, Number(params.id));
+      await fortress.auth.revokeSession(userId!, params.id);
       return { ok: true };
     case 'revokeAllOtherSessions':
       await fortress.auth.revokeAllOtherSessions(userId!, body.currentTokenId);
@@ -341,27 +341,27 @@ async function invokeIamHandler(
     case 'createRole':
       return fortress.iam.createRole(body.name, body.permissions, body.description);
     case 'deleteRole':
-      await fortress.iam.deleteRole(Number(params.id));
+      await fortress.iam.deleteRole(params.id);
       return { ok: true };
     case 'bindRoleToUser':
-      await fortress.iam.bindRoleToUser(body.userId, Number(params.id), body.tenantId);
+      await fortress.iam.bindRoleToUser(body.userId, params.id, body.tenantId);
       return { ok: true };
     case 'bindRoleToGroup':
-      await fortress.iam.bindRoleToGroup(body.groupId, Number(params.id), body.tenantId);
+      await fortress.iam.bindRoleToGroup(body.groupId, params.id, body.tenantId);
       return { ok: true };
     case 'unbindRole':
-      await fortress.iam.unbindRole(body.subjectType, body.subjectId, Number(params.id), body.tenantId);
+      await fortress.iam.unbindRole(body.subjectType, body.subjectId, params.id, body.tenantId);
       return { ok: true };
     case 'createGroup':
       return fortress.iam.createGroup(body.name, body.description);
     case 'addUserToGroup':
-      await fortress.iam.addUserToGroup(Number(params.id), body.userId);
+      await fortress.iam.addUserToGroup(params.id, body.userId);
       return { ok: true };
     case 'removeUserFromGroup':
-      await fortress.iam.removeUserFromGroup(Number(params.id), Number(params.userId));
+      await fortress.iam.removeUserFromGroup(params.id, params.userId);
       return { ok: true };
     case 'getUserPermissions':
-      return fortress.iam.getPermissionsForSubject({ type: 'USER', id: Number(params.id) }, body?.tenantId);
+      return fortress.iam.getPermissionsForSubject({ type: 'USER', id: params.id }, body?.tenantId);
     case 'checkPermission': {
       const allowed = await fortress.iam.checkPermission({ type: 'USER', id: body.userId }, body.resource, body.action, body.context);
       return { allowed };

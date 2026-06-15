@@ -77,7 +77,7 @@ describe('inline permissions (direct binding)', () => {
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
 
-    const perms = await fortress.config.database.findMany<{ id: number }>({
+    const perms = await fortress.config.database.findMany<{ id: string }>({
       model: 'permission',
       where: [
         { field: 'resource', operator: '=', value: 'post' },
@@ -306,7 +306,7 @@ describe('iam-service: admin CRUD', () => {
     });
 
     it('throws NOT_FOUND for missing role', async () => {
-      await expect(fortress.iam.getRole(99999)).rejects.toThrow('Role not found');
+      await expect(fortress.iam.getRole('99999')).rejects.toThrow('Role not found');
     });
   });
 
@@ -335,7 +335,7 @@ describe('iam-service: admin CRUD', () => {
     });
 
     it('throws NOT_FOUND for missing role', async () => {
-      await expect(fortress.iam.updateRole(99999, { name: 'x' })).rejects.toThrow('Role not found');
+      await expect(fortress.iam.updateRole('99999', { name: 'x' })).rejects.toThrow('Role not found');
     });
   });
 
@@ -382,7 +382,7 @@ describe('iam-service: admin CRUD', () => {
     });
 
     it('throws NOT_FOUND for missing group', async () => {
-      await expect(fortress.iam.getGroup(99999)).rejects.toThrow('Group not found');
+      await expect(fortress.iam.getGroup('99999')).rejects.toThrow('Group not found');
     });
   });
 
@@ -398,7 +398,7 @@ describe('iam-service: admin CRUD', () => {
     });
 
     it('throws NOT_FOUND for missing group', async () => {
-      await expect(fortress.iam.updateGroup(99999, { name: 'x' })).rejects.toThrow('Group not found');
+      await expect(fortress.iam.updateGroup('99999', { name: 'x' })).rejects.toThrow('Group not found');
     });
   });
 
@@ -415,7 +415,7 @@ describe('iam-service: admin CRUD', () => {
     });
 
     it('throws NOT_FOUND for missing group', async () => {
-      await expect(fortress.iam.deleteGroup(99999)).rejects.toThrow('Group not found');
+      await expect(fortress.iam.deleteGroup('99999')).rejects.toThrow('Group not found');
     });
   });
 
@@ -504,7 +504,7 @@ describe('iam-service: admin CRUD', () => {
     });
 
     it('throws NOT_FOUND for missing permission', async () => {
-      await expect(fortress.iam.deletePermission(99999)).rejects.toThrow('Permission not found');
+      await expect(fortress.iam.deletePermission('99999')).rejects.toThrow('Permission not found');
     });
   });
 
@@ -532,7 +532,7 @@ describe('iam-service: admin CRUD', () => {
 
     it('throws NOT_FOUND for missing role', async () => {
       await expect(
-        fortress.iam.addPermissionToRole(99999, { resource: 'x', action: 'y' }),
+        fortress.iam.addPermissionToRole('99999', { resource: 'x', action: 'y' }),
       ).rejects.toThrow('Role not found');
     });
   });

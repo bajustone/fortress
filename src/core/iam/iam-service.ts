@@ -27,8 +27,8 @@ import { loadResourceFile, pullResources, pushResources, writeResourceFile } fro
 
 export interface IamEvent {
   eventType: string;
-  actorId?: number | null;
-  targetId?: number | null;
+  actorId?: string | null;
+  targetId?: string | null;
   targetType?: string | null;
   metadata?: Record<string, unknown>;
 }
@@ -54,7 +54,7 @@ export type IamEventListener = (event: IamEvent) => void | Promise<void>;
  */
 export interface PermissionCheckEvent {
   subjectType: 'USER' | 'SERVICE_ACCOUNT' | 'GROUP';
-  subjectId: number;
+  subjectId: string;
   resource: string;
   action: string;
   allowed: boolean;
@@ -70,18 +70,18 @@ export interface IamService {
   checkPermission: (subject: Subject, resource: string, action: string, context?: PermissionContext) => Promise<boolean>;
   getPermissionsForSubject: (subject: Subject, tenantId?: string) => Promise<Permission[]>;
   createRole: (name: string, permissions: PermissionInput[], description?: string) => Promise<Role>;
-  deleteRole: (roleId: number) => Promise<void>;
-  bindRole: (subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string) => Promise<void>;
-  bindRoleToUser: (userId: number, roleId: number, tenantId?: string) => Promise<void>;
-  bindRoleToGroup: (groupId: number, roleId: number, tenantId?: string) => Promise<void>;
-  unbindRole: (subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string) => Promise<void>;
-  bindPermissionToUser: (userId: number, permission: PermissionInput, tenantId?: string) => Promise<void>;
-  bindPermissionToGroup: (groupId: number, permission: PermissionInput, tenantId?: string) => Promise<void>;
-  unbindPermissionFromUser: (userId: number, permissionId: number, tenantId?: string) => Promise<void>;
-  unbindPermissionFromGroup: (groupId: number, permissionId: number, tenantId?: string) => Promise<void>;
+  deleteRole: (roleId: string) => Promise<void>;
+  bindRole: (subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string) => Promise<void>;
+  bindRoleToUser: (userId: string, roleId: string, tenantId?: string) => Promise<void>;
+  bindRoleToGroup: (groupId: string, roleId: string, tenantId?: string) => Promise<void>;
+  unbindRole: (subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string) => Promise<void>;
+  bindPermissionToUser: (userId: string, permission: PermissionInput, tenantId?: string) => Promise<void>;
+  bindPermissionToGroup: (groupId: string, permission: PermissionInput, tenantId?: string) => Promise<void>;
+  unbindPermissionFromUser: (userId: string, permissionId: string, tenantId?: string) => Promise<void>;
+  unbindPermissionFromGroup: (groupId: string, permissionId: string, tenantId?: string) => Promise<void>;
   createGroup: (name: string, description?: string) => Promise<Group>;
-  addUserToGroup: (groupId: number, userId: number) => Promise<void>;
-  removeUserFromGroup: (groupId: number, userId: number) => Promise<void>;
+  addUserToGroup: (groupId: string, userId: string) => Promise<void>;
+  removeUserFromGroup: (groupId: string, userId: string) => Promise<void>;
   getResources: () => Promise<ResourceFile>;
   getRoles: () => Promise<Role[]>;
   syncResources: (direction: 'push' | 'pull', filePath?: string) => Promise<void>;
@@ -103,29 +103,29 @@ export interface IamService {
   addPermissionCheckObserver: (listener: PermissionCheckListener) => Unsubscribe;
 
   // ── Admin CRUD ─────────────────────────────────────────────────
-  getRole: (roleId: number) => Promise<Role & { permissions: Permission[] }>;
-  updateRole: (roleId: number, data: { name?: string; description?: string }) => Promise<Role>;
+  getRole: (roleId: string) => Promise<Role & { permissions: Permission[] }>;
+  updateRole: (roleId: string, data: { name?: string; description?: string }) => Promise<Role>;
   listGroups: (options?: { limit?: number; offset?: number }) => Promise<{ groups: Group[]; total: number }>;
-  getGroup: (groupId: number) => Promise<Group & { users: FortressUser[] }>;
-  updateGroup: (groupId: number, data: { name?: string; description?: string }) => Promise<Group>;
-  deleteGroup: (groupId: number) => Promise<void>;
-  getGroupUsers: (groupId: number) => Promise<FortressUser[]>;
+  getGroup: (groupId: string) => Promise<Group & { users: FortressUser[] }>;
+  updateGroup: (groupId: string, data: { name?: string; description?: string }) => Promise<Group>;
+  deleteGroup: (groupId: string) => Promise<void>;
+  getGroupUsers: (groupId: string) => Promise<FortressUser[]>;
   listPermissions: (options?: { resource?: string }) => Promise<Permission[]>;
   createPermission: (permission: PermissionInput) => Promise<Permission>;
-  deletePermission: (permissionId: number) => Promise<void>;
-  addPermissionToRole: (roleId: number, permission: PermissionInput) => Promise<void>;
-  removePermissionFromRole: (roleId: number, permission: PermissionInput) => Promise<void>;
+  deletePermission: (permissionId: string) => Promise<void>;
+  addPermissionToRole: (roleId: string, permission: PermissionInput) => Promise<void>;
+  removePermissionFromRole: (roleId: string, permission: PermissionInput) => Promise<void>;
 
   // ── Service Accounts ───────────────────────────────────────────
   createServiceAccount: (input: CreateServiceAccountInput) => Promise<ServiceAccount>;
-  getServiceAccount: (id: number) => Promise<ServiceAccount>;
+  getServiceAccount: (id: string) => Promise<ServiceAccount>;
   listServiceAccounts: (options?: { limit?: number; offset?: number }) => Promise<{ serviceAccounts: ServiceAccount[]; total: number }>;
-  updateServiceAccount: (id: number, data: { displayName?: string | null; description?: string | null; isActive?: boolean }) => Promise<ServiceAccount>;
-  deleteServiceAccount: (id: number) => Promise<void>;
-  bindRoleToServiceAccount: (serviceAccountId: number, roleId: number, tenantId?: string) => Promise<void>;
-  unbindRoleFromServiceAccount: (serviceAccountId: number, roleId: number, tenantId?: string) => Promise<void>;
-  bindPermissionToServiceAccount: (serviceAccountId: number, permission: PermissionInput, tenantId?: string) => Promise<void>;
-  unbindPermissionFromServiceAccount: (serviceAccountId: number, permissionId: number, tenantId?: string) => Promise<void>;
+  updateServiceAccount: (id: string, data: { displayName?: string | null; description?: string | null; isActive?: boolean }) => Promise<ServiceAccount>;
+  deleteServiceAccount: (id: string) => Promise<void>;
+  bindRoleToServiceAccount: (serviceAccountId: string, roleId: string, tenantId?: string) => Promise<void>;
+  unbindRoleFromServiceAccount: (serviceAccountId: string, roleId: string, tenantId?: string) => Promise<void>;
+  bindPermissionToServiceAccount: (serviceAccountId: string, permission: PermissionInput, tenantId?: string) => Promise<void>;
+  unbindPermissionFromServiceAccount: (serviceAccountId: string, permissionId: string, tenantId?: string) => Promise<void>;
 }
 
 export interface IamServiceDeps {
@@ -184,7 +184,7 @@ export function createIamService(
     where: WhereClause[],
     data: Record<string, unknown>,
   ): Promise<boolean> {
-    const existing = await db.findOne<{ id?: number }>({ model, where });
+    const existing = await db.findOne<{ id?: string }>({ model, where });
     if (existing)
       return false;
     try {
@@ -192,7 +192,7 @@ export function createIamService(
       return true;
     }
     catch (err) {
-      const winner = await db.findOne<{ id?: number }>({ model, where });
+      const winner = await db.findOne<{ id?: string }>({ model, where });
       if (winner)
         return false;
       throw err;
@@ -201,8 +201,8 @@ export function createIamService(
 
   async function createRoleBindingIfMissing(
     subjectType: SubjectType,
-    subjectId: number,
-    roleId: number,
+    subjectId: string,
+    roleId: string,
     tenantId?: string,
   ): Promise<boolean> {
     return insertIfMissing(
@@ -219,8 +219,8 @@ export function createIamService(
 
   async function createDirectPermissionBindingIfMissing(
     subjectType: SubjectType,
-    subjectId: number,
-    permissionId: number,
+    subjectId: string,
+    permissionId: string,
     tenantId?: string,
   ): Promise<boolean> {
     return insertIfMissing(
@@ -235,7 +235,7 @@ export function createIamService(
     );
   }
 
-  async function addUserToGroupIfMissing(groupId: number, userId: number): Promise<boolean> {
+  async function addUserToGroupIfMissing(groupId: string, userId: string): Promise<boolean> {
     return insertIfMissing(
       'group_user',
       [
@@ -343,7 +343,7 @@ export function createIamService(
       return role;
     },
 
-    async deleteRole(roleId: number): Promise<void> {
+    async deleteRole(roleId: string): Promise<void> {
       const role = await db.findOne<Role & { isSystem?: boolean }>({
         model: 'role',
         where: [{ field: 'id', operator: '=', value: roleId }],
@@ -364,14 +364,14 @@ export function createIamService(
       emit({ eventType: 'ROLE_DELETED', targetId: roleId, targetType: 'role' });
     },
 
-    async bindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string): Promise<void> {
+    async bindRole(subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string): Promise<void> {
       const inserted = await createRoleBindingIfMissing(subjectType, subjectId, roleId, tenantId);
       if (!inserted)
         return;
       emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId, tenantId } });
     },
 
-    async bindRoleToUser(userId: number, roleId: number, tenantId?: string): Promise<void> {
+    async bindRoleToUser(userId: string, roleId: string, tenantId?: string): Promise<void> {
       const inserted = await createRoleBindingIfMissing('USER', userId, roleId, tenantId);
       if (!inserted)
         return;
@@ -379,7 +379,7 @@ export function createIamService(
       emit({ eventType: 'ROLE_BOUND', actorId: userId, targetId: roleId, targetType: 'role', metadata: { subjectType: 'USER', tenantId } });
     },
 
-    async bindRoleToGroup(groupId: number, roleId: number, tenantId?: string): Promise<void> {
+    async bindRoleToGroup(groupId: string, roleId: string, tenantId?: string): Promise<void> {
       const inserted = await createRoleBindingIfMissing('GROUP', groupId, roleId, tenantId);
       if (!inserted)
         return;
@@ -387,7 +387,7 @@ export function createIamService(
       emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType: 'GROUP', groupId, tenantId } });
     },
 
-    async unbindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: string): Promise<void> {
+    async unbindRole(subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string): Promise<void> {
       const where = [
         { field: 'roleId' as const, operator: '=' as const, value: roleId },
         { field: 'subjectType' as const, operator: '=' as const, value: subjectType },
@@ -403,7 +403,7 @@ export function createIamService(
       emit({ eventType: 'ROLE_UNBOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId, tenantId } });
     },
 
-    async bindPermissionToUser(userId: number, permission: PermissionInput, tenantId?: string): Promise<void> {
+    async bindPermissionToUser(userId: string, permission: PermissionInput, tenantId?: string): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
       const inserted = await createDirectPermissionBindingIfMissing('USER', userId, perm.id, tenantId);
@@ -413,7 +413,7 @@ export function createIamService(
       emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'USER', tenantId } });
     },
 
-    async bindPermissionToGroup(groupId: number, permission: PermissionInput, tenantId?: string): Promise<void> {
+    async bindPermissionToGroup(groupId: string, permission: PermissionInput, tenantId?: string): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
       const inserted = await createDirectPermissionBindingIfMissing('GROUP', groupId, perm.id, tenantId);
@@ -423,7 +423,7 @@ export function createIamService(
       emit({ eventType: 'PERMISSION_CHANGED', targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'GROUP', groupId, tenantId } });
     },
 
-    async unbindPermissionFromUser(userId: number, permissionId: number, tenantId?: string): Promise<void> {
+    async unbindPermissionFromUser(userId: string, permissionId: string, tenantId?: string): Promise<void> {
       const where = [
         { field: 'permissionId' as const, operator: '=' as const, value: permissionId },
         { field: 'subjectType' as const, operator: '=' as const, value: 'USER' },
@@ -435,7 +435,7 @@ export function createIamService(
       emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'USER', tenantId } });
     },
 
-    async unbindPermissionFromGroup(groupId: number, permissionId: number, tenantId?: string): Promise<void> {
+    async unbindPermissionFromGroup(groupId: string, permissionId: string, tenantId?: string): Promise<void> {
       const where = [
         { field: 'permissionId' as const, operator: '=' as const, value: permissionId },
         { field: 'subjectType' as const, operator: '=' as const, value: 'GROUP' },
@@ -456,7 +456,7 @@ export function createIamService(
       return group;
     },
 
-    async addUserToGroup(groupId: number, userId: number): Promise<void> {
+    async addUserToGroup(groupId: string, userId: string): Promise<void> {
       const inserted = await addUserToGroupIfMissing(groupId, userId);
       if (!inserted)
         return;
@@ -464,7 +464,7 @@ export function createIamService(
       emit({ eventType: 'GROUP_MEMBER_ADDED', actorId: userId, targetId: groupId, targetType: 'group' });
     },
 
-    async removeUserFromGroup(groupId: number, userId: number): Promise<void> {
+    async removeUserFromGroup(groupId: string, userId: string): Promise<void> {
       await db.delete({
         model: 'group_user',
         where: [
@@ -514,7 +514,7 @@ export function createIamService(
 
     // ── Admin CRUD ───────────────────────────────────────────────
 
-    async getRole(roleId: number): Promise<Role & { permissions: Permission[] }> {
+    async getRole(roleId: string): Promise<Role & { permissions: Permission[] }> {
       const role = await db.findOne<Role>({
         model: 'role',
         where: [{ field: 'id', operator: '=', value: roleId }],
@@ -523,7 +523,7 @@ export function createIamService(
         throw Errors.notFound('Role not found');
       }
 
-      const rolePerms = await db.findMany<{ permissionId: number }>({
+      const rolePerms = await db.findMany<{ permissionId: string }>({
         model: 'role_permission',
         where: [{ field: 'roleId', operator: '=', value: roleId }],
       });
@@ -540,7 +540,7 @@ export function createIamService(
       return { ...role, permissions };
     },
 
-    async updateRole(roleId: number, data: { name?: string; description?: string }): Promise<Role> {
+    async updateRole(roleId: string, data: { name?: string; description?: string }): Promise<Role> {
       const existing = await db.findOne<Role & { isSystem?: boolean }>({
         model: 'role',
         where: [{ field: 'id', operator: '=', value: roleId }],
@@ -582,7 +582,7 @@ export function createIamService(
       return { groups, total };
     },
 
-    async getGroup(groupId: number): Promise<Group & { users: FortressUser[] }> {
+    async getGroup(groupId: string): Promise<Group & { users: FortressUser[] }> {
       const group = await db.findOne<Group>({
         model: 'group',
         where: [{ field: 'id', operator: '=', value: groupId }],
@@ -591,7 +591,7 @@ export function createIamService(
         throw Errors.notFound('Group not found');
       }
 
-      const memberships = await db.findMany<{ userId: number }>({
+      const memberships = await db.findMany<{ userId: string }>({
         model: 'group_user',
         where: [{ field: 'groupId', operator: '=', value: groupId }],
       });
@@ -609,7 +609,7 @@ export function createIamService(
       return { ...group, users };
     },
 
-    async updateGroup(groupId: number, data: { name?: string; description?: string }): Promise<Group> {
+    async updateGroup(groupId: string, data: { name?: string; description?: string }): Promise<Group> {
       const existing = await db.findOne<Group>({
         model: 'group',
         where: [{ field: 'id', operator: '=', value: groupId }],
@@ -633,7 +633,7 @@ export function createIamService(
       return updated!;
     },
 
-    async deleteGroup(groupId: number): Promise<void> {
+    async deleteGroup(groupId: string): Promise<void> {
       const existing = await db.findOne<Group>({
         model: 'group',
         where: [{ field: 'id', operator: '=', value: groupId }],
@@ -646,8 +646,8 @@ export function createIamService(
       cache?.invalidateAll();
     },
 
-    async getGroupUsers(groupId: number): Promise<FortressUser[]> {
-      const memberships = await db.findMany<{ userId: number }>({
+    async getGroupUsers(groupId: string): Promise<FortressUser[]> {
+      const memberships = await db.findMany<{ userId: string }>({
         model: 'group_user',
         where: [{ field: 'groupId', operator: '=', value: groupId }],
       });
@@ -676,7 +676,7 @@ export function createIamService(
       return adapter.findOrCreatePermission(permission);
     },
 
-    async deletePermission(permissionId: number): Promise<void> {
+    async deletePermission(permissionId: string): Promise<void> {
       const existing = await db.findOne<Permission>({
         model: 'permission',
         where: [{ field: 'id', operator: '=', value: permissionId }],
@@ -689,7 +689,7 @@ export function createIamService(
       cache?.invalidateAll();
     },
 
-    async addPermissionToRole(roleId: number, permission: PermissionInput): Promise<void> {
+    async addPermissionToRole(roleId: string, permission: PermissionInput): Promise<void> {
       const role = await db.findOne<Role>({
         model: 'role',
         where: [{ field: 'id', operator: '=', value: roleId }],
@@ -702,7 +702,7 @@ export function createIamService(
       const perm = await adapter.findOrCreatePermission(permission);
 
       // Check if already linked
-      const existing = await db.findOne<{ roleId: number }>({
+      const existing = await db.findOne<{ roleId: string }>({
         model: 'role_permission',
         where: [
           { field: 'roleId', operator: '=', value: roleId },
@@ -717,7 +717,7 @@ export function createIamService(
       emit({ eventType: 'ROLE_PERMISSION_ADDED', targetId: roleId, targetType: 'role', metadata: { permissionId: perm.id, resource: permission.resource, action: permission.action } });
     },
 
-    async removePermissionFromRole(roleId: number, permission: PermissionInput): Promise<void> {
+    async removePermissionFromRole(roleId: string, permission: PermissionInput): Promise<void> {
       // Resolve the permission row (must already exist; if not, nothing to
       // unlink). Uses the same uniqueness key as `addPermissionToRole`
       // (resource+action+effect+conditions) so the lookup matches the row
@@ -770,7 +770,7 @@ export function createIamService(
       return created;
     },
 
-    async getServiceAccount(id: number): Promise<ServiceAccount> {
+    async getServiceAccount(id: string): Promise<ServiceAccount> {
       const sa = await db.findOne<ServiceAccount>({
         model: 'service_account',
         where: [{ field: 'id', operator: '=', value: id }],
@@ -797,7 +797,7 @@ export function createIamService(
     },
 
     async updateServiceAccount(
-      id: number,
+      id: string,
       data: { displayName?: string | null; description?: string | null; isActive?: boolean },
     ): Promise<ServiceAccount> {
       const existing = await db.findOne<ServiceAccount>({
@@ -833,7 +833,7 @@ export function createIamService(
       return updated!;
     },
 
-    async deleteServiceAccount(id: number): Promise<void> {
+    async deleteServiceAccount(id: string): Promise<void> {
       const existing = await db.findOne<ServiceAccount>({
         model: 'service_account',
         where: [{ field: 'id', operator: '=', value: id }],
@@ -874,8 +874,8 @@ export function createIamService(
     },
 
     async bindRoleToServiceAccount(
-      serviceAccountId: number,
-      roleId: number,
+      serviceAccountId: string,
+      roleId: string,
       tenantId?: string,
     ): Promise<void> {
       const inserted = await createRoleBindingIfMissing('SERVICE_ACCOUNT', serviceAccountId, roleId, tenantId);
@@ -891,8 +891,8 @@ export function createIamService(
     },
 
     async unbindRoleFromServiceAccount(
-      serviceAccountId: number,
-      roleId: number,
+      serviceAccountId: string,
+      roleId: string,
       tenantId?: string,
     ): Promise<void> {
       const where = [
@@ -912,7 +912,7 @@ export function createIamService(
     },
 
     async bindPermissionToServiceAccount(
-      serviceAccountId: number,
+      serviceAccountId: string,
       permission: PermissionInput,
       tenantId?: string,
     ): Promise<void> {
@@ -931,8 +931,8 @@ export function createIamService(
     },
 
     async unbindPermissionFromServiceAccount(
-      serviceAccountId: number,
-      permissionId: number,
+      serviceAccountId: string,
+      permissionId: string,
       tenantId?: string,
     ): Promise<void> {
       const where = [

@@ -12,9 +12,9 @@ const SECRET = 'admin-api-key-test-secret-at-least-32!';
 interface Setup {
   fortress: Fortress<any>;
   apiKeyMethods: ApiKeyMethods;
-  adminUserId: number;
-  targetUserId: number;
-  nonAdminUserId: number;
+  adminUserId: string;
+  targetUserId: string;
+  nonAdminUserId: string;
   adminToken: string;
   nonAdminToken: string;
 }
@@ -142,7 +142,7 @@ describe('admin plugin — api-key routes', () => {
         headers: { authorization: `Bearer ${s.adminToken}` },
       }));
       expect(res.status).toBe(200);
-      const body = await res.json() as { keys: { id: number; name: string }[] };
+      const body = await res.json() as { keys: { id: string; name: string }[] };
       expect(body.keys).toHaveLength(2);
       expect(body.keys.map(k => k.name).sort()).toEqual(['Target Key 1', 'Target Key 2']);
     });
@@ -179,7 +179,7 @@ describe('admin plugin — api-key routes', () => {
         body: JSON.stringify({ name: 'admin-minted' }),
       }));
       expect(res.status).toBe(201);
-      const body = await res.json() as { key: string; id: number };
+      const body = await res.json() as { key: string; id: string };
       expect(body.key).toMatch(/^test_sk_/);
       expect(body.id).toBeDefined();
 
@@ -243,7 +243,7 @@ describe('admin plugin — api-key routes', () => {
         body: JSON.stringify({ name: 'ci-deploy-github-actions' }),
       }));
       expect(res.status).toBe(201);
-      const body = await res.json() as { key: string; id: number };
+      const body = await res.json() as { key: string; id: string };
       expect(body.key).toMatch(/^test_sk_/);
 
       // The minted key resolves back to the service account as the principal.
@@ -291,7 +291,7 @@ describe('admin plugin — api-key routes', () => {
         headers: { authorization: `Bearer ${s.adminToken}` },
       }));
       expect(res.status).toBe(200);
-      const body = await res.json() as { keys: { id: number; name: string }[] };
+      const body = await res.json() as { keys: { id: string; name: string }[] };
       expect(body.keys.map(k => k.name).sort()).toEqual(['Key A', 'Key B']);
     });
 
@@ -335,7 +335,7 @@ describe('admin plugin — api-key routes', () => {
         body: JSON.stringify({ name: 'lifecycle-key' }),
       }));
       expect(mintRes.status).toBe(201);
-      const { key } = await mintRes.json() as { key: string; id: number };
+      const { key } = await mintRes.json() as { key: string; id: string };
 
       // 4. The service account uses the minted key to hit a fortress route
       //    that requires the bound permission — the request should succeed.

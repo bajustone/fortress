@@ -105,14 +105,14 @@ describe('tryPluginPrincipal', () => {
       name: 'first',
       resolvePrincipal: async () => {
         calls.push('first');
-        return { subject: { type: 'USER', id: 100 } };
+        return { subject: { type: 'USER', id: '100' } };
       },
     };
     const secondHit: FortressPlugin = {
       name: 'second',
       resolvePrincipal: async () => {
         calls.push('second');
-        return { subject: { type: 'USER', id: 200 } };
+        return { subject: { type: 'USER', id: '200' } };
       },
     };
     const fortress = createFortress({
@@ -124,7 +124,7 @@ describe('tryPluginPrincipal', () => {
       fortress,
       new Request('http://localhost/api/anything'),
     );
-    expect(result?.subject).toEqual({ type: 'USER', id: 100 });
+    expect(result?.subject).toEqual({ type: 'USER', id: '100' });
     expect(calls).toEqual(['first']); // second never ran
   });
 
@@ -141,7 +141,7 @@ describe('tryPluginPrincipal', () => {
       name: 'second',
       resolvePrincipal: async () => {
         calls.push('second');
-        return { subject: { type: 'SERVICE_ACCOUNT', id: 42 } };
+        return { subject: { type: 'SERVICE_ACCOUNT', id: '42' } };
       },
     };
     const fortress = createFortress({
@@ -153,7 +153,7 @@ describe('tryPluginPrincipal', () => {
       fortress,
       new Request('http://localhost/api/anything'),
     );
-    expect(result?.subject).toEqual({ type: 'SERVICE_ACCOUNT', id: 42 });
+    expect(result?.subject).toEqual({ type: 'SERVICE_ACCOUNT', id: '42' });
     expect(calls).toEqual(['first', 'second']);
   });
 
@@ -161,7 +161,7 @@ describe('tryPluginPrincipal', () => {
     const unrelated: FortressPlugin = { name: 'unrelated' };
     const hit: FortressPlugin = {
       name: 'hit',
-      resolvePrincipal: async () => ({ subject: { type: 'USER', id: 7 } }),
+      resolvePrincipal: async () => ({ subject: { type: 'USER', id: '7' } }),
     };
     const fortress = createFortress({
       jwt: { key: SECRET },
@@ -172,7 +172,7 @@ describe('tryPluginPrincipal', () => {
       fortress,
       new Request('http://localhost/'),
     );
-    expect(result?.subject).toEqual({ type: 'USER', id: 7 });
+    expect(result?.subject).toEqual({ type: 'USER', id: '7' });
   });
 });
 
@@ -328,7 +328,7 @@ describe('resolveRequestPrincipal — subject shape pass-through', () => {
     const custom: FortressPlugin = {
       name: 'group-resolver',
       resolvePrincipal: async (): Promise<{ subject: Subject }> => ({
-        subject: { type: 'GROUP', id: 99 },
+        subject: { type: 'GROUP', id: '99' },
       }),
     };
     const fortress = createFortress({
@@ -340,6 +340,6 @@ describe('resolveRequestPrincipal — subject shape pass-through', () => {
       fortress,
       new Request('http://localhost/'),
     );
-    expect(result?.subject).toEqual({ type: 'GROUP', id: 99 });
+    expect(result?.subject).toEqual({ type: 'GROUP', id: '99' });
   });
 });

@@ -11,8 +11,8 @@ import { socialLogin } from './index';
 interface SocialLoginMethods {
   getAuthorizationUrl: (provider: string, redirectUri: string) => Promise<{ url: string; state: { provider: string; codeVerifier: string; nonce: string } }>;
   handleCallback: (provider: string, code: string, redirectUri: string, codeVerifier: string) => Promise<{ user: FortressUser; profile: ProviderProfile; isNewUser: boolean }>;
-  getLinkedAccounts: (userId: number) => Promise<{ provider: string; providerAccountId: string; email: string | null }[]>;
-  unlinkAccount: (userId: number, provider: string) => Promise<void>;
+  getLinkedAccounts: (userId: string) => Promise<{ provider: string; providerAccountId: string; email: string | null }[]>;
+  unlinkAccount: (userId: string, provider: string) => Promise<void>;
   getProviders: () => string[];
 }
 
@@ -68,7 +68,7 @@ describe('social-login plugin', () => {
   describe('getLinkedAccounts', () => {
     it('returns linked social accounts for a user', async () => {
       // Seed a user and social account directly
-      const user = await db.create<{ id: number }>({
+      const user = await db.create<{ id: string }>({
         model: 'user',
         data: { email: 'alice@example.com', name: 'Alice', passwordHash: null, isActive: true },
       });
@@ -94,7 +94,7 @@ describe('social-login plugin', () => {
     });
 
     it('returns empty array for user with no linked accounts', async () => {
-      const user = await db.create<{ id: number }>({
+      const user = await db.create<{ id: string }>({
         model: 'user',
         data: { email: 'bob@example.com', name: 'Bob', passwordHash: null, isActive: true },
       });
@@ -106,7 +106,7 @@ describe('social-login plugin', () => {
 
   describe('unlinkAccount', () => {
     it('removes a linked social account', async () => {
-      const user = await db.create<{ id: number }>({
+      const user = await db.create<{ id: string }>({
         model: 'user',
         data: { email: 'alice@example.com', name: 'Alice', passwordHash: null, isActive: true },
       });

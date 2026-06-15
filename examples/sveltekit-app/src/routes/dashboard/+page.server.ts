@@ -13,7 +13,7 @@ import type { SvelteKitRequestEvent } from '../../../../../src/sveltekit';
 import { getUserId } from '../../../../../src/sveltekit';
 import { fortress } from '../../lib/server/fortress';
 
-export async function load(event: SvelteKitRequestEvent): Promise<{ user: { id: number; email: string } }> {
+export async function load(event: SvelteKitRequestEvent): Promise<{ user: { id: string; email: string } }> {
   const userId = getUserId(event as never);
   const user = await fortress.auth.me(userId);
   return { user };

@@ -102,7 +102,7 @@ export function createSvelteKitHandle(
       //    is expired, try a silent refresh using the refresh cookie so
       //    SSR loads stay logged in across token lifetimes.
       let subject: Subject | undefined;
-      let userId: number | undefined;
+      let userId: string | undefined;
       let claims: TokenClaims | undefined;
       let scopes: string[] | null | undefined;
 

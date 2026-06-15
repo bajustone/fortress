@@ -53,6 +53,7 @@ describe('validateRequest', () => {
 
   it('validates params via paramsSchema', async () => {
     const params = obj({ id: int() }, 'id');
+    // Note: int() does not coerce strings 2014 a string id rejects.
     const input = {
       params: params as any,
       paramsSchema: params,

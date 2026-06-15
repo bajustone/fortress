@@ -23,7 +23,7 @@ export interface PermissionExplanationSource {
   /** Role name when `via === 'role'`. */
   role?: string;
   /** Group id/name when the grant flows through a group (USER subjects only). */
-  group?: { id: number; name: string };
+  group?: { id: string; name: string };
   /** The matching permission row. */
   permission: Permission;
 }
@@ -39,30 +39,30 @@ export interface PermissionExplanation {
   /** Roles the subject is bound to (whether or not their permissions matched). */
   roleBindings: Array<{ role: string; tenantId?: string | null }>;
   /** Groups the subject belongs to (USER only). */
-  groupMemberships: Array<{ id: number; name: string }>;
+  groupMemberships: Array<{ id: string; name: string }>;
 }
 
 interface RoleBindingRow {
-  roleId: number;
+  roleId: string;
   tenantId: string | null;
   subjectType: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
-  subjectId: number;
+  subjectId: string;
 }
 
 interface DirectPermissionBindingRow {
-  permissionId: number;
+  permissionId: string;
   tenantId: string | null;
   subjectType: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
-  subjectId: number;
+  subjectId: string;
 }
 
 interface GroupMembershipRow {
-  groupId: number;
-  userId: number;
+  groupId: string;
+  userId: string;
 }
 
 interface GroupRow {
-  id: number;
+  id: string;
   name: string;
 }
 
@@ -73,7 +73,7 @@ function permissionMatches(perm: Permission, resource: string, action: string): 
 
 async function loadGroupMemberships(
   db: DatabaseAdapter,
-  userId: number,
+  userId: string,
 ): Promise<GroupRow[]> {
   const memberships = await db.findMany<GroupMembershipRow>({
     model: 'group_user',
@@ -89,7 +89,7 @@ async function loadGroupMemberships(
 
 async function loadRoleBindings(
   db: DatabaseAdapter,
-  subject: { type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'; id: number },
+  subject: { type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'; id: string },
 ): Promise<RoleBindingRow[]> {
   return db.findMany<RoleBindingRow>({
     model: 'role_binding',
@@ -102,7 +102,7 @@ async function loadRoleBindings(
 
 async function loadDirectBindings(
   db: DatabaseAdapter,
-  subject: { type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'; id: number },
+  subject: { type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'; id: string },
 ): Promise<DirectPermissionBindingRow[]> {
   return db.findMany<DirectPermissionBindingRow>({
     model: 'direct_permission_binding',
@@ -115,8 +115,8 @@ async function loadDirectBindings(
 
 async function loadPermissionsByIds(
   db: DatabaseAdapter,
-  ids: number[],
-): Promise<Map<number, Permission>> {
+  ids: string[],
+): Promise<Map<string, Permission>> {
   if (ids.length === 0)
     return new Map();
   const rows = await db.findMany<Permission>({
@@ -128,15 +128,15 @@ async function loadPermissionsByIds(
 
 async function loadRolePermissions(
   db: DatabaseAdapter,
-  roleIds: number[],
-): Promise<Map<number, number[]>> {
+  roleIds: string[],
+): Promise<Map<string, string[]>> {
   if (roleIds.length === 0)
     return new Map();
-  const links = await db.findMany<{ roleId: number; permissionId: number }>({
+  const links = await db.findMany<{ roleId: string; permissionId: string }>({
     model: 'role_permission',
     where: [{ field: 'roleId', operator: 'in', value: roleIds }],
   });
-  const out = new Map<number, number[]>();
+  const out = new Map<string, string[]>();
   for (const link of links) {
     const list = out.get(link.roleId) ?? [];
     list.push(link.permissionId);
@@ -145,7 +145,7 @@ async function loadRolePermissions(
   return out;
 }
 
-async function loadRoles(db: DatabaseAdapter, ids: number[]): Promise<Map<number, Role>> {
+async function loadRoles(db: DatabaseAdapter, ids: string[]): Promise<Map<string, Role>> {
   if (ids.length === 0)
     return new Map();
   const rows = await db.findMany<Role>({
@@ -209,7 +209,7 @@ export async function explainPermission(
   ];
 
   // ── Resolve every referenced permission row in one query ───────────
-  const permissionIds = new Set<number>();
+  const permissionIds = new Set<string>();
   for (const list of rolePermIds.values()) {
     for (const id of list) permissionIds.add(id);
   }

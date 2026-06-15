@@ -18,7 +18,7 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
 
   describe('create', () => {
     it('creates a record and returns it with an id', async () => {
-      const user = await db.create<{ id: number; email: string; name: string }>({
+      const user = await db.create<{ id: string; email: string; name: string }>({
         model: 'user',
         data: { email: 'alice@test.com', name: 'Alice', passwordHash: 'hash', isActive: true },
       });
@@ -91,7 +91,7 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
 
   describe('update', () => {
     it('updates matching records', async () => {
-      const user = await db.create<{ id: number }>({
+      const user = await db.create<{ id: string }>({
         model: 'user',
         data: { email: 'alice@test.com', name: 'Alice', passwordHash: 'hash', isActive: true },
       });
@@ -113,7 +113,7 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
 
   describe('delete', () => {
     it('removes matching records', async () => {
-      const user = await db.create<{ id: number }>({
+      const user = await db.create<{ id: string }>({
         model: 'user',
         data: { email: 'alice@test.com', name: 'Alice', passwordHash: 'hash', isActive: true },
       });

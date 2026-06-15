@@ -52,13 +52,13 @@ export interface FortressPlugin {
 
   /** Extend JWT token claims */
   enrichTokenClaims?: (
-    userId: number,
+    userId: string,
     ctx: PluginContext,
   ) => Promise<Record<string, unknown>>;
 
   /** Scope data access by user context (row-level data isolation) */
   scopeRules?: (
-    userId: number,
+    userId: string,
     model: string,
     ctx: PluginContext,
   ) => Promise<ScopeRule | null>;
@@ -159,7 +159,7 @@ export interface PluginRouteContext {
   /** Resolved request principal — USER or SERVICE_ACCOUNT. */
   subject?: Subject;
   /** Convenience alias for `subject?.id` when the subject is a USER. */
-  userId?: number;
+  userId?: string;
   claims?: TokenClaims;
   /** Credential-level narrowing scopes from principal resolution, if any. */
   scopes?: string[] | null;

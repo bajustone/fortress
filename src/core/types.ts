@@ -1,8 +1,16 @@
 // --- Identity ---
 
-/** A fortress user record as returned by the database adapter. */
+/**
+ * A fortress user record as returned by the database adapter.
+ *
+ * `id` is always a string at the fortress API surface. Adapters backed by
+ * numeric primary keys are responsible for stringifying on read and parsing
+ * on write at the adapter boundary — consumers of fortress never see the
+ * underlying representation. This matches the JWT/OIDC `sub` wire shape
+ * (RFC 7519 §4.1.2) and unblocks UUID/ULID/snowflake-keyed adapters.
+ */
 export interface FortressUser {
-  id: number;
+  id: string;
   email: string;
   name: string;
   isActive: boolean;
@@ -15,7 +23,8 @@ export interface FortressUser {
 
 /** JWT claims fortress signs into the access token, plus the optional impersonation actor (`act`) and per-deployment custom claims. */
 export interface TokenClaims {
-  sub: number;
+  /** Subject identifier — string per RFC 7519 §4.1.2. */
+  sub: string;
   /** Subject kind — defaults to 'USER' on legacy tokens that do not carry the claim. */
   subjectType: SubjectType;
   name: string;
@@ -23,7 +32,7 @@ export interface TokenClaims {
   iss: string;
   iat: number;
   exp: number;
-  act?: { sub: number; subjectType?: SubjectType }; // RFC 8693 actor claim for impersonation
+  act?: { sub: string; subjectType?: SubjectType }; // RFC 8693 actor claim for impersonation
   customClaims?: Record<string, unknown>;
 }
 
@@ -72,7 +81,7 @@ export interface RequestMeta {
 
 /** A persisted refresh-token session as exposed to session-management UIs. */
 export interface SessionInfo {
-  id: number;
+  id: string;
   ipAddress: string | null;
   userAgent: string | null;
   deviceName: string | null;
@@ -96,12 +105,12 @@ export type SubjectType = 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
 /** A subject identity — a discriminated (type, id) pair used by IAM and the auth pipeline. */
 export interface Subject {
   type: SubjectType;
-  id: number;
+  id: string;
 }
 
 /** A persisted IAM permission — a (resource, action) pair with optional conditions and an allow/deny effect. */
 export interface Permission {
-  id: number;
+  id: string;
   resource: string;
   action: string;
   effect: 'ALLOW' | 'DENY';
@@ -148,7 +157,7 @@ export interface PermissionContext {
 
 /** A persisted IAM role grouping a set of {@link Permission}s. */
 export interface Role {
-  id: number;
+  id: string;
   name: string;
   description?: string;
   isSystem?: boolean;
@@ -156,10 +165,10 @@ export interface Role {
 
 /** Binding of a {@link Role} to a subject (user, group, or service account), optionally scoped to a tenant. */
 export interface RoleBinding {
-  id: number;
-  roleId: number;
+  id: string;
+  roleId: string;
   subjectType: SubjectType;
-  subjectId: number;
+  subjectId: string;
   tenantId?: string | null;
 }
 
@@ -168,8 +177,8 @@ export type LoginIdentifierType = 'email' | 'phone' | 'username';
 
 /** A persisted login identifier (e.g. email, phone, username) attached to a user. */
 export interface LoginIdentifier {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   type: LoginIdentifierType;
   value: string;
   /** Reserved for future multi-tenant support. Not yet stored in the database. */
@@ -178,14 +187,14 @@ export interface LoginIdentifier {
 
 /** A persisted IAM group used to grant permissions to many users at once. */
 export interface Group {
-  id: number;
+  id: string;
   name: string;
   description?: string;
 }
 
 /** A persisted IAM service account — a non-human principal that can hold roles and direct permissions. */
 export interface ServiceAccount {
-  id: number;
+  id: string;
   name: string;
   displayName: string | null;
   description: string | null;

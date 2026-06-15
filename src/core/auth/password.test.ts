@@ -23,6 +23,12 @@ describe('defaultHasher', () => {
     expect(result).toBe(true);
   });
 
+  it('normalizes password input with NFKC before hashing and verifying', async () => {
+    const hash = await hasher.hash('Password123!');
+    const result = await hasher.verify(hash, 'Ｐａｓｓｗｏｒｄ１２３！');
+    expect(result).toBe(true);
+  });
+
   it('rejects an incorrect password', async () => {
     const hash = await hasher.hash('correct-password');
     const result = await hasher.verify(hash, 'wrong-password');

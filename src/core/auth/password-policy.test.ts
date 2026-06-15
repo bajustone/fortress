@@ -45,6 +45,10 @@ describe('password-policy', () => {
       await expect(validatePassword('abc', { minLength: 3, maxLength: 10 })).resolves.toBeUndefined();
       await expect(validatePassword('ab', { minLength: 3 })).rejects.toThrow('at least 3');
     });
+
+    it('applies NFKC before length checks', async () => {
+      await expect(validatePassword('ﬃ', { minLength: 3, maxLength: 3 })).resolves.toBeUndefined();
+    });
   });
 
   describe('isPasswordBreached (HIBP)', () => {
@@ -160,6 +164,32 @@ describe('password-policy', () => {
 
       const user = await fortress.auth.createUser({ email: 'a@b.com', name: 'Test' });
       expect(user.email).toBe('a@b.com');
+    });
+
+    it('normalizes passwords consistently across create, update, and login', async () => {
+      const passwordHasher = {
+        hash: async (password: string) => `hash:${password}`,
+        verify: async (hash: string, password: string) => hash === `hash:${password}`,
+      };
+      const fortress = createFortress({
+        jwt: { key: 'test-secret-at-least-32-characters!!' },
+        database: createTestAdapter(),
+        passwordHasher,
+      });
+
+      const user = await fortress.auth.createUser({
+        email: 'nfkc@test.com',
+        name: 'NFKC',
+        password: 'Ｐａｓｓｗｏｒｄ１２３！',
+      });
+      await expect(fortress.auth.login('nfkc@test.com', 'Password123!')).resolves.toMatchObject({
+        status: 'success',
+      });
+
+      await fortress.auth.updateUser(user.id, { password: 'ＮｅｗＰａｓｓｗｏｒｄ１２３！' });
+      await expect(fortress.auth.login('nfkc@test.com', 'NewPassword123!')).resolves.toMatchObject({
+        status: 'success',
+      });
     });
   });
 });

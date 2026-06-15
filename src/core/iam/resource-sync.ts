@@ -52,7 +52,7 @@ export async function pushResources(db: DatabaseAdapter, resources: ResourceFile
 
     // Sync permissions for this resource
     for (const action of definition.actions) {
-      const existingPerm = await db.findOne<{ id: number }>({
+      const existingPerm = await db.findOne<{ id: string }>({
         model: 'permission',
         where: [
           { field: 'resource', operator: '=', value: name },

@@ -11,8 +11,8 @@ import type {
 // --- Stored types for typed queries ---
 
 export interface StoredRefreshToken {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   tokenFamily: string;
   isRevoked: boolean;
   expiresAt: Date;
@@ -29,7 +29,7 @@ export interface InternalAdapter {
   /** Resolve user via login_identifier lookup, falling back to direct email match */
   findUserByIdentifier: (identifier: string) => Promise<(FortressUser & { passwordHash: string | null }) | null>;
   /** Get group names for a user via group_user → group resolution */
-  getUserGroups: (userId: number) => Promise<string[]>;
+  getUserGroups: (userId: string) => Promise<string[]>;
   /** Find a refresh token by its SHA-256 hash */
   findRefreshTokenByHash: (tokenHash: string) => Promise<StoredRefreshToken | null>;
   /**
@@ -107,8 +107,8 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       });
     },
 
-    async getUserGroups(userId: number): Promise<string[]> {
-      const memberships = await db.findMany<{ groupId: number }>({
+    async getUserGroups(userId: string): Promise<string[]> {
+      const memberships = await db.findMany<{ groupId: string }>({
         model: 'group_user',
         where: [{ field: 'userId', operator: '=', value: userId }],
       });
@@ -213,9 +213,9 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
 
       // 1. Group memberships — USER subjects only. Non-user subjects aren't
       //    members of groups, so skip this lookup entirely.
-      let groupIds: number[] = [];
+      let groupIds: string[] = [];
       if (isUser) {
-        const groupMemberships = await db.findMany<{ groupId: number }>({
+        const groupMemberships = await db.findMany<{ groupId: string }>({
           model: 'group_user',
           where: [{ field: 'userId', operator: '=', value: subject.id }],
         });
@@ -223,7 +223,7 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       }
 
       // 2. Role-based permission IDs — direct bindings on the subject.
-      const directRoleBindings = matchesTenant(await db.findMany<{ roleId: number; tenantId?: string | null }>({
+      const directRoleBindings = matchesTenant(await db.findMany<{ roleId: string; tenantId?: string | null }>({
         model: 'role_binding',
         where: [
           { field: 'subjectType', operator: '=', value: subject.type },
@@ -231,9 +231,9 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         ],
       }));
 
-      let groupRoleBindings: { roleId: number; tenantId?: string | null }[] = [];
+      let groupRoleBindings: { roleId: string; tenantId?: string | null }[] = [];
       if (groupIds.length > 0) {
-        groupRoleBindings = matchesTenant(await db.findMany<{ roleId: number; tenantId?: string | null }>({
+        groupRoleBindings = matchesTenant(await db.findMany<{ roleId: string; tenantId?: string | null }>({
           model: 'role_binding',
           where: [
             { field: 'subjectType', operator: '=', value: 'GROUP' },
@@ -247,9 +247,9 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         ...groupRoleBindings.map(b => b.roleId),
       ])];
 
-      let rolePermissionIds: number[] = [];
+      let rolePermissionIds: string[] = [];
       if (roleIds.length > 0) {
-        const rolePerms = await db.findMany<{ permissionId: number }>({
+        const rolePerms = await db.findMany<{ permissionId: string }>({
           model: 'role_permission',
           where: [{ field: 'roleId', operator: 'in', value: roleIds }],
         });
@@ -257,7 +257,7 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       }
 
       // 3. Direct permission binding IDs — on the subject directly.
-      const directSubjectBindings = matchesTenant(await db.findMany<{ permissionId: number; tenantId?: string | null }>({
+      const directSubjectBindings = matchesTenant(await db.findMany<{ permissionId: string; tenantId?: string | null }>({
         model: 'direct_permission_binding',
         where: [
           { field: 'subjectType', operator: '=', value: subject.type },
@@ -265,9 +265,9 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         ],
       }));
 
-      let directGroupBindings: { permissionId: number; tenantId?: string | null }[] = [];
+      let directGroupBindings: { permissionId: string; tenantId?: string | null }[] = [];
       if (groupIds.length > 0) {
-        directGroupBindings = matchesTenant(await db.findMany<{ permissionId: number; tenantId?: string | null }>({
+        directGroupBindings = matchesTenant(await db.findMany<{ permissionId: string; tenantId?: string | null }>({
           model: 'direct_permission_binding',
           where: [
             { field: 'subjectType', operator: '=', value: 'GROUP' },

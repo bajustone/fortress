@@ -114,7 +114,7 @@ export interface OAuthConfig {
 }
 
 interface OAuthClientRecord {
-  id: number;
+  id: string;
   clientId: string;
   clientSecretHash: string;
   name: string;
@@ -145,10 +145,10 @@ interface OAuthClientRecord {
 export type TokenEndpointAuthMethod = 'client_secret_basic' | 'client_secret_post' | 'none';
 
 interface AuthCodeRecord {
-  id: number;
+  id: string;
   code: string;
   clientId: string;
-  userId: number;
+  userId: string;
   redirectUri: string;
   scope: string | null;
   codeChallenge: string | null;
@@ -162,10 +162,10 @@ interface AuthCodeRecord {
 }
 
 interface AccessTokenRecord {
-  id: number;
+  id: string;
   token: string;
   clientId: string;
-  userId: number | null;
+  userId: string | null;
   scope: string | null;
   expiresAt: Date;
 }
@@ -181,22 +181,22 @@ interface AccessTokenRecord {
  * §2.2.2).
  */
 interface RefreshTokenRecord {
-  id: number;
+  id: string;
   token: string;
   familyId: string;
   clientId: string;
-  userId: number;
+  userId: string;
   scope: string | null;
   issuedAt: Date;
   expiresAt: Date;
   usedAt: Date | null;
-  parentId: number | null;
+  parentId: string | null;
 }
 
 /** Persisted state for an in-flight OAuth authorization-code flow. */
 export interface PendingFlowRecord {
   /** Internal DB primary key — never exposed to clients. */
-  id: number;
+  id: string;
   /** Public opaque handle used in URLs; replaces enumerable serial ids (H6). */
   flowId: string;
   clientId: string;
@@ -216,7 +216,7 @@ export interface PendingFlowRecord {
    * authenticated user could fetch another user's RP state token or
    * approve their flow.
    */
-  userId: number | null;
+  userId: string | null;
   /** Set during atomic approve/deny claim; prevents concurrent double-submit. */
   usedAt: Date | null;
   expiresAt: Date;
@@ -258,22 +258,22 @@ export interface AuthorizeRequestParams {
 export interface OAuthMethods {
   // Programmatic API
   createClient: (data: { name: string; redirectUris: string[]; grantTypes: string[]; allowedScopes?: string[]; tokenEndpointAuthMethod?: TokenEndpointAuthMethod }) => Promise<{ clientId: string; clientSecret: string | null }>;
-  createAuthorizationCode: (params: { clientId: string; userId: number; redirectUri: string; scope?: string; codeChallenge?: string; codeChallengeMethod?: string; nonce?: string; authTime?: number }) => Promise<{ code: string }>;
+  createAuthorizationCode: (params: { clientId: string; userId: string; redirectUri: string; scope?: string; codeChallenge?: string; codeChallengeMethod?: string; nonce?: string; authTime?: number }) => Promise<{ code: string }>;
   exchangeCode: (params: { code: string; clientId: string; clientSecret?: string; redirectUri: string; codeVerifier?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number; scope?: string; refreshToken?: string; idToken?: string }>;
   refreshTokenGrant: (params: { clientId: string; clientSecret?: string; refreshToken: string; scope?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number; refreshToken: string; scope?: string; idToken?: string }>;
   clientCredentialsGrant: (params: { clientId: string; clientSecret: string; scope?: string }) => Promise<{ accessToken: string; tokenType: string; expiresIn: number }>;
   revokeToken: (token: string) => Promise<void>;
-  introspectToken: (token: string) => Promise<{ active: boolean; clientId?: string; userId?: number; scope?: string }>;
-  createPendingFlow: (params: { clientId: string; redirectUri: string; scope?: string; state: string; codeChallenge?: string; codeChallengeMethod?: string; userId?: number }) => Promise<{ flowId: string }>;
+  introspectToken: (token: string) => Promise<{ active: boolean; clientId?: string; userId?: string; scope?: string }>;
+  createPendingFlow: (params: { clientId: string; redirectUri: string; scope?: string; state: string; codeChallenge?: string; codeChallengeMethod?: string; userId?: string }) => Promise<{ flowId: string }>;
   /**
    * Read a pending flow without consuming it. Throws if not found, expired,
    * or (when `userId` is supplied) owned by a different user — in the
    * "different user" case the error is `not_found` rather than `forbidden`
    * to avoid confirming the flow's existence.
    */
-  getPendingFlow: (flowId: string | number, context?: { userId?: number }) => Promise<PendingFlowRecord>;
+  getPendingFlow: (flowId: string | number, context?: { userId?: string }) => Promise<PendingFlowRecord>;
   /** Read and delete a pending flow (single-use). Throws if not found or expired. */
-  resumePendingFlow: (flowId: string | number, context?: { userId?: number }) => Promise<PendingFlowRecord>;
+  resumePendingFlow: (flowId: string | number, context?: { userId?: string }) => Promise<PendingFlowRecord>;
   getUserInfo: (token: string) => Promise<FortressUser | null>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
   handleTokenRequest: (body: TokenRequestBody, clientAuth?: ClientAuth) => Promise<Record<string, unknown>>;
@@ -302,7 +302,7 @@ export interface OAuthMethods {
    */
   handleAuthorizeRequest: (
     query: Record<string, string | undefined>,
-    context: { userId?: number },
+    context: { userId?: string },
   ) => Promise<{ redirectUrl: string; flowId: string }>;
   /**
    * Handle GET /oauth/flows/:flowId. Returns the consent metadata the host
@@ -314,7 +314,7 @@ export interface OAuthMethods {
    */
   handleGetFlow: (
     flowId: string | number,
-    context: { userId: number },
+    context: { userId: string },
   ) => Promise<{
     flowId: string;
     client: { clientId: string; name: string };
@@ -330,7 +330,7 @@ export interface OAuthMethods {
    */
   handleApproveFlow: (
     flowId: string | number,
-    context: { userId: number; authTimeSeconds?: number },
+    context: { userId: string; authTimeSeconds?: number },
   ) => Promise<{ redirectUrl: string }>;
   /**
    * Handle POST /oauth/flows/:flowId/deny. Deletes the pending flow and
@@ -341,7 +341,7 @@ export interface OAuthMethods {
    */
   handleDenyFlow: (
     flowId: string | number,
-    context: { userId: number },
+    context: { userId: string },
   ) => Promise<{ redirectUrl: string }>;
   resolveTokenPermissions: (token: string) => Promise<{ resource: string; action: string }[]>;
 }
@@ -547,7 +547,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        */
       async createAuthorizationCode(params: {
         clientId: string;
-        userId: number;
+        userId: string;
         redirectUri: string;
         scope?: string;
         codeChallenge?: string;
@@ -1056,7 +1056,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       async introspectToken(token: string): Promise<{
         active: boolean;
         clientId?: string;
-        userId?: number;
+        userId?: string;
         scope?: string;
       }> {
         const tokenHash = await hashToken(token);
@@ -1087,7 +1087,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         state: string;
         codeChallenge?: string;
         codeChallengeMethod?: string;
-        userId?: number;
+        userId?: string;
       }): Promise<{ flowId: string }> {
         const expiresAt = new Date(Date.now() + pendingFlowExpiry * 1000);
         const { raw: flowId } = await generateRefreshToken();
@@ -1122,7 +1122,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        */
       async getPendingFlow(
         flowId: string | number,
-        context?: { userId?: number },
+        context?: { userId?: string },
       ): Promise<PendingFlowRecord> {
         const flow = await ctx.db.findOne<PendingFlowRecord>({
           model: 'oauth_pending_flow',
@@ -1160,7 +1160,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        */
       async resumePendingFlow(
         flowId: string | number,
-        context?: { userId?: number },
+        context?: { userId?: string },
       ): Promise<PendingFlowRecord> {
         const flow = await ctx.db.findOne<PendingFlowRecord>({
           model: 'oauth_pending_flow',
@@ -1208,7 +1208,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        */
       async handleAuthorizeRequest(
         query: Record<string, string | undefined>,
-        context: { userId?: number },
+        context: { userId?: string },
       ): Promise<{ redirectUrl: string; flowId: string }> {
         const nonce = query.nonce;
         if (!config.loginUrl || !config.consentUrl) {
@@ -1314,7 +1314,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        */
       async handleGetFlow(
         flowId: string | number,
-        context: { userId: number },
+        context: { userId: string },
       ): Promise<{
         flowId: string;
         client: { clientId: string; name: string };
@@ -1359,7 +1359,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        */
       async handleApproveFlow(
         flowId: string | number,
-        context: { userId: number; authTimeSeconds?: number },
+        context: { userId: string; authTimeSeconds?: number },
       ): Promise<{ redirectUrl: string }> {
         const { flow, code } = await ctx.db.transaction(async (tx) => {
           const flow = await tx.findOne<PendingFlowRecord>({
@@ -1459,7 +1459,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        */
       async handleDenyFlow(
         flowId: string | number,
-        context: { userId: number },
+        context: { userId: string },
       ): Promise<{ redirectUrl: string }> {
         // H6: owner check enforced via the context arg.
         const flow = await this.resumePendingFlow(flowId, context);

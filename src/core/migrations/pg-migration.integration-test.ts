@@ -83,7 +83,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
 
     // The provisioned schema is usable: insert a row through the adapter,
     // exercising SERIAL ids and timestamp defaults.
-    const user = await db.create<{ id: number; createdAt: Date }>({
+    const user = await db.create<{ id: string; createdAt: Date }>({
       model: 'user',
       data: { email: 'pg-migrate@test.com', name: 'PG Migrate', passwordHash: 'h', isActive: true },
     });

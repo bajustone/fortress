@@ -36,7 +36,7 @@ type SigningKey = CryptoKey | { type: string };
 
 /** Persisted signing-key row. Stores both public and private JWKs as JSON strings. */
 export interface SigningKeyRecord {
-  id: number;
+  id: string;
   kid: string;
   alg: string;
   publicJwk: string;

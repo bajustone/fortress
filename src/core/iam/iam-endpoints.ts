@@ -2,7 +2,7 @@ import type { ErrorResponseWire, OkResponseWire } from '../auth/auth-endpoints';
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressSchema } from '../json-schema';
 import { authRef } from '../auth/auth-endpoints';
-import { arr, bool, defineComponents, endpoint, enums, int, nullable, obj, record, recordOf, str } from '../schema-builder';
+import { arr, bool, defineComponents, endpoint, enums, id, int, nullable, obj, record, recordOf, str } from '../schema-builder';
 
 // Sentinel for "no body / query / params" matching EndpointDefinition's default.
 
@@ -12,7 +12,7 @@ interface EmptyInput {}
 
 /** Wire shape of a persisted role. `description` and `isSystem` are optional nullable on the wire. */
 export interface RoleWire {
-  id: number;
+  id: string;
   name: string;
   description?: string | null;
   isSystem?: boolean;
@@ -20,7 +20,7 @@ export interface RoleWire {
 
 /** Wire shape of a persisted group. */
 export interface GroupWire {
-  id: number;
+  id: string;
   name: string;
   description?: string | null;
 }
@@ -34,7 +34,7 @@ export interface PermissionConditionWire {
 
 /** Wire shape of a persisted permission. */
 export interface PermissionWire {
-  id: number;
+  id: string;
   resource: string;
   action: string;
   effect: 'ALLOW' | 'DENY';
@@ -52,7 +52,7 @@ export interface PermissionInputWire {
 
 /** Wire shape of a persisted service account. Date fields are ISO strings on the wire. */
 export interface ServiceAccountWire {
-  id: number;
+  id: string;
   name: string;
   displayName?: string | null;
   description?: string | null;
@@ -65,7 +65,7 @@ export interface ServiceAccountWire {
 
 const Role: FortressSchema<RoleWire> = obj(
   {
-    id: int('Role ID'),
+    id: id('Role ID'),
     name: str('Role name'),
     description: nullable(str('Role description')),
     isSystem: bool('Whether this is a system role'),
@@ -76,7 +76,7 @@ const Role: FortressSchema<RoleWire> = obj(
 
 const Group: FortressSchema<GroupWire> = obj(
   {
-    id: int('Group ID'),
+    id: id('Group ID'),
     name: str('Group name'),
     description: nullable(str('Group description')),
   },
@@ -86,7 +86,7 @@ const Group: FortressSchema<GroupWire> = obj(
 
 const Permission: FortressSchema<PermissionWire> = obj(
   {
-    id: int('Permission ID'),
+    id: id('Permission ID'),
     resource: str('Resource name'),
     action: str('Action name'),
     effect: enums('ALLOW', 'DENY'),
@@ -120,7 +120,7 @@ const PermissionInput: FortressSchema<PermissionInputWire> = obj(
 
 const ServiceAccount: FortressSchema<ServiceAccountWire> = obj(
   {
-    id: int('Service account ID'),
+    id: id('Service account ID'),
     name: str('Machine identifier — immutable after creation'),
     displayName: nullable(str('Human-readable label')),
     description: nullable(str('Free-form description')),
@@ -201,29 +201,29 @@ export interface IamEndpointsMap {
   deleteRole: EndpointDefinition<
     EmptyInput,
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 400: ErrorResponseWire; 401: ErrorResponseWire }
   >;
   bindRoleToUser: EndpointDefinition<
-    { userId: number; tenantId?: string },
+    { userId: string; tenantId?: string },
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   bindRoleToGroup: EndpointDefinition<
-    { groupId: number; tenantId?: string },
+    { groupId: string; tenantId?: string },
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   unbindRole: EndpointDefinition<
     {
       subjectType: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
-      subjectId: number;
+      subjectId: string;
       tenantId?: string;
     },
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   createGroup: EndpointDefinition<
@@ -233,26 +233,26 @@ export interface IamEndpointsMap {
     { 201: GroupWire; 401: ErrorResponseWire }
   >;
   addUserToGroup: EndpointDefinition<
-    { userId: number },
+    { userId: string },
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   removeUserFromGroup: EndpointDefinition<
     EmptyInput,
     EmptyInput,
-    { id: number; userId: number },
+    { id: string; userId: string },
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   getUserPermissions: EndpointDefinition<
     EmptyInput,
     { tenantId?: string },
-    { id: number },
+    { id: string },
     { 200: PermissionWire[]; 401: ErrorResponseWire }
   >;
   checkPermission: EndpointDefinition<
     {
-      userId: number;
+      userId: string;
       resource: string;
       action: string;
       context?: Record<string, unknown>;
@@ -262,25 +262,25 @@ export interface IamEndpointsMap {
     { 200: { allowed: boolean }; 401: ErrorResponseWire }
   >;
   bindPermissionToUser: EndpointDefinition<
-    { userId: number; permission: PermissionInputWire; tenantId?: string },
+    { userId: string; permission: PermissionInputWire; tenantId?: string },
     EmptyInput,
     EmptyInput,
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   bindPermissionToGroup: EndpointDefinition<
-    { groupId: number; permission: PermissionInputWire; tenantId?: string },
+    { groupId: string; permission: PermissionInputWire; tenantId?: string },
     EmptyInput,
     EmptyInput,
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   unbindPermissionFromUser: EndpointDefinition<
-    { userId: number; permissionId: number; tenantId?: string },
+    { userId: string; permissionId: string; tenantId?: string },
     EmptyInput,
     EmptyInput,
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   unbindPermissionFromGroup: EndpointDefinition<
-    { groupId: number; permissionId: number; tenantId?: string },
+    { groupId: string; permissionId: string; tenantId?: string },
     EmptyInput,
     EmptyInput,
     { 200: OkResponseWire; 401: ErrorResponseWire }
@@ -300,47 +300,47 @@ export interface IamEndpointsMap {
   getServiceAccount: EndpointDefinition<
     EmptyInput,
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: ServiceAccountWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
   >;
   updateServiceAccount: EndpointDefinition<
     { displayName?: string | null; description?: string | null; isActive?: boolean },
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: ServiceAccountWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
   >;
   deleteServiceAccount: EndpointDefinition<
     EmptyInput,
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
   >;
   getServiceAccountPermissions: EndpointDefinition<
     EmptyInput,
     { tenantId?: string },
-    { id: number },
+    { id: string },
     { 200: PermissionWire[]; 401: ErrorResponseWire }
   >;
   bindRoleToServiceAccount: EndpointDefinition<
-    { serviceAccountId: number; tenantId?: string },
+    { serviceAccountId: string; tenantId?: string },
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   unbindRoleFromServiceAccount: EndpointDefinition<
-    { serviceAccountId: number; tenantId?: string },
+    { serviceAccountId: string; tenantId?: string },
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   bindPermissionToServiceAccount: EndpointDefinition<
-    { serviceAccountId: number; permission: PermissionInputWire; tenantId?: string },
+    { serviceAccountId: string; permission: PermissionInputWire; tenantId?: string },
     EmptyInput,
     EmptyInput,
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   unbindPermissionFromServiceAccount: EndpointDefinition<
-    { serviceAccountId: number; permissionId: number; tenantId?: string },
+    { serviceAccountId: string; permissionId: string; tenantId?: string },
     EmptyInput,
     EmptyInput,
     { 200: OkResponseWire; 401: ErrorResponseWire }
@@ -406,7 +406,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Roles')
     .security('bearer')
     .permission('fortress', 'deleteRole')
-    .params(obj({ id: int('Role ID') }, 'id'))
+    .params(obj({ id: id('Role ID') }, 'id'))
     .response(200, 'Role deleted', obj({ ok: bool() }, 'ok'))
     .response(400, 'Cannot delete system role', authRef('ErrorResponse'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
@@ -420,9 +420,9 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Roles')
     .security('bearer')
     .permission('fortress', 'bindRole')
-    .params(obj({ id: int('Role ID') }, 'id'))
+    .params(obj({ id: id('Role ID') }, 'id'))
     .body(obj(
-      { userId: int('User ID'), tenantId: str('Tenant ID (optional)') },
+      { userId: id('User ID'), tenantId: str('Tenant ID (optional)') },
       'userId',
     ))
     .response(200, 'Role bound to user', obj({ ok: bool() }, 'ok'))
@@ -435,9 +435,9 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Roles')
     .security('bearer')
     .permission('fortress', 'bindRole')
-    .params(obj({ id: int('Role ID') }, 'id'))
+    .params(obj({ id: id('Role ID') }, 'id'))
     .body(obj(
-      { groupId: int('Group ID'), tenantId: str('Tenant ID (optional)') },
+      { groupId: id('Group ID'), tenantId: str('Tenant ID (optional)') },
       'groupId',
     ))
     .response(200, 'Role bound to group', obj({ ok: bool() }, 'ok'))
@@ -450,11 +450,11 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Roles')
     .security('bearer')
     .permission('fortress', 'unbindRole')
-    .params(obj({ id: int('Role ID') }, 'id'))
+    .params(obj({ id: id('Role ID') }, 'id'))
     .body(obj(
       {
         subjectType: enums('USER', 'GROUP', 'SERVICE_ACCOUNT'),
-        subjectId: int('Subject ID'),
+        subjectId: id('Subject ID'),
         tenantId: str('Tenant ID (optional)'),
       },
       'subjectType',
@@ -486,8 +486,8 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Groups')
     .security('bearer')
     .permission('fortress', 'manageGroup')
-    .params(obj({ id: int('Group ID') }, 'id'))
-    .body(obj({ userId: int('User ID') }, 'userId'))
+    .params(obj({ id: id('Group ID') }, 'id'))
+    .body(obj({ userId: id('User ID') }, 'userId'))
     .response(200, 'User added to group', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('addUserToGroup')
@@ -498,7 +498,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Groups')
     .security('bearer')
     .permission('fortress', 'manageGroup')
-    .params(obj({ id: int('Group ID'), userId: int('User ID') }, 'id', 'userId'))
+    .params(obj({ id: id('Group ID'), userId: id('User ID') }, 'id', 'userId'))
     .response(200, 'User removed from group', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('removeUserFromGroup')
@@ -511,7 +511,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Permissions')
     .security('bearer')
     .permission('fortress', 'viewPermissions')
-    .params(obj({ id: int('User ID') }, 'id'))
+    .params(obj({ id: id('User ID') }, 'id'))
     .query(obj({ tenantId: str('Tenant ID (optional)') }))
     .response(200, 'User permissions', arr(iamRef('Permission')))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
@@ -525,7 +525,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .permission('fortress', 'viewPermissions')
     .body(obj(
       {
-        userId: int('User ID'),
+        userId: id('User ID'),
         resource: str('Resource name'),
         action: str('Action name'),
         context: record('Permission context'),
@@ -546,7 +546,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .permission('fortress', 'managePermissions')
     .body(obj(
       {
-        userId: int('User ID'),
+        userId: id('User ID'),
         permission: iamRef('PermissionInput'),
         tenantId: str('Tenant ID (optional)'),
       },
@@ -565,7 +565,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .permission('fortress', 'managePermissions')
     .body(obj(
       {
-        groupId: int('Group ID'),
+        groupId: id('Group ID'),
         permission: iamRef('PermissionInput'),
         tenantId: str('Tenant ID (optional)'),
       },
@@ -584,8 +584,8 @@ export const iamEndpoints: IamEndpointsMap = {
     .permission('fortress', 'managePermissions')
     .body(obj(
       {
-        userId: int('User ID'),
-        permissionId: int('Permission ID'),
+        userId: id('User ID'),
+        permissionId: id('Permission ID'),
         tenantId: str('Tenant ID (optional)'),
       },
       'userId',
@@ -603,8 +603,8 @@ export const iamEndpoints: IamEndpointsMap = {
     .permission('fortress', 'managePermissions')
     .body(obj(
       {
-        groupId: int('Group ID'),
-        permissionId: int('Permission ID'),
+        groupId: id('Group ID'),
+        permissionId: id('Permission ID'),
         tenantId: str('Tenant ID (optional)'),
       },
       'groupId',
@@ -659,7 +659,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Service Accounts')
     .security('bearer')
     .permission('fortress', 'viewServiceAccounts')
-    .params(obj({ id: int('Service account ID') }, 'id'))
+    .params(obj({ id: id('Service account ID') }, 'id'))
     .response(200, 'Service account', iamRef('ServiceAccount'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .response(404, 'Not found', authRef('ErrorResponse'))
@@ -672,7 +672,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Service Accounts')
     .security('bearer')
     .permission('fortress', 'manageServiceAccount')
-    .params(obj({ id: int('Service account ID') }, 'id'))
+    .params(obj({ id: id('Service account ID') }, 'id'))
     .body(obj({
       displayName: nullable(str('New human-readable label')),
       description: nullable(str('New description')),
@@ -690,7 +690,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Service Accounts')
     .security('bearer')
     .permission('fortress', 'manageServiceAccount')
-    .params(obj({ id: int('Service account ID') }, 'id'))
+    .params(obj({ id: id('Service account ID') }, 'id'))
     .response(200, 'Service account deleted', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .response(404, 'Not found', authRef('ErrorResponse'))
@@ -702,7 +702,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Service Accounts', 'Permissions')
     .security('bearer')
     .permission('fortress', 'viewPermissions')
-    .params(obj({ id: int('Service account ID') }, 'id'))
+    .params(obj({ id: id('Service account ID') }, 'id'))
     .query(obj({ tenantId: str('Tenant ID (optional)') }))
     .response(200, 'Service account permissions', arr(iamRef('Permission')))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
@@ -714,9 +714,9 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Roles', 'Service Accounts')
     .security('bearer')
     .permission('fortress', 'bindRole')
-    .params(obj({ id: int('Role ID') }, 'id'))
+    .params(obj({ id: id('Role ID') }, 'id'))
     .body(obj(
-      { serviceAccountId: int('Service account ID'), tenantId: str('Tenant ID (optional)') },
+      { serviceAccountId: id('Service account ID'), tenantId: str('Tenant ID (optional)') },
       'serviceAccountId',
     ))
     .response(200, 'Role bound to service account', obj({ ok: bool() }, 'ok'))
@@ -729,9 +729,9 @@ export const iamEndpoints: IamEndpointsMap = {
     .tags('IAM', 'Roles', 'Service Accounts')
     .security('bearer')
     .permission('fortress', 'unbindRole')
-    .params(obj({ id: int('Role ID') }, 'id'))
+    .params(obj({ id: id('Role ID') }, 'id'))
     .body(obj(
-      { serviceAccountId: int('Service account ID'), tenantId: str('Tenant ID (optional)') },
+      { serviceAccountId: id('Service account ID'), tenantId: str('Tenant ID (optional)') },
       'serviceAccountId',
     ))
     .response(200, 'Role unbound', obj({ ok: bool() }, 'ok'))
@@ -746,7 +746,7 @@ export const iamEndpoints: IamEndpointsMap = {
     .permission('fortress', 'managePermissions')
     .body(obj(
       {
-        serviceAccountId: int('Service account ID'),
+        serviceAccountId: id('Service account ID'),
         permission: iamRef('PermissionInput'),
         tenantId: str('Tenant ID (optional)'),
       },
@@ -765,8 +765,8 @@ export const iamEndpoints: IamEndpointsMap = {
     .permission('fortress', 'managePermissions')
     .body(obj(
       {
-        serviceAccountId: int('Service account ID'),
-        permissionId: int('Permission ID'),
+        serviceAccountId: id('Service account ID'),
+        permissionId: id('Permission ID'),
         tenantId: str('Tenant ID (optional)'),
       },
       'serviceAccountId',

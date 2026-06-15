@@ -38,7 +38,7 @@ export interface FortressExpressFields {
    * Non-USER subjects (e.g. `SERVICE_ACCOUNT` via api-key) leave this
    * undefined; fall back to {@link fortressSubject}.
    */
-  fortressUserId?: number;
+  fortressUserId?: string;
   fortressClaims?: TokenClaims;
   fortressScopes?: string[] | null;
   fortressDb?: DatabaseAdapter;
@@ -316,7 +316,7 @@ export function getSubject(req: ExpressRequest): Subject {
  * api-key) — use {@link getSubject} for handlers that accept any
  * principal.
  */
-export function getUserId(req: ExpressRequest): number {
+export function getUserId(req: ExpressRequest): string {
   if (!req.fortressSubject || req.fortressSubject.type !== 'USER') {
     throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
   }

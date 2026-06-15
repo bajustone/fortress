@@ -97,7 +97,7 @@ describe('hono authMiddleware', () => {
     // No routeMap for /api/profile → RBAC skips, request goes through
     expect(res.status).toBe(200);
     const body = await res.json() as any;
-    expect(body.userId).toBeGreaterThan(0);
+    expect(body.userId).toBeTruthy();
   });
 
   it('skips auth for skip paths', async () => {
@@ -122,7 +122,7 @@ describe('hono rbacMiddleware', () => {
     const token = await loginAndGetToken();
 
     // Give the user permission to list posts
-    const user = await fortress.auth.me(1);
+    const user = await fortress.auth.me('1');
     const role = await fortress.iam.createRole('viewer', [
       { resource: 'post', action: 'list' },
       { resource: 'post', action: 'read' },
@@ -153,7 +153,7 @@ describe('hono rbacMiddleware', () => {
     const role = await fortress.iam.createRole('reader', [
       { resource: 'post', action: 'read' },
     ]);
-    await fortress.iam.bindRoleToUser(1, role.id);
+    await fortress.iam.bindRoleToUser('1', role.id);
 
     const res = await app.request('/api/posts/42', {
       headers: { Authorization: `Bearer ${token}` },

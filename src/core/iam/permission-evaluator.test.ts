@@ -6,7 +6,7 @@ import { evaluateConditions, evaluatePermissions } from './permission-evaluator'
 
 function perm(overrides: Partial<Permission> = {}): Permission {
   return {
-    id: 1,
+    id: '1',
     resource: 'post',
     action: 'update',
     effect: 'ALLOW',
@@ -42,7 +42,7 @@ describe('evaluatePermissions', () => {
 
     it('ignores DENY permissions in allow-only mode', () => {
       const result = evaluatePermissions(
-        [perm({ effect: 'DENY' }), perm({ id: 2, effect: 'ALLOW' })],
+        [perm({ effect: 'DENY' }), perm({ id: '2', effect: 'ALLOW' })],
         'post',
         'update',
         'allow-only',
@@ -54,7 +54,7 @@ describe('evaluatePermissions', () => {
   describe('deny-overrides mode', () => {
     it('denies if any DENY matches even with ALLOW present', () => {
       const result = evaluatePermissions(
-        [perm({ effect: 'ALLOW' }), perm({ id: 2, effect: 'DENY' })],
+        [perm({ effect: 'ALLOW' }), perm({ id: '2', effect: 'DENY' })],
         'post',
         'update',
         'deny-overrides',
@@ -121,8 +121,8 @@ describe('evaluatePermissions', () => {
     it('exact DENY overrides wildcard ALLOW in deny-overrides mode', () => {
       const result = evaluatePermissions(
         [
-          perm({ id: 1, resource: 'post', action: '*', effect: 'ALLOW' }),
-          perm({ id: 2, resource: 'post', action: 'delete', effect: 'DENY' }),
+          perm({ id: '1', resource: 'post', action: '*', effect: 'ALLOW' }),
+          perm({ id: '2', resource: 'post', action: 'delete', effect: 'DENY' }),
         ],
         'post',
         'delete',
@@ -151,7 +151,7 @@ describe('evaluatePermissions', () => {
         'post',
         'update',
         'allow-only',
-        { resource: { ownerId: 42 }, user: { id: 99 } },
+        { resource: { ownerId: 42 }, user: { id: '99' } },
       );
       expect(result).toBe(false);
     });
@@ -204,7 +204,7 @@ describe('evaluatePermissions', () => {
         'post',
         'update',
         'allow-only',
-        { resource: { ownerId: 42 }, user: { id: 42 } },
+        { resource: { ownerId: 42 }, user: { id: '42' } },
       );
       expect(result).toBe(true);
     });
@@ -217,7 +217,7 @@ describe('evaluatePermissions', () => {
         'post',
         'update',
         'allow-only',
-        { resource: { ownerId: 42 }, user: { id: 99 } },
+        { resource: { ownerId: 42 }, user: { id: '99' } },
       );
       expect(result).toBe(false);
     });
@@ -263,7 +263,7 @@ describe('evaluateConditions', () => {
         { field: 'resource.ownerId', operator: 'eq', value: '${user.id}' },
         { field: 'resource.status', operator: 'neq', value: 'archived' },
       ],
-      { resource: { ownerId: 42, status: 'published' }, user: { id: 42 } },
+      { resource: { ownerId: 42, status: 'published' }, user: { id: '42' } },
     );
     expect(result).toBe(true);
   });
@@ -274,7 +274,7 @@ describe('evaluateConditions', () => {
         { field: 'resource.ownerId', operator: 'eq', value: '${user.id}' },
         { field: 'resource.status', operator: 'neq', value: 'archived' },
       ],
-      { resource: { ownerId: 42, status: 'archived' }, user: { id: 42 } },
+      { resource: { ownerId: 42, status: 'archived' }, user: { id: '42' } },
     );
     expect(result).toBe(false);
   });

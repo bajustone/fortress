@@ -423,7 +423,7 @@ beforeEach(async () => {
 describe('pg: date handling', () => {
   it('returns Date objects for timestamp columns', async () => {
     const adapter = createPgAdapter();
-    const user = await adapter.create<{ id: number; createdAt: Date; updatedAt: Date }>({
+    const user = await adapter.create<{ id: string; createdAt: Date; updatedAt: Date }>({
       model: 'user',
       data: { email: 'dates@test.com', name: 'Dates', passwordHash: 'h', isActive: true },
     });
@@ -434,7 +434,7 @@ describe('pg: date handling', () => {
 
   it('round-trips Date objects through create and findOne', async () => {
     const adapter = createPgAdapter();
-    const user = await adapter.create<{ id: number }>({
+    const user = await adapter.create<{ id: string }>({
       model: 'user',
       data: { email: 'rt@test.com', name: 'RT', passwordHash: 'h', isActive: true },
     });
@@ -463,7 +463,7 @@ describe('pg: date handling', () => {
 
   it('supports date comparison operators (gt, lt)', async () => {
     const adapter = createPgAdapter();
-    const user = await adapter.create<{ id: number }>({
+    const user = await adapter.create<{ id: string }>({
       model: 'user',
       data: { email: 'cmp@test.com', name: 'Cmp', passwordHash: 'h', isActive: true },
     });
@@ -491,7 +491,7 @@ describe('pg: date handling', () => {
 
   it('handles nullable timestamp columns', async () => {
     const adapter = createPgAdapter();
-    const user = await adapter.create<{ id: number }>({
+    const user = await adapter.create<{ id: string }>({
       model: 'user',
       data: { email: 'null-ts@test.com', name: 'NullTs', passwordHash: 'h', isActive: true },
     });
@@ -532,7 +532,7 @@ describe('pg: date handling', () => {
 
   it('handles boolean values natively', async () => {
     const adapter = createPgAdapter();
-    const user = await adapter.create<{ id: number; isActive: boolean }>({
+    const user = await adapter.create<{ id: string; isActive: boolean }>({
       model: 'user',
       data: { email: 'bool@test.com', name: 'Bool', passwordHash: 'h', isActive: false },
     });
@@ -1164,7 +1164,7 @@ describe('pg: social-login plugin', () => {
   it('round-trips JSONB profile data through PG', async () => {
     const adapter = createPgAdapter();
 
-    const user = await adapter.create<{ id: number }>({
+    const user = await adapter.create<{ id: string }>({
       model: 'user',
       data: { email: 'social@test.com', name: 'Social', passwordHash: 'h', isActive: true },
     });
@@ -1218,7 +1218,7 @@ describe('pg: social-login plugin', () => {
       config: { jwt: { key: SECRET }, database: adapter },
     }) as any;
 
-    const user = await adapter.create<{ id: number }>({
+    const user = await adapter.create<{ id: string }>({
       model: 'user',
       data: { email: 'linked@test.com', name: 'Linked', passwordHash: 'h', isActive: true },
     });
@@ -1345,7 +1345,7 @@ describe('pg: data-isolation plugin', () => {
     await adapter.create({ model: 'user', data: { email: 'inactive@test.com', name: 'Inactive', passwordHash: 'h', isActive: false } });
 
     // Get scope rules
-    const rules = await plugin.scopeRules!(1, 'user', { db: adapter, config: { jwt: { key: SECRET }, database: adapter } });
+    const rules = await plugin.scopeRules!('1', 'user', { db: adapter, config: { jwt: { key: SECRET }, database: adapter } });
 
     expect(rules).not.toBeNull();
     expect(rules!.filters).toHaveLength(1);

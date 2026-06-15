@@ -39,7 +39,7 @@ export interface PluginRequestContext {
    * Non-USER principals (e.g. `SERVICE_ACCOUNT` via api-key) leave this
    * field undefined; consumers should fall back to `fortressSubject`.
    */
-  fortressUserId?: number;
+  fortressUserId?: string;
   fortressClaims?: TokenClaims;
   /** Credential-level narrowing scopes (for example API-key scopes), if any. */
   fortressScopes?: string[] | null;

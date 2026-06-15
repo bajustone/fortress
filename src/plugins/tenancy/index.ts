@@ -26,7 +26,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
 import { Errors } from '../../core/errors';
-import { arr, bool, endpoint, int, obj, ref, str } from '../../core/schema-builder';
+import { arr, bool, endpoint, id, obj, ref, str } from '../../core/schema-builder';
 
 /**
  * Callback invoked once, inside the creation transaction, after a tenant's
@@ -67,7 +67,7 @@ export interface TenancyConfig {
 }
 
 interface TenantRecord {
-  id: number;
+  id: string;
   name: string;
   taxId: string;
   description: string | null;
@@ -76,8 +76,8 @@ interface TenantRecord {
 }
 
 interface TenantUserRecord {
-  tenantId: number;
-  userId: number;
+  tenantId: string;
+  userId: string;
   isDefault: boolean;
 }
 
@@ -87,22 +87,30 @@ export interface TenancyMethods {
     routeCtx?: PluginRouteContext,
   ) => Promise<TenantRecord>;
   deleteTenant: (
-    input: { id: number | string },
+    input: { id: string },
     routeCtx?: PluginRouteContext,
   ) => Promise<{ ok: true }>;
-  addUserToTenant: (userId: number, tenantId: number) => Promise<void>;
-  getUserTenants: (userId: number) => Promise<TenantRecord[]>;
+  addUserToTenant: (userId: string, tenantId: string) => Promise<void>;
+  getUserTenants: (userId: string) => Promise<TenantRecord[]>;
   getMyTenants: (
-    input: { userId?: number },
+    input: { userId?: string },
     routeCtx?: PluginRouteContext,
   ) => Promise<TenantRecord[]>;
   switchTenant: (
-    input: { taxId: string; userId?: number },
+    input: { taxId: string; userId?: string },
     routeCtx?: PluginRouteContext,
   ) => Promise<{ ok: true }>;
 }
 
 const SAFE_SCHEMA_PREFIX = /^[a-z_][a-z0-9_]*$/;
+
+/**
+ * Subject-id strings that are safe to interpolate into a Postgres schema
+ * name. The tenant claim is verified-JWT-supplied but is *user-controlled*
+ * at sign-up time, so any character that isn't safe for an identifier must
+ * be rejected before {@link tenantSchemaName} concatenates it.
+ */
+const SAFE_TENANT_ID = /^[\w-]+$/;
 
 /**
  * Validate the configured schema prefix once, at factory time. The full
@@ -119,7 +127,7 @@ function assertSafeSchemaPrefix(prefix: string): void {
 const errorRef = ref('ErrorResponse');
 
 const tenantResponse = obj({
-  id: int('Tenant id'),
+  id: id('Tenant id'),
   name: str('Tenant name'),
   taxId: str('Unique tenant tax id / external code'),
   description: str('Optional description'),
@@ -201,7 +209,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
    * Schema name for a tenant. `id` is numeric, so the result is always a
    * valid, non-injectable identifier.
    */
-  const tenantSchemaName = (id: number): string => `${schemaPrefix}${id}`;
+  const tenantSchemaName = (id: string): string => `${schemaPrefix}${id}`;
 
   return {
     name: 'tenancy',
@@ -230,7 +238,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
 
     ...(mountRoutes ? { routes: tenancyRoutes } : {}),
 
-    async enrichTokenClaims(userId: number, ctx: PluginContext): Promise<Record<string, unknown>> {
+    async enrichTokenClaims(userId: string, ctx: PluginContext): Promise<Record<string, unknown>> {
       // Find user's default tenant
       const membership = await ctx.db.findOne<TenantUserRecord>({
         model: 'tenant_user',
@@ -258,13 +266,17 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
     },
 
     wrapAdapter(adapter: DatabaseAdapter, requestContext: Record<string, unknown>): DatabaseAdapter {
-      const tenantId = requestContext.tenantId as number | undefined;
+      const tenantId = requestContext.tenantId as string | undefined;
       // Fail closed: no verified tenant claim ⇒ no schema switch. Business
       // tables live only in tenant schemas, so they are simply not on the
       // search path — there is no silent fallback to another tenant's data.
       if (tenantId == null)
         return adapter;
-      if (!Number.isInteger(tenantId))
+      // Validate: alphanumeric + underscore + hyphen only. The id is
+      // interpolated into a Postgres schema name (via tenantSchemaName), so
+      // any character that isn't safe for an identifier MUST be rejected
+      // here — there is no second sanitization step downstream.
+      if (!SAFE_TENANT_ID.test(tenantId))
         throw Errors.forbidden('Invalid tenant claim');
 
       const isPg = adapter.dialect === 'pg' && !!adapter.rawQuery;
@@ -337,7 +349,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
           where: [{ field: 'taxId', operator: '=', value: taxId }],
         });
 
-      const listUserTenants = async (userId: number): Promise<TenantRecord[]> => {
+      const listUserTenants = async (userId: string): Promise<TenantRecord[]> => {
         const memberships = await ctx.db.findMany<TenantUserRecord>({
           model: 'tenant_user',
           where: [{ field: 'userId', operator: '=', value: userId }],
@@ -353,7 +365,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
         });
       };
 
-      const requireUserId = (input: { userId?: number }, routeCtx?: PluginRouteContext): number => {
+      const requireUserId = (input: { userId?: string }, routeCtx?: PluginRouteContext): string => {
         const userId = routeCtx?.userId ?? input.userId;
         if (userId == null) {
           if (routeCtx)
@@ -392,10 +404,10 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
           });
         },
 
-        async deleteTenant(input: { id: number | string }): Promise<{ ok: true }> {
-          const id = Number(input.id);
-          if (!Number.isInteger(id))
-            throw Errors.badRequest('id must be an integer');
+        async deleteTenant(input: { id: string }): Promise<{ ok: true }> {
+          const id = String(input.id ?? '');
+          if (!id)
+            throw Errors.badRequest('id is required');
 
           const tenant = await ctx.db.findOne<TenantRecord>({
             model: 'tenant',
@@ -422,7 +434,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
           return { ok: true };
         },
 
-        async addUserToTenant(userId: number, tenantId: number): Promise<void> {
+        async addUserToTenant(userId: string, tenantId: string): Promise<void> {
           // Check if user already belongs to this tenant
           const existing = await ctx.db.findOne<TenantUserRecord>({
             model: 'tenant_user',
@@ -451,15 +463,15 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
           });
         },
 
-        async getUserTenants(userId: number): Promise<TenantRecord[]> {
+        async getUserTenants(userId: string): Promise<TenantRecord[]> {
           return listUserTenants(userId);
         },
 
-        async getMyTenants(input: { userId?: number }, routeCtx?: PluginRouteContext): Promise<TenantRecord[]> {
+        async getMyTenants(input: { userId?: string }, routeCtx?: PluginRouteContext): Promise<TenantRecord[]> {
           return listUserTenants(requireUserId(input, routeCtx));
         },
 
-        async switchTenant(input: { taxId: string; userId?: number }, routeCtx?: PluginRouteContext): Promise<{ ok: true }> {
+        async switchTenant(input: { taxId: string; userId?: string }, routeCtx?: PluginRouteContext): Promise<{ ok: true }> {
           const userId = requireUserId(input, routeCtx);
 
           const tenant = await findTenantByTaxId(input.taxId);

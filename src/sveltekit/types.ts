@@ -97,7 +97,7 @@ export interface FortressLocals {
      * `subject.type === 'USER'`. Non-USER principals (e.g. a service
      * account via api-key) leave this undefined; fall back to `subject`.
      */
-    userId?: number;
+    userId?: string;
     /**
      * Verified JWT claims, if the request was authenticated via a JWT.
      * Plugin-resolved principals (api-key, etc.) do not populate this.

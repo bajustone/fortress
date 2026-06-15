@@ -16,7 +16,7 @@ describe('data-isolation plugin', () => {
     });
 
     const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-    const rules = await plugin.scopeRules!(1, 'sale', ctx);
+    const rules = await plugin.scopeRules!('1', 'sale', ctx);
 
     expect(rules).not.toBeNull();
     expect(rules!.filters).toEqual([{ field: 'siteId', operator: '=', value: 3 }]);
@@ -35,7 +35,7 @@ describe('data-isolation plugin', () => {
     });
 
     const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-    const rules = await plugin.scopeRules!(1, 'user', ctx);
+    const rules = await plugin.scopeRules!('1', 'user', ctx);
 
     expect(rules).toBeNull();
   });
@@ -50,7 +50,7 @@ describe('data-isolation plugin', () => {
     });
 
     const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-    const rules = await plugin.scopeRules!(1, 'sale', ctx);
+    const rules = await plugin.scopeRules!('1', 'sale', ctx);
 
     expect(rules!.filters).toHaveLength(2);
     expect(rules!.defaults).toEqual({ orgId: 7, siteId: 3 });
@@ -68,7 +68,7 @@ describe('data-isolation plugin', () => {
     });
 
     const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-    const rules = await plugin.scopeRules!(1, 'anything', ctx);
+    const rules = await plugin.scopeRules!('1', 'anything', ctx);
 
     expect(rules).not.toBeNull();
     expect(rules!.filters[0].value).toBe(1);
@@ -86,7 +86,7 @@ describe('data-isolation plugin', () => {
     });
 
     const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-    const rules = await plugin.scopeRules!(1, 'sale', ctx);
+    const rules = await plugin.scopeRules!('1', 'sale', ctx);
 
     expect(rules).toBeNull();
   });
@@ -105,7 +105,7 @@ describe('data-isolation plugin', () => {
       const methods = plugin.methods!(ctx) as { withoutScope: <T>(name: string, fn: () => Promise<T>) => Promise<T> };
 
       const rules = await methods.withoutScope('site', async () => {
-        return plugin.scopeRules!(1, 'sale', ctx);
+        return plugin.scopeRules!('1', 'sale', ctx);
       });
 
       expect(rules!.filters).toHaveLength(1);
@@ -125,7 +125,7 @@ describe('data-isolation plugin', () => {
       const methods = plugin.methods!(ctx) as { unscoped: <T>(fn: () => Promise<T>) => Promise<T> };
 
       const rules = await methods.unscoped(async () => {
-        return plugin.scopeRules!(1, 'sale', ctx);
+        return plugin.scopeRules!('1', 'sale', ctx);
       });
 
       expect(rules).toBeNull();
@@ -149,7 +149,7 @@ describe('data-isolation plugin', () => {
       const flowB = (async (): Promise<unknown> => {
         // Microtask-delay so flow A is already "inside" unscoped().
         await Promise.resolve();
-        return plugin.scopeRules!(1, 'sale', ctx);
+        return plugin.scopeRules!('1', 'sale', ctx);
       })();
       const flowA = methods.unscoped(async () => {
         await new Promise(r => setTimeout(r, 5));

@@ -24,7 +24,7 @@ import {
  */
 export interface FortressVariables {
   fortressSubject: Subject;
-  fortressUserId?: number;
+  fortressUserId?: string;
   fortressClaims?: TokenClaims;
   fortressScopes?: string[] | null;
   fortressDb: DatabaseAdapter;
@@ -173,7 +173,7 @@ export function getSubject<E extends Env = FortressEnv>(c: Context<E>): Subject 
  * via api-key) — use {@link getSubject} for handlers that need to accept
  * any principal.
  */
-export function getUserId<E extends Env = FortressEnv>(c: Context<E>): number {
+export function getUserId<E extends Env = FortressEnv>(c: Context<E>): string {
   const subject = c.get('fortressSubject' as never) as Subject | undefined;
   if (!subject || subject.type !== 'USER') {
     throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
@@ -192,7 +192,7 @@ export function getUserId<E extends Env = FortressEnv>(c: Context<E>): number {
  *
  * @example
  * ```ts
- * interface MyClaims { tenantId: number; tenantCode: string }
+ * interface MyClaims { tenantId: string; tenantCode: string }
  * const claims = getClaims<MyClaims>(c);
  * claims.customClaims?.tenantCode; // string | undefined
  * ```

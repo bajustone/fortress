@@ -44,7 +44,7 @@ All fields on `MagicLinkConfig` are optional:
 | Method | Signature | Returns |
 |---|---|---|
 | `sendMagicLink` | `(email: string)` | `Promise<{ sent: true }>` |
-| `verifyMagicLink` | `(rawToken: string)` | `Promise<{ userId: number; email: string; accessToken: string }>` |
+| `verifyMagicLink` | `(rawToken: string)` | `Promise<{ userId: string; email: string; accessToken: string }>` |
 
 ### sendMagicLink
 

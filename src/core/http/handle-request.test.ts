@@ -14,7 +14,7 @@ function makeFortress() {
 
 interface AuthBody {
   status: string;
-  user: { id: number; email: string };
+  user: { id: string; email: string };
   accessToken: string;
   refreshToken: string;
 }
@@ -34,7 +34,7 @@ describe('fortress.handleRequest', () => {
         body: JSON.stringify({ email: 'a@b.co', name: 'Alice', password: 'password123' }),
       }));
       expect(res.status).toBe(201);
-      const body = await res.json() as { id: number; email: string };
+      const body = await res.json() as { id: string; email: string };
       expect(body.email).toBe('a@b.co');
     });
 

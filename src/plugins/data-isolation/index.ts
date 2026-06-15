@@ -20,7 +20,7 @@ export interface DataIsolationScope {
   /** Which models (tables) this scope applies to. Use ['*'] for all models. */
   models: string[];
   /** Resolve the current user's value for this scope */
-  resolveValue: (userId: number, ctx: PluginContext) => Promise<unknown>;
+  resolveValue: (userId: string, ctx: PluginContext) => Promise<unknown>;
 }
 
 export interface DataIsolationConfig {
@@ -85,7 +85,7 @@ export function dataIsolation(config: DataIsolationConfig): FortressPlugin & { r
       },
     }],
 
-    async scopeRules(userId: number, model: string, ctx: PluginContext): Promise<ScopeRule | null> {
+    async scopeRules(userId: string, model: string, ctx: PluginContext): Promise<ScopeRule | null> {
       const state = currentBypassState();
       if (state?.all)
         return null;

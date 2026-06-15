@@ -57,7 +57,7 @@ adds `tenantId` / `tenantCode`:
 
 ```ts
 interface MyClaims {
-  tenantId: number;
+  tenantId: string;
   tenantCode: string;
 }
 

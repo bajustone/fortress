@@ -1,6 +1,6 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressSchema } from '../json-schema';
-import { arr, bool, defineComponents, endpoint, enums, int, nullable, nullType, obj, oneOf, record, str, strFormat } from '../schema-builder';
+import { arr, bool, defineComponents, endpoint, enums, id, int, nullable, nullType, obj, oneOf, record, str, strFormat } from '../schema-builder';
 
 // Sentinel for "no body / query / params" that matches EndpointDefinition's
 // defaults so the intersection-based InferEndpointCallInput collapses cleanly.
@@ -16,7 +16,7 @@ interface EmptyInput {}
 
 /** Wire shape of a fortress user — domain `Date` fields are ISO strings on the wire. */
 export interface UserWire {
-  id: number;
+  id: string;
   email: string;
   name: string;
   isActive: boolean;
@@ -66,7 +66,7 @@ export interface AuthTokenPairWire {
 
 /** Wire shape of a persisted refresh-token session. */
 export interface SessionInfoWire {
-  id: number;
+  id: string;
   ipAddress?: string | null;
   userAgent?: string | null;
   deviceName?: string | null;
@@ -91,8 +91,8 @@ export interface ErrorResponseWire {
 
 /** Wire shape of a login identifier. */
 export interface LoginIdentifierWire {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   type: 'email' | 'phone' | 'username';
   value: string;
 }
@@ -106,7 +106,7 @@ export interface OkResponseWire {
 
 const User: FortressSchema<UserWire> = obj(
   {
-    id: int('User ID'),
+    id: id('User ID'),
     email: strFormat('email', 'User email'),
     name: str('Display name'),
     isActive: bool('Account active status'),
@@ -175,7 +175,7 @@ const AuthTokenPair: FortressSchema<AuthTokenPairWire> = obj(
 
 const SessionInfo: FortressSchema<SessionInfoWire> = obj(
   {
-    id: int('Token ID'),
+    id: id('Token ID'),
     ipAddress: nullable(str('Client IP address')),
     userAgent: nullable(str('Client user agent')),
     deviceName: nullable(str('Device name')),
@@ -210,8 +210,8 @@ const ErrorResponse: FortressSchema<ErrorResponseWire> = obj(
 
 const LoginIdentifier: FortressSchema<LoginIdentifierWire> = obj(
   {
-    id: int('Identifier ID'),
-    userId: int('User ID'),
+    id: id('Identifier ID'),
+    userId: id('User ID'),
     type: enums('email', 'phone', 'username'),
     value: str('Identifier value'),
   },
@@ -301,11 +301,11 @@ export interface AuthEndpointsMap {
   revokeSession: EndpointDefinition<
     EmptyInput,
     EmptyInput,
-    { id: number },
+    { id: string },
     { 200: OkResponseWire; 401: ErrorResponseWire }
   >;
   revokeAllOtherSessions: EndpointDefinition<
-    { currentTokenId: number },
+    { currentTokenId: string },
     EmptyInput,
     EmptyInput,
     { 200: OkResponseWire; 401: ErrorResponseWire }
@@ -329,7 +329,7 @@ export interface AuthEndpointsMap {
     { 200: LoginIdentifierWire[]; 401: ErrorResponseWire }
   >;
   impersonate: EndpointDefinition<
-    { targetUserId: number; reason?: string; expirySeconds?: number },
+    { targetUserId: string; reason?: string; expirySeconds?: number },
     EmptyInput,
     EmptyInput,
     { 200: AuthResponseWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
@@ -412,7 +412,7 @@ export const authEndpoints: AuthEndpointsMap = {
     .summary('Revoke a specific session')
     .tags('Auth')
     .security('bearer')
-    .params(obj({ id: int('Session/token ID') }, 'id'))
+    .params(obj({ id: id('Session/token ID') }, 'id'))
     .response(200, 'Session revoked', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('revokeSession')
@@ -423,7 +423,7 @@ export const authEndpoints: AuthEndpointsMap = {
     .description('Revokes all active sessions except the current one. Requires the current token ID.')
     .tags('Auth')
     .security('bearer')
-    .body(obj({ currentTokenId: int('Current token ID to keep') }, 'currentTokenId'))
+    .body(obj({ currentTokenId: id('Current token ID to keep') }, 'currentTokenId'))
     .response(200, 'Other sessions revoked', obj({ ok: bool() }, 'ok'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('revokeAllOtherSessions')
@@ -480,7 +480,7 @@ export const authEndpoints: AuthEndpointsMap = {
     .permission('fortress', 'impersonate')
     .body(obj(
       {
-        targetUserId: int('User to impersonate'),
+        targetUserId: id('User to impersonate'),
         reason: str('Reason for impersonation'),
         expirySeconds: int('Token expiry in seconds (default 3600)'),
       },

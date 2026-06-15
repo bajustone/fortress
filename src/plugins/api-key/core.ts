@@ -20,7 +20,7 @@ import { hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
 
 export interface ApiKeyInfo {
-  id: number;
+  id: string;
   name: string;
   keyPrefix: string;
   scopes: string[] | null;
@@ -30,9 +30,9 @@ export interface ApiKeyInfo {
 }
 
 export interface ApiKeyRecord {
-  id: number;
+  id: string;
   subjectType: SubjectType;
-  subjectId: number;
+  subjectId: string;
   name: string;
   keyHash: string;
   keyPrefix: string;
@@ -97,7 +97,7 @@ export async function createKeyForSubject(
   subject: Subject,
   options: CreateKeyOptions,
   knobs: ApiKeyKnobs,
-): Promise<{ key: string; id: number }> {
+): Promise<{ key: string; id: string }> {
   const activeCount = await db.count({
     model: 'api_key',
     where: [
@@ -161,7 +161,7 @@ export async function listKeysForSubject(
 export async function revokeKeyForSubject(
   db: DatabaseAdapter,
   subject: Subject,
-  keyId: number,
+  keyId: string,
 ): Promise<void> {
   const record = await db.findOne<ApiKeyRecord>({
     model: 'api_key',
@@ -185,9 +185,9 @@ export async function revokeKeyForSubject(
 export async function rotateKeyForSubject(
   db: DatabaseAdapter,
   subject: Subject,
-  keyId: number,
+  keyId: string,
   knobs: { prefix: string },
-): Promise<{ key: string; id: number }> {
+): Promise<{ key: string; id: string }> {
   const record = await db.findOne<ApiKeyRecord>({
     model: 'api_key',
     where: [{ field: 'id', operator: '=', value: keyId }],
@@ -275,7 +275,7 @@ export async function resolveApiKey(
  */
 export async function revokeKeyAsAdmin(
   db: DatabaseAdapter,
-  keyId: number,
+  keyId: string,
 ): Promise<void> {
   const record = await db.findOne<ApiKeyRecord>({
     model: 'api_key',

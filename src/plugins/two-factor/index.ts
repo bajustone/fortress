@@ -31,23 +31,23 @@ export interface TwoFactorConfig {
 }
 
 interface TwoFactorSecretRecord {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   secret: string;
   isEnabled: boolean;
   createdAt: Date;
 }
 
 interface BackupCodeRecord {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   codeHash: string;
   isUsed: boolean;
 }
 
 interface TrustedDeviceRecord {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   deviceHash: string;
   expiresAt: Date;
   lastUsedAt: Date;
@@ -181,9 +181,9 @@ async function generateBackupCodes(count: number): Promise<{ raw: string[]; hash
 }
 
 export interface TwoFactorMethods {
-  enable: (userId: number) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
-  verify: (userId: number, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>;
-  disable: (userId: number) => Promise<void>;
+  enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
+  verify: (userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>;
+  disable: (userId: string) => Promise<void>;
 }
 /**
  * Two-factor authentication plugin factory. Returns a {@link FortressPlugin}
@@ -287,7 +287,7 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
       // Auth service reference for issuing tokens after 2FA verification
       // We need access to signToken and refresh token creation — reuse the fortress instance
       return {
-        async enable(userId: number): Promise<{
+        async enable(userId: string): Promise<{
           secret: string;
           otpauthUrl: string;
           backupCodes: string[];
@@ -344,7 +344,7 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           return { secret, otpauthUrl, backupCodes: backupCodesRaw };
         },
 
-        async verify(userId: number, code: string, meta?: RequestMeta): Promise<{ verified: boolean }> {
+        async verify(userId: string, code: string, meta?: RequestMeta): Promise<{ verified: boolean }> {
           const secretRecord = await ctx.db.findOne<TwoFactorSecretRecord>({
             model: 'two_factor_secret',
             where: [{ field: 'userId', operator: '=', value: userId }],
@@ -428,7 +428,7 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           throw Errors.unauthorized('Invalid two-factor code');
         },
 
-        async disable(userId: number): Promise<void> {
+        async disable(userId: string): Promise<void> {
           await ctx.db.delete({
             model: 'two_factor_secret',
             where: [{ field: 'userId', operator: '=', value: userId }],

@@ -7,15 +7,15 @@ import { generateTOTP, twoFactor } from './index';
 const SECRET = 'two-factor-test-secret-at-least32';
 
 interface TwoFactorMethods {
-  enable: (userId: number) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
-  verify: (userId: number, code: string, meta?: { userAgent?: string }) => Promise<{ verified: boolean }>;
-  disable: (userId: number) => Promise<void>;
+  enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
+  verify: (userId: string, code: string, meta?: { userAgent?: string }) => Promise<{ verified: boolean }>;
+  disable: (userId: string) => Promise<void>;
 }
 
 describe('two-factor plugin', () => {
   let fortress: Fortress<any>;
   let methods: TwoFactorMethods;
-  let userId: number;
+  let userId: string;
 
   beforeEach(async () => {
     fortress = createFortress({

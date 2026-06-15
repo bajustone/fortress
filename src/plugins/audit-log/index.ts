@@ -38,12 +38,12 @@ export type AuditEventType
     | 'SERVICE_ACCOUNT_DELETED';
 
 export interface AuditLogEntry {
-  id: number;
+  id: string;
   timestamp: Date;
   eventType: AuditEventType;
-  actorId: number | null;
+  actorId: string | null;
   actorType: string;
-  targetId: number | null;
+  targetId: string | null;
   targetType: string | null;
   ipAddress: string | null;
   userAgent: string | null;
@@ -54,7 +54,7 @@ export interface AuditLogEntry {
 }
 
 export interface AuditLogQueryOptions {
-  userId?: number;
+  userId?: string;
   eventType?: AuditEventType;
   from?: Date;
   to?: Date;
@@ -70,9 +70,9 @@ async function sha256Hex(input: string): Promise<string> {
 
 export interface CustomAuditEvent {
   eventType: string;
-  actorId?: number | null;
+  actorId?: string | null;
   actorType?: string;
-  targetId?: number | null;
+  targetId?: string | null;
   targetType?: string | null;
   outcome?: string;
   metadata?: Record<string, unknown> | null;
@@ -83,7 +83,7 @@ export interface CustomAuditEvent {
 export interface ChainVerificationResult {
   valid: boolean;
   totalEntries: number;
-  brokenLinks: { entryId: number; expected: string; actual: string | null }[];
+  brokenLinks: { entryId: string; expected: string; actual: string | null }[];
 }
 
 /** Serialization formats supported by {@link AuditLogMethods.exportEntries}. */

@@ -20,15 +20,15 @@ function httpCtx(subject: Subject | undefined): PluginRouteContext {
   };
 }
 
-function userSubject(id: number): Subject {
+function userSubject(id: string): Subject {
   return { type: 'USER', id };
 }
 
 async function setup(config: ApiKeyConfig = { prefix: 'test', maxKeysPerSubject: 3 }): Promise<{
   fortress: Fortress<any>;
   methods: ApiKeyMethods;
-  userId: number;
-  otherUserId: number;
+  userId: string;
+  otherUserId: string;
   accessToken: string;
 }> {
   const fortress = createFortress({
@@ -65,8 +65,8 @@ async function setup(config: ApiKeyConfig = { prefix: 'test', maxKeysPerSubject:
 
 describe('api-key plugin — programmatic methods', () => {
   let methods: ApiKeyMethods;
-  let userId: number;
-  let otherUserId: number;
+  let userId: string;
+  let otherUserId: string;
 
   beforeEach(async () => {
     ({ methods, userId, otherUserId } = await setup());
@@ -431,7 +431,7 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
         body: JSON.stringify({ subject: userSubject(otherUserId), name: 'Forged via HTTP' }),
       }));
       expect(res.status).toBe(201);
-      const body = await res.json() as { key: string; id: number };
+      const body = await res.json() as { key: string; id: string };
       expect(body.key).toMatch(/^test_sk_/);
 
       const aliceKeys = await methods.listKeys({ subject: userSubject(userId) });
@@ -451,7 +451,7 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
         headers: { authorization: `Bearer ${accessToken}` },
       }));
       expect(res.status).toBe(200);
-      const body = await res.json() as { id: number; name: string }[];
+      const body = await res.json() as { id: string; name: string }[];
       // Route returns array shape from listKeys method (not wrapped in { keys: [...] })
       expect(Array.isArray(body)).toBe(true);
       expect(body.some(k => k.name === 'Alice HTTP')).toBe(true);
@@ -493,7 +493,7 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
         },
       }));
       expect(res.status).toBe(200);
-      const body = await res.json() as { key: string; id: number };
+      const body = await res.json() as { key: string; id: string };
       expect(body.key).toMatch(/^test_sk_/);
       expect(body.id).not.toBe(original.id);
 

@@ -241,23 +241,23 @@ interface AuthService {
   login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResponse>;
   refresh(refreshToken: string, meta?: RequestMeta): Promise<AuthTokenPair>;
   logout(refreshToken: string): Promise<void>;
-  me(userId: number): Promise<FortressUser>;
+  me(userId: string): Promise<FortressUser>;
   createUser(data: CreateUserInput): Promise<FortressUser>;
   verifyToken(token: string): Promise<TokenClaims>;
   signToken(claims: Omit<TokenClaims, 'iat' | 'exp'>): Promise<string>;
-  listSessions(userId: number): Promise<SessionInfo[]>;
-  revokeSession(userId: number, tokenId: number): Promise<void>;
-  revokeAllOtherSessions(userId: number, currentTokenId: number): Promise<void>;
-  addLoginIdentifier(userId: number, type: 'email' | 'phone' | 'username', value: string): Promise<void>;
-  removeLoginIdentifier(userId: number, type: string, value: string): Promise<void>;
-  getLoginIdentifiers(userId: number): Promise<LoginIdentifier[]>;
-  impersonate(adminUserId: number, targetUserId: number, options?: { reason?: string; expiresInSeconds?: number }): Promise<AuthResponse>;
+  listSessions(userId: string): Promise<SessionInfo[]>;
+  revokeSession(userId: string, tokenId: string): Promise<void>;
+  revokeAllOtherSessions(userId: string, currentTokenId: string): Promise<void>;
+  addLoginIdentifier(userId: string, type: 'email' | 'phone' | 'username', value: string): Promise<void>;
+  removeLoginIdentifier(userId: string, type: string, value: string): Promise<void>;
+  getLoginIdentifiers(userId: string): Promise<LoginIdentifier[]>;
+  impersonate(adminUserId: string, targetUserId: string, options?: { reason?: string; expiresInSeconds?: number }): Promise<AuthResponse>;
 
   // Admin user management
   listUsers(options: { limit?, offset?, search?, sortBy?, sortDirection? }): Promise<{ users: FortressUser[]; total: number }>;
-  getUserById(userId: number): Promise<FortressUser>;
-  updateUser(userId: number, data: { name?, email?, isActive? }): Promise<FortressUser>;
-  deleteUser(userId: number): Promise<void>;
+  getUserById(userId: string): Promise<FortressUser>;
+  updateUser(userId: string, data: { name?, email?, isActive? }): Promise<FortressUser>;
+  deleteUser(userId: string): Promise<void>;
 }
 ```
 
@@ -433,37 +433,37 @@ When a user is created via `createUser({ email, name, password })`, a `login_ide
 
 ```typescript
 interface IamService {
-  checkPermission(userId: number, resource: string, action: string, context?: PermissionContext): Promise<boolean>;
-  getUserPermissions(userId: number, tenantId?: number): Promise<Permission[]>;
+  checkPermission(userId: string, resource: string, action: string, context?: PermissionContext): Promise<boolean>;
+  getUserPermissions(userId: string, tenantId?: string): Promise<Permission[]>;
   createRole(name: string, permissions: PermissionInput[], description?: string): Promise<Role>;
-  deleteRole(roleId: number): Promise<void>;
-  bindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: number): Promise<void>;
-  bindRoleToUser(userId: number, roleId: number, tenantId?: number): Promise<void>;
-  bindRoleToGroup(groupId: number, roleId: number, tenantId?: number): Promise<void>;
-  unbindRole(subjectType: SubjectType, subjectId: number, roleId: number, tenantId?: number): Promise<void>;
-  bindPermissionToUser(subjectId: number, permission: PermissionInput, tenantId?: number): Promise<void>;
-  bindPermissionToGroup(subjectId: number, permission: PermissionInput, tenantId?: number): Promise<void>;
-  unbindPermissionFromUser(subjectId: number, permissionId: number, tenantId?: number): Promise<void>;
-  unbindPermissionFromGroup(subjectId: number, permissionId: number, tenantId?: number): Promise<void>;
+  deleteRole(roleId: string): Promise<void>;
+  bindRole(subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string): Promise<void>;
+  bindRoleToUser(userId: string, roleId: string, tenantId?: string): Promise<void>;
+  bindRoleToGroup(groupId: string, roleId: string, tenantId?: string): Promise<void>;
+  unbindRole(subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string): Promise<void>;
+  bindPermissionToUser(subjectId: string, permission: PermissionInput, tenantId?: string): Promise<void>;
+  bindPermissionToGroup(subjectId: string, permission: PermissionInput, tenantId?: string): Promise<void>;
+  unbindPermissionFromUser(subjectId: string, permissionId: string, tenantId?: string): Promise<void>;
+  unbindPermissionFromGroup(subjectId: string, permissionId: string, tenantId?: string): Promise<void>;
   createGroup(name: string, description?: string): Promise<Group>;
-  addUserToGroup(groupId: number, userId: number): Promise<void>;
-  removeUserFromGroup(groupId: number, userId: number): Promise<void>;
+  addUserToGroup(groupId: string, userId: string): Promise<void>;
+  removeUserFromGroup(groupId: string, userId: string): Promise<void>;
   syncResources(direction: 'push' | 'pull', filePath?: string): Promise<void>;
   setIamObserver(listener: IamEventListener): void;
   clearPermissionCache(): void;
 
   // Admin CRUD
-  getRole(roleId: number): Promise<Role & { permissions: Permission[] }>;
-  updateRole(roleId: number, data: { name?, description? }): Promise<Role>;
+  getRole(roleId: string): Promise<Role & { permissions: Permission[] }>;
+  updateRole(roleId: string, data: { name?, description? }): Promise<Role>;
   listGroups(options?: { limit?, offset? }): Promise<{ groups: Group[]; total: number }>;
-  getGroup(groupId: number): Promise<Group & { users: FortressUser[] }>;
-  updateGroup(groupId: number, data: { name?, description? }): Promise<Group>;
-  deleteGroup(groupId: number): Promise<void>;
-  getGroupUsers(groupId: number): Promise<FortressUser[]>;
+  getGroup(groupId: string): Promise<Group & { users: FortressUser[] }>;
+  updateGroup(groupId: string, data: { name?, description? }): Promise<Group>;
+  deleteGroup(groupId: string): Promise<void>;
+  getGroupUsers(groupId: string): Promise<FortressUser[]>;
   listPermissions(options?: { resource? }): Promise<Permission[]>;
   createPermission(permission: PermissionInput): Promise<Permission>;
-  deletePermission(permissionId: number): Promise<void>;
-  addPermissionToRole(roleId: number, permission: PermissionInput): Promise<void>;
+  deletePermission(permissionId: string): Promise<void>;
+  addPermissionToRole(roleId: string, permission: PermissionInput): Promise<void>;
 }
 ```
 
@@ -471,7 +471,7 @@ interface IamService {
 
 ```typescript
 interface Permission {
-  id: number;
+  id: string;
   resource: string;     // "user", "post", "invoice"
   action: string;       // "create", "read", "update", "delete"
   effect: 'ALLOW' | 'DENY';
@@ -524,7 +524,7 @@ Key characteristics:
 Fortress threads a single `Subject` type through the entire pipeline:
 
 ```ts
-type Subject = { type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'; id: number };
+type Subject = { type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT'; id: string };
 ```
 
 Every request resolves to a `Subject` (or `undefined` for public routes) via two ordered paths:
@@ -927,8 +927,8 @@ interface FortressPlugin {
   routes?: RouteDefinition[];             // HTTP endpoints (auto-mounted by framework adapter)
   middleware?: MiddlewareDefinition[];     // Per-request middleware
   wrapAdapter?: (adapter: DatabaseAdapter, requestContext: Record<string, unknown>) => DatabaseAdapter;
-  enrichTokenClaims?: (userId: number, ctx: PluginContext) => Promise<Record<string, unknown>>;
-  scopeRules?: (userId: number, model: string, ctx: PluginContext) => Promise<ScopeRule | null>;
+  enrichTokenClaims?: (userId: string, ctx: PluginContext) => Promise<Record<string, unknown>>;
+  scopeRules?: (userId: string, model: string, ctx: PluginContext) => Promise<ScopeRule | null>;
 }
 ```
 
@@ -994,7 +994,7 @@ When a plugin route handler is invoked over HTTP, `fortress.handleRequest` passe
 
 ```typescript
 interface PluginRouteContext {
-  userId?: number;       // Verified JWT subject (if security: ['bearer'])
+  userId?: string;       // Verified JWT subject (if security: ['bearer'])
   claims?: TokenClaims;  // Verified token claims
   meta?: RequestMeta;    // { ipAddress, userAgent } from forwarding headers
   request: Request;      // Raw Request — read headers, cookies, URL directly
@@ -1502,7 +1502,7 @@ mountFortress(app, fortress);  // Mounts all Fortress routes (auth, IAM, plugins
 ```
 
 **Hono context variables** (set by auth middleware, read by helpers):
-- `fortressUserId: number`
+- `fortressUserId: string`
 - `fortressClaims: TokenClaims`
 - `fortressDb: DatabaseAdapter` — plugin-wrapped adapter
 - `fortressGetScopedDb: (model: string) => Promise<DatabaseAdapter>` — lazy scope rules
@@ -1658,7 +1658,7 @@ const fortress = createFortress({
 ```typescript
 // --- Identity ---
 interface FortressUser {
-  id: number;
+  id: string;
   email: string;
   name: string;
   isActive: boolean;
@@ -1668,22 +1668,22 @@ interface FortressUser {
 }
 
 interface LoginIdentifier {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   type: 'email' | 'phone' | 'username';
   value: string;
-  tenantId?: number;
+  tenantId?: string;
 }
 
 // --- Auth ---
 interface TokenClaims {
-  sub: number;                                 // User ID
+  sub: string;                                 // User ID
   name: string;
   groups: string[];
   iss: string;                                 // Issuer
   iat: number;                                 // Issued at
   exp: number;                                 // Expiration
-  act?: { sub: number };                       // RFC 8693 actor claim (impersonation)
+  act?: { sub: string };                       // RFC 8693 actor claim (impersonation)
   customClaims?: Record<string, unknown>;      // Plugin-injected claims
 }
 
@@ -1726,7 +1726,7 @@ interface RequestMeta {
 }
 
 interface SessionInfo {
-  id: number;
+  id: string;
   ipAddress?: string;
   userAgent?: string;
   deviceName?: string;
@@ -1738,7 +1738,7 @@ interface SessionInfo {
 type SubjectType = 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
 
 interface Permission {
-  id: number;
+  id: string;
   resource: string;
   action: string;
   effect: 'ALLOW' | 'DENY';
@@ -1759,26 +1759,26 @@ interface PermissionContext {
   resource?: Record<string, unknown>;          // Resource instance attributes
   request?: Record<string, unknown>;           // Request metadata
   user?: Record<string, unknown>;              // Extra user attributes
-  tenantId?: number;                           // Tenant scoping
+  tenantId?: string;                           // Tenant scoping
 }
 
 interface Role {
-  id: number;
+  id: string;
   name: string;
   description?: string;
   isSystem?: boolean;
 }
 
 interface RoleBinding {
-  id: number;
-  roleId: number;
+  id: string;
+  roleId: string;
   subjectType: SubjectType;
-  subjectId: number;
-  tenantId?: number;
+  subjectId: string;
+  tenantId?: string;
 }
 
 interface Group {
-  id: number;
+  id: string;
   name: string;
   description?: string;
 }

@@ -39,7 +39,7 @@ describe('iam-service: service accounts', () => {
   });
 
   it('getServiceAccount throws notFound for missing id', async () => {
-    await expect(fortress.iam.getServiceAccount(9999)).rejects.toThrow(/not found/i);
+    await expect(fortress.iam.getServiceAccount('9999')).rejects.toThrow(/not found/i);
   });
 
   it('listServiceAccounts paginates and returns total', async () => {

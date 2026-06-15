@@ -61,7 +61,7 @@ The plugin defines four routes that are auto-mounted via `mountFortress`:
 |---|---|---|
 | `generateRegistrationOptions` | `(input: Record<string, unknown>, ctx: PluginRouteContext)` | `Promise<{ options: PublicKeyCredentialCreationOptionsJSON }>` |
 | `verifyRegistration` | `(input: { response: RegistrationResponseJSON }, ctx: PluginRouteContext)` | `Promise<{ verified, credentialId, credentialDeviceType, credentialBackedUp }>` |
-| `generateAuthenticationOptions` | `(input: { userId?: number })` | `Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>` |
+| `generateAuthenticationOptions` | `(input: { userId?: string })` | `Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>` |
 | `verifyAuthentication` | `(input: { response: AuthenticationResponseJSON })` | `Promise<{ verified, userId, accessToken?, refreshToken? }>` |
 
 > **Registration methods require `PluginRouteContext`.** The target user is always the verified caller (`ctx.userId`) — there is no body-supplied `userId` field. When a browser hits `POST /webauthn/register/options` or `/webauthn/register/verify`, `fortress.handleRequest` constructs the `ctx` automatically from the bearer token. Programmatic callers must build one by hand (see below).

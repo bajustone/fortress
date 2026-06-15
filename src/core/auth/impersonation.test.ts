@@ -7,8 +7,8 @@ import { createFortress } from '../fortress';
 const SECRET = 'impersonation-test-secret-32chars!!';
 
 let fortress: Fortress;
-let adminId: number;
-let targetId: number;
+let adminId: string;
+let targetId: string;
 
 beforeEach(async () => {
   fortress = createFortress({
@@ -122,7 +122,7 @@ describe('impersonation', () => {
   });
 
   it('throws NOT_FOUND if target user does not exist', async () => {
-    await expect(fortress.auth.impersonate(adminId, 99999)).rejects.toThrow('Target user not found');
+    await expect(fortress.auth.impersonate(adminId, '99999')).rejects.toThrow('Target user not found');
   });
 
   it('includes reason in pluginData when provided', async () => {

@@ -30,7 +30,7 @@ export function getSubject(event: EventWithFortress): Subject {
  * api-key) — use {@link getSubject} for handlers that accept any
  * principal.
  */
-export function getUserId(event: EventWithFortress): number {
+export function getUserId(event: EventWithFortress): string {
   const subject = event.locals.fortress?.subject;
   if (!subject || subject.type !== 'USER')
     throw Errors.unauthorized('User not authenticated');

@@ -74,7 +74,7 @@ describe('drizzle adapter: buildWhereCondition edge cases', () => {
   });
 
   it('maps snake_case field names to camelCase columns', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'snake@test.com', name: 'Snake', passwordHash: 'h', isActive: true },
     });
@@ -104,7 +104,7 @@ describe('drizzle adapter: buildWhereCondition edge cases', () => {
 
 describe('drizzle adapter: date and value handling', () => {
   it('stores and retrieves Date objects correctly', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'date@test.com', name: 'Date', passwordHash: 'h', isActive: true },
     });
@@ -132,12 +132,12 @@ describe('drizzle adapter: date and value handling', () => {
   });
 
   it('handles booleans correctly', async () => {
-    const user = await db.create<{ id: number; isActive: boolean }>({
+    const user = await db.create<{ id: string; isActive: boolean }>({
       model: 'user',
       data: { email: 'bool@test.com', name: 'Bool', passwordHash: 'h', isActive: false },
     });
 
-    const found = await db.findOne<{ id: number; isActive: boolean }>({
+    const found = await db.findOne<{ id: string; isActive: boolean }>({
       model: 'user',
       where: [{ field: 'id', operator: '=', value: user.id }],
     });
@@ -147,7 +147,7 @@ describe('drizzle adapter: date and value handling', () => {
   });
 
   it('passes null values through unchanged', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'null@test.com', name: 'Null', passwordHash: 'h', isActive: true },
     });
@@ -174,7 +174,7 @@ describe('drizzle adapter: date and value handling', () => {
   });
 
   it('converts undefined values to null', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'undef@test.com', name: 'Undef', passwordHash: 'h', isActive: true },
     });
@@ -278,7 +278,7 @@ describe('drizzle adapter: update returns null on no match', () => {
   });
 
   it('applies update to every matching row while returning one row', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'update-many@test.com', name: 'Many', passwordHash: 'h', isActive: true },
     });
@@ -309,12 +309,12 @@ describe('drizzle adapter: update returns null on no match', () => {
   });
 
   it('returns the updated record when a row matches', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'update@test.com', name: 'Before', passwordHash: 'h', isActive: true },
     });
 
-    const updated = await db.update<{ id: number; name: string }>({
+    const updated = await db.update<{ id: string; name: string }>({
       model: 'user',
       where: [{ field: 'id', operator: '=', value: user.id }],
       data: { name: 'After' },
@@ -334,13 +334,13 @@ describe('drizzle adapter: update returns null on no match', () => {
 // the write lock up front.
 describe('drizzle adapter: concurrent transactions (C3)', () => {
   it('does not error "transaction within a transaction" under concurrency', async () => {
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'cas@test.com', name: 'CAS', passwordHash: 'h', isActive: true },
     });
 
     const txOne = db.transaction(async (tx) => {
-      const row = await tx.findOne<{ id: number; name: string }>({
+      const row = await tx.findOne<{ id: string; name: string }>({
         model: 'user',
         where: [{ field: 'id', operator: '=', value: user.id }],
       });
@@ -355,7 +355,7 @@ describe('drizzle adapter: concurrent transactions (C3)', () => {
       });
     });
     const txTwo = db.transaction(async (tx) => {
-      const row = await tx.findOne<{ id: number; name: string }>({
+      const row = await tx.findOne<{ id: string; name: string }>({
         model: 'user',
         where: [{ field: 'id', operator: '=', value: user.id }],
       });
@@ -389,7 +389,7 @@ describe('drizzle adapter: concurrent transactions (C3)', () => {
   it('compare-and-set update is atomic across concurrent transactions', async () => {
     // This is the pattern OAuth code exchange + refresh rotation rely on:
     // exactly one of N concurrent transactions can flip a NULL claim flag.
-    const user = await db.create<{ id: number }>({
+    const user = await db.create<{ id: string }>({
       model: 'user',
       data: { email: 'claim@test.com', name: 'C', passwordHash: 'h', isActive: true },
     });
@@ -406,7 +406,7 @@ describe('drizzle adapter: concurrent transactions (C3)', () => {
 
     async function tryClaim(): Promise<boolean> {
       return db.transaction(async (tx) => {
-        const claimed = await tx.update<{ id: number }>({
+        const claimed = await tx.update<{ id: string }>({
           model: 'refresh_token',
           where: [
             { field: 'tokenHash', operator: '=', value: 'h-claim' },

@@ -10,7 +10,7 @@ describe('email-verification plugin', () => {
   let fortress: Fortress<any>;
   let capturedToken: string | null;
   let capturedEmail: string | null;
-  const onSend = vi.fn(async (email: string, token: string, _userId: number) => {
+  const onSend = vi.fn(async (email: string, token: string, _userId: string) => {
     capturedEmail = email;
     capturedToken = token;
   });
@@ -49,7 +49,7 @@ describe('email-verification plugin', () => {
         password: 'password-123',
       });
 
-      const result = await (fortress.plugins['email-verification'].verify as (token: string) => Promise<{ userId: number; email: string }>)(capturedToken!);
+      const result = await (fortress.plugins['email-verification'].verify as (token: string) => Promise<{ userId: string; email: string }>)(capturedToken!);
 
       expect(result.email).toBe('alice@example.com');
       expect(result.userId).toBeDefined();
@@ -133,7 +133,7 @@ describe('email-verification plugin', () => {
       });
 
       onSend.mockClear();
-      const sendVerification = fortress.plugins['email-verification'].sendVerification as (userId: number) => Promise<{ token: string }>;
+      const sendVerification = fortress.plugins['email-verification'].sendVerification as (userId: string) => Promise<{ token: string }>;
       const result = await sendVerification(user.id);
 
       expect(result.token).toBeTruthy();

@@ -19,12 +19,12 @@ export interface EmailVerificationConfig {
   /** Block login for unverified users (default: true) */
   requireVerification?: boolean;
   /** Called when a verification token is created */
-  onSendVerification?: (email: string, token: string, userId: number) => Promise<void>;
+  onSendVerification?: (email: string, token: string, userId: string) => Promise<void>;
 }
 
 interface VerificationTokenRecord {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   token: string;
   email: string;
   expiresAt: Date;
@@ -32,8 +32,8 @@ interface VerificationTokenRecord {
 }
 
 export interface EmailVerificationMethods {
-  sendVerification: (userId: number, email?: string) => Promise<{ token: string }>;
-  verify: (rawToken: string) => Promise<{ userId: number; email: string }>;
+  sendVerification: (userId: string, email?: string) => Promise<{ token: string }>;
+  verify: (rawToken: string) => Promise<{ userId: string; email: string }>;
 }
 /**
  * Email verification plugin factory. Returns a {@link FortressPlugin} that
@@ -118,7 +118,7 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
     },
 
     methods: ctx => ({
-      async sendVerification(userId: number, email?: string): Promise<{ token: string }> {
+      async sendVerification(userId: string, email?: string): Promise<{ token: string }> {
         const user = await ctx.db.findOne<FortressUser>({
           model: 'user',
           where: [{ field: 'id', operator: '=', value: userId }],
@@ -149,7 +149,7 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
         return { token: raw };
       },
 
-      async verify(rawToken: string): Promise<{ userId: number; email: string }> {
+      async verify(rawToken: string): Promise<{ userId: string; email: string }> {
         const hash = await hashToken(rawToken);
 
         const record = await ctx.db.findOne<VerificationTokenRecord>({

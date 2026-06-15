@@ -26,9 +26,9 @@ function mockRes(): ExpressResponse {
 
 interface Ctx {
   fortress: Fortress<any>;
-  userId: number;
+  userId: string;
   userKey: string;
-  saId: number;
+  saId: string;
   saKey: string;
   saKeyNoPerm: string;
   userAccessToken: string;

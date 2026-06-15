@@ -27,7 +27,7 @@ import type { Fortress } from '../../core/fortress';
 export interface MinimalExpressRequest {
   ip?: string;
   headers: Record<string, string | string[] | undefined>;
-  fortressUserId?: number;
+  fortressUserId?: string;
 }
 
 export interface ExpressRateLimitOptions {
@@ -42,7 +42,7 @@ export interface ExpressRateLimitOptions {
 }
 
 interface RateLimitCheck {
-  check: (rule: string, keys: { ip?: string; userId?: number | string }) => Promise<void>;
+  check: (rule: string, keys: { ip?: string; userId?: string }) => Promise<void>;
 }
 
 function defaultExtractIp(req: MinimalExpressRequest): string | undefined {

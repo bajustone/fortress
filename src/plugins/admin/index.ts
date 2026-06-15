@@ -24,7 +24,7 @@ import { listKeysForSubject, revokeKeyAsAdmin } from '../api-key/core';
 
 export interface AdminPluginOptions {
   /** User IDs that bypass all permission checks (superadmins) */
-  adminUserIds?: number[];
+  adminUserIds?: string[];
   /** Resource name for fortress admin permissions. Default: 'fortress'. */
   resource?: string;
   /**
@@ -84,20 +84,21 @@ function boolSchema(desc: string): { type: 'boolean'; description: string } {
   return { type: 'boolean', description: desc };
 }
 
-/** Parse a value to a positive integer, or return undefined. */
-function safeInt(v: unknown): number | undefined {
-  if (v === undefined || v === null || v === '')
-    return undefined;
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
-}
-
-/** Parse a value to a required positive integer, or throw. */
-function requireInt(v: unknown, name: string): number {
-  const n = safeInt(v);
-  if (n === undefined)
-    throw Errors.badRequest(`${name} must be a positive integer`);
-  return n;
+/**
+ * Parse a value to a required non-empty subject-id string.
+ *
+ * IDs are opaque strings at the fortress API surface (RFC 7519 §4.1.2 for
+ * JWT `sub`, and per the v0.3.0 lock-in audit). Numeric inputs are accepted
+ * and stringified — numeric-keyed adapters keep working transparently.
+ */
+function requireId(v: unknown, name: string): string {
+  if (v == null || v === '')
+    throw Errors.badRequest(`${name} is required`);
+  if (typeof v === 'string')
+    return v;
+  if (typeof v === 'number' && Number.isFinite(v))
+    return String(v);
+  throw Errors.badRequest(`${name} must be a string or number`);
 }
 
 // ── Admin endpoint definitions ────────────────────────────────────
@@ -964,7 +965,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       },
 
       async bootstrap(
-        body: { userId?: number },
+        body: { userId?: string },
         routeCtx?: PluginRouteContext,
       ): Promise<{ ok: boolean; role: Role }> {
         // Two call paths:
@@ -977,7 +978,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         //      have a direct reference to `fortress.plugins.admin`.
         const callerId = routeCtx?.userId;
         const isSuperadmin = callerId != null && adminUserIds.has(callerId);
-        let userId: number | undefined;
+        let userId: string | undefined;
         if (routeCtx) {
           userId = isSuperadmin && body.userId != null ? body.userId : callerId;
           if (userId == null)
@@ -991,7 +992,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         const db = ctx.db;
 
         // Verify user exists
-        const user = await db.findOne<{ id: number }>({
+        const user = await db.findOne<{ id: string }>({
           model: 'user',
           where: [{ field: 'id', operator: '=', value: userId }],
         });
@@ -1036,9 +1037,9 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         }
 
         // Find or create each permission
-        const permissionIds: number[] = [];
+        const permissionIds: string[] = [];
         for (const perm of declaredPermissions) {
-          let existing = await db.findOne<{ id: number }>({
+          let existing = await db.findOne<{ id: string }>({
             model: 'permission',
             where: [
               { field: 'resource', operator: '=', value: perm.resource },
@@ -1046,7 +1047,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
             ],
           });
           if (!existing) {
-            existing = await db.create<{ id: number }>({
+            existing = await db.create<{ id: string }>({
               model: 'permission',
               data: {
                 resource: perm.resource,
@@ -1070,7 +1071,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
 
         // Link all permissions to the role
         for (const permId of permissionIds) {
-          const existingLink = await db.findOne<{ id: number }>({
+          const existingLink = await db.findOne<{ id: string }>({
             model: 'role_permission',
             where: [
               { field: 'roleId', operator: '=', value: adminRole.id },
@@ -1083,7 +1084,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         }
 
         // Bind the role to the user
-        const existingBinding = await db.findOne<{ id: number }>({
+        const existingBinding = await db.findOne<{ id: string }>({
           model: 'role_binding',
           where: [
             { field: 'roleId', operator: '=', value: adminRole.id },
@@ -1118,7 +1119,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async getUserById(body: Record<string, string>): Promise<FortressUser> {
         if (!ctx.auth)
           throw Errors.database('Auth service not available');
-        return ctx.auth.getUserById(requireInt(body.id, 'id'));
+        return ctx.auth.getUserById(requireId(body.id, 'id'));
       },
 
       async createUser(body: Record<string, unknown>): Promise<FortressUser> {
@@ -1136,13 +1137,13 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.auth)
           throw Errors.database('Auth service not available');
         const { id, ...data } = body;
-        return ctx.auth.updateUser(requireInt(id, 'id'), data as { name?: string; email?: string; isActive?: boolean; password?: string });
+        return ctx.auth.updateUser(requireId(id, 'id'), data as { name?: string; email?: string; isActive?: boolean; password?: string });
       },
 
       async deleteUser(body: Record<string, string>): Promise<{ ok: boolean }> {
         if (!ctx.auth)
           throw Errors.database('Auth service not available');
-        await ctx.auth.deleteUser(requireInt(body.id, 'id'));
+        await ctx.auth.deleteUser(requireId(body.id, 'id'));
         return { ok: true };
       },
 
@@ -1151,14 +1152,14 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async getRole(body: Record<string, string>): Promise<Role & { permissions: Permission[] }> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        return ctx.iam.getRole(requireInt(body.id, 'id'));
+        return ctx.iam.getRole(requireId(body.id, 'id'));
       },
 
       async updateRole(body: Record<string, unknown>): Promise<Role> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         const { id, ...data } = body;
-        return ctx.iam.updateRole(requireInt(id, 'id'), data as { name?: string; description?: string });
+        return ctx.iam.updateRole(requireId(id, 'id'), data as { name?: string; description?: string });
       },
 
       async listGroups(body: Record<string, string>): Promise<{ groups: Group[]; total: number }> {
@@ -1173,27 +1174,27 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async getGroup(body: Record<string, string>): Promise<Group & { users: FortressUser[] }> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        return ctx.iam.getGroup(requireInt(body.id, 'id'));
+        return ctx.iam.getGroup(requireId(body.id, 'id'));
       },
 
       async updateGroup(body: Record<string, unknown>): Promise<Group> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         const { id, ...data } = body;
-        return ctx.iam.updateGroup(requireInt(id, 'id'), data as { name?: string; description?: string });
+        return ctx.iam.updateGroup(requireId(id, 'id'), data as { name?: string; description?: string });
       },
 
       async deleteGroup(body: Record<string, string>): Promise<{ ok: boolean }> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        await ctx.iam.deleteGroup(requireInt(body.id, 'id'));
+        await ctx.iam.deleteGroup(requireId(body.id, 'id'));
         return { ok: true };
       },
 
       async getGroupUsers(body: Record<string, string>): Promise<FortressUser[]> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        return ctx.iam.getGroupUsers(requireInt(body.id, 'id'));
+        return ctx.iam.getGroupUsers(requireId(body.id, 'id'));
       },
 
       async listPermissions(body: Record<string, string>): Promise<Permission[]> {
@@ -1213,7 +1214,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async deletePermission(body: Record<string, string>): Promise<{ ok: boolean }> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        await ctx.iam.deletePermission(requireInt(body.id, 'id'));
+        await ctx.iam.deletePermission(requireId(body.id, 'id'));
         return { ok: true };
       },
 
@@ -1221,7 +1222,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         const { id, ...permission } = body;
-        await ctx.iam.addPermissionToRole(requireInt(id, 'id'), permission as unknown as PermissionInput);
+        await ctx.iam.addPermissionToRole(requireId(id, 'id'), permission as unknown as PermissionInput);
         return { ok: true };
       },
 
@@ -1246,7 +1247,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async deleteRole(body: Record<string, unknown>): Promise<{ ok: boolean }> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        await ctx.iam.deleteRole(requireInt(body.id, 'id'));
+        await ctx.iam.deleteRole(requireId(body.id, 'id'));
         return { ok: true };
       },
 
@@ -1254,8 +1255,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.bindRoleToUser(
-          requireInt(body.userId, 'userId'),
-          requireInt(body.id, 'id'),
+          requireId(body.userId, 'userId'),
+          requireId(body.id, 'id'),
           body.tenantId as string | undefined,
         );
         return { ok: true };
@@ -1265,8 +1266,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.bindRoleToGroup(
-          requireInt(body.groupId, 'groupId'),
-          requireInt(body.id, 'id'),
+          requireId(body.groupId, 'groupId'),
+          requireId(body.id, 'id'),
           body.tenantId as string | undefined,
         );
         return { ok: true };
@@ -1277,8 +1278,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
           throw Errors.database('IAM service not available');
         await ctx.iam.unbindRole(
           body.subjectType as SubjectType,
-          requireInt(body.subjectId, 'subjectId'),
-          requireInt(body.id, 'id'),
+          requireId(body.subjectId, 'subjectId'),
+          requireId(body.id, 'id'),
           body.tenantId as string | undefined,
         );
         return { ok: true };
@@ -1297,8 +1298,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.addUserToGroup(
-          requireInt(body.id, 'id'),
-          requireInt(body.userId, 'userId'),
+          requireId(body.id, 'id'),
+          requireId(body.userId, 'userId'),
         );
         return { ok: true };
       },
@@ -1307,8 +1308,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.removeUserFromGroup(
-          requireInt(body.id, 'id'),
-          requireInt(body.userId, 'userId'),
+          requireId(body.id, 'id'),
+          requireId(body.userId, 'userId'),
         );
         return { ok: true };
       },
@@ -1317,7 +1318,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         return ctx.iam.getPermissionsForSubject(
-          { type: 'USER', id: requireInt(body.id, 'id') },
+          { type: 'USER', id: requireId(body.id, 'id') },
           body.tenantId as string | undefined,
         );
       },
@@ -1326,7 +1327,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         const allowed = await ctx.iam.checkPermission(
-          { type: 'USER', id: requireInt(body.userId, 'userId') },
+          { type: 'USER', id: requireId(body.userId, 'userId') },
           body.resource as string,
           body.action as string,
           body.context as Record<string, unknown> | undefined,
@@ -1338,7 +1339,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.bindPermissionToUser(
-          requireInt(body.userId, 'userId'),
+          requireId(body.userId, 'userId'),
           body.permission as PermissionInput,
           body.tenantId as string | undefined,
         );
@@ -1349,7 +1350,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.bindPermissionToGroup(
-          requireInt(body.groupId, 'groupId'),
+          requireId(body.groupId, 'groupId'),
           body.permission as PermissionInput,
           body.tenantId as string | undefined,
         );
@@ -1360,8 +1361,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.unbindPermissionFromUser(
-          requireInt(body.userId, 'userId'),
-          requireInt(body.permissionId, 'permissionId'),
+          requireId(body.userId, 'userId'),
+          requireId(body.permissionId, 'permissionId'),
           body.tenantId as string | undefined,
         );
         return { ok: true };
@@ -1371,8 +1372,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.unbindPermissionFromGroup(
-          requireInt(body.groupId, 'groupId'),
-          requireInt(body.permissionId, 'permissionId'),
+          requireId(body.groupId, 'groupId'),
+          requireId(body.permissionId, 'permissionId'),
           body.tenantId as string | undefined,
         );
         return { ok: true };
@@ -1410,13 +1411,13 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async getServiceAccount(body: Record<string, unknown>): Promise<unknown> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        return ctx.iam.getServiceAccount(requireInt(body.id, 'id'));
+        return ctx.iam.getServiceAccount(requireId(body.id, 'id'));
       },
 
       async updateServiceAccount(body: Record<string, unknown>): Promise<unknown> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        return ctx.iam.updateServiceAccount(requireInt(body.id, 'id'), {
+        return ctx.iam.updateServiceAccount(requireId(body.id, 'id'), {
           displayName: body.displayName as string | null | undefined,
           description: body.description as string | null | undefined,
           isActive: body.isActive as boolean | undefined,
@@ -1426,7 +1427,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async deleteServiceAccount(body: Record<string, unknown>): Promise<{ ok: boolean }> {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
-        await ctx.iam.deleteServiceAccount(requireInt(body.id, 'id'));
+        await ctx.iam.deleteServiceAccount(requireId(body.id, 'id'));
         return { ok: true };
       },
 
@@ -1434,7 +1435,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         return ctx.iam.getPermissionsForSubject(
-          { type: 'SERVICE_ACCOUNT', id: requireInt(body.id, 'id') },
+          { type: 'SERVICE_ACCOUNT', id: requireId(body.id, 'id') },
           body.tenantId as string | undefined,
         );
       },
@@ -1443,8 +1444,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.bindRoleToServiceAccount(
-          requireInt(body.serviceAccountId, 'serviceAccountId'),
-          requireInt(body.id, 'id'),
+          requireId(body.serviceAccountId, 'serviceAccountId'),
+          requireId(body.id, 'id'),
           body.tenantId as string | undefined,
         );
         return { ok: true };
@@ -1454,8 +1455,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.unbindRoleFromServiceAccount(
-          requireInt(body.serviceAccountId, 'serviceAccountId'),
-          requireInt(body.id, 'id'),
+          requireId(body.serviceAccountId, 'serviceAccountId'),
+          requireId(body.id, 'id'),
           body.tenantId as string | undefined,
         );
         return { ok: true };
@@ -1465,7 +1466,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.bindPermissionToServiceAccount(
-          requireInt(body.serviceAccountId, 'serviceAccountId'),
+          requireId(body.serviceAccountId, 'serviceAccountId'),
           body.permission as PermissionInput,
           body.tenantId as string | undefined,
         );
@@ -1476,8 +1477,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         if (!ctx.iam)
           throw Errors.database('IAM service not available');
         await ctx.iam.unbindPermissionFromServiceAccount(
-          requireInt(body.serviceAccountId, 'serviceAccountId'),
-          requireInt(body.permissionId, 'permissionId'),
+          requireId(body.serviceAccountId, 'serviceAccountId'),
+          requireId(body.permissionId, 'permissionId'),
           body.tenantId as string | undefined,
         );
         return { ok: true };
@@ -1496,10 +1497,10 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
 
       async adminCreateUserApiKey(
         body: Record<string, unknown>,
-      ): Promise<{ key: string; id: number }> {
-        const userId = requireInt(body.userId, 'userId');
+      ): Promise<{ key: string; id: string }> {
+        const userId = requireId(body.userId, 'userId');
         // Verify the user exists so we never mint an orphan key.
-        const user = await ctx.db.findOne<{ id: number }>({
+        const user = await ctx.db.findOne<{ id: string }>({
           model: 'user',
           where: [{ field: 'id', operator: '=', value: userId }],
         });
@@ -1521,7 +1522,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       ): Promise<{ keys: ApiKeyInfo[] }> {
         const keys = await listKeysForSubject(ctx.db, {
           type: 'USER',
-          id: requireInt(body.userId, 'userId'),
+          id: requireId(body.userId, 'userId'),
         });
         return { keys };
       },
@@ -1529,7 +1530,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async adminRevokeUserApiKey(
         body: Record<string, unknown>,
       ): Promise<{ ok: boolean }> {
-        await revokeKeyAsAdmin(ctx.db, requireInt(body.id, 'id'));
+        await revokeKeyAsAdmin(ctx.db, requireId(body.id, 'id'));
         return { ok: true };
       },
 
@@ -1537,13 +1538,13 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
 
       async adminCreateServiceAccountApiKey(
         body: Record<string, unknown>,
-      ): Promise<{ key: string; id: number }> {
-        const serviceAccountId = requireInt(body.id, 'id');
+      ): Promise<{ key: string; id: string }> {
+        const serviceAccountId = requireId(body.id, 'id');
         // Verify the service account exists so we never mint an orphan
         // key. Inactive service accounts are allowed here — the key will
         // just fail to authenticate until the account is reactivated,
         // which is occasionally useful for pre-provisioning.
-        const sa = await ctx.db.findOne<{ id: number }>({
+        const sa = await ctx.db.findOne<{ id: string }>({
           model: 'service_account',
           where: [{ field: 'id', operator: '=', value: serviceAccountId }],
         });
@@ -1563,7 +1564,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       ): Promise<{ keys: ApiKeyInfo[] }> {
         const keys = await listKeysForSubject(ctx.db, {
           type: 'SERVICE_ACCOUNT',
-          id: requireInt(body.id, 'id'),
+          id: requireId(body.id, 'id'),
         });
         return { keys };
       },
@@ -1571,7 +1572,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
       async adminRevokeServiceAccountApiKey(
         body: Record<string, unknown>,
       ): Promise<{ ok: boolean }> {
-        await revokeKeyAsAdmin(ctx.db, requireInt(body.keyId, 'keyId'));
+        await revokeKeyAsAdmin(ctx.db, requireId(body.keyId, 'keyId'));
         return { ok: true };
       },
 
@@ -1615,18 +1616,18 @@ function getApiKeyMethods(ctx: PluginContext): ApiKeyMethods {
  * Extract userId from a framework-agnostic request object.
  * Supports both Hono Context and Express Request.
  */
-function extractUserId(request: unknown): number | undefined {
+function extractUserId(request: unknown): string | undefined {
   if (!request || typeof request !== 'object')
     return undefined;
 
   // Hono Context: has .get() method
   if ('get' in request && typeof (request as any).get === 'function') {
-    return (request as any).get('fortressUserId') as number | undefined;
+    return (request as any).get('fortressUserId') as string | undefined;
   }
 
   // Express Request: has .fortressUserId property
   if ('fortressUserId' in request) {
-    return (request as any).fortressUserId as number | undefined;
+    return (request as any).fortressUserId as string | undefined;
   }
 
   return undefined;

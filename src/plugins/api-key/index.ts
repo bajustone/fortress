@@ -22,7 +22,7 @@ import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../co
 import type { Subject } from '../../core/types';
 import type { ApiKeyInfo, ApiKeyKnobs, CreateKeyOptions } from './core';
 import { Errors } from '../../core/errors';
-import { arr, bool, endpoint, int, obj, ref, str } from '../../core/schema-builder';
+import { arr, bool, endpoint, id, int, obj, ref, str } from '../../core/schema-builder';
 import {
   createKeyForSubject,
   deleteAllKeysForSubject,
@@ -53,19 +53,19 @@ export interface ApiKeyMethods {
   createKey: (
     input: { subject?: Subject; name: string; scopes?: string[]; expiresAt?: Date | string },
     routeCtx?: PluginRouteContext,
-  ) => Promise<{ key: string; id: number }>;
+  ) => Promise<{ key: string; id: string }>;
   listKeys: (
     input: { subject?: Subject },
     routeCtx?: PluginRouteContext,
   ) => Promise<ApiKeyInfo[]>;
   revokeKey: (
-    input: { subject?: Subject; id: number | string },
+    input: { subject?: Subject; id: string },
     routeCtx?: PluginRouteContext,
   ) => Promise<{ ok: true }>;
   rotateKey: (
-    input: { subject?: Subject; id: number | string },
+    input: { subject?: Subject; id: string },
     routeCtx?: PluginRouteContext,
-  ) => Promise<{ key: string; id: number }>;
+  ) => Promise<{ key: string; id: string }>;
   resolveKey: (
     rawKey: string,
   ) => Promise<{ subject: Subject; scopes: string[] | null } | null>;
@@ -102,7 +102,7 @@ const apiKeySelfServiceRoutes = {
     .security('bearer')
     .response(200, 'Keys', obj({
       keys: arr(obj({
-        id: int('Database id'),
+        id: id('Database id'),
         name: str('Key label'),
         keyPrefix: str('First 12 characters of the key, for identification'),
         scopes: arr(str()),
@@ -219,7 +219,7 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
         async createKey(
           input: { subject?: Subject; name: string; scopes?: string[]; expiresAt?: Date | string },
           routeCtx?: PluginRouteContext,
-        ): Promise<{ key: string; id: number }> {
+        ): Promise<{ key: string; id: string }> {
           const subject = resolveCallerSubject(input, routeCtx);
           const options: CreateKeyOptions = {
             name: String(input.name ?? ''),
@@ -240,24 +240,24 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
         },
 
         async revokeKey(
-          input: { subject?: Subject; id: number | string },
+          input: { subject?: Subject; id: string },
           routeCtx?: PluginRouteContext,
         ): Promise<{ ok: true }> {
           const subject = resolveCallerSubject(input, routeCtx);
-          const keyId = Number(input.id);
-          if (!Number.isFinite(keyId))
+          const keyId = String(input.id ?? '');
+          if (!keyId)
             throw Errors.badRequest('id is required');
           await revokeKeyForSubject(ctx.db, subject, keyId);
           return { ok: true };
         },
 
         async rotateKey(
-          input: { subject?: Subject; id: number | string },
+          input: { subject?: Subject; id: string },
           routeCtx?: PluginRouteContext,
-        ): Promise<{ key: string; id: number }> {
+        ): Promise<{ key: string; id: string }> {
           const subject = resolveCallerSubject(input, routeCtx);
-          const keyId = Number(input.id);
-          if (!Number.isFinite(keyId))
+          const keyId = String(input.id ?? '');
+          if (!keyId)
             throw Errors.badRequest('id is required');
           return rotateKeyForSubject(ctx.db, subject, keyId, { prefix: knobs.prefix });
         },

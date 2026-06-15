@@ -30,7 +30,7 @@ export interface DispatchAuth {
   /** Resolved request principal — USER or SERVICE_ACCOUNT. Present iff authenticated. */
   subject?: Subject;
   /** Convenience alias for `subject?.id` when the subject is a USER. */
-  userId?: number;
+  userId?: string;
   claims?: TokenClaims;
   /** Credential-level narrowing scopes (e.g. API-key scopes). */
   scopes?: string[] | null;
@@ -382,10 +382,10 @@ async function invokeAuthHandler(
     case 'listSessions':
       return fortress.auth.listSessions(requireUserId(auth));
     case 'revokeSession':
-      await fortress.auth.revokeSession(requireUserId(auth), Number(params.id));
+      await fortress.auth.revokeSession(requireUserId(auth), params.id);
       return { ok: true };
     case 'revokeAllOtherSessions':
-      await fortress.auth.revokeAllOtherSessions(requireUserId(auth), Number(body.currentTokenId));
+      await fortress.auth.revokeAllOtherSessions(requireUserId(auth), String(body.currentTokenId ?? ''));
       return { ok: true };
     case 'addLoginIdentifier':
       await fortress.auth.addLoginIdentifier(
@@ -404,7 +404,7 @@ async function invokeAuthHandler(
     case 'getLoginIdentifiers':
       return fortress.auth.getLoginIdentifiers(requireUserId(auth));
     case 'impersonate':
-      return fortress.auth.impersonate(requireUserId(auth), Number(body.targetUserId), {
+      return fortress.auth.impersonate(requireUserId(auth), String(body.targetUserId ?? ''), {
         reason: body.reason as string | undefined,
         expirySeconds: body.expirySeconds as number | undefined,
       });
@@ -431,27 +431,27 @@ async function invokeIamHandler(
         body.description as string | undefined,
       );
     case 'deleteRole':
-      await fortress.iam.deleteRole(Number(params.id));
+      await fortress.iam.deleteRole(params.id);
       return { ok: true };
     case 'bindRoleToUser':
       await fortress.iam.bindRoleToUser(
-        Number(body.userId),
-        Number(params.id),
+        String(body.userId ?? ''),
+        params.id,
         body.tenantId as string | undefined,
       );
       return { ok: true };
     case 'bindRoleToGroup':
       await fortress.iam.bindRoleToGroup(
-        Number(body.groupId),
-        Number(params.id),
+        String(body.groupId ?? ''),
+        params.id,
         body.tenantId as string | undefined,
       );
       return { ok: true };
     case 'unbindRole':
       await fortress.iam.unbindRole(
         body.subjectType as never,
-        Number(body.subjectId),
-        Number(params.id),
+        String(body.subjectId ?? ''),
+        params.id,
         body.tenantId as string | undefined,
       );
       return { ok: true };
@@ -461,14 +461,14 @@ async function invokeIamHandler(
         body.description as string | undefined,
       );
     case 'addUserToGroup':
-      await fortress.iam.addUserToGroup(Number(params.id), Number(body.userId));
+      await fortress.iam.addUserToGroup(params.id, String(body.userId ?? ''));
       return { ok: true };
     case 'removeUserFromGroup':
-      await fortress.iam.removeUserFromGroup(Number(params.id), Number(params.userId));
+      await fortress.iam.removeUserFromGroup(params.id, params.userId);
       return { ok: true };
     case 'getUserPermissions':
       return fortress.iam.getPermissionsForSubject(
-        { type: 'USER', id: Number(params.id) },
+        { type: 'USER', id: params.id },
         body.tenantId as string | undefined,
       );
     case 'checkPermission': {
@@ -476,10 +476,10 @@ async function invokeIamHandler(
       // legacy `{ userId }` shape. Defaulting to USER keeps this backwards
       // compatible for callers that haven't migrated yet — step 10 updates
       // the endpoint body schema to the new shape.
-      const subjectIn = body.subject as { type?: string; id?: number } | undefined;
-      const subject = subjectIn?.type && subjectIn?.id != null
-        ? { type: subjectIn.type as 'USER' | 'GROUP' | 'SERVICE_ACCOUNT', id: Number(subjectIn.id) }
-        : { type: 'USER' as const, id: Number(body.userId) };
+      const subjectIn = body.subject as { type?: string; id?: string } | undefined;
+      const subject: Subject = subjectIn?.type && subjectIn?.id != null
+        ? { type: subjectIn.type as 'USER' | 'GROUP' | 'SERVICE_ACCOUNT', id: String(subjectIn.id) }
+        : { type: 'USER' as const, id: String(body.userId ?? '') };
       // M7 fix: sanitize caller-supplied context before forwarding to the
       // evaluator. `/iam/check` is an admin diagnostic; we must NOT let a
       // caller widen credentialScopes (which would let any caller answer
@@ -503,29 +503,29 @@ async function invokeIamHandler(
     }
     case 'bindPermissionToUser':
       await fortress.iam.bindPermissionToUser(
-        Number(body.userId),
+        String(body.userId ?? ''),
         body.permission as never,
         body.tenantId as string | undefined,
       );
       return { ok: true };
     case 'bindPermissionToGroup':
       await fortress.iam.bindPermissionToGroup(
-        Number(body.groupId),
+        String(body.groupId ?? ''),
         body.permission as never,
         body.tenantId as string | undefined,
       );
       return { ok: true };
     case 'unbindPermissionFromUser':
       await fortress.iam.unbindPermissionFromUser(
-        Number(body.userId),
-        Number(body.permissionId),
+        String(body.userId ?? ''),
+        String(body.permissionId ?? ''),
         body.tenantId as string | undefined,
       );
       return { ok: true };
     case 'unbindPermissionFromGroup':
       await fortress.iam.unbindPermissionFromGroup(
-        Number(body.groupId),
-        Number(body.permissionId),
+        String(body.groupId ?? ''),
+        String(body.permissionId ?? ''),
         body.tenantId as string | undefined,
       );
       return { ok: true };
@@ -543,46 +543,46 @@ async function invokeIamHandler(
         offset: body.offset != null ? Number(body.offset) : undefined,
       });
     case 'getServiceAccount':
-      return fortress.iam.getServiceAccount(Number(params.id));
+      return fortress.iam.getServiceAccount(params.id);
     case 'updateServiceAccount':
-      return fortress.iam.updateServiceAccount(Number(params.id), {
+      return fortress.iam.updateServiceAccount(params.id, {
         displayName: body.displayName as string | null | undefined,
         description: body.description as string | null | undefined,
         isActive: body.isActive as boolean | undefined,
       });
     case 'deleteServiceAccount':
-      await fortress.iam.deleteServiceAccount(Number(params.id));
+      await fortress.iam.deleteServiceAccount(params.id);
       return { ok: true };
     case 'getServiceAccountPermissions':
       return fortress.iam.getPermissionsForSubject(
-        { type: 'SERVICE_ACCOUNT', id: Number(params.id) },
+        { type: 'SERVICE_ACCOUNT', id: params.id },
         body.tenantId as string | undefined,
       );
     case 'bindRoleToServiceAccount':
       await fortress.iam.bindRoleToServiceAccount(
-        Number(body.serviceAccountId),
-        Number(params.id),
+        String(body.serviceAccountId ?? ''),
+        params.id,
         body.tenantId as string | undefined,
       );
       return { ok: true };
     case 'unbindRoleFromServiceAccount':
       await fortress.iam.unbindRoleFromServiceAccount(
-        Number(body.serviceAccountId),
-        Number(params.id),
+        String(body.serviceAccountId ?? ''),
+        params.id,
         body.tenantId as string | undefined,
       );
       return { ok: true };
     case 'bindPermissionToServiceAccount':
       await fortress.iam.bindPermissionToServiceAccount(
-        Number(body.serviceAccountId),
+        String(body.serviceAccountId ?? ''),
         body.permission as never,
         body.tenantId as string | undefined,
       );
       return { ok: true };
     case 'unbindPermissionFromServiceAccount':
       await fortress.iam.unbindPermissionFromServiceAccount(
-        Number(body.serviceAccountId),
-        Number(body.permissionId),
+        String(body.serviceAccountId ?? ''),
+        String(body.permissionId ?? ''),
         body.tenantId as string | undefined,
       );
       return { ok: true };
@@ -592,7 +592,7 @@ async function invokeIamHandler(
   }
 }
 
-function requireUserId(auth: DispatchAuth): number {
+function requireUserId(auth: DispatchAuth): string {
   if (!auth.userId)
     throw new FortressError('UNAUTHORIZED', 'User not authenticated', 401);
   return auth.userId;

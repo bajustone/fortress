@@ -7,7 +7,7 @@ import { createFortress } from '../fortress';
 let fortress: Fortress;
 const SECRET = 'hooks-test-secret-at-least-32chars!!';
 
-async function seedUser(): Promise<{ id: number }> {
+async function seedUser(): Promise<{ id: string }> {
   return fortress.auth.createUser({
     email: 'hook-user@example.com',
     name: 'Hook User',

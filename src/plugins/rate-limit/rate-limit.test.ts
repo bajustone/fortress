@@ -367,7 +367,7 @@ describe('rate-limit plugin', () => {
       });
 
       const methods = fortress.plugins['rate-limit'] as unknown as {
-        check: (r: string, k: { ip?: string; userId?: number }) => Promise<void>;
+        check: (r: string, k: { ip?: string; userId?: string }) => Promise<void>;
         listRules: () => string[];
       };
 
@@ -409,10 +409,10 @@ describe('rate-limit plugin', () => {
       });
 
       const methods = fortress.plugins['rate-limit'] as unknown as {
-        check: (r: string, k: { ip?: string; userId?: number }) => Promise<void>;
+        check: (r: string, k: { ip?: string; userId?: string }) => Promise<void>;
       };
 
-      await methods.check('mixed', { ip: '1.2.3.4', userId: 42 });
+      await methods.check('mixed', { ip: '1.2.3.4', userId: '42' });
       expect(calls).toContain('mixed:ip:1.2.3.4');
       expect(calls).toContain('mixed:user:42');
     });

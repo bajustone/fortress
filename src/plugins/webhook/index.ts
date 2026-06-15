@@ -29,7 +29,7 @@ export type WebhookEventType
     | 'TOKEN_REFRESH';
 
 export interface WebhookEndpoint {
-  id: number;
+  id: string;
   url: string;
   events: string; // JSON array
   secret: string;
@@ -38,8 +38,8 @@ export interface WebhookEndpoint {
 }
 
 export interface WebhookDelivery {
-  id: number;
-  endpointId: number;
+  id: string;
+  endpointId: string;
   eventType: string;
   payload: string; // JSON
   status: 'pending' | 'success' | 'failed';
@@ -315,7 +315,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
         });
       },
 
-      async removeEndpoint(id: number): Promise<void> {
+      async removeEndpoint(id: string): Promise<void> {
         await ctx.db.delete({
           model: 'webhook_delivery',
           where: [{ field: 'endpointId', operator: '=', value: id }],

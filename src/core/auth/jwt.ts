@@ -9,6 +9,7 @@
  * @module
  */
 
+import type { JWTVerifyOptions } from 'jose';
 import type { SubjectType, TokenClaims } from '../types';
 
 import { jwtVerify, SignJWT } from 'jose';
@@ -68,6 +69,20 @@ export const RESERVED_JWT_CLAIMS: ReadonlySet<string> = new Set([
   'subjectType',
   'name',
 ]);
+
+export interface VerifyAccessTokenOptions {
+  /** Expected issuer. When set, jose also requires the `iss` claim to be present. */
+  issuer?: string | string[];
+  /** Expected audience. When set, jose also requires the `aud` claim to be present. */
+  audience?: string | string[];
+  /** Clock skew tolerance for `nbf`, `exp`, and max-token-age checks. */
+  clockTolerance?: string | number;
+  /** Additional claim names that must be present alongside Fortress's required access-token claims. */
+  requiredClaims?: string[];
+}
+
+const REQUIRED_ACCESS_TOKEN_CLAIMS = ['sub', 'subjectType', 'name', 'groups', 'iss', 'iat', 'exp'] as const;
+const SUBJECT_TYPES: readonly SubjectType[] = ['USER', 'GROUP', 'SERVICE_ACCOUNT'];
 
 /**
  * Strip any reserved keys from a custom-claims object. In development we
@@ -138,7 +153,7 @@ export async function signAccessToken(
     .setIssuedAt()
     .setExpirationTime(`${expiresInSeconds}s`)
     .setIssuer(claims.iss)
-    .setSubject(String(claims.sub))
+    .setSubject(claims.sub)
     .sign(signingKey);
 }
 
@@ -153,29 +168,54 @@ export async function signAccessToken(
 export async function verifyAccessToken(
   token: string,
   key: JwtKeyMaterial,
-  options?: { issuer?: string },
+  options?: VerifyAccessTokenOptions,
 ): Promise<TokenClaims> {
   const keys = normalizeKeys(key);
-  const verifyOptions: { algorithms: string[]; issuer?: string } = { algorithms: ['HS256'] };
+  const requiredClaims = [...new Set([...REQUIRED_ACCESS_TOKEN_CLAIMS, ...(options?.requiredClaims ?? [])])];
+  const verifyOptions: JWTVerifyOptions = { algorithms: ['HS256'], requiredClaims };
   if (options?.issuer)
     verifyOptions.issuer = options.issuer;
+  if (options?.audience)
+    verifyOptions.audience = options.audience;
+  if (options?.clockTolerance !== undefined)
+    verifyOptions.clockTolerance = options.clockTolerance;
 
   for (const candidate of keys) {
     try {
       const { payload } = await jwtVerify(token, candidate, verifyOptions);
+      const subjectType = payload.subjectType;
+      const groups = payload.groups;
+      const name = payload.name;
+      const issuer = payload.iss;
+      const issuedAt = payload.iat;
+      const expiresAt = payload.exp;
+
+      if (typeof payload.sub !== 'string' || payload.sub.length === 0)
+        throw new Error('Invalid sub claim');
+      if (typeof subjectType !== 'string' || !SUBJECT_TYPES.includes(subjectType as SubjectType))
+        throw new Error('Invalid subjectType claim');
+      if (typeof name !== 'string')
+        throw new Error('Invalid name claim');
+      if (!Array.isArray(groups) || !groups.every(group => typeof group === 'string'))
+        throw new Error('Invalid groups claim');
+      if (typeof issuer !== 'string' || issuer.length === 0)
+        throw new Error('Invalid iss claim');
+      if (typeof issuedAt !== 'number')
+        throw new Error('Invalid iat claim');
+      if (typeof expiresAt !== 'number')
+        throw new Error('Invalid exp claim');
+
       return {
-        sub: Number(payload.sub),
-        subjectType: (payload.subjectType as SubjectType | undefined) ?? 'USER',
-        name: payload.name as string,
-        groups: (payload.groups as string[]) ?? [],
-        iss: payload.iss ?? '',
-        iat: payload.iat ?? 0,
-        exp: payload.exp ?? 0,
-        act: payload.act as { sub: number; subjectType?: SubjectType } | undefined,
+        sub: payload.sub,
+        subjectType: subjectType as SubjectType,
+        name,
+        groups,
+        iss: issuer,
+        iat: issuedAt,
+        exp: expiresAt,
+        act: payload.act as { sub: string; subjectType?: SubjectType } | undefined,
         customClaims: Object.fromEntries(
-          Object.entries(payload).filter(
-            ([k]) => !['sub', 'subjectType', 'name', 'groups', 'iss', 'iat', 'exp', 'act'].includes(k),
-          ),
+          Object.entries(payload).filter(([k]) => !RESERVED_JWT_CLAIMS.has(k)),
         ),
       };
     }

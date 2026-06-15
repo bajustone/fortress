@@ -17,6 +17,22 @@
 
 ## [Unreleased]
 
+### Changed (breaking)
+- **Subject identifiers are strings everywhere.** `FortressUser.id`, `TokenClaims.sub`, `Session.userId`, every IAM `id`/`*Id` field (`Role`, `Group`, `Permission`, `RoleBinding`, `LoginIdentifier`, `ServiceAccount`, `Subject`), every plugin `id` field (`api-key.id`, `webhook.id`, `webauthn.userId`, audit `actorId`/`targetId`, etc.), and every HTTP endpoint path-param `:id` are now typed `string` at the fortress API surface. Closes the lock-in identified in the 2026-06-13 audit: `TokenClaims.sub: number` plus the `Number()`/`String()` round-trip in `verifyAccessToken` made string/UUID/ULID-keyed adapters structurally impossible. This was the only lock-in blocking UUID adapters that fortress couldn't lift later without a second breaking change.
+
+  **Why string and not `string | number`.** RFC 7519 §4.1.2 already mandates `sub` is a string on the wire; the only reason the round-trip existed was that the internal type disagreed with the wire type. A union pushed the coercion hazard to every consumer. Making the internal type match the wire type deletes the round-trip and the bug class in one cut. (See the rejected-options note under the [lock-in audit memory](memory/project_lockin_audit.md).)
+
+  **What didn't change.** The Drizzle adapter still uses `bigserial`/`integer` PKs by default — the new `stringifyIds` helper at the adapter boundary transparently translates rows on read. No migrations are required for existing numeric-keyed installations. JWTs signed by v0.2.x verify unchanged because `String(1)` already produced `"1"` on the wire.
+
+  **What you have to change.** Every place your code held a fortress id as `number` is now `string`. The mechanical migration:
+  - `FortressUser['id']`, `TokenClaims['sub']`, `Subject['id']`, all role/group/permission/session/identifier `id` fields: `number → string`.
+  - HTTP path params: `Number(params.id) → params.id`. Zod schemas: `z.coerce.number() → z.string().min(1)`.
+  - Custom adapters returning `id: number`: stringify on read at the adapter boundary (`row.id.toString()`), parse on write if the column is numeric.
+  - Comparisons: `userId === 1 → userId === '1'`. Set/Map type params: `Set<number> → Set<string>`.
+  - Schema builder: new `id(description?)` helper exports a string-typed id schema. Path-param `:id` declarations should use it instead of `int()`.
+
+  **Files touched in this commit (for grep):** `src/core/types.ts`, `src/core/internal-adapter.ts`, `src/core/auth/jwt.ts` (round-trip removed), `src/core/auth/auth-service.ts`, `src/core/iam/iam-service.ts`, `src/core/iam/explain.ts`, `src/core/iam/permission-sync.ts`, `src/core/http/dispatch.ts`, `src/core/http/handle-request.ts`, `src/core/http/protect.ts`, `src/core/policy/apply.ts`, `src/core/policy/diff.ts`, `src/core/schema-builder.ts` (new `id()` helper), `src/drizzle/adapter.ts` (new `stringifyIds` boundary helper), every plugin (`admin`, `api-key`, `audit-log`, `email-verification`, `magic-link`, `oauth`, `rate-limit`, `social-login`, `tenancy`, `two-factor`, `webauthn`, `webhook`), and every framework binding (`hono`, `express`, `sveltekit`).
+
 ### Fixed (security)
 - **Login timing-oracle defense is now actually a defense.** The "user not found / no password" branch of `auth.login()` previously called `hasher.verify()` with a hard-coded, malformed Argon2 PHC string (`$argon2id$...$dummy`). `hash-wasm`'s parser threw before running the KDF, so the branch completed in ~0.3ms while a real password verify took ~50–200ms — a ~300× timing gap usable for user enumeration over the network. The dummy is now a lazily computed, well-formed Argon2id hash produced by the configured `PasswordHasher`, so the not-found branch performs a *real* verify at the same cost as a hit. Regression test in `src/core/auth/login-timing.test.ts`.
 

@@ -26,11 +26,11 @@ import type { Fortress } from '../../core/fortress';
 
 export interface SvelteKitRateLimitEvent {
   request: Request;
-  locals?: { fortressUserId?: number };
+  locals?: { fortressUserId?: string };
 }
 
 interface RateLimitCheck {
-  check: (rule: string, keys: { ip?: string; userId?: number | string }) => Promise<void>;
+  check: (rule: string, keys: { ip?: string; userId?: string }) => Promise<void>;
 }
 
 function ipFromRequest(request: Request): string | undefined {

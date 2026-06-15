@@ -110,7 +110,7 @@ export function buildHandleRequest(
       //        pipeline so a host app SPA can call them with a Fortress
       //        JWT and have RBAC honoured.
       let subject: Subject | undefined;
-      let userId: number | undefined;
+      let userId: string | undefined;
       let claims: TokenClaims | undefined;
       let scopes: string[] | null | undefined;
       const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';

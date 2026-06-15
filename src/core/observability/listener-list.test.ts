@@ -45,7 +45,7 @@ describe('createListenerList (sync)', () => {
 
   it('catches thrown errors and routes them to the logger', () => {
     const logger = mockLogger();
-    const list = createListenerList<{ id: number }>({
+    const list = createListenerList<{ id: string }>({
       kind: 'sync',
       eventLabel: 'boom',
       logger: () => logger,
@@ -59,7 +59,7 @@ describe('createListenerList (sync)', () => {
     });
 
     // Emit should NOT throw — error is routed to logger.error.
-    expect(() => list.emit({ id: 1 })).not.toThrow();
+    expect(() => list.emit({ id: '1' })).not.toThrow();
     expect(logger.errorSpy).toHaveBeenCalledTimes(1);
     expect(logger.errorSpy.mock.calls[0][0]).toMatchObject({
       event: 'boom',

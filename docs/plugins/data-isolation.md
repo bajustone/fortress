@@ -61,7 +61,7 @@ Each `DataIsolationScope` has the following fields:
 | `name` | `string` | Scope name for identification and bypass control. |
 | `field` | `string` | Column name that holds the scoping value in the target tables. |
 | `models` | `string[]` | Which models (tables) this scope applies to. Use `['*']` for all models. |
-| `resolveValue` | `(userId: number, ctx: PluginContext) => Promise<unknown>` | Async function that returns the current user's value for this scope. |
+| `resolveValue` | `(userId: string, ctx: PluginContext) => Promise<unknown>` | Async function that returns the current user's value for this scope. |
 
 ## How It Works
 

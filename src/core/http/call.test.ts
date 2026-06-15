@@ -27,7 +27,7 @@ describe('fortress.call', () => {
 
     it('infers revokeSession params shape', () => {
       expectTypeOf<InferEndpointCallInput<typeof authEndpoints.revokeSession>>().toEqualTypeOf<{
-        id: number;
+        id: string;
       }>();
     });
 

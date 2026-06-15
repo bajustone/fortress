@@ -51,7 +51,7 @@ describe('magic-link plugin', () => {
       const send = fortress.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;
       await send('bob@example.com');
 
-      const verify = fortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<{ userId: number; email: string; accessToken: string }>;
+      const verify = fortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<{ userId: string; email: string; accessToken: string }>;
       const result = await verify(capturedToken!);
 
       expect(result.email).toBe('bob@example.com');
@@ -63,7 +63,7 @@ describe('magic-link plugin', () => {
       const send = fortress.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;
       await send('newuser@example.com');
 
-      const verify = fortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<{ userId: number; email: string; accessToken: string }>;
+      const verify = fortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<{ userId: string; email: string; accessToken: string }>;
       const result = await verify(capturedToken!);
 
       expect(result.email).toBe('newuser@example.com');

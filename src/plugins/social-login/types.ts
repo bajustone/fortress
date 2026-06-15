@@ -50,5 +50,5 @@ export interface SocialLoginConfig {
   /** Map provider profile fields to Fortress user fields */
   mapProfile?: (provider: string, profile: ProviderProfile) => { email: string; name: string };
   /** Called on first-ever login for a social user */
-  onFirstLogin?: (user: { id: number }, provider: string, profile: ProviderProfile) => Promise<void>;
+  onFirstLogin?: (user: { id: string }, provider: string, profile: ProviderProfile) => Promise<void>;
 }

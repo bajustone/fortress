@@ -152,7 +152,7 @@ export async function runPermissionSync(
 
       const existingRole = rolesByName.get(roleName);
       let roleCreated = false;
-      let roleId: number;
+      let roleId: string;
       if (existingRole) {
         roleId = existingRole.id;
       }

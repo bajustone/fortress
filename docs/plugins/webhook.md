@@ -92,7 +92,7 @@ After `maxRetries` attempts, the delivery is marked as `failed`.
 |---|---|---|
 | `registerEndpoint` | `(url: string, events: WebhookEventType[], secret: string)` | `Promise<WebhookEndpoint>` |
 | `listEndpoints` | `()` | `Promise<WebhookEndpoint[]>` |
-| `removeEndpoint` | `(id: number)` | `Promise<void>` |
+| `removeEndpoint` | `(id: string)` | `Promise<void>` |
 | `processRetries` | `()` | `Promise<void>` |
 
 ### registerEndpoint
@@ -138,7 +138,7 @@ The `WebhookEndpoint` type:
 
 ```ts
 interface WebhookEndpoint {
-  id: number;
+  id: string;
   url: string;
   events: string;        // JSON array of event types
   secret: string;
@@ -151,8 +151,8 @@ The `WebhookDelivery` type:
 
 ```ts
 interface WebhookDelivery {
-  id: number;
-  endpointId: number;
+  id: string;
+  endpointId: string;
   eventType: string;
   payload: string;                 // JSON
   status: 'pending' | 'success' | 'failed';

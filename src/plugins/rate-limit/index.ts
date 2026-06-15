@@ -149,7 +149,7 @@ function ipFromRequest(request: Request): string {
 
 interface CheckKeys {
   ip?: string | null;
-  userId?: number | string | null;
+  userId?: string | null;
 }
 
 async function runRule(
@@ -293,7 +293,7 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
           await next();
           return;
         }
-        const userId = (request as { fortressUserId?: number }).fortressUserId;
+        const userId = (request as { fortressUserId?: string }).fortressUserId;
         await check(ruleName, { ip: ipFromRequest(req), userId });
         await next();
       },
@@ -328,7 +328,7 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
           await next();
           return;
         }
-        const userId = (request as { fortressUserId?: number }).fortressUserId;
+        const userId = (request as { fortressUserId?: string }).fortressUserId;
         await check(ruleName, { ip: ipFromRequest(req), userId });
         await next();
       },

@@ -18,7 +18,7 @@ const SECRET = 'service-account-http-secret-32ch';
 
 interface Ctx {
   fortress: Fortress;
-  adminId: number;
+  adminId: string;
   adminToken: string;
   sa: ServiceAccount;
   role: Role;

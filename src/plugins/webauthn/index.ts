@@ -25,7 +25,7 @@ import {
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
 import { Errors } from '../../core/errors';
-import { bool, endpoint, int, obj, record, str } from '../../core/schema-builder';
+import { bool, endpoint, id, obj, record, str } from '../../core/schema-builder';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -68,10 +68,10 @@ export interface WebAuthnMethods {
     credentialDeviceType: string;
     credentialBackedUp: boolean;
   }>;
-  generateAuthenticationOptions: (input: { userId?: number }) => Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>;
+  generateAuthenticationOptions: (input: { userId?: string }) => Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>;
   verifyAuthentication: (input: { response: AuthenticationResponseJSON }) => Promise<{
     verified: boolean;
-    userId: number;
+    userId: string;
     accessToken?: string;
     refreshToken?: string;
   }>;
@@ -80,8 +80,8 @@ export interface WebAuthnMethods {
 // ── Internal Record Types ───────────────────────────────────────────
 
 interface CredentialRecord {
-  id: number;
-  userId: number;
+  id: string;
+  userId: string;
   credentialId: string;
   publicKey: string; // base64url-encoded
   counter: number;
@@ -92,9 +92,9 @@ interface CredentialRecord {
 }
 
 interface ChallengeRecord {
-  id: number;
+  id: string;
   challenge: string;
-  userId: number | null;
+  userId: string | null;
   expiresAt: Date;
   createdAt: Date;
 }
@@ -166,7 +166,7 @@ const webauthnRoutes = {
     .description('Generate public key credential request options. Optionally pass userId for non-discoverable credential flow.')
     .tags('WebAuthn')
     .security('none')
-    .body(obj({ userId: int('Optional user ID') }))
+    .body(obj({ userId: id('Optional user ID') }))
     .response(200, 'Authentication options', obj({
       options: record('PublicKeyCredentialRequestOptions JSON'),
     }, 'options'))
@@ -183,7 +183,7 @@ const webauthnRoutes = {
     }, 'response'))
     .response(200, 'Authentication verified', obj({
       verified: bool('Whether authentication was successful'),
-      userId: int('Authenticated user ID'),
+      userId: id('Authenticated user ID'),
       accessToken: str('JWT access token (if passwordless)'),
       refreshToken: str('Refresh token (if passwordless)'),
     }, 'verified', 'userId'))
@@ -403,7 +403,7 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
         };
       },
 
-      async generateAuthenticationOptions(input: { userId?: number }): Promise<{ options: PublicKeyCredentialRequestOptionsJSON }> {
+      async generateAuthenticationOptions(input: { userId?: string }): Promise<{ options: PublicKeyCredentialRequestOptionsJSON }> {
         const { userId } = input;
 
         let allowCredentials: { id: string; transports?: AuthenticatorTransportFuture[] }[] | undefined;
@@ -451,7 +451,7 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
 
       async verifyAuthentication(input: { response: AuthenticationResponseJSON }): Promise<{
         verified: boolean;
-        userId: number;
+        userId: string;
         accessToken?: string;
         refreshToken?: string;
       }> {

@@ -21,7 +21,7 @@ export interface MagicLinkConfig {
 }
 
 interface MagicLinkTokenRecord {
-  id: number;
+  id: string;
   email: string;
   token: string;
   expiresAt: Date;
@@ -75,7 +75,7 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
         return { sent: true };
       },
 
-      async verifyMagicLink(rawToken: string): Promise<{ userId: number; email: string; accessToken: string }> {
+      async verifyMagicLink(rawToken: string): Promise<{ userId: string; email: string; accessToken: string }> {
         const hash = await hashToken(rawToken);
 
         const record = await ctx.db.findOne<MagicLinkTokenRecord>({

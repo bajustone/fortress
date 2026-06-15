@@ -73,8 +73,8 @@ describe('expressRateLimit (framework wrapper)', () => {
     const mw = expressRateLimit(fortress, 'api');
 
     // User 1 gets one hit, then blocked on same IP+user combo.
-    const r1 = await invoke(mw, mockReq({ ip: '10.0.0.5', fortressUserId: 1 }));
-    const r2 = await invoke(mw, mockReq({ ip: '10.0.0.5', fortressUserId: 1 }));
+    const r1 = await invoke(mw, mockReq({ ip: '10.0.0.5', fortressUserId: '1' }));
+    const r2 = await invoke(mw, mockReq({ ip: '10.0.0.5', fortressUserId: '1' }));
     expect(r1.err).toBeUndefined();
     expect(r2.err).toBeInstanceOf(FortressError);
   });

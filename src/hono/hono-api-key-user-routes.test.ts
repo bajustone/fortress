@@ -22,12 +22,12 @@ const SECRET = 'hono-api-key-user-routes-secret-32char!';
 interface Ctx {
   fortress: Fortress<any>;
   app: Hono<FortressEnv>;
-  userId: number;
+  userId: string;
   userKey: string;
-  saId: number;
+  saId: string;
   saKey: string;
   saKeyNoPerm: string;
-  saNoPermId: number;
+  saNoPermId: string;
   userAccessToken: string;
 }
 
@@ -128,7 +128,7 @@ describe('hono user routes: api-key authentication', () => {
       headers: { Authorization: `ApiKey ${ctx.userKey}` },
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { subject: Subject; userId: number };
+    const body = await res.json() as { subject: Subject; userId: string };
     expect(body.subject).toEqual({ type: 'USER', id: ctx.userId });
     expect(body.userId).toBe(ctx.userId);
   });
@@ -138,7 +138,7 @@ describe('hono user routes: api-key authentication', () => {
       headers: { 'X-API-Key': ctx.saKey },
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { subject: Subject; userId: number | null };
+    const body = await res.json() as { subject: Subject; userId: string | null };
     expect(body.subject).toEqual({ type: 'SERVICE_ACCOUNT', id: ctx.saId });
     // fortressUserId is a USER-only alias — undefined for service accounts
     expect(body.userId).toBeFalsy();
@@ -149,7 +149,7 @@ describe('hono user routes: api-key authentication', () => {
       headers: { Authorization: `Bearer ${ctx.userAccessToken}` },
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { subject: Subject; userId: number };
+    const body = await res.json() as { subject: Subject; userId: string };
     expect(body.subject).toEqual({ type: 'USER', id: ctx.userId });
     expect(body.userId).toBe(ctx.userId);
   });
@@ -178,7 +178,7 @@ describe('hono user routes: api-key authentication', () => {
       headers: { Authorization: `ApiKey ${ctx.userKey}` },
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { userId: number };
+    const body = await res.json() as { userId: string };
     expect(body.userId).toBe(ctx.userId);
   });
 });

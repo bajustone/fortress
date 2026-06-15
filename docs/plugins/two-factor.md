@@ -158,9 +158,9 @@ All methods are accessed via `fortress.plugins['two-factor']`.
 
 | Method | Signature | Description |
 |---|---|---|
-| `enable` | `(userId: number) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>` | Generate TOTP secret and backup codes. Throws if 2FA is already enabled. |
-| `verify` | `(userId: number, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>` | Verify a TOTP or backup code. Activates 2FA on first success. Trusts device if `meta.userAgent` is provided. Throws `'Invalid two-factor code'` on failure. |
-| `disable` | `(userId: number) => Promise<void>` | Remove all 2FA data (secret, backup codes, trusted devices) for the user. |
+| `enable` | `(userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>` | Generate TOTP secret and backup codes. Throws if 2FA is already enabled. |
+| `verify` | `(userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>` | Verify a TOTP or backup code. Activates 2FA on first success. Trusts device if `meta.userAgent` is provided. Throws `'Invalid two-factor code'` on failure. |
+| `disable` | `(userId: string) => Promise<void>` | Remove all 2FA data (secret, backup codes, trusted devices) for the user. |
 
 The plugin also installs an `afterLogin` hook. This is not called directly -- it runs automatically on every `fortress.auth.login()` call.
 
