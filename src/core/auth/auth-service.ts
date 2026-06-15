@@ -44,7 +44,7 @@ export interface AuthEvent {
     | 'LOGOUT' | 'REGISTER'
     | 'TOKEN_REFRESH' | 'TOKEN_REUSE_DETECTED' | 'TOKEN_FINGERPRINT_MISMATCH'
     | 'IMPERSONATE';
-  actorId?: number;
+  actorId?: string;
   identifier?: string;
   method?: 'password' | 'oauth' | 'magic_link' | 'webauthn' | '2fa' | 'api_key';
   ipAddress?: string;
@@ -83,29 +83,29 @@ export interface AuthService {
   login: (identifier: string, password: string, meta?: RequestMeta) => Promise<AuthResponse>;
   refresh: (refreshToken: string, meta?: RequestMeta) => Promise<AuthTokenPair>;
   logout: (refreshToken: string) => Promise<void>;
-  me: (userId: number) => Promise<FortressUser>;
+  me: (userId: string) => Promise<FortressUser>;
   createUser: (data: CreateUserInput) => Promise<FortressUser>;
   verifyToken: (token: string) => Promise<TokenClaims>;
   signToken: (claims: Omit<TokenClaims, 'iat' | 'exp'>) => Promise<string>;
-  listSessions: (userId: number) => Promise<SessionInfo[]>;
-  revokeSession: (userId: number, tokenId: number) => Promise<void>;
-  revokeAllOtherSessions: (userId: number, currentTokenId: number) => Promise<void>;
-  addLoginIdentifier: (userId: number, type: LoginIdentifierType, value: string) => Promise<void>;
-  removeLoginIdentifier: (userId: number, type: LoginIdentifierType, value: string) => Promise<void>;
-  getLoginIdentifiers: (userId: number) => Promise<LoginIdentifier[]>;
+  listSessions: (userId: string) => Promise<SessionInfo[]>;
+  revokeSession: (userId: string, tokenId: string) => Promise<void>;
+  revokeAllOtherSessions: (userId: string, currentTokenId: string) => Promise<void>;
+  addLoginIdentifier: (userId: string, type: LoginIdentifierType, value: string) => Promise<void>;
+  removeLoginIdentifier: (userId: string, type: LoginIdentifierType, value: string) => Promise<void>;
+  getLoginIdentifiers: (userId: string) => Promise<LoginIdentifier[]>;
   /**
    * Issue a short-lived, non-renewable access token that lets an admin act as another user.
    * The token carries an RFC 8693 `act` claim identifying the real admin.
    *
    * Requires the admin user to hold `fortress:impersonate`. The built-in HTTP route also enforces this via endpoint metadata.
    */
-  impersonate: (adminUserId: number, targetUserId: number, options?: { reason?: string; expirySeconds?: number }) => Promise<AuthResponse>;
+  impersonate: (adminUserId: string, targetUserId: string, options?: { reason?: string; expirySeconds?: number }) => Promise<AuthResponse>;
 
   // ── Admin user management ──────────────────────────────────────────
   listUsers: (options: { limit?: number; offset?: number; search?: string; sortBy?: string; sortDirection?: 'asc' | 'desc' }) => Promise<{ users: FortressUser[]; total: number }>;
-  getUserById: (userId: number) => Promise<FortressUser>;
-  updateUser: (userId: number, data: { name?: string; email?: string; isActive?: boolean; password?: string }) => Promise<FortressUser>;
-  deleteUser: (userId: number) => Promise<void>;
+  getUserById: (userId: string) => Promise<FortressUser>;
+  updateUser: (userId: string, data: { name?: string; email?: string; isActive?: boolean; password?: string }) => Promise<FortressUser>;
+  deleteUser: (userId: string) => Promise<void>;
 
   /**
    * Register a listener for auth lifecycle events. Multiple listeners are
@@ -137,6 +137,22 @@ export function createAuthService(
   const resolved = resolveConfig(config);
   const evaluationMode = config.rbac?.evaluationMode ?? 'allow-only';
   const hasher: PasswordHasher = config.passwordHasher ?? createDefaultHasher();
+  // Real, well-formed Argon2 reference hash used as the timing-oracle dummy in
+  // the login "user not found / no password" branch. Computing a real hash here
+  // (rather than a hard-coded malformed PHC string) guarantees that the
+  // verify() call in that branch runs the *full* KDF and matches the cost of
+  // verifying a real user's password, so attackers can't distinguish
+  // "user exists" from "user not found" via response timing. Lazily computed
+  // once on first miss to avoid paying ~100ms at service construction.
+  let dummyHashPromise: Promise<string> | null = null;
+  const getDummyHash = (): Promise<string> => {
+    if (!dummyHashPromise) {
+      // Random input -> the hash is never going to verify against any real
+      // password the attacker controls, and is never persisted.
+      dummyHashPromise = hasher.hash(`fortress-timing-dummy-${crypto.randomUUID()}`);
+    }
+    return dummyHashPromise;
+  };
   const adapter = createInternalAdapter(db);
   const logger = deps?.logger;
   const tokenVerifyDuration = deps?.tokenVerifyDuration;
@@ -195,7 +211,7 @@ export function createAuthService(
     }
   }
 
-  async function enrichClaims(userId: number): Promise<Record<string, unknown>> {
+  async function enrichClaims(userId: string): Promise<Record<string, unknown>> {
     const customClaims: Record<string, unknown> = {};
     for (const plugin of plugins) {
       if (plugin.enrichTokenClaims) {
@@ -283,12 +299,13 @@ export function createAuthService(
         user = await adapter.findUserByIdentifier(identifier);
 
         if (!user || !user.passwordHash) {
-          // Run dummy verify to prevent timing oracle (normalize response time
-          // regardless of whether user exists or has a password)
-          await hasher.verify(
-            '$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0$dummy',
-            password,
-          ).catch(() => {});
+          // Run a real Argon2 verify against a well-formed reference hash so
+          // this branch takes the same wall-clock time as verifying a real
+          // user's password. The previous hard-coded PHC string was malformed
+          // (`$...$dummy`), so hash-wasm's parser threw before running the
+          // KDF and the branch completed in ~0.3ms instead of ~100ms — a
+          // trivial timing oracle for user enumeration.
+          await hasher.verify(await getDummyHash(), password).catch(() => {});
           throw Errors.unauthorized('Invalid credentials');
         }
 
@@ -530,7 +547,7 @@ export function createAuthService(
       // Look up the user the token belongs to so the LOGOUT event can
       // carry an actorId. If lookup fails (token unknown), emit with
       // actorId undefined — observers still fire.
-      let actorId: number | undefined;
+      let actorId: string | undefined;
       if (authEventListeners.size() > 0) {
         const stored = await adapter.findRefreshTokenByHash(tokenHash);
         if (stored) {
@@ -552,7 +569,7 @@ export function createAuthService(
       }
     },
 
-    async me(userId: number): Promise<FortressUser> {
+    async me(userId: string): Promise<FortressUser> {
       const user = await db.findOne<FortressUser>({
         model: 'user',
         where: [{ field: 'id', operator: '=', value: userId }],
@@ -574,7 +591,7 @@ export function createAuthService(
       }
 
       // Check for duplicate email before inserting
-      const existing = await db.findOne<{ id: number }>({
+      const existing = await db.findOne<{ id: string }>({
         model: 'user',
         where: [{ field: 'email', operator: '=', value: data.email }],
       });
@@ -650,9 +667,9 @@ export function createAuthService(
       return signAccessToken(claims, resolved.key, resolved.accessTokenExpiry);
     },
 
-    async listSessions(userId: number): Promise<SessionInfo[]> {
+    async listSessions(userId: string): Promise<SessionInfo[]> {
       const tokens = await db.findMany<{
-        id: number;
+        id: string;
         ipAddress: string | null;
         userAgent: string | null;
         deviceName: string | null;
@@ -677,7 +694,7 @@ export function createAuthService(
       }));
     },
 
-    async revokeSession(userId: number, tokenId: number): Promise<void> {
+    async revokeSession(userId: string, tokenId: string): Promise<void> {
       await db.update({
         model: 'refresh_token',
         where: [
@@ -688,7 +705,7 @@ export function createAuthService(
       });
     },
 
-    async revokeAllOtherSessions(userId: number, currentTokenId: number): Promise<void> {
+    async revokeAllOtherSessions(userId: string, currentTokenId: string): Promise<void> {
       // L-tier: replace the read-then-loop with a single conditional UPDATE.
       // The original N+1 path opened a window where new refresh tokens issued
       // during the loop would slip through unrevoked, and added unnecessary
@@ -705,14 +722,14 @@ export function createAuthService(
       });
     },
 
-    async addLoginIdentifier(userId: number, type: LoginIdentifierType, value: string): Promise<void> {
+    async addLoginIdentifier(userId: string, type: LoginIdentifierType, value: string): Promise<void> {
       await db.create({
         model: 'login_identifier',
         data: { userId, type, value },
       });
     },
 
-    async removeLoginIdentifier(userId: number, type: LoginIdentifierType, value: string): Promise<void> {
+    async removeLoginIdentifier(userId: string, type: LoginIdentifierType, value: string): Promise<void> {
       await db.delete({
         model: 'login_identifier',
         where: [
@@ -723,7 +740,7 @@ export function createAuthService(
       });
     },
 
-    async getLoginIdentifiers(userId: number): Promise<LoginIdentifier[]> {
+    async getLoginIdentifiers(userId: string): Promise<LoginIdentifier[]> {
       return db.findMany<LoginIdentifier>({
         model: 'login_identifier',
         where: [{ field: 'userId', operator: '=', value: userId }],
@@ -731,8 +748,8 @@ export function createAuthService(
     },
 
     async impersonate(
-      adminUserId: number,
-      targetUserId: number,
+      adminUserId: string,
+      targetUserId: string,
       options?: { reason?: string; expirySeconds?: number },
     ): Promise<AuthResponse> {
       // Defense in depth for programmatic callers. The HTTP route also
@@ -849,7 +866,7 @@ export function createAuthService(
       };
     },
 
-    async getUserById(userId: number): Promise<FortressUser> {
+    async getUserById(userId: string): Promise<FortressUser> {
       const user = await db.findOne<FortressUser & { passwordHash?: string }>({
         model: 'user',
         where: [{ field: 'id', operator: '=', value: userId }],
@@ -864,7 +881,7 @@ export function createAuthService(
     },
 
     async updateUser(
-      userId: number,
+      userId: string,
       data: { name?: string; email?: string; isActive?: boolean; password?: string },
     ): Promise<FortressUser> {
       // Verify user exists
@@ -878,7 +895,7 @@ export function createAuthService(
 
       // Check email uniqueness if changing email
       if (data.email && data.email !== existing.email) {
-        const duplicate = await db.findOne<{ id: number }>({
+        const duplicate = await db.findOne<{ id: string }>({
           model: 'user',
           where: [{ field: 'email', operator: '=', value: data.email }],
         });
@@ -930,8 +947,8 @@ export function createAuthService(
       return safeUser;
     },
 
-    async deleteUser(userId: number): Promise<void> {
-      const existing = await db.findOne<{ id: number }>({
+    async deleteUser(userId: string): Promise<void> {
+      const existing = await db.findOne<{ id: string }>({
         model: 'user',
         where: [{ field: 'id', operator: '=', value: userId }],
       });

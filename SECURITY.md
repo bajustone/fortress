@@ -49,6 +49,19 @@ send either a verification email or an "already have an account" email).
 When using the built-in endpoint publicly, mount the rate-limit plugin with
 `register` protection enabled to slow bulk enumeration.
 
+## Login is not an enumeration oracle
+
+In contrast to `register`, `auth.login()` is intentionally
+timing-equalized: the "user not found / no password set" branch runs a real
+Argon2id verify against a well-formed reference hash produced by the
+configured `PasswordHasher`, not a hard-coded dummy. Both that branch and
+the "wrong password" branch take the same wall-clock time and return the
+same generic `Invalid credentials` error, so a remote attacker cannot
+distinguish "account exists" from "account missing" via response timing or
+error text. The same path also covers disabled accounts to avoid leaking
+`isActive` state. The regression test lives in
+`src/core/auth/login-timing.test.ts`.
+
 ## Tenancy isolation model
 
 The tenancy plugin derives the active tenant from the verified JWT custom

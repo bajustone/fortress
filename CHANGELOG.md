@@ -17,6 +17,9 @@
 
 ## [Unreleased]
 
+### Fixed (security)
+- **Login timing-oracle defense is now actually a defense.** The "user not found / no password" branch of `auth.login()` previously called `hasher.verify()` with a hard-coded, malformed Argon2 PHC string (`$argon2id$...$dummy`). `hash-wasm`'s parser threw before running the KDF, so the branch completed in ~0.3ms while a real password verify took ~50–200ms — a ~300× timing gap usable for user enumeration over the network. The dummy is now a lazily computed, well-formed Argon2id hash produced by the configured `PasswordHasher`, so the not-found branch performs a *real* verify at the same cost as a hit. Regression test in `src/core/auth/login-timing.test.ts`.
+
 ### Changed (breaking)
 - **`FortressConfig.jwt.secret` renamed to `FortressConfig.jwt.key`.** The field now accepts the new exported `JwtKeyMaterial` type (currently `string | string[]`, intentionally narrow so the runtime helpers don't lie about supported inputs). The alias exists so the public signature stays stable when fortress expands to asymmetric algorithms (RS256 / EdDSA) and JWKS-backed verification — the doc comment on `JwtKeyMaterial` in `core/auth/jwt.ts` shows the planned widening (`CryptoKey | KeyObject | JWK | Uint8Array | …` plus a `JwtVerifyKeyMaterial` variant for `JWTVerifyGetKey`). `signAccessToken` / `verifyAccessToken` parameter renamed `secret` → `key` to match. Codemod: `jwt: { secret: ... }` → `jwt: { key: ... }`.
 
