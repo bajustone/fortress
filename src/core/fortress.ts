@@ -265,12 +265,12 @@ const MIN_SECRET_BYTES = 32;
 export function createFortress<const T extends readonly FortressPlugin[]>(
   config: FortressConfig & { plugins?: T },
 ): Fortress<InferPlugins<T>, TypedCall<T>> {
-  // Validate JWT secret strength
-  const secrets = Array.isArray(config.jwt.secret) ? config.jwt.secret : [config.jwt.secret];
-  for (const secret of secrets) {
-    if (new TextEncoder().encode(secret).length < MIN_SECRET_BYTES) {
+  // Validate JWT key strength (HS256 shared-secret bytes).
+  const keys = Array.isArray(config.jwt.key) ? config.jwt.key : [config.jwt.key];
+  for (const key of keys) {
+    if (new TextEncoder().encode(key).length < MIN_SECRET_BYTES) {
       throw Errors.badRequest(
-        `JWT secret must be at least ${MIN_SECRET_BYTES} bytes for HS256 security. Got ${new TextEncoder().encode(secret).length} bytes.`,
+        `JWT key must be at least ${MIN_SECRET_BYTES} bytes for HS256 security. Got ${new TextEncoder().encode(key).length} bytes.`,
       );
     }
   }

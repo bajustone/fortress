@@ -11,7 +11,7 @@ const SECRET = 'explain-test-secret-at-least-32-bytes!';
 
 function setup() {
   const fortress = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
   });
   return { fortress };

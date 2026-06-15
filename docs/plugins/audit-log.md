@@ -13,7 +13,7 @@ import { createFortress } from '@bajustone/fortress';
 import { auditLog } from '@bajustone/fortress/plugins/audit-log';
 
 const fortress = createFortress({
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
   database: adapter,
   plugins: [auditLog()],
 });
@@ -140,7 +140,7 @@ The first entry in the chain has `previousHash: null`. Every subsequent entry re
 
 ```ts
 const fortress = createFortress({
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
   database: adapter,
   plugins: [auditLog({ hashChain: true })],
 });

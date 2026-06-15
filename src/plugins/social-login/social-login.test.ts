@@ -36,7 +36,7 @@ describe('social-login plugin', () => {
     });
 
     // Get methods directly from plugin
-    methods = plugin.methods!({ db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+    methods = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
   });
 
   describe('getProviders', () => {
@@ -144,7 +144,7 @@ describe('social-login plugin', () => {
         providers: [{ name: 'corporate-sso', clientId: 'x', clientSecret: 'y', issuer: 'https://sso.company.com' }],
       });
 
-      const m = plugin.methods!({ db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+      const m = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
       expect(m.getProviders()).toEqual(['corporate-sso']);
     });
   });

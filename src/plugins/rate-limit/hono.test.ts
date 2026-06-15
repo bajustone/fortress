@@ -11,7 +11,7 @@ const SECRET = 'hono-rate-limit-wrapper-test-secret-32!';
 describe('honoRateLimit (framework wrapper)', () => {
   function setup(ruleMaxPerIp: number) {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [
         rateLimit({
@@ -52,7 +52,7 @@ describe('honoRateLimit (framework wrapper)', () => {
 
   it('throws synchronously during setup when the plugin is not registered', () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
     expect(() => honoRateLimit(fortress, 'api')).toThrow(/rate-limit plugin is not registered/);

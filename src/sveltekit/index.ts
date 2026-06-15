@@ -24,7 +24,7 @@
  *
  * export const fortress = createFortress({
  *   database: createDrizzleAdapter(...),
- *   jwt: { secret: process.env.JWT_SECRET! },
+ *   jwt: { key: process.env.JWT_SECRET! },
  * });
  *
  * // src/hooks.server.ts

@@ -556,7 +556,7 @@ describe('pg: auth lifecycle', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
     });
   });
@@ -689,7 +689,7 @@ describe('pg: IAM', () => {
 
   beforeEach(async () => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
     });
 
@@ -736,7 +736,7 @@ describe('pg: IAM', () => {
 describe('pg: plugins', () => {
   it('api-key plugin works with PG dates', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [apiKey({ prefix: 'test' })],
     });
@@ -770,7 +770,7 @@ describe('pg: plugins', () => {
 
   it('email-verification plugin works with PG dates', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [emailVerification({
         requireVerification: false,
@@ -795,7 +795,7 @@ describe('pg: plugins', () => {
 
   it('audit-log plugin records events with PG timestamps', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [auditLog()],
     });
@@ -880,7 +880,7 @@ describe('pg: sorting', () => {
 describe('pg: tenancy plugin', () => {
   it('creates tenants and manages membership with PG dates', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [tenancy()],
     });
@@ -911,7 +911,7 @@ describe('pg: tenancy plugin', () => {
 
   it('enriches JWT claims with tenant info after login', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [tenancy()],
     });
@@ -937,7 +937,7 @@ describe('pg: tenancy plugin', () => {
 
   it('switches default tenant', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [tenancy()],
     });
@@ -963,7 +963,7 @@ describe('pg: tenancy plugin', () => {
   it('isolates tenant data via the transaction-pinned search_path (H2/H3)', async () => {
     // Each tenant gets an `items` table in its own schema via onSchemaCreated.
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [
         tenancy({
@@ -1007,7 +1007,7 @@ describe('pg: tenancy plugin', () => {
 
   it('drops the tenant schema on delete only when opted in', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [
         tenancy({
@@ -1041,7 +1041,7 @@ describe('pg: tenancy plugin', () => {
 describe('pg: two-factor plugin', () => {
   it('enables, verifies, and disables 2FA with PG dates', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [twoFactor({ totp: { issuer: 'PGTest' }, backupCodes: { count: 5 } })],
     });
@@ -1079,7 +1079,7 @@ describe('pg: magic-link plugin', () => {
   it('sends and verifies magic link with PG timestamps', async () => {
     let capturedToken = '';
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [magicLink({
         onSendMagicLink: async (_email, token) => { capturedToken = token; },
@@ -1109,7 +1109,7 @@ describe('pg: magic-link plugin', () => {
 describe('pg: oauth plugin', () => {
   it('creates client, issues auth code, and exchanges for token', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [oauth({ issuerUrl: 'http://localhost:3000' })],
     });
@@ -1215,7 +1215,7 @@ describe('pg: social-login plugin', () => {
 
     const methods = plugin.methods!({
       db: adapter,
-      config: { jwt: { secret: SECRET }, database: adapter },
+      config: { jwt: { key: SECRET }, database: adapter },
     }) as any;
 
     const user = await adapter.create<{ id: number }>({
@@ -1246,7 +1246,7 @@ describe('pg: social-login plugin', () => {
 describe('pg: account-lockout plugin', () => {
   it('locks out after failed attempts and returns PG timestamps', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [accountLockout({ maxFailedAttempts: 2, lockoutDurationSeconds: 60 })],
     });
@@ -1287,7 +1287,7 @@ describe('pg: webhook plugin', () => {
   it('registers endpoint and records delivery with PG timestamps', async () => {
     const delivered: string[] = [];
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [webhook({
         deliver: async (_url, payload) => {
@@ -1345,7 +1345,7 @@ describe('pg: data-isolation plugin', () => {
     await adapter.create({ model: 'user', data: { email: 'inactive@test.com', name: 'Inactive', passwordHash: 'h', isActive: false } });
 
     // Get scope rules
-    const rules = await plugin.scopeRules!(1, 'user', { db: adapter, config: { jwt: { secret: SECRET }, database: adapter } });
+    const rules = await plugin.scopeRules!(1, 'user', { db: adapter, config: { jwt: { key: SECRET }, database: adapter } });
 
     expect(rules).not.toBeNull();
     expect(rules!.filters).toHaveLength(1);

@@ -15,7 +15,7 @@ let app: Hono<FortressEnv>;
 
 beforeEach(async () => {
   fortress = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
   });
 
@@ -180,7 +180,7 @@ describe('hono authMiddleware — fortressDb and getScopedDb', () => {
 
   beforeEach(async () => {
     dbFortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 
@@ -263,7 +263,7 @@ describe('hono authMiddleware — data-isolation scopeRules', () => {
     const db = createTestAdapter();
 
     isolatedFortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: db,
       plugins: [
         dataIsolation({

@@ -198,7 +198,7 @@ describe('standalone toOpenAPI helper', () => {
 describe('openapi plugin', () => {
   it('registers as a fortress plugin', () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi()],
     });
@@ -211,7 +211,7 @@ describe('openapi plugin', () => {
 
   it('generates spec with all core endpoints', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi({ title: 'My API', version: '2.0.0' })],
     });
@@ -225,7 +225,7 @@ describe('openapi plugin', () => {
 
   it('includes plugin routes in spec', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [
         oauth({ issuerUrl: 'https://auth.example.com' }),
@@ -248,7 +248,7 @@ describe('openapi plugin', () => {
       .handler('schools.list')
       .build();
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       routes: { listSchools: hostEndpoint },
       plugins: [openapi({ includeCoreAuth: false, includeCoreIam: false, operationId: 'handler' })],
@@ -261,7 +261,7 @@ describe('openapi plugin', () => {
 
   it('excludes core auth when configured', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi({ includeCoreAuth: false })],
     });
@@ -274,7 +274,7 @@ describe('openapi plugin', () => {
 
   it('excludes core IAM when configured', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi({ includeCoreIam: false })],
     });
@@ -287,7 +287,7 @@ describe('openapi plugin', () => {
 
   it('getUI returns Scalar HTML', () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi()],
     });
@@ -300,7 +300,7 @@ describe('openapi plugin', () => {
 
   it('getUI uses relative spec URL for prefix compatibility', () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi({ specPath: '/docs/api.json', uiPath: '/docs/ui' })],
     });
@@ -311,7 +311,7 @@ describe('openapi plugin', () => {
 
   it('getUI handles spec in parent directory', () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi({ specPath: '/spec.json', uiPath: '/docs/ui' })],
     });
@@ -322,7 +322,7 @@ describe('openapi plugin', () => {
 
   it('fortress.endpoints includes all endpoint definitions', () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [oauth({ issuerUrl: 'https://auth.example.com' }), openapi()],
     });
@@ -354,7 +354,7 @@ describe('openapi resource/action enum enrichment', () => {
     await seedResources(db);
 
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: db,
       plugins: [openapi()],
     });
@@ -393,7 +393,7 @@ describe('openapi resource/action enum enrichment', () => {
     await seedResources(db);
 
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: db,
       plugins: [openapi()],
     });
@@ -409,7 +409,7 @@ describe('openapi resource/action enum enrichment', () => {
 
   it('falls back to plain strings when no resources are registered', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi()],
     });

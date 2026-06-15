@@ -15,7 +15,7 @@ import { createFortress } from '@bajustone/fortress';
 import { webhook } from '@bajustone/fortress/plugins/webhook';
 
 const fortress = createFortress({
-  jwt: { secret: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!' },
   database: adapter,
   plugins: [
     webhook({
@@ -171,7 +171,7 @@ import { createFortress } from '@bajustone/fortress';
 import { webhook } from '@bajustone/fortress/plugins/webhook';
 
 const fortress = createFortress({
-  jwt: { secret: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!' },
   database: adapter,
   plugins: [
     webhook({ maxRetries: 3 }),

@@ -17,7 +17,7 @@ Pass an array to rotate secrets with zero downtime. Fortress signs with the firs
 ```typescript
 const fortress = createFortress({
   jwt: {
-    secret: ['new-secret-abc', 'old-secret-xyz'],
+    key: ['new-secret-abc', 'old-secret-xyz'],
   },
 });
 ```

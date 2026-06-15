@@ -7,7 +7,7 @@ let fortress: Fortress;
 
 beforeEach(() => {
   fortress = createFortress({
-    jwt: { secret: 'integration-test-secret-32chars!!' },
+    jwt: { key: 'integration-test-secret-32chars!!' },
     database: createTestAdapter(),
   });
 });
@@ -348,7 +348,7 @@ describe('plugin integration', () => {
     let hookCalled = false;
 
     const f = createFortress({
-      jwt: { secret: 'integration-test-secret-32chars!!' },
+      jwt: { key: 'integration-test-secret-32chars!!' },
       database: createTestAdapter(),
       plugins: [
         {
@@ -377,7 +377,7 @@ describe('plugin integration', () => {
 
   it('beforeLogin hook can block login', async () => {
     const f = createFortress({
-      jwt: { secret: 'integration-test-secret-32chars!!' },
+      jwt: { key: 'integration-test-secret-32chars!!' },
       database: createTestAdapter(),
       plugins: [
         {

@@ -15,7 +15,7 @@ import { createFortress } from '@bajustone/fortress';
 import { emailVerification } from '@bajustone/fortress/plugins/email-verification';
 
 const fortress = createFortress({
-  jwt: { secret: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!' },
   database: adapter,
   plugins: [
     emailVerification({
@@ -97,7 +97,7 @@ import { createFortress } from '@bajustone/fortress';
 import { emailVerification } from '@bajustone/fortress/plugins/email-verification';
 
 const fortress = createFortress({
-  jwt: { secret: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!' },
   database: adapter,
   plugins: [
     emailVerification({

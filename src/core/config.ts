@@ -1,4 +1,5 @@
 import type { DatabaseAdapter } from '../adapters/database';
+import type { JwtKeyMaterial } from './auth/jwt';
 import type { PasswordPolicyConfig } from './auth/password-policy';
 import type { EndpointDefinition } from './endpoint';
 import type { CsrfConfig } from './http/csrf';
@@ -39,7 +40,13 @@ export interface CookieConfig {
 /** Top-level fortress configuration accepted by {@link createFortress}. */
 export interface FortressConfig {
   jwt: {
-    secret: string | string[];
+    /**
+     * Signing/verification key material. Today: an HS256 shared secret
+     * (string) or a rotation array of shared secrets (first signs, all
+     * verify). See {@link JwtKeyMaterial} for the planned expansion to
+     * asymmetric keys / JWKS.
+     */
+    key: JwtKeyMaterial;
     issuer?: string;
     accessTokenExpirySeconds?: number;
     refreshTokenExpirySeconds?: number;

@@ -15,7 +15,7 @@ describe('data-isolation plugin', () => {
       }],
     });
 
-    const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+    const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
     const rules = await plugin.scopeRules!(1, 'sale', ctx);
 
     expect(rules).not.toBeNull();
@@ -34,7 +34,7 @@ describe('data-isolation plugin', () => {
       }],
     });
 
-    const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+    const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
     const rules = await plugin.scopeRules!(1, 'user', ctx);
 
     expect(rules).toBeNull();
@@ -49,7 +49,7 @@ describe('data-isolation plugin', () => {
       ],
     });
 
-    const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+    const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
     const rules = await plugin.scopeRules!(1, 'sale', ctx);
 
     expect(rules!.filters).toHaveLength(2);
@@ -67,7 +67,7 @@ describe('data-isolation plugin', () => {
       }],
     });
 
-    const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+    const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
     const rules = await plugin.scopeRules!(1, 'anything', ctx);
 
     expect(rules).not.toBeNull();
@@ -85,7 +85,7 @@ describe('data-isolation plugin', () => {
       }],
     });
 
-    const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+    const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
     const rules = await plugin.scopeRules!(1, 'sale', ctx);
 
     expect(rules).toBeNull();
@@ -101,7 +101,7 @@ describe('data-isolation plugin', () => {
         ],
       });
 
-      const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+      const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
       const methods = plugin.methods!(ctx) as { withoutScope: <T>(name: string, fn: () => Promise<T>) => Promise<T> };
 
       const rules = await methods.withoutScope('site', async () => {
@@ -121,7 +121,7 @@ describe('data-isolation plugin', () => {
         ],
       });
 
-      const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+      const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
       const methods = plugin.methods!(ctx) as { unscoped: <T>(fn: () => Promise<T>) => Promise<T> };
 
       const rules = await methods.unscoped(async () => {
@@ -141,7 +141,7 @@ describe('data-isolation plugin', () => {
           { name: 'org', field: 'orgId', models: ['sale'], resolveValue: async () => 7 },
         ],
       });
-      const ctx: PluginContext = { db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } };
+      const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
       const methods = plugin.methods!(ctx) as { unscoped: <T>(fn: () => Promise<T>) => Promise<T> };
 
       // Flow A holds an unscoped window open across an await.

@@ -17,6 +17,9 @@
 
 ## [Unreleased]
 
+### Changed (breaking)
+- **`FortressConfig.jwt.secret` renamed to `FortressConfig.jwt.key`.** The field now accepts the new exported `JwtKeyMaterial` type (currently `string | string[]`, intentionally narrow so the runtime helpers don't lie about supported inputs). The alias exists so the public signature stays stable when fortress expands to asymmetric algorithms (RS256 / EdDSA) and JWKS-backed verification — the doc comment on `JwtKeyMaterial` in `core/auth/jwt.ts` shows the planned widening (`CryptoKey | KeyObject | JWK | Uint8Array | …` plus a `JwtVerifyKeyMaterial` variant for `JWTVerifyGetKey`). `signAccessToken` / `verifyAccessToken` parameter renamed `secret` → `key` to match. Codemod: `jwt: { secret: ... }` → `jwt: { key: ... }`.
+
 ## [0.2.5] - 2026-06-10
 
 ### Changed

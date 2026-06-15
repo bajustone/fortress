@@ -21,7 +21,7 @@ describe('magic-link plugin', () => {
     onSend.mockClear();
 
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [magicLink({ onSendMagicLink: onSend })],
     });
@@ -78,7 +78,7 @@ describe('magic-link plugin', () => {
 
     it('rejects expired tokens', async () => {
       const expiredFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [magicLink({ tokenExpirySeconds: -1, onSendMagicLink: onSend })],
       });

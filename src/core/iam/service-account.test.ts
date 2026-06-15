@@ -10,7 +10,7 @@ describe('iam-service: service accounts', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });
@@ -113,7 +113,7 @@ describe('iam-service: service account permissions (regression)', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });
@@ -226,7 +226,7 @@ describe('iam-service: service accounts + tenancy', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });

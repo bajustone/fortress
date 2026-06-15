@@ -10,7 +10,7 @@ const SECRET = 'sveltekit-rate-limit-wrapper-test-32!!';
 
 function setup(maxPerIp: number) {
   return createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins: [rateLimit({ rules: { api: { maxPerIp, windowSeconds: 60 } } })],
   });
@@ -48,7 +48,7 @@ describe('svelteKitRateLimit (framework wrapper)', () => {
 
   it('throws synchronously when the plugin is not registered', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
     await expect(

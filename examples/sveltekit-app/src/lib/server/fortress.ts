@@ -12,7 +12,7 @@ import { createTestAdapter } from '../../../../../src/testing';
 
 export const fortress = createFortress({
   jwt: {
-    secret: process.env.JWT_SECRET ?? 'dev-secret-minimum-32-bytes-long!!',
+    key: process.env.JWT_SECRET ?? 'dev-secret-minimum-32-bytes-long!!',
     accessTokenExpirySeconds: 900,
     refreshTokenExpirySeconds: 60 * 60 * 24 * 7,
   },

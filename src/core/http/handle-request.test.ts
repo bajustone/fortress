@@ -7,7 +7,7 @@ const SECRET = 'fortress-test-secret-at-least-32-bytes-long!';
 
 function makeFortress() {
   return createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
   });
 }
@@ -214,7 +214,7 @@ describe('fortress.handleRequest', () => {
     it('passes verified userId, claims, meta, and request to plugin handlers', async () => {
       const { plugin, received } = makeSpyPlugin();
       const spyFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [plugin],
       });
@@ -253,7 +253,7 @@ describe('fortress.handleRequest', () => {
     it('passes request + meta but leaves userId/claims undefined on public routes', async () => {
       const { plugin, received } = makeSpyPlugin();
       const spyFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [plugin],
       });
@@ -322,7 +322,7 @@ describe('fortress.handleRequest', () => {
 
     it('rejects /oauth/host-app/jwt-route without a JWT (401)', async () => {
       const { plugin } = makeOauthBearerPlugin();
-      const f = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter(), plugins: [plugin] });
+      const f = createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins: [plugin] });
 
       const res = await f.handleRequest(new Request('http://localhost/oauth/host-app/jwt-route', {
         method: 'POST',
@@ -334,7 +334,7 @@ describe('fortress.handleRequest', () => {
 
     it('accepts /oauth/host-app/jwt-route with a valid JWT and populates ctx.userId', async () => {
       const { plugin, received } = makeOauthBearerPlugin();
-      const f = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter(), plugins: [plugin] });
+      const f = createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins: [plugin] });
       const user = await f.auth.createUser({ email: 'jwt@b.co', name: 'J', password: 'password123' });
       const login = await f.auth.login('jwt@b.co', 'password123');
       if (login.status !== 'success')
@@ -352,7 +352,7 @@ describe('fortress.handleRequest', () => {
 
     it('rejects arbitrary plugin routes that set bearerKind="oauth" (P3.6)', async () => {
       const { plugin } = makeOauthBearerPlugin(true);
-      expect(() => createFortress({ jwt: { secret: SECRET }, database: createTestAdapter(), plugins: [plugin] }))
+      expect(() => createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins: [plugin] }))
         .toThrow(/not an approved self-auth OAuth protocol route/);
     });
   });

@@ -21,7 +21,7 @@ describe('email-verification plugin', () => {
     onSend.mockClear();
 
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [emailVerification({ onSendVerification: onSend })],
     });
@@ -76,7 +76,7 @@ describe('email-verification plugin', () => {
     it('rejects expired token', async () => {
       // Create with negative expiry to guarantee token is already expired
       const shortFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [emailVerification({ tokenExpirySeconds: -1, onSendVerification: onSend })],
       });
@@ -144,7 +144,7 @@ describe('email-verification plugin', () => {
   describe('requireVerification: false', () => {
     it('allows login without verification', async () => {
       const noRequireFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [emailVerification({ requireVerification: false })],
       });

@@ -8,7 +8,7 @@ const SECRET = 'permission-sync-test-secret-3232!';
 
 async function buildFortress(): Promise<Fortress> {
   const fortress = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
     routes: {
       listSchools: endpoint('GET', '/schools')

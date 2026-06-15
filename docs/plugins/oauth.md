@@ -13,7 +13,7 @@ import { createFortress } from "@bajustone/fortress";
 import { oauth } from "@bajustone/fortress/plugins/oauth";
 
 const fortress = createFortress({
-  jwt: { secret: "your-secret-minimum-32-bytes-long!" },
+  jwt: { key: "your-secret-minimum-32-bytes-long!" },
   database: db,
   plugins: [
     oauth({

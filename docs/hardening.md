@@ -12,7 +12,7 @@ Each item is "what to do" + "why" + "how to verify".
 
 - **Do:** Generate via `fortress generate-secret` (64 bytes hex, exceeds the 32-byte HS256 minimum). Store in a secret manager. Rotate at least annually and immediately on suspected compromise.
 - **Why:** A leaked HS256 secret lets an attacker forge any access token. Fortress validates secret length at boot — anything shorter throws.
-- **Verify:** `createFortress` accepts an array for rotation (`jwt.secret: [new, old]`) — make sure your rotation playbook adds `new` to position 0, redeploys, waits past `accessTokenExpirySeconds`, removes `old`.
+- **Verify:** `createFortress` accepts an array for rotation (`jwt.key: [new, old]`) — make sure your rotation playbook adds `new` to position 0, redeploys, waits past `accessTokenExpirySeconds`, removes `old`.
 
 ### Cookie posture
 

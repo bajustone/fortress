@@ -22,7 +22,7 @@ const SECRET = 'sveltekit-test-secret-32-chars-long!';
 
 function makeFortress() {
   return createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
   });
 }
@@ -402,7 +402,7 @@ describe('setAuthCookies', () => {
 describe('createSvelteKitHandle: api-key on user routes', () => {
   async function setupWithApiKey() {
     const fortress: Fortress<any> = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [apiKey({ prefix: 'test' })],
     });

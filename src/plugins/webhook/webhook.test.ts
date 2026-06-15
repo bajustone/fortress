@@ -23,7 +23,7 @@ describe('webhook plugin', () => {
     };
 
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [webhook({ deliver: mockDeliver })],
     });
@@ -192,7 +192,7 @@ describe('webhook plugin', () => {
       };
 
       const retryFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [webhook({ deliver: failDeliver, maxRetries: 1 })],
       });

@@ -89,7 +89,7 @@ describe('webauthn plugin', () => {
     vi.clearAllMocks();
 
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [webauthn({ rpName: 'Test', rpID: 'localhost', origin: 'http://localhost:3000' })],
     });
@@ -321,7 +321,7 @@ describe('webauthn plugin', () => {
   describe('afterLogin hook (second-factor mode)', () => {
     it('returns requiresWebAuthn when supportPasswordless is false', async () => {
       const f = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [webauthn({ rpName: 'Test', rpID: 'localhost', origin: 'http://localhost:3000', supportPasswordless: false })],
       });
@@ -349,7 +349,7 @@ describe('webauthn plugin', () => {
 
     it('allows normal login when no credentials registered', async () => {
       const f = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [webauthn({ rpName: 'Test', rpID: 'localhost', origin: 'http://localhost:3000', supportPasswordless: false })],
       });

@@ -21,7 +21,7 @@ interface Setup {
 
 async function setup(adminOptions: AdminPluginOptions = { apiKeyRoutes: true }): Promise<Setup> {
   const fortress = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins: [
       apiKey({ prefix: 'test', maxKeysPerSubject: 5 }),

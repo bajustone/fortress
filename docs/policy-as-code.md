@@ -132,7 +132,7 @@ import { applyPolicyPlan } from '@bajustone/fortress';
 
 const fortress = createFortress({
   database: createTestAdapter(),
-  jwt: { secret: process.env.FORTRESS_JWT_SECRET! },
+  jwt: { key: process.env.FORTRESS_JWT_SECRET! },
 });
 
 const { policy } = loadPolicy();

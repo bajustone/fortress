@@ -15,7 +15,7 @@
  *
  * const fortress = await createFortress({
  *   db: createDrizzleAdapter(db, { dialect: 'pg' }),
- *   jwt: { secret: process.env.JWT_SECRET! },
+ *   jwt: { key: process.env.JWT_SECRET! },
  * });
  *
  * const result = await fortress.signIn({ email: 'a@b.co', password: 'secret' });

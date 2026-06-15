@@ -15,7 +15,7 @@ import { socialLogin } from '@bajustone/fortress/plugins/social-login';
 
 const fortress = createFortress({
   database: adapter,
-  jwt: { secret: process.env.JWT_SECRET!, issuer: 'my-app' },
+  jwt: { key: process.env.JWT_SECRET!, issuer: 'my-app' },
   plugins: [
     socialLogin({
       providers: [

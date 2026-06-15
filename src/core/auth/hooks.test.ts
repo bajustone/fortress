@@ -21,7 +21,7 @@ describe('plugin hooks', () => {
       const beforeLogout = vi.fn(async () => {});
 
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [{ name: 'test', hooks: { beforeLogout } }],
       });
@@ -42,7 +42,7 @@ describe('plugin hooks', () => {
       const afterRegister = vi.fn(async () => {});
 
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [{ name: 'test', hooks: { afterRegister } }],
       });
@@ -67,7 +67,7 @@ describe('plugin hooks', () => {
       });
 
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [{ name: 'test', hooks: { afterRegister } }],
       });
@@ -87,7 +87,7 @@ describe('plugin hooks', () => {
       const beforeTokenRefresh = vi.fn(async () => {});
 
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [{ name: 'test', hooks: { beforeTokenRefresh } }],
       });
@@ -104,7 +104,7 @@ describe('plugin hooks', () => {
 
     it('can block refresh with HookResult', async () => {
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [{
           name: 'blocker',
@@ -127,7 +127,7 @@ describe('plugin hooks', () => {
   describe('afterTokenRefresh', () => {
     it('is called after token refresh and can modify result', async () => {
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [{
           name: 'test',
@@ -152,7 +152,7 @@ describe('plugin hooks', () => {
       const order: string[] = [];
 
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           {
@@ -186,7 +186,7 @@ describe('plugin hooks', () => {
   describe('plugin validation', () => {
     it('throws on duplicate plugin names', () => {
       expect(() => createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           { name: 'duplicate' },

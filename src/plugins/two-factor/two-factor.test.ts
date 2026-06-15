@@ -19,7 +19,7 @@ describe('two-factor plugin', () => {
 
   beforeEach(async () => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [twoFactor({ totp: { issuer: 'TestApp' }, backupCodes: { count: 5 } })],
     });

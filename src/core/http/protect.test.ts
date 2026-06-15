@@ -67,7 +67,7 @@ describe('protect()', () => {
     };
     const fortress = createFortress({
       database: createTestAdapter(),
-      jwt: { secret },
+      jwt: { key: secret },
       csrf: { enabled: false },
       plugins: [plugin],
     });
@@ -152,7 +152,7 @@ describe('protect()', () => {
     const ep = testEndpoint();
     const fortress = createFortress({
       database: createTestAdapter(),
-      jwt: { secret },
+      jwt: { key: secret },
       csrf: { enabled: false },
       plugins: [{ name: 'host-routes', routes: { createHostThing: ep } }],
       cookies: { secure: false },
@@ -172,7 +172,7 @@ describe('protect()', () => {
     const ep = testEndpoint();
     const fortress = createFortress({
       database: createTestAdapter(),
-      jwt: { secret },
+      jwt: { key: secret },
       csrf: { enabled: false },
       plugins: [{ name: 'host-routes', routes: { createHostThing: ep } }],
       cookies: { secure: false },

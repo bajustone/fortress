@@ -125,7 +125,7 @@ describe('password-policy', () => {
   describe('integration with createUser', () => {
     it('rejects short passwords during user creation', async () => {
       const fortress = createFortress({
-        jwt: { secret: 'test-secret-at-least-32-characters!!' },
+        jwt: { key: 'test-secret-at-least-32-characters!!' },
         database: createTestAdapter(),
         passwordPolicy: { minLength: 10 },
       });
@@ -137,7 +137,7 @@ describe('password-policy', () => {
 
     it('allows valid passwords during user creation', async () => {
       const fortress = createFortress({
-        jwt: { secret: 'test-secret-at-least-32-characters!!' },
+        jwt: { key: 'test-secret-at-least-32-characters!!' },
         database: createTestAdapter(),
         passwordPolicy: { minLength: 6 },
       });
@@ -153,7 +153,7 @@ describe('password-policy', () => {
 
     it('allows passwordless user creation (no validation)', async () => {
       const fortress = createFortress({
-        jwt: { secret: 'test-secret-at-least-32-characters!!' },
+        jwt: { key: 'test-secret-at-least-32-characters!!' },
         database: createTestAdapter(),
         passwordPolicy: { minLength: 10 },
       });

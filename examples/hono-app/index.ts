@@ -87,8 +87,8 @@ const logger = {
 
 const fortress = createFortress({
   jwt: {
-    secret: 'dev-secret-minimum-32-bytes-long!',
-    // secret: ['new-secret-32-bytes-minimum!!!!!!', 'old-secret-32-bytes-minimum!!!!!!'],  // ← secret rotation
+    key: 'dev-secret-minimum-32-bytes-long!',
+    // key: ['new-secret-32-bytes-minimum!!!!!!', 'old-secret-32-bytes-minimum!!!!!!'],  // ← secret rotation
     accessTokenExpirySeconds: 900,
     refreshTokenExpirySeconds: 604800,
   },

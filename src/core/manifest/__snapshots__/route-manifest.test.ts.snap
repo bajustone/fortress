@@ -164,3 +164,168 @@ exports[`route manifest > snapshots the core auth manifest subset 1`] = `
   },
 ]
 `;
+
+exports[`route manifest snapshots the core auth manifest subset 1`] = `
+[
+  {
+    "classification": "authenticated",
+    "csrfApplicable": true,
+    "handler": "removeLoginIdentifier",
+    "method": "DELETE",
+    "mounted": true,
+    "path": "/auth/identifiers",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "bearer",
+    ],
+  },
+  {
+    "classification": "authenticated",
+    "csrfApplicable": true,
+    "handler": "revokeAllOtherSessions",
+    "method": "DELETE",
+    "mounted": true,
+    "path": "/auth/sessions",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "bearer",
+    ],
+  },
+  {
+    "classification": "authenticated",
+    "csrfApplicable": true,
+    "handler": "revokeSession",
+    "method": "DELETE",
+    "mounted": true,
+    "path": "/auth/sessions/:id",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "bearer",
+    ],
+  },
+  {
+    "classification": "authenticated",
+    "csrfApplicable": false,
+    "handler": "getLoginIdentifiers",
+    "method": "GET",
+    "mounted": true,
+    "path": "/auth/identifiers",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "bearer",
+    ],
+  },
+  {
+    "classification": "authenticated",
+    "csrfApplicable": false,
+    "handler": "me",
+    "method": "GET",
+    "mounted": true,
+    "path": "/auth/me",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "bearer",
+    ],
+  },
+  {
+    "classification": "authenticated",
+    "csrfApplicable": false,
+    "handler": "listSessions",
+    "method": "GET",
+    "mounted": true,
+    "path": "/auth/sessions",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "bearer",
+    ],
+  },
+  {
+    "classification": "authenticated",
+    "csrfApplicable": true,
+    "handler": "addLoginIdentifier",
+    "method": "POST",
+    "mounted": true,
+    "path": "/auth/identifiers",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "bearer",
+    ],
+  },
+  {
+    "classification": "rbac",
+    "csrfApplicable": true,
+    "handler": "impersonate",
+    "method": "POST",
+    "mounted": true,
+    "path": "/auth/impersonate",
+    "permission": {
+      "action": "impersonate",
+      "resource": "fortress",
+    },
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "bearer",
+    ],
+  },
+  {
+    "classification": "public",
+    "csrfApplicable": true,
+    "handler": "login",
+    "method": "POST",
+    "mounted": true,
+    "path": "/auth/login",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "none",
+    ],
+  },
+  {
+    "classification": "public",
+    "csrfApplicable": true,
+    "handler": "logout",
+    "method": "POST",
+    "mounted": true,
+    "path": "/auth/logout",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "none",
+    ],
+  },
+  {
+    "classification": "public",
+    "csrfApplicable": true,
+    "handler": "refresh",
+    "method": "POST",
+    "mounted": true,
+    "path": "/auth/refresh",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "none",
+    ],
+  },
+  {
+    "classification": "public",
+    "csrfApplicable": true,
+    "handler": "createUser",
+    "method": "POST",
+    "mounted": true,
+    "path": "/auth/register",
+    "plugin": "auth",
+    "rateLimited": false,
+    "security": [
+      "none",
+    ],
+  },
+]
+`;

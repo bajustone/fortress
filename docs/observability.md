@@ -39,7 +39,7 @@ import pino from 'pino';
 import { createFortress } from '@bajustone/fortress';
 
 const fortress = createFortress({
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
   database: db,
   logger: pino({ level: 'info' }),
 });
@@ -53,7 +53,7 @@ import { createFortress } from '@bajustone/fortress';
 
 const app = Fastify({ logger: { level: 'info' } });
 const fortress = createFortress({
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
   database: db,
   logger: app.log,
 });
@@ -74,7 +74,7 @@ const consoleLogger = {
 };
 
 const fortress = createFortress({
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
   database: db,
   logger: consoleLogger,
 });
@@ -210,7 +210,7 @@ sdk.start();
 // 2. Wire the Fortress adapter.
 const observability = await createOtelTelemetry({ name: 'my-app-auth' });
 const fortress = createFortress({
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
   database: db,
   observability,
 });

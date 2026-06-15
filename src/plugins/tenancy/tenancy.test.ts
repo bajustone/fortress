@@ -44,7 +44,7 @@ describe('tenancy plugin', () => {
 
   beforeEach(async () => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [tenancy()],
     });
@@ -62,12 +62,12 @@ describe('tenancy plugin', () => {
   describe('route mounting', () => {
     it('keeps HTTP routes opt-in while methods are always available', () => {
       const withoutRoutes = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [tenancy()],
       });
       const withRoutes = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [tenancy({ routes: true })],
       });

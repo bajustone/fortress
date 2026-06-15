@@ -218,14 +218,14 @@ Permissions are `resource` + `action`, not `path` + `httpVerb`. HTTP-to-resource
 
 ### 10. Secret Rotation
 
-`jwt.secret` accepts `string | string[]`. When an array, the first secret signs, all secrets verify. This allows zero-downtime rotation:
+`jwt.key` accepts `string | string[]`. When an array, the first secret signs, all secrets verify. This allows zero-downtime rotation:
 
 ```typescript
 // Step 1: Add new secret, keep old one for verification
-jwt: { secret: ['new-secret', 'old-secret'] }
+jwt: { key: ['new-secret', 'old-secret'] }
 
 // Step 2: After all old tokens expire, remove old secret
-jwt: { secret: 'new-secret' }
+jwt: { key: 'new-secret' }
 ```
 
 ---
@@ -1571,7 +1571,7 @@ Add the new sub-path to `jsr.json` and `package.json` exports.
 
 ```typescript
 const fortress = createFortress({
-  jwt: { secret: env.JWT_SECRET },
+  jwt: { key: env.JWT_SECRET },
   database: createDrizzleAdapter(db),
   plugins: [twoFactor({ ... }), tenancy({ ... })],
 });
@@ -1621,7 +1621,7 @@ const fortress = createFortress({
 ```typescript
 interface FortressConfig {
   jwt: {
-    secret: string | string[];                    // Required. string[] for rotation: first signs, all verify. Min 32 bytes.
+    key: string | string[];                    // Required. string[] for rotation: first signs, all verify. Min 32 bytes.
     issuer?: string;                              // Default: 'fortress'
     accessTokenExpirySeconds?: number;            // Default: 900 (15 min)
     refreshTokenExpirySeconds?: number;           // Default: 604800 (7 days)
@@ -1646,7 +1646,7 @@ interface FortressConfig {
 
 ```typescript
 const fortress = createFortress({
-  jwt: { secret: env.JWT_SECRET },
+  jwt: { key: env.JWT_SECRET },
   database: createDrizzleAdapter(db),
 });
 ```

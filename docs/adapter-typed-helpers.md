@@ -174,7 +174,7 @@ import { apiKey } from '@bajustone/fortress/plugins/api-key';
 
 const fortress = createFortress({
   database: db,
-  jwt: { secret },
+  jwt: { key: secret },
   plugins: [tenancy(), apiKey({ prefix: 'fortress' })] as const,
 });
 

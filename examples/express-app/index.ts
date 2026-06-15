@@ -56,7 +56,7 @@ const db = createTestAdapter();
 
 const fortress = createFortress({
   jwt: {
-    secret: 'dev-secret-minimum-32-bytes-long!',
+    key: 'dev-secret-minimum-32-bytes-long!',
     accessTokenExpirySeconds: 900,
     refreshTokenExpirySeconds: 604800,
   },

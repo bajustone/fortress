@@ -18,7 +18,7 @@ async function seed(): Promise<void> {
 describe('addAuthObserver', () => {
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });

@@ -7,7 +7,7 @@ const SECRET = 'fortress-migrate-test-secret-32!';
 describe('fortress.migrate', () => {
   it('runs fortress migrations and reports the applied result', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 
@@ -20,7 +20,7 @@ describe('fortress.migrate', () => {
 
   it('calls migrateApp after fortress migrations complete', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 
@@ -39,7 +39,7 @@ describe('fortress.migrate', () => {
 
   it('is idempotent — re-running applies nothing', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 
@@ -50,7 +50,7 @@ describe('fortress.migrate', () => {
 
   it('propagates errors from migrateApp', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 

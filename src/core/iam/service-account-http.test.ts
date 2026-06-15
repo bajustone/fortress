@@ -26,7 +26,7 @@ interface Ctx {
 
 async function setup(): Promise<Ctx> {
   const fortress = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
   });
 

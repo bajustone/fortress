@@ -65,7 +65,7 @@ describe('error handler', () => {
   let app: Hono<FortressEnv>;
 
   beforeEach(() => {
-    const fortress = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter() });
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
     app = createApp(fortress);
   });
 
@@ -79,7 +79,7 @@ describe('error handler', () => {
   });
 
   it('returns 500 for unknown errors without stack trace', async () => {
-    const fortress = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter() });
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
     const { errorHandler } = createHonoMiddleware(fortress);
     const testApp = new Hono();
     testApp.onError(errorHandler);
@@ -96,7 +96,7 @@ describe('error handler', () => {
   });
 
   it('adds Retry-After header for RATE_LIMITED errors', async () => {
-    const fortress = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter() });
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
     const { errorHandler } = createHonoMiddleware(fortress);
     const testApp = new Hono();
     testApp.onError(errorHandler);
@@ -110,7 +110,7 @@ describe('error handler', () => {
   });
 
   it('maps various error codes to correct status codes', async () => {
-    const fortress = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter() });
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
     const { errorHandler } = createHonoMiddleware(fortress);
     const testApp = new Hono();
     testApp.onError(errorHandler);
@@ -140,7 +140,7 @@ describe('auth middleware', () => {
   let app: Hono<FortressEnv>;
 
   beforeEach(async () => {
-    fortress = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter() });
+    fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
     app = createApp(fortress);
 
     app.get('/api/me', (c) => {
@@ -207,7 +207,7 @@ describe('rbac middleware', () => {
   let app: Hono<FortressEnv>;
 
   beforeEach(async () => {
-    fortress = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter() });
+    fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
     app = createApp(fortress, {
       routeMap: {
         'GET /api/posts': { resource: 'post', action: 'list' },
@@ -299,7 +299,7 @@ describe('rbac middleware', () => {
   });
 
   it('supports dynamic mapRequest fallback', async () => {
-    const mapFortress = createFortress({ jwt: { secret: SECRET }, database: createTestAdapter() });
+    const mapFortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
     // Pass a routeMap (even empty) so rbacMiddleware is applied by createApp
     const mapApp = createApp(mapFortress, {
       routeMap: {},
@@ -498,7 +498,7 @@ describe('plugin route mounting: OAuth', () => {
 
   beforeEach(async () => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [oauth({ issuerUrl: 'https://auth.example.com' })],
     });
@@ -719,7 +719,7 @@ describe('plugin route mounting: OAuth', () => {
 describe('plugin route mounting: OpenAPI with prefix', () => {
   it('scalar UI data-url resolves to prefixed spec path', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi()],
     });
@@ -747,7 +747,7 @@ describe('plugin route mounting: OpenAPI with prefix', () => {
 
   it('unprefixed spec path returns 404', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [openapi()],
     });
@@ -770,7 +770,7 @@ describe('full auth flow via Hono', () => {
 
   beforeEach(async () => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 

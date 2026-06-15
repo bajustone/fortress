@@ -3,8 +3,8 @@
  *
  * Provides {@link signAccessToken} and {@link verifyAccessToken} for short-lived
  * access tokens. Refresh tokens are handled separately in
- * `core/auth/refresh-token.ts`. Supports secret rotation by accepting an array
- * of secrets — the first is used to sign, all are accepted on verify.
+ * `core/auth/refresh-token.ts`. Supports key rotation by accepting an array
+ * of keys — the first is used to sign, all are accepted on verify.
  *
  * @module
  */
@@ -13,6 +13,37 @@ import type { SubjectType, TokenClaims } from '../types';
 
 import { jwtVerify, SignJWT } from 'jose';
 import { Errors } from '../errors';
+
+/**
+ * Key material accepted by {@link signAccessToken} / {@link verifyAccessToken}.
+ *
+ * Today this is just an HS256 shared secret (string) or a rotation array of
+ * shared secrets. The alias exists so the public signature is stable when we
+ * expand to asymmetric algorithms (RS256 / EdDSA) and JWKS-backed verification.
+ *
+ * Expected expansion:
+ *
+ * ```ts
+ * import type { CryptoKey, JWK, JWTVerifyGetKey, KeyObject } from 'jose';
+ *
+ * export type JwtStaticKey =
+ *   | string        // HS* shared secret (utf-8)
+ *   | Uint8Array    // HS* shared secret (raw bytes)
+ *   | CryptoKey     // Web Crypto key (any alg)
+ *   | KeyObject     // Node KeyObject (any alg)
+ *   | JWK;          // JSON Web Key
+ *
+ * export type JwtKeyMaterial = JwtStaticKey | readonly JwtStaticKey[];
+ *
+ * // Verification additionally accepts a resolver (e.g. createRemoteJWKSet):
+ * export type JwtVerifyKeyMaterial = JwtKeyMaterial | JWTVerifyGetKey;
+ * ```
+ *
+ * Until then, the runtime helpers ({@link normalizeKeys}) only know how to
+ * encode strings — widening the type without widening the helpers would be a
+ * lie, so do both together.
+ */
+export type JwtKeyMaterial = string | string[];
 
 /**
  * JWT claim names fortress controls and that must never be overridable by
@@ -66,19 +97,19 @@ export function stripReservedClaims(
 }
 
 /**
- * Encode a secret string to Uint8Array for jose.
+ * Encode a shared-secret string to Uint8Array for jose.
  */
 function encodeSecret(secret: string): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
 /**
- * Normalize secret config to an array of encoded secrets.
- * First secret is used for signing, all are used for verification.
+ * Normalize key material to an array of encoded keys.
+ * First entry is used for signing, all are used for verification.
  */
-function normalizeSecrets(secret: string | string[]): Uint8Array[] {
-  const secrets = Array.isArray(secret) ? secret : [secret];
-  return secrets.map(encodeSecret);
+function normalizeKeys(key: JwtKeyMaterial): Uint8Array[] {
+  const keys = Array.isArray(key) ? key : [key];
+  return keys.map(encodeSecret);
 }
 
 /**
@@ -86,10 +117,10 @@ function normalizeSecrets(secret: string | string[]): Uint8Array[] {
  */
 export async function signAccessToken(
   claims: Omit<TokenClaims, 'iat' | 'exp'>,
-  secret: string | string[],
+  key: JwtKeyMaterial,
   expiresInSeconds: number,
 ): Promise<string> {
-  const [signingKey] = normalizeSecrets(secret);
+  const [signingKey] = normalizeKeys(key);
 
   // Strip reserved claim names from customClaims before spreading — a caller
   // (or a plugin contributing via enrichTokenClaims) MUST NOT be able to
@@ -112,7 +143,7 @@ export async function signAccessToken(
 }
 
 /**
- * Verify a JWT access token. Tries each secret in order for rotation support.
+ * Verify a JWT access token. Tries each key in order for rotation support.
  *
  * Pins `alg: HS256` and (when supplied) the expected `issuer`. jose already
  * rejects `alg: none` by default; the explicit allowlist is defense in
@@ -121,17 +152,17 @@ export async function signAccessToken(
  */
 export async function verifyAccessToken(
   token: string,
-  secret: string | string[],
+  key: JwtKeyMaterial,
   options?: { issuer?: string },
 ): Promise<TokenClaims> {
-  const secrets = normalizeSecrets(secret);
+  const keys = normalizeKeys(key);
   const verifyOptions: { algorithms: string[]; issuer?: string } = { algorithms: ['HS256'] };
   if (options?.issuer)
     verifyOptions.issuer = options.issuer;
 
-  for (const key of secrets) {
+  for (const candidate of keys) {
     try {
-      const { payload } = await jwtVerify(token, key, verifyOptions);
+      const { payload } = await jwtVerify(token, candidate, verifyOptions);
       return {
         sub: Number(payload.sub),
         subjectType: (payload.subjectType as SubjectType | undefined) ?? 'USER',

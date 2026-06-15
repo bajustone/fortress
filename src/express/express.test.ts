@@ -27,7 +27,7 @@ function mockRes(): ExpressResponse {
 describe('express adapter', () => {
   it('createExpressMiddleware returns auth, rbac, and error handler', () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 
@@ -39,7 +39,7 @@ describe('express adapter', () => {
 
   it('auth middleware rejects missing Authorization header', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 
@@ -58,7 +58,7 @@ describe('express adapter', () => {
 
   it('auth middleware sets user context on valid token', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 
@@ -93,7 +93,7 @@ describe('express adapter', () => {
 
   it('rbac middleware skips when no route mapping matches', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 

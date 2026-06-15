@@ -21,6 +21,7 @@ import type {
   SessionInfo,
   TokenClaims,
 } from '../types';
+import type { JwtKeyMaterial } from './jwt';
 import { Errors, FortressError } from '../errors';
 import { evaluatePermissions } from '../iam/permission-evaluator';
 import { createInternalAdapter } from '../internal-adapter';
@@ -63,7 +64,7 @@ export interface AuthEvent {
 export type AuthEventListener = (event: AuthEvent) => void | Promise<void>;
 
 interface ResolvedConfig {
-  secret: string | string[];
+  key: JwtKeyMaterial;
   issuer: string;
   accessTokenExpiry: number;
   refreshTokenExpiry: number;
@@ -71,7 +72,7 @@ interface ResolvedConfig {
 
 function resolveConfig(config: FortressConfig): ResolvedConfig {
   return {
-    secret: config.jwt.secret,
+    key: config.jwt.key,
     issuer: config.jwt.issuer ?? 'fortress',
     accessTokenExpiry: config.jwt.accessTokenExpirySeconds ?? 900,
     refreshTokenExpiry: config.jwt.refreshTokenExpirySeconds ?? 604800,
@@ -238,7 +239,7 @@ export function createAuthService(
         iss: resolved.issuer,
         customClaims: Object.keys(customClaims).length > 0 ? customClaims : undefined,
       },
-      resolved.secret,
+      resolved.key,
       resolved.accessTokenExpiry,
     );
 
@@ -454,7 +455,7 @@ export function createAuthService(
             iss: resolved.issuer,
             customClaims: Object.keys(customClaims).length > 0 ? customClaims : undefined,
           },
-          resolved.secret,
+          resolved.key,
           resolved.accessTokenExpiry,
         );
 
@@ -629,7 +630,7 @@ export function createAuthService(
     async verifyToken(token: string): Promise<TokenClaims> {
       const start = performance.now();
       try {
-        const claims = await verifyAccessToken(token, resolved.secret, { issuer: resolved.issuer });
+        const claims = await verifyAccessToken(token, resolved.key, { issuer: resolved.issuer });
         tokenVerifyDuration?.record(
           (performance.now() - start) / 1000,
           { result: 'ok' },
@@ -646,7 +647,7 @@ export function createAuthService(
     },
 
     async signToken(claims: Omit<TokenClaims, 'iat' | 'exp'>): Promise<string> {
-      return signAccessToken(claims, resolved.secret, resolved.accessTokenExpiry);
+      return signAccessToken(claims, resolved.key, resolved.accessTokenExpiry);
     },
 
     async listSessions(userId: number): Promise<SessionInfo[]> {
@@ -771,7 +772,7 @@ export function createAuthService(
           act: { sub: adminUserId, subjectType: 'USER' },
           customClaims: Object.keys(customClaims).length > 0 ? customClaims : undefined,
         },
-        resolved.secret,
+        resolved.key,
         expirySeconds,
       );
 

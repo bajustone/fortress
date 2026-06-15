@@ -10,7 +10,7 @@ describe('iam-service: isSystem flag', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });
@@ -62,7 +62,7 @@ describe('inline permissions (direct binding)', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });
@@ -189,7 +189,7 @@ describe('tenant-scoped IAM', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });
@@ -284,7 +284,7 @@ describe('iam-service: admin CRUD', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });
@@ -544,7 +544,7 @@ describe('remediation regressions (P3.1, P3.3)', () => {
     // the deleteRole invalidation, the granted decision would survive in cache
     // for up to the TTL even after the role (and its access) is gone.
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       rbac: { cache: { ttlSeconds: 300 } },
     });
@@ -567,7 +567,7 @@ describe('remediation regressions (P3.1, P3.3)', () => {
 
   it('permission identity includes effect (ALLOW and DENY are distinct rows)', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
     const role = await fortress.iam.createRole('effect-identity', [
@@ -591,7 +591,7 @@ describe('remediation regressions (P3.1, P3.3)', () => {
 
   it('permission identity includes stable serialized conditions', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
     const role = await fortress.iam.createRole('conditions-identity', [
@@ -625,7 +625,7 @@ describe('remediation regressions (P3.1, P3.3)', () => {
 
   it('findOrCreatePermission resolves concurrent creates to one row (P3.3/M8)', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
     const user = await fortress.auth.createUser({

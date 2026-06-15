@@ -10,7 +10,7 @@ describe('auth admin: user management', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
   });

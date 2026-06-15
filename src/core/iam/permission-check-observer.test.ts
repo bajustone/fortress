@@ -23,7 +23,7 @@ async function seedUserAndRole(): Promise<{ userId: number }> {
 describe('addPermissionCheckObserver', () => {
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       rbac: { cache: { ttlSeconds: 30, maxEntries: 100 } },
     });

@@ -19,7 +19,7 @@ interface LoginResult { accessToken: string; refreshToken: string }
 async function setup(csrf?: { enabled?: boolean }): Promise<{ fortress: Awaited<ReturnType<typeof createFortress>>; login: LoginResult }> {
   const fortress = createFortress({
     database: createTestAdapter(),
-    jwt: { secret: 'x'.repeat(32) },
+    jwt: { key: 'x'.repeat(32) },
     cookies: { secure: false },
     csrf,
   });

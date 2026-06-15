@@ -23,7 +23,7 @@ describe('oauth plugin', () => {
         'write:posts': { resource: 'post', action: 'create' },
       },
     });
-    methods = plugin.methods!({ db, config: { jwt: { secret: 'x'.repeat(32) }, database: db } }) as unknown as OAuthMethods;
+    methods = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as OAuthMethods;
 
     // Create a test user
     const user = await db.create<{ id: number }>({
@@ -326,7 +326,7 @@ describe('oauth plugin', () => {
         loginUrl: 'https://app.example.com/signin',
         consentUrl: 'https://app.example.com/oauth/consent',
       });
-      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { secret: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
+      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { key: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
       // Re-create the client in the local DB.
       await localDb.create({
         model: 'oauth_client',
@@ -375,7 +375,7 @@ describe('oauth plugin', () => {
         loginUrl: 'https://app.example.com/signin',
         consentUrl: 'https://app.example.com/oauth/consent',
       });
-      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { secret: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
+      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { key: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
       await localDb.create({
         model: 'oauth_client',
         data: {
@@ -411,7 +411,7 @@ describe('oauth plugin', () => {
         loginUrl: 'https://app.example.com/signin',
         consentUrl: 'https://app.example.com/oauth/consent',
       });
-      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { secret: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
+      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { key: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
 
       await expect(
         localMethods.handleAuthorizeRequest(
@@ -446,7 +446,7 @@ describe('oauth plugin', () => {
     it('handleAuthorizeRequest throws when loginUrl/consentUrl are not configured', async () => {
       const localDb = createTestAdapter();
       const localPlugin = oauth({}); // no URLs
-      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { secret: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
+      const localMethods = localPlugin.methods!({ db: localDb, config: { jwt: { key: 'x'.repeat(32) }, database: localDb } }) as unknown as OAuthMethods;
 
       await expect(
         localMethods.handleAuthorizeRequest(
@@ -822,7 +822,7 @@ describe('oauth plugin', () => {
       });
       const localMethods = localPlugin.methods!({
         db: localDb,
-        config: { jwt: { secret: 'x'.repeat(32) }, database: localDb },
+        config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
       await localDb.create({
         model: 'oauth_client',
@@ -861,7 +861,7 @@ describe('oauth plugin', () => {
       });
       const localMethods = localPlugin.methods!({
         db: localDb,
-        config: { jwt: { secret: 'x'.repeat(32) }, database: localDb },
+        config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
       await localDb.create({
         model: 'oauth_client',
@@ -902,7 +902,7 @@ describe('oauth plugin', () => {
       });
       const localMethods = localPlugin.methods!({
         db: localDb,
-        config: { jwt: { secret: 'x'.repeat(32) }, database: localDb },
+        config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
       await localDb.create({
         model: 'oauth_client',
@@ -1069,7 +1069,7 @@ describe('oauth plugin', () => {
       });
       const localMethods = localPlugin.methods!({
         db: localDb,
-        config: { jwt: { secret: 'x'.repeat(32) }, database: localDb },
+        config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
       // Re-create the same client in the local DB with allow-list intact.
       await localDb.create({
@@ -1117,7 +1117,7 @@ describe('oauth plugin', () => {
       });
       const localMethods = localPlugin.methods!({
         db: localDb,
-        config: { jwt: { secret: 'x'.repeat(32) }, database: localDb },
+        config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
       await localDb.create({
         model: 'oauth_client',
@@ -1278,7 +1278,7 @@ describe('oauth plugin', () => {
       });
       const localMethods = localPlugin.methods!({
         db: localDb,
-        config: { jwt: { secret: 'x'.repeat(32) }, database: localDb },
+        config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
 
       const localUser = await localDb.create<{ id: number }>({
@@ -1744,7 +1744,7 @@ describe('oauth plugin', () => {
       });
       const localMethods = localPlugin.methods!({
         db: localDb,
-        config: { jwt: { secret: 'x'.repeat(32) }, database: localDb },
+        config: { jwt: { key: 'x'.repeat(32) }, database: localDb },
       }) as unknown as OAuthMethods;
       const localUser = await localDb.create<{ id: number }>({
         model: 'user',

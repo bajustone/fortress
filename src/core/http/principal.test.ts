@@ -18,7 +18,7 @@ const SECRET = 'principal-resolver-test-secret-32char!';
 
 async function makeFortressWithApiKey() {
   const fortress: Fortress<any> = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins: [apiKey({ prefix: 'test' })],
   });
@@ -42,7 +42,7 @@ async function makeFortressWithApiKey() {
 describe('tryPluginPrincipal', () => {
   it('returns null when no plugin is registered', async () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
     const result = await tryPluginPrincipal(
@@ -116,7 +116,7 @@ describe('tryPluginPrincipal', () => {
       },
     };
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [firstHit, secondHit],
     });
@@ -145,7 +145,7 @@ describe('tryPluginPrincipal', () => {
       },
     };
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [firstDefers, secondHit],
     });
@@ -164,7 +164,7 @@ describe('tryPluginPrincipal', () => {
       resolvePrincipal: async () => ({ subject: { type: 'USER', id: 7 } }),
     };
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [unrelated, hit],
     });
@@ -332,7 +332,7 @@ describe('resolveRequestPrincipal — subject shape pass-through', () => {
       }),
     };
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [custom],
     });

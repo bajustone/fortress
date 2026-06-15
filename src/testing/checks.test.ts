@@ -20,7 +20,7 @@ const SECRET = 'checks-test-secret-at-least-32-chars!';
 function makeFortress(extraRoutes?: Parameters<typeof publicLeakPlugin>[0]) {
   const plugins = extraRoutes ? [publicLeakPlugin(extraRoutes)] : [];
   return createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins,
   });

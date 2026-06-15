@@ -11,7 +11,7 @@
  * import { createTestAdapter } from '@bajustone/fortress/testing';
  *
  * const db = createTestAdapter();
- * const fortress = await createFortress({ db, jwt: { secret: 'test' } });
+ * const fortress = await createFortress({ db, jwt: { key: 'test' } });
  * ```
  *
  * @module
@@ -55,7 +55,7 @@ const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined'
  *
  * Usage:
  *   import { createTestAdapter } from '@bajustone/fortress/testing';
- *   const fortress = createFortress({ database: createTestAdapter(), jwt: { secret: 'test' } });
+ *   const fortress = createFortress({ database: createTestAdapter(), jwt: { key: 'test' } });
  */
 export function createTestAdapter(): DatabaseAdapter {
   if (isBun) {

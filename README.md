@@ -109,7 +109,7 @@ const db = createDrizzleAdapter(drizzle('app.db'));
 const fortress = createFortress({
   database: db,
   jwt: {
-    secret: process.env.JWT_SECRET!, // min 32 bytes for HS256
+    key: process.env.JWT_SECRET!, // min 32 bytes for HS256
     issuer: 'my-app',
   },
 });
@@ -183,7 +183,7 @@ const fortress = createFortress({
   // Required
   database: adapter,
   jwt: {
-    secret: 'min-32-bytes-long-secret-here!!!', // string or string[] for rotation
+    key: 'min-32-bytes-long-secret-here!!!', // string or string[] for rotation
     issuer: 'fortress',                          // default: 'fortress'
     accessTokenExpirySeconds: 900,               // default: 900 (15 min)
     refreshTokenExpirySeconds: 604800,           // default: 604800 (7 days)
@@ -234,7 +234,7 @@ Pass an array of secrets for zero-downtime JWT key rotation. The first secret si
 
 ```typescript
 jwt: {
-  secret: ['new-secret-min-32-bytes!!!!!!!!!', 'old-secret-min-32-bytes!!!!!!!!!'],
+  key: ['new-secret-min-32-bytes!!!!!!!!!', 'old-secret-min-32-bytes!!!!!!!!!'],
 }
 ```
 
@@ -248,7 +248,7 @@ const nativeArgon2: PasswordHasher = {
   verify: (hash, password) => argon2.verify(hash, password),
 };
 
-createFortress({ database: db, jwt: { secret }, passwordHasher: nativeArgon2 });
+createFortress({ database: db, jwt: { key: secret }, passwordHasher: nativeArgon2 });
 ```
 
 ## Core Auth API
@@ -1001,7 +1001,7 @@ import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
 
 export const fortress = createFortress({
   database: createDrizzleAdapter(/* ... */),
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
 });
 
 // src/hooks.server.ts
@@ -1384,7 +1384,7 @@ import { auditLog } from '@bajustone/fortress/plugins/audit-log';
 
 const fortress = createFortress({
   database: db,
-  jwt: { secret },
+  jwt: { key: secret },
   plugins: [
     rateLimit(),
     accountLockout(),
@@ -1441,7 +1441,7 @@ Full IAM administration: users, roles, groups, permissions, role/permission bind
 import { admin } from '@bajustone/fortress/plugins/admin';
 
 const fortress = createFortress({
-  jwt: { secret: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!' },
   database: adapter,
   plugins: [
     admin({ adminUserIds: [1] }), // superadmin bypass for user ID 1
@@ -2436,7 +2436,7 @@ import pino from 'pino';
 import { createFortress } from '@bajustone/fortress';
 
 const fortress = createFortress({
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
   database: db,
   logger: pino({ level: 'info' }),
 });
@@ -2488,7 +2488,7 @@ import { createOtelTelemetry } from '@bajustone/fortress/otel';
 
 const observability = await createOtelTelemetry({ name: 'my-app-auth' });
 const fortress = createFortress({
-  jwt: { secret: process.env.JWT_SECRET! },
+  jwt: { key: process.env.JWT_SECRET! },
   database: db,
   observability,
 });
@@ -2532,7 +2532,7 @@ import { describe, it, expect } from 'vitest';
 describe('auth', () => {
   const fortress = createFortress({
     database: createTestAdapter(),
-    jwt: { secret: 'test-secret-min-32-bytes-long!!!' },
+    jwt: { key: 'test-secret-min-32-bytes-long!!!' },
   });
 
   it('registers and logs in a user', async () => {

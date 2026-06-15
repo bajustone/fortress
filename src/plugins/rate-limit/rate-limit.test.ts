@@ -13,7 +13,7 @@ describe('rate-limit plugin', () => {
 
     beforeEach(async () => {
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -132,7 +132,7 @@ describe('rate-limit plugin', () => {
 
     beforeEach(() => {
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -192,7 +192,7 @@ describe('rate-limit plugin', () => {
 
     beforeEach(async () => {
       fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -277,7 +277,7 @@ describe('rate-limit plugin', () => {
       };
 
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [rateLimit({
           login: { maxPerIp: 10, maxPerAccount: 5, windowSeconds: 60 },
@@ -302,7 +302,7 @@ describe('rate-limit plugin', () => {
   describe('refresh rate limiting', () => {
     it('blocks excessive refresh attempts from the same IP', async () => {
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -354,7 +354,7 @@ describe('rate-limit plugin', () => {
       };
 
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -396,7 +396,7 @@ describe('rate-limit plugin', () => {
       };
 
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -419,7 +419,7 @@ describe('rate-limit plugin', () => {
 
     it('throws when referencing an unknown rule', async () => {
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [rateLimit({ rules: { api: { maxPerIp: 5, windowSeconds: 60 } } })],
       });
@@ -471,7 +471,7 @@ describe('rate-limit plugin', () => {
       // before the 404. That confirms end-to-end wiring without dragging
       // in the oauth dependency graph.
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [rateLimit({ oauthToken: { maxPerIp: 2, windowSeconds: 60 } })],
       });
@@ -501,7 +501,7 @@ describe('rate-limit plugin', () => {
 
     it('paths binding enforces method filter (GET passes, POST is limited)', async () => {
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -538,7 +538,7 @@ describe('rate-limit plugin', () => {
 
     it('method filter is case-insensitive', async () => {
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -560,7 +560,7 @@ describe('rate-limit plugin', () => {
 
     it('cross-rule isolation: exceeding one rule does not affect another', async () => {
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [
           rateLimit({
@@ -589,7 +589,7 @@ describe('rate-limit plugin', () => {
       // default per-IP login limit (10 / 15min). Guards against the 0.0.37
       // silent-upgrade regression where opt-in meant "missing block = no limit."
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [rateLimit({})],
       });
@@ -621,7 +621,7 @@ describe('rate-limit plugin', () => {
 
     it('login: { disabled: true } fully turns the hook off', async () => {
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [rateLimit({ login: { disabled: true } })],
       });
@@ -648,7 +648,7 @@ describe('rate-limit plugin', () => {
 
     it('register is rate-limited with defaults when the config block is omitted', async () => {
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [rateLimit({})],
       });
@@ -670,7 +670,7 @@ describe('rate-limit plugin', () => {
 
     it('register: { disabled: true } fully turns the hook off', async () => {
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [rateLimit({ register: { disabled: true } })],
       });

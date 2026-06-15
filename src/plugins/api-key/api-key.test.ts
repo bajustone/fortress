@@ -32,7 +32,7 @@ async function setup(config: ApiKeyConfig = { prefix: 'test', maxKeysPerSubject:
   accessToken: string;
 }> {
   const fortress = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins: [apiKey(config)],
   });
@@ -247,7 +247,7 @@ describe('api-key plugin — programmatic methods', () => {
         methods: () => ({ deleteReport: () => ({ ok: true }) }),
       };
       const fortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [apiKey({ prefix: 'test' }), reportsPlugin],
       });

@@ -13,7 +13,7 @@ const SECRET = 'policy-test-secret-at-least-32-bytes!';
 
 function freshFortress() {
   return createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
   });
 }

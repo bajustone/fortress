@@ -12,7 +12,7 @@ let targetId: number;
 
 beforeEach(async () => {
   fortress = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
   });
 

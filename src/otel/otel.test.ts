@@ -47,7 +47,7 @@ describe('createOtelTelemetry', () => {
 
     const telemetry = await createOtelTelemetry({ name: 'fortress-test' });
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       rbac: { cache: { ttlSeconds: 30, maxEntries: 100 } },
       observability: telemetry,

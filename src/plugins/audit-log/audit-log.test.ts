@@ -13,7 +13,7 @@ describe('audit-log plugin', () => {
 
   beforeEach(() => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [auditLog()],
     });
@@ -168,7 +168,7 @@ describe('audit-log plugin', () => {
   describe('hash chain', () => {
     it('creates previousHash entries when enabled', async () => {
       const chainFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [auditLog({ hashChain: true })],
       });
@@ -234,7 +234,7 @@ describe('audit-log plugin', () => {
   describe('verifyChain method', () => {
     it('reports valid chain when hash chain is enabled', async () => {
       const chainFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [auditLog({ hashChain: true })],
       });
@@ -263,7 +263,7 @@ describe('audit-log plugin', () => {
   describe('iAM event integration', () => {
     it('logs ROLE_CREATED when a role is created', async () => {
       const auditFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [auditLog()],
       });
@@ -282,7 +282,7 @@ describe('audit-log plugin', () => {
 
     it('logs ROLE_BOUND when a role is bound to a user', async () => {
       const auditFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [auditLog()],
       });
@@ -302,7 +302,7 @@ describe('audit-log plugin', () => {
 
     it('logs GROUP_CREATED when a group is created', async () => {
       const auditFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [auditLog()],
       });
@@ -374,7 +374,7 @@ describe('audit-log plugin', () => {
   describe('event filtering', () => {
     it('only logs configured event types when events array is provided', async () => {
       const filteredFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [auditLog({ events: ['LOGIN_SUCCESS'] })],
       });

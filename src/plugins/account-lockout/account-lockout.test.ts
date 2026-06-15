@@ -19,7 +19,7 @@ describe('account-lockout plugin', () => {
 
   beforeEach(async () => {
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [accountLockout({
         maxFailedAttempts: 3,
@@ -95,7 +95,7 @@ describe('account-lockout plugin', () => {
     it('allows login after lockout duration passes', async () => {
       // Use a very short lockout for this test
       const shortFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [accountLockout({
           maxFailedAttempts: 2,
@@ -179,7 +179,7 @@ describe('account-lockout plugin', () => {
       // After first lockout, lockoutCount = 1. Let lockout expire, then fail again.
       // For this test, we use a fortress with short lockout.
       const escFortress = createFortress({
-        jwt: { secret: SECRET },
+        jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [accountLockout({
           maxFailedAttempts: 1,

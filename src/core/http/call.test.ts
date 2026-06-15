@@ -10,7 +10,7 @@ const SECRET = 'call-test-secret-at-least-32-bytes-long!!';
 
 function makeFortress(): Fortress {
   return createFortress({
-    jwt: { secret: SECRET, issuer: 'call-test' },
+    jwt: { key: SECRET, issuer: 'call-test' },
     database: createTestAdapter(),
   }) as unknown as Fortress;
 }

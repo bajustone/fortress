@@ -6,7 +6,7 @@ production deployment should explicitly answer or skip each item.
 
 ## 1. JWT secret
 
-The JWT signing secret (`FortressConfig.jwt.secret`) must be **at least
+The JWT signing secret (`FortressConfig.jwt.key`) must be **at least
 32 bytes** of cryptographically random material. Anything shorter throws
 at `createFortress` startup.
 
@@ -23,7 +23,7 @@ Recommendations:
   Manager, GCP Secret Manager, Vault, Doppler, Fly secrets, etc.).
   Never commit it.
 - Rotate the secret periodically. Fortress supports an array of secrets
-  on `jwt.secret` — the first entry is used for **signing**, all entries
+  on `jwt.key` — the first entry is used for **signing**, all entries
   are accepted for **verification**. Add the new secret to position 0,
   redeploy, wait until every issued token has expired (typically the
   access-token lifetime + grace), then remove the old one.

@@ -33,7 +33,7 @@ interface Ctx {
 
 async function setup(): Promise<Ctx> {
   const fortress: Fortress<any> = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins: [apiKey({ prefix: 'test' })],
   });

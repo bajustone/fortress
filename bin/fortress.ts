@@ -80,7 +80,7 @@ const CONFIG_TEMPLATE = `import type { FortressConfig } from '@bajustone/fortres
 const config: FortressConfig = {
   database: undefined!, // Replace with your DatabaseAdapter (e.g. createDrizzleAdapter(db))
   jwt: {
-    secret: process.env.FORTRESS_JWT_SECRET!,
+    key: process.env.FORTRESS_JWT_SECRET!,
     issuer: 'my-app',
     accessTokenExpirySeconds: 900,   // 15 minutes
     refreshTokenExpirySeconds: 604800, // 7 days

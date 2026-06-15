@@ -9,7 +9,7 @@ import { createFortress } from '@bajustone/fortress';
 import { twoFactor } from '@bajustone/fortress/plugins/two-factor';
 
 const fortress = createFortress({
-  jwt: { secret: 'your-secret-at-least-32-bytes-long' },
+  jwt: { key: 'your-secret-at-least-32-bytes-long' },
   database: yourAdapter,
   plugins: [
     twoFactor({

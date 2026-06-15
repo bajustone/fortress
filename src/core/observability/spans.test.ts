@@ -63,7 +63,7 @@ describe('handleRequest outer span', () => {
     const telemetry = createSpyTelemetry();
     spans = telemetry.spans;
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       observability: telemetry.provider,
     });
@@ -135,7 +135,7 @@ describe('db-instrumentation spans', () => {
     const telemetry = createSpyTelemetry();
     spans = telemetry.spans;
     fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
       observability: telemetry.provider,
     });

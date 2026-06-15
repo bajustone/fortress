@@ -16,7 +16,7 @@ import { createFortress } from '@bajustone/fortress';
 import { rateLimit } from '@bajustone/fortress/plugins/rate-limit';
 
 const fortress = createFortress({
-  jwt: { secret: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!' },
   database: adapter,
   plugins: [
     rateLimit({

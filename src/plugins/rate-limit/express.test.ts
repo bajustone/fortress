@@ -15,7 +15,7 @@ const SECRET = 'express-rate-limit-wrapper-test-secret32!';
 
 function setup(maxPerIp: number) {
   const fortress = createFortress({
-    jwt: { secret: SECRET },
+    jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins: [rateLimit({ rules: { api: { maxPerIp, windowSeconds: 60 } } })],
   });
@@ -81,7 +81,7 @@ describe('expressRateLimit (framework wrapper)', () => {
 
   it('throws synchronously during setup when the plugin is not registered', () => {
     const fortress = createFortress({
-      jwt: { secret: SECRET },
+      jwt: { key: SECRET },
       database: createTestAdapter(),
     });
     expect(() => expressRateLimit(fortress, 'api')).toThrow(/rate-limit plugin is not registered/);
