@@ -170,6 +170,8 @@ app.get('/auth/google/callback', async (c) => {
 - `profile` -- normalized provider profile (`id`, `email`, `emailVerified`, `name`, `avatar`, `raw`)
 - `isNewUser` -- `true` if the user was created during this call (JIT provisioning)
 
+> The OIDC discovery, token-exchange, and userinfo calls run through a shared `@bajustone/fetcher` client with a request timeout (10 s; HIBP breach checks use 6 s), so a hung provider cannot stall the callback. Token responses are rejected if `access_token` is missing; discovery/userinfo responses must be JSON objects. Discovery falls back to the static provider definition on timeout/error.
+
 ### JIT User Provisioning
 
 When `autoRegister` is `true` (the default) and no existing Fortress user matches the social identity, the plugin creates a new user automatically. The new user has `passwordHash: null`, marking them as a social-only account.

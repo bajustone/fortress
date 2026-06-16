@@ -54,6 +54,23 @@ describe('social-login plugin', () => {
     });
   });
 
+  describe('token exchange — response validation', () => {
+    it('rejects a token response missing access_token (schema-validated via fetcher)', async () => {
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const href = input instanceof Request ? input.url : String(input);
+        if (href === 'https://oauth2.googleapis.com/token') {
+          // No access_token → fails the response schema → treated as a failed exchange.
+          return Response.json({ token_type: 'bearer' });
+        }
+        throw new Error(`unexpected fetch ${href}`);
+      }));
+
+      await expect(
+        methods.handleCallback('google', 'code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce'),
+      ).rejects.toThrow('Failed to exchange authorization code with google');
+    });
+  });
+
   describe('getAuthorizationUrl', () => {
     it('generates URL with PKCE and state', async () => {
       const result = await methods.getAuthorizationUrl('google', 'https://app.com/callback');
@@ -135,8 +152,11 @@ describe('social-login plugin', () => {
       parts[2] = `${parts[2].startsWith('a') ? 'b' : 'a'}${parts[2].slice(1)}`;
       const tampered = parts.join('.');
 
-      vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
-        const href = String(url);
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+        // fetcher dispatches a single `Request`; jose passes a URL string.
+        const req = input instanceof Request ? input : undefined;
+        const href = req ? req.url : String(input);
+        const method = req ? req.method : init?.method;
         if (href === 'https://issuer-a.example.com/.well-known/openid-configuration') {
           return Response.json({
             issuer: 'https://issuer-a.example.com',
@@ -147,7 +167,7 @@ describe('social-login plugin', () => {
           });
         }
         if (href === 'https://issuer-a.example.com/token') {
-          expect(init?.method).toBe('POST');
+          expect(method).toBe('POST');
           return Response.json({ access_token: 'provider-access', id_token: tampered });
         }
         if (href === 'https://issuer-a.example.com/jwks') {
@@ -183,8 +203,8 @@ describe('social-login plugin', () => {
         .setExpirationTime('5m')
         .sign(privateKey);
 
-      vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
-        const href = String(url);
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const href = input instanceof Request ? input.url : String(input);
         if (href === 'https://oauth2.googleapis.com/token') {
           return Response.json({
             access_token: 'provider-access-token',

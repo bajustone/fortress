@@ -13,10 +13,17 @@ import type { JWTPayload } from 'jose';
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import type { ProviderConfig, ProviderDefinition, ProviderProfile, SocialLoginConfig } from './types';
+import { object, string } from '@bajustone/fetcher/schema';
 import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
 import { Errors } from '../../core/errors';
+import { outboundClient } from '../../core/http/outbound';
 import { builtInProviders, createMicrosoftProvider } from './providers';
 import { createOidcProvider } from './providers/oidc';
+
+/** Response shape guard — the upstream returned a JSON object (not array/null/scalar). */
+const jsonObjectSchema = object({});
+/** OAuth token response: `access_token` must be a present string; other fields pass through. */
+const tokenResponseSchema = object({ access_token: string() });
 
 interface SocialAccountRecord {
   id: string;
@@ -168,10 +175,13 @@ async function resolveDiscoveredDefinition(definition: ProviderDefinition, provi
   let cached = discoveryCache.get(cacheKey);
   if (!cached) {
     cached = (async () => {
-      const response = await fetch(definition.discoveryUrl!);
-      if (!response.ok)
+      const res = await outboundClient.get(definition.discoveryUrl!, { responseSchema: jsonObjectSchema }).result();
+      // Degrade to the static definition on non-2xx, timeout, network failure,
+      // or a non-object body — same fallback the bare fetch had, now also
+      // covering hangs (native fetch had no timeout).
+      if (!res.ok)
         return definition;
-      const discovered = await response.json() as Record<string, unknown>;
+      const discovered = res.data as Record<string, unknown>;
       return {
         ...definition,
         issuer: String(discovered.issuer ?? definition.issuer ?? providerConfig.issuer ?? ''),
@@ -387,9 +397,9 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
         const resolvedDefinition = await resolveDiscoveredDefinition(definition, pc);
         const clientSecret = await buildClientSecret(pc, resolvedDefinition);
 
-        // Exchange code for tokens
-        const tokenResponse = await fetch(resolvedDefinition.tokenUrl, {
-          method: 'POST',
+        // Exchange code for tokens. POST is never retried (RFC 9110); the
+        // shared client adds a timeout and validates `access_token` is present.
+        const tokenRes = await outboundClient.post(resolvedDefinition.tokenUrl, {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
             grant_type: 'authorization_code',
@@ -399,13 +409,14 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
             client_secret: clientSecret,
             code_verifier: codeVerifier,
           }),
-        });
+          responseSchema: tokenResponseSchema,
+        }).result();
 
-        if (!tokenResponse.ok) {
+        if (!tokenRes.ok) {
           throw Errors.unauthorized(`Failed to exchange authorization code with ${providerName}`);
         }
 
-        const tokens = await tokenResponse.json() as {
+        const tokens = tokenRes.data as {
           access_token: string;
           refresh_token?: string;
           expires_in?: number;
@@ -424,15 +435,16 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
           });
         }
         else if (resolvedDefinition.userInfoUrl) {
-          const profileResponse = await fetch(resolvedDefinition.userInfoUrl, {
+          const profileRes = await outboundClient.get(resolvedDefinition.userInfoUrl, {
             headers: { Authorization: `Bearer ${tokens.access_token}` },
-          });
+            responseSchema: jsonObjectSchema,
+          }).result();
 
-          if (!profileResponse.ok) {
+          if (!profileRes.ok) {
             throw Errors.unauthorized(`Failed to fetch profile from ${providerName}`);
           }
 
-          rawProfile = await profileResponse.json() as Record<string, unknown>;
+          rawProfile = profileRes.data as Record<string, unknown>;
         }
         else if (idTokenClaims) {
           rawProfile = { ...idTokenClaims };

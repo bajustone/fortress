@@ -1,4 +1,5 @@
 import { Errors } from '../errors';
+import { outboundClient } from '../http/outbound';
 import { normalizePasswordInput } from './password';
 
 export interface PasswordPolicyConfig {
@@ -15,6 +16,10 @@ export interface PasswordPolicyConfig {
 const DEFAULT_MIN_LENGTH = 8;
 const DEFAULT_MAX_LENGTH = 128;
 const DEFAULT_CACHE_TTL_MS = 86_400_000; // 24 hours
+// Tighter timeout than the default outbound budget: the breach check runs in
+// the password-validation hot path and fails open, so a slow HIBP must not
+// stall registration/login.
+const HIBP_TIMEOUT_MS = 6_000;
 
 // Module-level cache for HIBP range responses (keyed by 5-char prefix)
 const hibpCache = new Map<string, { data: string; expiresAt: number }>();
@@ -72,17 +77,24 @@ export async function isPasswordBreached(
     return cached.data.includes(suffix);
   }
 
-  // Fetch from HIBP API
+  // Fetch from HIBP API via the shared outbound client (adds a timeout —
+  // native fetch has none). fetcher never throws on transport failure: a
+  // network error / timeout resolves to a Response with `ok === false`, so the
+  // single `!ok` branch fails open for both non-2xx and unreachable. The body
+  // is the plaintext k-anonymity suffix list, so it is read as text, never
+  // schema-parsed.
   try {
-    const response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
+    const response = await outboundClient.get(`https://api.pwnedpasswords.com/range/${prefix}`, {
       headers: { 'Add-Padding': 'true' },
+      timeout: HIBP_TIMEOUT_MS,
     });
 
     if (!response.ok) {
-      // Fail open on API errors — don't block registration due to HIBP downtime.
-      // L-tier: log so operators notice when the breach check stops working.
+      // Fail open on API errors / unreachable — don't block registration due to
+      // HIBP downtime. L-tier: log so operators notice the control is down.
+      // `status === 0` indicates a transport failure (timeout/network).
       console.warn(
-        `[fortress/password-policy] HIBP range API returned HTTP ${response.status}; failing open for this check.`,
+        `[fortress/password-policy] HIBP range API unavailable (HTTP ${response.status}); failing open for this check.`,
       );
       return false;
     }
@@ -95,9 +107,11 @@ export async function isPasswordBreached(
     return data.includes(suffix);
   }
   catch (err) {
-    // Fail open on network errors. Log so operators notice the control is down.
+    // Belt-and-suspenders: fetcher's contract makes transport rejections
+    // surface as `!ok` above, but a body-read failure could still throw. Fail
+    // open and log so operators notice the control is down.
     console.warn(
-      `[fortress/password-policy] HIBP range API unreachable (${(err as Error).message ?? err}); failing open for this check.`,
+      `[fortress/password-policy] HIBP range API error (${(err as Error).message ?? err}); failing open for this check.`,
     );
     return false;
   }

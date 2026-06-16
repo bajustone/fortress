@@ -1,4 +1,10 @@
 import type { ProviderDefinition, ProviderProfile } from '../types';
+import { array, object } from '@bajustone/fetcher/schema';
+import { outboundClient } from '../../../core/http/outbound';
+
+/** GitHub `/user` must be a JSON object; `/user/emails` an array of objects. */
+const userSchema = object({});
+const emailsSchema = array(object({}));
 
 /** GitHub uses custom OAuth2, not OIDC — no discovery URL */
 export const githubProvider: ProviderDefinition = {
@@ -8,19 +14,22 @@ export const githubProvider: ProviderDefinition = {
   userInfoUrl: 'https://api.github.com/user',
   defaultScopes: ['read:user', 'user:email'],
   async fetchProfile(accessToken: string): Promise<Record<string, unknown>> {
-    const userResponse = await fetch('https://api.github.com/user', {
+    // Shared outbound client adds a timeout + validates the response shape.
+    const userRes = await outboundClient.get('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/vnd.github+json' },
-    });
-    if (!userResponse.ok)
+      responseSchema: userSchema,
+    }).result();
+    if (!userRes.ok)
       throw new Error('Failed to fetch GitHub profile');
-    const user = await userResponse.json() as Record<string, unknown>;
+    const user = userRes.data as Record<string, unknown>;
 
     if (!user.email) {
-      const emailsResponse = await fetch('https://api.github.com/user/emails', {
+      const emailsRes = await outboundClient.get('https://api.github.com/user/emails', {
         headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/vnd.github+json' },
-      });
-      if (emailsResponse.ok) {
-        const emails = await emailsResponse.json() as Array<Record<string, unknown>>;
+        responseSchema: emailsSchema,
+      }).result();
+      if (emailsRes.ok) {
+        const emails = emailsRes.data as Array<Record<string, unknown>>;
         const primary = emails.find(e => e.primary === true) ?? emails.find(e => e.verified === true);
         if (primary) {
           user.email = primary.email;
