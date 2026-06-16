@@ -1,7 +1,7 @@
 import type { Infer } from './json-schema';
 import type { StandardSchemaV1 } from './standard-schema';
 import { describe, expect, it } from 'vitest';
-import { anyOf, arr, bool, endpoint, enums, ErrorEnvelope, extractJsonSchema, id, int, isFortressSchema, isStandardSchema, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat } from './schema-builder';
+import { anyOf, arr, bool, date, datetime, discriminatedUnion, email, endpoint, enums, ErrorEnvelope, extractJsonSchema, id, int, intersect, isFortressSchema, isStandardSchema, literal, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat, strict, time, url, uuid } from './schema-builder';
 
 /** Assert validation fails and return issues. */
 function expectIssues(result: StandardSchemaV1.Result<any>): void {
@@ -425,5 +425,105 @@ describe('errorEnvelope + .errorResponse()', () => {
     expect(ep.responses?.[404]?.description).toBe('Not found');
     expect(ep.responses?.[404]?.schema?.required).toEqual(['code', 'message', 'statusCode']);
     expect(ep.responses?.[403]?.schema?.properties?.code?.type).toBe('string');
+  });
+});
+
+describe('tier 1 — richer constraints (fetcher-backed, enforced)', () => {
+  it('str({ min, max, pattern }) emits and enforces constraints', () => {
+    const s = str({ min: 3, max: 5, pattern: '^[a-z]+$' });
+    expect(s.minLength).toBe(3);
+    expect(s.maxLength).toBe(5);
+    expect(s.pattern).toBe('^[a-z]+$');
+
+    expect(s['~standard'].validate('abc')).toEqual({ value: 'abc' });
+    expectIssues(s['~standard'].validate('ab') as StandardSchemaV1.Result<any>); // too short
+    expectIssues(s['~standard'].validate('abcdef') as StandardSchemaV1.Result<any>); // too long
+    expectIssues(s['~standard'].validate('AB1') as StandardSchemaV1.Result<any>); // pattern
+  });
+
+  it('str() still accepts a bare description string', () => {
+    expect(str('An email').description).toBe('An email');
+  });
+
+  it('int({ min, max }) enforces numeric bounds', () => {
+    const s = int({ min: 1, max: 10 });
+    expect(s.minimum).toBe(1);
+    expect(s.maximum).toBe(10);
+    expect(s['~standard'].validate(5)).toEqual({ value: 5 });
+    expectIssues(s['~standard'].validate(0) as StandardSchemaV1.Result<any>);
+    expectIssues(s['~standard'].validate(11) as StandardSchemaV1.Result<any>);
+  });
+
+  it('literal() narrows and enforces a constant', () => {
+    const s = literal('admin');
+    expect(s.const).toBe('admin');
+    void (0 as unknown as Infer<typeof s> satisfies 'admin');
+    expect(s['~standard'].validate('admin')).toEqual({ value: 'admin' });
+    expectIssues(s['~standard'].validate('user') as StandardSchemaV1.Result<any>);
+  });
+
+  it('intersect() requires every schema (allOf)', () => {
+    const s = intersect(obj({ a: str() }, 'a'), obj({ b: int() }, 'b'));
+    expect(s.allOf).toHaveLength(2);
+    expect((s['~standard'].validate({ a: 'x', b: 1 }) as any).issues).toBeUndefined();
+    expectIssues(s['~standard'].validate({ a: 'x' }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('strict() closes an object against extra keys', () => {
+    const s = strict(obj({ a: str() }, 'a'));
+    expect(s.additionalProperties).toBe(false);
+    expect((s['~standard'].validate({ a: 'x' }) as any).issues).toBeUndefined();
+    expectIssues(s['~standard'].validate({ a: 'x', extra: 1 }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('discriminatedUnion() dispatches on the tag property', () => {
+    const s = discriminatedUnion(
+      'kind',
+      obj({ kind: literal('a'), x: int() }, 'kind', 'x'),
+      obj({ kind: literal('b'), y: str() }, 'kind', 'y'),
+    );
+    expect(s.oneOf).toHaveLength(2);
+    expect(s.discriminator?.propertyName).toBe('kind');
+    expect((s['~standard'].validate({ kind: 'a', x: 1 }) as any).issues).toBeUndefined();
+    expectIssues(s['~standard'].validate({ kind: 'a', x: 'no' }) as StandardSchemaV1.Result<any>);
+  });
+});
+
+describe('tier 2 — enforced string formats (lifted from fetcher)', () => {
+  it('email() carries format + pattern and enforces at runtime', () => {
+    const s = email();
+    expect(s.format).toBe('email');
+    expect(typeof s.pattern).toBe('string');
+    expect(s['~standard'].validate('user@example.com')).toEqual({ value: 'user@example.com' });
+    expectIssues(s['~standard'].validate('not-an-email') as StandardSchemaV1.Result<any>);
+    expectIssues(s['~standard'].validate('a@b@c') as StandardSchemaV1.Result<any>);
+  });
+
+  it('uuid() enforces the RFC 9562 grammar', () => {
+    const s = uuid();
+    expect(s.format).toBe('uuid');
+    expect(s['~standard'].validate('00000000-0000-0000-0000-000000000000')).toEqual({
+      value: '00000000-0000-0000-0000-000000000000',
+    });
+    expectIssues(s['~standard'].validate('not-a-uuid') as StandardSchemaV1.Result<any>);
+  });
+
+  it('url() requires an explicit scheme://authority', () => {
+    const s = url();
+    expect(s.format).toBe('uri');
+    expect(s['~standard'].validate('https://example.com')).toEqual({ value: 'https://example.com' });
+    expectIssues(s['~standard'].validate('mailto:a@b.com') as StandardSchemaV1.Result<any>);
+  });
+
+  it('datetime()/date()/time() enforce RFC 3339 shapes', () => {
+    expect(datetime().format).toBe('date-time');
+    expect((datetime()['~standard'].validate('2026-01-02T03:04:05Z') as any).issues).toBeUndefined();
+    expectIssues(datetime()['~standard'].validate('2026-01-02') as StandardSchemaV1.Result<any>);
+
+    expect(date().format).toBe('date');
+    expect((date()['~standard'].validate('2026-01-02') as any).issues).toBeUndefined();
+
+    expect(time().format).toBe('time');
+    expect((time()['~standard'].validate('03:04:05') as any).issues).toBeUndefined();
   });
 });

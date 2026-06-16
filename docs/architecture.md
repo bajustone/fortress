@@ -761,7 +761,9 @@ Since OpenAPI 3.1 uses JSON Schema natively, spec generation is trivial (just wr
 2. **Standard Schema** — `schema['~standard'].validate()` → runtime validation
 3. **TypeScript types** — `Infer<typeof schema>` or `StandardSchemaV1.InferOutput<typeof schema>` → compile-time inference
 
-Additionally, `endpoint().body()`, `.query()`, `.params()` accept external Standard Schema (Zod, Valibot, ArkType) directly — fortress extracts JSON Schema for OpenAPI and uses `~standard.validate()` for runtime validation.
+**Validation engine:** `~standard.validate()` delegates to [`@bajustone/fetcher`](https://www.npmjs.com/package/@bajustone/fetcher)'s `fromJSONSchema`, which compiles the JSON Schema object into a validator (lazily, memoized). Fortress no longer ships a hand-rolled validator. The builder DSL stays thin and JSON-Schema-shaped, but because fetcher enforces the full keyword set, richer builders are available: `str({ min, max, pattern })` / `int({ min, max })` (enforced constraints), `literal()` (`const`), `intersect()` (`allOf`), `strict()` (`additionalProperties: false`), `discriminatedUnion()` (`oneOf` + `discriminator`), and enforced string formats `email()`/`uuid()`/`url()`/`datetime()`/`date()`/`time()` (ReDoS-safe patterns lifted from fetcher). `$ref` request fields validate permissively (compiled without the components map). The same fetcher toolkit is re-exported at `@bajustone/fortress/fetcher`.
+
+Additionally, `endpoint().body()`, `.query()`, `.params()` accept external Standard Schema (Zod, Valibot, ArkType, or fetcher's own builder) directly — fortress extracts JSON Schema for OpenAPI and uses `~standard.validate()` for runtime validation. Fetcher's builder schemas (from `@bajustone/fortress/fetcher`) are first-class: they validate via fetcher's engine and serialize to clean OpenAPI because the spec builder's `cleanSchema` strips every `~`-prefixed key (and function/undefined value) recursively.
 
 ### EndpointDefinition
 

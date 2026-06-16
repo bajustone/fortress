@@ -1,22 +1,96 @@
 import type { EndpointDefinition, EndpointResponse, HttpMethod, SecurityRequirement } from './endpoint';
 import type { FortressSchema, Infer, JSONSchema, Simplify } from './json-schema';
 import type { StandardSchemaV1 } from './standard-schema';
-import { validateJsonSchema } from './json-schema-validator';
+import { fromJSONSchema } from '@bajustone/fetcher/openapi';
+import { date as fDate, datetime as fDatetime, email as fEmail, time as fTime, url as fUrl, uuid as fUuid } from '@bajustone/fetcher/schema';
 
 /** Shorthand for the Standard Schema inferred output type. */
 type InferSchema<T extends StandardSchemaV1> = StandardSchemaV1.InferOutput<T>;
 
+/** Distribute a union into an intersection — `A | B` → `A & B`. Used by {@link intersect}. */
+type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends (k: infer I) => void ? I : never;
+
+/** Options accepted by the {@link str} builder (string constraints + annotations). */
+export interface StringOptions {
+  description?: string;
+  /** Minimum length (`minLength`), enforced at runtime. */
+  min?: number;
+  /** Maximum length (`maxLength`), enforced at runtime. */
+  max?: number;
+  /** Regular-expression source (`pattern`), enforced at runtime. */
+  pattern?: string;
+  /** OpenAPI `format` annotation (e.g. `email`, `uuid`). Annotation-only unless paired with `pattern`. */
+  format?: string;
+}
+
+/** Options accepted by the {@link num}/{@link int} builders (numeric bounds + annotations). */
+export interface NumberOptions {
+  description?: string;
+  /** Inclusive minimum (`minimum`), enforced at runtime. */
+  min?: number;
+  /** Inclusive maximum (`maximum`), enforced at runtime. */
+  max?: number;
+}
+
 // ── Standard Schema wiring ─────────────────────────────────────────
 
+/**
+ * Collect the component names referenced by `$ref` anywhere in a schema tree
+ * (the last path segment, e.g. `PermissionInput` for
+ * `#/components/schemas/PermissionInput`).
+ */
+function collectRefNames(schema: JSONSchema | undefined, acc: Set<string>): Set<string> {
+  if (!schema || typeof schema !== 'object')
+    return acc;
+  if (typeof schema.$ref === 'string') {
+    const i = schema.$ref.lastIndexOf('/');
+    acc.add(i >= 0 ? schema.$ref.slice(i + 1) : schema.$ref);
+  }
+  if (schema.properties) {
+    for (const key of Object.keys(schema.properties))
+      collectRefNames(schema.properties[key], acc);
+  }
+  collectRefNames(schema.items, acc);
+  for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
+    const variants = schema[key];
+    if (variants) {
+      for (const variant of variants)
+        collectRefNames(variant, acc);
+    }
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === 'object')
+    collectRefNames(schema.additionalProperties, acc);
+  return acc;
+}
+
+/**
+ * Build the `~standard` props for a fortress schema. Runtime validation is
+ * delegated to `@bajustone/fetcher`'s `fromJSONSchema`, which compiles the
+ * JSON Schema object into a Standard Schema V1 validator (lazily, on first
+ * use, then memoized). fortress schemas keep `vendor: 'fortress'` and remain
+ * plain JSON Schema objects — only the validation engine is fetcher's.
+ *
+ * `$ref` nodes are resolved permissively (to `unknown`): a schema is compiled
+ * in isolation without its OpenAPI components map, so a referenced component's
+ * shape isn't available to enforce. This preserves fortress's prior behavior,
+ * where `$ref` request fields were present-but-unconstrained; the surrounding
+ * inline fields are still validated strictly.
+ */
 function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~standard'] {
+  type ValidateFn = (value: unknown) => StandardSchemaV1.Result<T> | Promise<StandardSchemaV1.Result<T>>;
+  let validateFn: ValidateFn | undefined;
   return {
     version: 1,
     vendor: 'fortress',
-    validate(value: unknown): StandardSchemaV1.Result<T> {
-      const issues = validateJsonSchema(schema, value);
-      if (issues.length > 0)
-        return { issues };
-      return { value: value as T };
+    validate(value: unknown): StandardSchemaV1.Result<T> | Promise<StandardSchemaV1.Result<T>> {
+      if (!validateFn) {
+        const refNames = collectRefNames(schema, new Set<string>());
+        const defs = refNames.size > 0
+          ? Object.fromEntries(Array.from(refNames, name => [name, {}]))
+          : undefined;
+        validateFn = fromJSONSchema<T>(schema, defs)['~standard'].validate as ValidateFn;
+      }
+      return validateFn(value);
     },
   } as StandardSchemaV1<T, T>['~standard'];
 }
@@ -29,27 +103,62 @@ function toFortressSchema<T>(schema: JSONSchema): FortressSchema<T> {
 
 // ── Schema Builders ─────────────────────────────────────────────────
 
-/** Build a string {@link FortressSchema}. */
-export function str(description?: string): FortressSchema<string> {
+/**
+ * Build a string {@link FortressSchema}.
+ *
+ * Pass a string for just a description, or an options object to set
+ * `minLength`/`maxLength`/`pattern`/`format` — the length and pattern
+ * constraints are enforced at runtime by the validator.
+ */
+export function str(opts?: string | StringOptions): FortressSchema<string> {
+  const o = typeof opts === 'string' ? { description: opts } : opts ?? {};
   const s: JSONSchema = { type: 'string' };
-  if (description)
-    s.description = description;
+  if (o.description)
+    s.description = o.description;
+  if (o.min !== undefined)
+    s.minLength = o.min;
+  if (o.max !== undefined)
+    s.maxLength = o.max;
+  if (o.pattern !== undefined)
+    s.pattern = o.pattern;
+  if (o.format !== undefined)
+    s.format = o.format;
   return toFortressSchema<string>(s);
 }
 
-/** Build a number {@link FortressSchema} (any numeric, integer or float). */
-export function num(description?: string): FortressSchema<number> {
+/**
+ * Build a number {@link FortressSchema} (any numeric, integer or float).
+ *
+ * Pass a string for just a description, or an options object to set
+ * `minimum`/`maximum` — both are enforced at runtime by the validator.
+ */
+export function num(opts?: string | NumberOptions): FortressSchema<number> {
+  const o = typeof opts === 'string' ? { description: opts } : opts ?? {};
   const s: JSONSchema = { type: 'number' };
-  if (description)
-    s.description = description;
+  if (o.description)
+    s.description = o.description;
+  if (o.min !== undefined)
+    s.minimum = o.min;
+  if (o.max !== undefined)
+    s.maximum = o.max;
   return toFortressSchema<number>(s);
 }
 
-/** Build an integer {@link FortressSchema}. */
-export function int(description?: string): FortressSchema<number> {
+/**
+ * Build an integer {@link FortressSchema}.
+ *
+ * Pass a string for just a description, or an options object to set
+ * `minimum`/`maximum` — both are enforced at runtime by the validator.
+ */
+export function int(opts?: string | NumberOptions): FortressSchema<number> {
+  const o = typeof opts === 'string' ? { description: opts } : opts ?? {};
   const s: JSONSchema = { type: 'integer' };
-  if (description)
-    s.description = description;
+  if (o.description)
+    s.description = o.description;
+  if (o.min !== undefined)
+    s.minimum = o.min;
+  if (o.max !== undefined)
+    s.maximum = o.max;
   return toFortressSchema<number>(s);
 }
 
@@ -213,6 +322,93 @@ export function recordOf<T>(valueSchema: FortressSchema<T>, description?: string
     s.description = description;
   return toFortressSchema<Record<string, T>>(s);
 }
+
+/**
+ * Build a literal {@link FortressSchema} accepting exactly one constant value
+ * (`const`). The value is enforced at runtime and the inferred type narrows to
+ * the literal (e.g. `literal('admin')` infers `'admin'`).
+ */
+export function literal<const V extends string | number | boolean>(value: V, description?: string): FortressSchema<V> {
+  const s: JSONSchema = { const: value };
+  if (description)
+    s.description = description;
+  return toFortressSchema<V>(s);
+}
+
+/**
+ * Build an intersection {@link FortressSchema} (`allOf`) — a value must satisfy
+ * every supplied schema. The inferred type is the intersection of each schema's
+ * inferred type.
+ */
+export function intersect<S extends FortressSchema<any>[]>(
+  ...schemas: S
+): FortressSchema<UnionToIntersection<Infer<S[number]>>> {
+  return toFortressSchema<UnionToIntersection<Infer<S[number]>>>({ allOf: schemas as JSONSchema[] });
+}
+
+/**
+ * Close an object {@link FortressSchema} — sets `additionalProperties: false`,
+ * so the validator rejects any key not declared in `properties`. Use to harden
+ * request bodies against over-posting (mass assignment).
+ */
+export function strict<T>(schema: FortressSchema<T>): FortressSchema<T> {
+  return toFortressSchema<T>({ ...schema, additionalProperties: false });
+}
+
+/**
+ * Build a discriminated-union {@link FortressSchema}. Emits `oneOf` plus an
+ * OpenAPI `discriminator`, which the validator uses to dispatch on
+ * `propertyName` (faster, with precise per-variant errors) instead of trying
+ * every branch.
+ */
+export function discriminatedUnion<S extends FortressSchema<any>[]>(
+  propertyName: string,
+  ...variants: S
+): FortressSchema<Infer<S[number]>> {
+  return toFortressSchema<Infer<S[number]>>({
+    oneOf: variants as JSONSchema[],
+    discriminator: { propertyName },
+  });
+}
+
+// ── Enforced string formats ─────────────────────────────────────────
+// Each lifts the `format` + ReDoS-safe `pattern` from the corresponding
+// `@bajustone/fetcher/schema` format builder (the single source of truth), so
+// the value is BOTH documented (`format`) and enforced at runtime (`pattern`),
+// while the schema stays a plain fortress JSON Schema object.
+
+/** Build a string format builder by lifting `{ format, pattern }` from a fetcher format factory. */
+function makeFormatBuilder(factory: () => unknown): (description?: string) => FortressSchema<string> {
+  const f = factory() as { format?: string; pattern?: string };
+  return (description?: string): FortressSchema<string> => {
+    const s: JSONSchema = { type: 'string' };
+    if (f.format)
+      s.format = f.format;
+    if (f.pattern)
+      s.pattern = f.pattern;
+    if (description)
+      s.description = description;
+    return toFortressSchema<string>(s);
+  };
+}
+
+/** Email string schema (`format: 'email'`) — enforces the WHATWG HTML5 email grammar at runtime. */
+export const email: (description?: string) => FortressSchema<string> = makeFormatBuilder(fEmail);
+
+/** UUID string schema (`format: 'uuid'`) — enforces RFC 9562 versions 1–8 plus nil/max at runtime. */
+export const uuid: (description?: string) => FortressSchema<string> = makeFormatBuilder(fUuid);
+
+/** URL string schema (`format: 'uri'`) — enforces an explicit `scheme://` authority at runtime. */
+export const url: (description?: string) => FortressSchema<string> = makeFormatBuilder(fUrl);
+
+/** RFC 3339 date-time string schema (`format: 'date-time'`) — field ranges enforced at runtime. */
+export const datetime: (description?: string) => FortressSchema<string> = makeFormatBuilder(fDatetime);
+
+/** RFC 3339 full-date string schema (`format: 'date'`) — field ranges enforced at runtime. */
+export const date: (description?: string) => FortressSchema<string> = makeFormatBuilder(fDate);
+
+/** RFC 3339 time string schema (`format: 'time'`) — field ranges enforced at runtime. */
+export const time: (description?: string) => FortressSchema<string> = makeFormatBuilder(fTime);
 
 // ── Schema detection helpers ────────────────────────────────────────
 

@@ -17,6 +17,20 @@
 
 ## [Unreleased]
 
+### Added
+- **`@bajustone/fetcher` is now a runtime dependency, re-exported at `@bajustone/fortress/fetcher`.** The zero-dependency, Standard-Schema-V1-native fetch client + schema builder that fortress uses internally is surfaced so consumers can author endpoint schemas with the same toolkit and build their own validated outbound clients without a separate install. The subpath re-exports fetcher's root (`createFetch`, middleware, errors, types) flat, plus `schema`, `openapi`, and `specTools` namespaces.
+- **Richer schema-builder DSL.** `str()`, `num()`, and `int()` now accept an options object as well as a bare description: `str({ min, max, pattern, format })`, `int({ min, max })` — the constraints are **enforced at runtime**. New builders: `literal(value)` (`const`), `intersect(...schemas)` (`allOf`), `strict(objSchema)` (`additionalProperties: false`, to reject over-posting/mass-assignment), and `discriminatedUnion(propertyName, ...variants)` (`oneOf` + `discriminator`).
+- **Enforced string formats.** `email()`, `uuid()`, `url()`, `datetime()`, `date()`, and `time()` emit both a `format` annotation (for OpenAPI) and a ReDoS-safe `pattern` lifted from `@bajustone/fetcher`, so the value is now validated at runtime — previously `strFormat('email')` was annotation-only and never checked.
+- **Author endpoint schemas with fetcher's builder.** `endpoint().body()/.query()/.params()/.response()` (and `vBody`/`vParam`/`vQuery`) accept schemas from `@bajustone/fortress/fetcher`'s `schema` namespace directly — fetcher's `object`/`optional`/`discriminatedUnion`/`transform`/`refined`/`brand`/`tuple`/… . They validate at runtime via fetcher's engine and serialize to clean OpenAPI (internal `~`-prefixed keys are stripped by the spec builder), unlocking combinators fortress's own DSL doesn't expose.
+
+### Changed (breaking)
+- **Request/response validation now runs on `@bajustone/fetcher`'s `fromJSONSchema`.** Fortress's hand-rolled `validateJsonSchema` (`src/core/json-schema-validator.ts`) is deleted; `FortressSchema` objects keep `vendor: 'fortress'` and stay plain JSON Schema objects, but their `~standard.validate()` delegates to fetcher's compiled validator. Consequences:
+  - The `422 VALIDATION_ERROR` body's issue `path` segments are now fetcher's bare `PropertyKey`s (e.g. `["email"]`) instead of fortress's `{ key }` objects (e.g. `[{ key: "email" }]`). The `location`/`message`/`code` envelope is unchanged.
+  - `oneOf` now validates as "matches at least one" (union) rather than "matches exactly one". Use `discriminatedUnion()` for tagged variants.
+  - More keywords are now actually enforced (`minimum`/`maximum`, `const`, `allOf`, `additionalProperties: false`, `discriminator`) — schemas that emitted these previously passed them through unchecked.
+  - `$ref` fields in request bodies remain present-but-unconstrained at validation time (compiled in isolation without the components map), preserving prior behavior; full ref resolution is a follow-up.
+- **Node `>=20.19.0` is now required** (matches `@bajustone/fetcher`'s engine floor), declared in `package.json#engines`.
+
 ### Changed (breaking)
 - **Subject identifiers are strings everywhere.** `FortressUser.id`, `TokenClaims.sub`, `Session.userId`, every IAM `id`/`*Id` field (`Role`, `Group`, `Permission`, `RoleBinding`, `LoginIdentifier`, `ServiceAccount`, `Subject`), every plugin `id` field (`api-key.id`, `webhook.id`, `webauthn.userId`, audit `actorId`/`targetId`, etc.), and every HTTP endpoint path-param `:id` are now typed `string` at the fortress API surface. Closes the lock-in identified in the 2026-06-13 audit: `TokenClaims.sub: number` plus the `Number()`/`String()` round-trip in `verifyAccessToken` made string/UUID/ULID-keyed adapters structurally impossible. This was the only lock-in blocking UUID adapters that fortress couldn't lift later without a second breaking change.
 

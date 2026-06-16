@@ -6,6 +6,9 @@
   "module": "src/index.ts",
   "main": "./dist/index.cjs",
   "types": "./dist/index.d.ts",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "bin": {
     "fortress": "./bin/fortress.ts"
   },
@@ -18,6 +21,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./fetcher": {
+      "import": {
+        "types": "./dist/fetcher.d.ts",
+        "default": "./dist/fetcher.js"
+      },
+      "require": {
+        "types": "./dist/fetcher.d.cts",
+        "default": "./dist/fetcher.cjs"
       }
     },
     "./hono": {
@@ -157,6 +170,7 @@
     }
   },
   "dependencies": {
+    "@bajustone/fetcher": "^1.0.0",
     "@simplewebauthn/server": "^13.1.1",
     "hash-wasm": "^4.12.0",
     "jose": "^6.2.2"

@@ -24,6 +24,7 @@ export interface JSONSchema {
   anyOf?: JSONSchema[];
   allOf?: JSONSchema[];
   $ref?: string;
+  discriminator?: { propertyName: string; mapping?: Record<string, string> };
   additionalProperties?: boolean | JSONSchema;
   minimum?: number;
   maximum?: number;

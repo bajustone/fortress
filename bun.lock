@@ -5,6 +5,7 @@
     "": {
       "name": "@bajustone/fortress",
       "dependencies": {
+        "@bajustone/fetcher": "^1.0.0",
         "@simplewebauthn/server": "^13.1.1",
         "hash-wasm": "^4.12.0",
         "jose": "^6.2.2",
@@ -54,6 +55,8 @@
     "@babel/parser": ["@babel/parser@7.29.2", "", { "dependencies": { "@babel/types": "^7.29.0" }, "bin": "./bin/babel-parser.js" }, "sha512-4GgRzy/+fsBa72/RZVJmGKPmZu9Byn8o4MoLpmNe1m8ZfYnz5emHLQz3U4gLud6Zwl0RZIcgiLD7Uq7ySFuDLA=="],
 
     "@babel/types": ["@babel/types@7.29.0", "", { "dependencies": { "@babel/helper-string-parser": "^7.27.1", "@babel/helper-validator-identifier": "^7.28.5" } }, "sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A=="],
+
+    "@bajustone/fetcher": ["@bajustone/fetcher@1.0.0", "", { "peerDependencies": { "typescript": "^5" }, "optionalPeers": ["typescript"] }, "sha512-wSzjc7SxlK1v7miHEJk5P4p6DeGd53fOGu/a/fLvTMCUqj42N44G0yJ/PXeVZ2WB/LnrezsMwB1ZAl6uo7Hh/Q=="],
 
     "@balena/dockerignore": ["@balena/dockerignore@1.0.2", "", {}, "sha512-wMue2Sy4GAVTk6Ic4tJVcnfdau+gx2EnG7S+uAEe+TWJFqE4YoWN4/H8MSLj4eYJKxGg26lZwboEniNiNwZQ6Q=="],
 

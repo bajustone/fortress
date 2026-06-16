@@ -3,6 +3,7 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: {
     index: 'src/index.ts',
+    fetcher: 'src/fetcher/index.ts',
     hono: 'src/hono/index.ts',
     express: 'src/express/index.ts',
     sveltekit: 'src/sveltekit/index.ts',

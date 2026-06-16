@@ -659,30 +659,66 @@ Fortress includes a typed schema builder that produces `FortressSchema<T>` objec
 - **Standard Schema V1** -- for runtime validation via `~standard.validate()`
 - **TypeScript typed** -- for compile-time type inference via `Infer<T>`
 
+Runtime validation runs on [`@bajustone/fetcher`](https://www.npmjs.com/package/@bajustone/fetcher)'s `fromJSONSchema` — the same toolkit is re-exported at `@bajustone/fortress/fetcher` so you can author schemas (and build validated outbound clients) with the exact builder fortress uses internally.
+
 ```typescript
 import { obj, str, int, id, bool, arr, enums, nullable, nullType, record, recordOf, ref } from '@bajustone/fortress';
 
-// Primitives
-str('description')           // FortressSchema<string>
-int('description')           // FortressSchema<number>
-id('description')            // FortressSchema<string> — subject-id (RFC 7519 §4.1.2)
-num('description')           // FortressSchema<number>
-bool('description')          // FortressSchema<boolean>
-strFormat('email', 'desc')   // FortressSchema<string>
-nullType()                   // FortressSchema<null>
+// Primitives — pass a description, or an options object for enforced constraints
+str('description')               // FortressSchema<string>
+str({ min: 3, max: 20, pattern: '^[a-z]+$' }) // enforced minLength/maxLength/pattern
+int({ min: 1, max: 100 })        // enforced minimum/maximum
+id('description')                // FortressSchema<string> — subject-id (RFC 7519 §4.1.2)
+num('description')               // FortressSchema<number>
+bool('description')              // FortressSchema<boolean>
+nullType()                       // FortressSchema<null>
+
+// Enforced string formats (ReDoS-safe patterns; emit `format` for OpenAPI)
+email()                          // FortressSchema<string> — validated at runtime
+uuid(); url(); datetime(); date(); time()
 
 // Objects — required fields listed as rest params
 obj({ name: str(), age: int() }, 'name')
 // FortressSchema<{ name: string; age?: number }>
+strict(obj({ name: str() }, 'name')) // additionalProperties: false — rejects unknown keys
 
 // Combinators
-arr(str())                   // FortressSchema<string[]>
-enums('admin', 'user')       // FortressSchema<'admin' | 'user'>
-nullable(str())              // FortressSchema<string | null>
-record()                     // FortressSchema<Record<string, unknown>>
-recordOf(str())              // FortressSchema<Record<string, string>>
-ref('User')                  // $ref to component schema
-oneOf(str(), int())          // FortressSchema<string | number>
+arr(str())                       // FortressSchema<string[]>
+enums('admin', 'user')           // FortressSchema<'admin' | 'user'>
+literal('admin')                 // FortressSchema<'admin'> — const
+nullable(str())                  // FortressSchema<string | null>
+intersect(A, B)                  // FortressSchema<A & B> — allOf
+record()                         // FortressSchema<Record<string, unknown>>
+recordOf(str())                  // FortressSchema<Record<string, string>>
+ref('User')                      // $ref to component schema
+oneOf(str(), int())              // FortressSchema<string | number> (matches at least one)
+discriminatedUnion('kind', A, B) // oneOf + discriminator, dispatched on `kind`
+```
+
+> `strFormat('email')` still exists as an annotation-only helper; prefer `email()`/`uuid()`/… when you want the value enforced.
+
+### Authoring with fetcher's builder
+
+Fortress's builder covers the common cases. For richer composition — `transform()`, `refined()`, `brand()`, `tuple()`, `pick`/`omit`/`partial`/`merge`/`extend` — author schemas with fetcher's own builder, re-exported at `@bajustone/fortress/fetcher`. Because fetcher schemas are JSON Schema objects that implement Standard Schema V1, they drop straight into `endpoint()` (and `vBody`/`vParam`/`vQuery`): they validate at runtime via fetcher's engine and serialize to clean OpenAPI (fetcher's internal `~`-keys are stripped automatically).
+
+```typescript
+import { endpoint } from '@bajustone/fortress';
+import { schema as s } from '@bajustone/fortress/fetcher';
+
+const CreateUser = s.object({
+  email: s.email(),                 // enforced, emits format + pattern
+  age: s.optional(s.integer()),     // optional → absent from `required`
+  role: s.discriminatedUnion('kind', {
+    member: s.object({ kind: s.literal('member') }),
+    admin: s.object({ kind: s.literal('admin'), scopes: s.array(s.string()) }),
+  }),
+});
+
+endpoint('POST', '/users')
+  .summary('Create user')
+  .body(CreateUser)                 // runtime validation + OpenAPI from one schema
+  .handler('createUser')
+  .build();
 ```
 
 ### Canonical error envelope

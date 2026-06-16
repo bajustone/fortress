@@ -18,7 +18,7 @@
  * Or:   bun run examples/hono-app/index.ts
  */
 import { Hono } from 'hono';
-import { createFortress, endpoint, int, obj, str } from '../../src';
+import { createFortress, email, endpoint, int, obj, str, strict } from '../../src';
 import {
   convertRoutes,
   createCsrfMiddleware,
@@ -326,7 +326,10 @@ app.get('/health', c => c.json({ status: 'ok' }));
 // VALIDATION_ERROR (HTTP 422) — the same shape every fortress-managed endpoint
 // produces — so the registered Hono error handler formats it identically.
 
-const RegisterBody = obj({ email: str(), password: str(), name: str() }, 'email', 'password');
+// `email()` enforces the email format at runtime (ReDoS-safe pattern); `strict()`
+// rejects unknown body keys (no over-posting). Both come from the fetcher-backed
+// schema builder re-exported at `@bajustone/fortress/fetcher`.
+const RegisterBody = strict(obj({ email: email(), password: str({ min: 8 }), name: str() }, 'email', 'password'));
 const LoginBody = obj({ identifier: str(), password: str() }, 'identifier', 'password');
 
 // curl -X POST http://localhost:3000/auth/register -H 'Content-Type: application/json' \

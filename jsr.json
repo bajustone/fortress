@@ -31,6 +31,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./fetcher": "./src/fetcher/index.ts",
     "./crypto": "./src/core/auth/password.ts",
     "./jwt": "./src/core/auth/jwt.ts",
     "./otel": "./src/otel/index.ts",

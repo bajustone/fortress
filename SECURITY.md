@@ -33,6 +33,14 @@ Use `fortress.manifest` (or `fortress manifest` for the core auth/IAM surface) t
 
 For app-owned routes that call Fortress services directly, prefer `protect()` / adapter `protectedRoute()` wrappers so CSRF, auth, RBAC, validation, and plugin middleware still run from endpoint metadata. See [docs/host-owned-routes.md](docs/host-owned-routes.md).
 
+### Input validation
+
+Request validation runs on `@bajustone/fetcher`'s `fromJSONSchema` engine. For security-sensitive inputs:
+- Use the **enforced** format builders (`email()`, `uuid()`, `url()`, `datetime()`) rather than the annotation-only `strFormat()` — their patterns are ReDoS-safe (linear-time) and checked at runtime.
+- Wrap request-body objects in `strict()` (`additionalProperties: false`) to reject unknown keys and prevent over-posting / mass-assignment.
+- Object validators are prototype-pollution-safe (null-prototype accumulation; a literal `__proto__` key is treated as an ordinary property).
+- Note: `$ref` fields in request bodies are present-but-unconstrained at validation time — validate referenced shapes inline (or in the handler) when their contents are security-relevant.
+
 Track Fortress-owned table/index upgrades with `fortress_schema_version`, `getMigrationStatus()`, and the bundled SQL under `migrations/{sqlite,pg}`. Auth, IAM, OAuth, API-key, tenancy, and audit-log tables are security-critical; do not skip migration drift checks during upgrades.
 
 See [docs/security.md](docs/security.md) for comprehensive security guidance, [docs/threat-model.md](docs/threat-model.md) for the current formal threat model, [docs/hardening.md](docs/hardening.md) for the production hardening checklist, [docs/deployment.md](docs/deployment.md) for the production deployment guide (JWT secret rotation, cookies behind reverse proxies, CSRF/CORS recipes, HTTPS requirements, OAuth/OIDC RP setup), and [docs/migrations/upgrade-guide.md](docs/migrations/upgrade-guide.md) for the migration runbook.

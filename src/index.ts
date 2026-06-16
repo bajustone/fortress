@@ -145,7 +145,11 @@ export {
   anyOf,
   arr,
   bool,
+  date,
+  datetime,
   defineComponents,
+  discriminatedUnion,
+  email,
   endpoint,
   EndpointBuilder,
   enums,
@@ -153,8 +157,10 @@ export {
   extractJsonSchema,
   id,
   int,
+  intersect,
   isFortressSchema,
   isStandardSchema,
+  literal,
   nullable,
   nullType,
   num,
@@ -165,10 +171,14 @@ export {
   ref,
   str,
   strFormat,
+  strict,
+  time,
+  url,
+  uuid,
 } from './core/schema-builder';
 
 /** Input type accepted by `endpoint(...).input()` and friends. */
-export type { SchemaInput } from './core/schema-builder';
+export type { NumberOptions, SchemaInput, StringOptions } from './core/schema-builder';
 
 /** Standard Schema v1 interop type — fortress schemas implement this. */
 export type { StandardSchemaV1 } from './core/standard-schema';
