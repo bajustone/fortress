@@ -1,6 +1,6 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressSchema } from '../json-schema';
-import { arr, bool, defineComponents, endpoint, enums, id, int, nullable, nullType, obj, oneOf, record, str, strFormat } from '../schema-builder';
+import { arr, bool, defineComponents, email, endpoint, enums, id, int, nullable, nullType, obj, oneOf, record, str, strFormat } from '../schema-builder';
 
 // Sentinel for "no body / query / params" that matches EndpointDefinition's
 // defaults so the intersection-based InferEndpointCallInput collapses cleanly.
@@ -188,7 +188,7 @@ const SessionInfo: FortressSchema<SessionInfoWire> = obj(
 
 const CreateUserInput: FortressSchema<CreateUserInputWire> = obj(
   {
-    email: strFormat('email', 'User email'),
+    email: email('User email'), // enforced format (ReDoS-safe pattern), not annotation-only
     name: str('Display name'),
     password: str('User password'),
     isActive: bool('Set active status (default true)'),

@@ -2387,6 +2387,8 @@ openapi({
 })
 ```
 
+> **No Zod required.** If you author with fortress's or fetcher's builder, use the bundled converters from `@bajustone/fortress/hono` instead of a Zod converter: `toJSONSchemaConverter` for `convertRoutes` (import side), and `identitySchemaConverter` / `fetcherSchemaConverter` for `mountFortressOpenAPI` (mount side — the latter compiles to a validating Standard Schema for `hono-openapi`/`@hono/standard-validator`).
+
 This gives you:
 - `GET /openapi.json` — unified OpenAPI 3.1 spec (fortress + your endpoints)
 - `GET /openapi` — Scalar interactive UI

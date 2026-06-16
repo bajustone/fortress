@@ -38,6 +38,7 @@ import { createRbacMiddleware } from './middleware/rbac';
 
 export { convertRoutes } from './convert-routes';
 export type { ConvertRoutesOptions, ExternalRoute, ToJSONSchemaConverter } from './convert-routes';
+export { fetcherSchemaConverter, identitySchemaConverter, toJSONSchemaConverter } from './converters';
 export { mountFortress } from './handle';
 export type { MountFortressOptions } from './handle';
 export { getClaims, getDb, getScopedDb, getSubject, getUserId } from './helpers';

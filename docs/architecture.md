@@ -904,6 +904,10 @@ Supported schema libraries (via their own JSON Schema support):
 - **ArkType**: `@ark/jsonschema`
 - **Valibot**: `json-schema-to-valibot` (ecosystem package)
 
+**Zod-free defaults.** Because fortress's and fetcher's builder schemas ARE JSON Schema, `@bajustone/fortress/hono` ships ready-made converters so you can skip Zod entirely: `identitySchemaConverter` (JSON Schema passthrough), `fetcherSchemaConverter` (`fromJSONSchema` → a validating Standard Schema, for `hono-openapi` / `@hono/standard-validator`), and `toJSONSchemaConverter` (`extractJsonSchema`, for importing fetcher/fortress-authored routes via `convertRoutes`).
+
+**Spec-drift CI gate.** `src/core/openapi-drift.test.ts` runs `@bajustone/fetcher/spec-tools`' `lintSpec` over the emitted spec and fails on any keyword the runtime validator can't enforce except the intentional `format` (paired with an enforcing `pattern` via `email()`/`uuid()`) and `additionalProperties` — catching e.g. a `multipleOf`/`exclusiveMinimum` added to a request schema that would silently not validate.
+
 ### CLI Codegen
 
 ```bash
