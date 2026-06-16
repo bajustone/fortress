@@ -17,20 +17,26 @@ import type { WebhookQueue, WebhookQueueJob } from './types';
 export function inMemoryQueue(): WebhookQueue {
   let handler: ((job: WebhookQueueJob) => Promise<void>) | null = null;
   const timers = new Set<ReturnType<typeof setTimeout>>();
+  // Serialize handler execution: jobs run one at a time so two deliveries to the
+  // same endpoint never overlap (concurrent runs would race the circuit-breaker
+  // `consecutiveFailures` read-modify-write).
+  let chain: Promise<void> = Promise.resolve();
 
   const enqueue = async (job: WebhookQueueJob): Promise<void> => {
     const delay = job.scheduledFor ? Math.max(0, job.scheduledFor.getTime() - Date.now()) : 0;
-    const run = (): void => {
-      if (handler)
-        void handler(job).catch(() => {});
+    const dispatch = (): void => {
+      const current = handler;
+      if (!current)
+        return;
+      chain = chain.then(() => current(job)).catch(() => {});
     };
     if (delay === 0) {
-      queueMicrotask(run);
+      queueMicrotask(dispatch);
     }
     else {
       const timer = setTimeout(() => {
         timers.delete(timer);
-        run();
+        dispatch();
       }, delay);
       timers.add(timer);
     }

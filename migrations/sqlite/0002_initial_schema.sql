@@ -328,6 +328,8 @@ CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
   events TEXT NOT NULL,
   secret TEXT NOT NULL,
   is_active INTEGER NOT NULL DEFAULT 1,
+  deactivated_reason TEXT,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -338,11 +340,18 @@ CREATE TABLE IF NOT EXISTS fortress_webhook_delivery (
   payload TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   attempts INTEGER NOT NULL DEFAULT 0,
+  idempotency_key TEXT,
   last_attempt_at INTEGER,
   next_retry_at INTEGER,
   response_status INTEGER,
+  response_body TEXT,
+  error_kind TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_webhook_delivery_idempotency
+  ON fortress_webhook_delivery (endpoint_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS fortress_webauthn_credential (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

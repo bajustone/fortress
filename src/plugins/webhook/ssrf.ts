@@ -4,7 +4,7 @@
  * Webhook URLs are consumer-supplied, so delivery is a live SSRF surface
  * (cloud metadata endpoints, internal services). This module resolves the
  * target host, refuses private/loopback/link-local/CGNAT addresses (IPv4,
- * IPv6, and `::ffff:`-mapped forms), and returns the *resolved IP* so the
+ * IPv6, `::ffff:`-mapped, and `64:ff9b::/96` NAT64 forms), and returns the *resolved IP* so the
  * caller can pin the connection to it — closing the DNS-rebinding window
  * between validation and connect.
  *
@@ -72,12 +72,82 @@ function isPrivateIpv4(address: string): boolean {
     || a >= 224;
 }
 
-/** `true` if `address` is a loopback/private/link-local/CGNAT/multicast IP (v4, v6, or `::ffff:` mapped). */
+/**
+ * Expand an IPv6 literal to its 8 16-bit groups, handling `::` compression and
+ * a trailing embedded dotted-quad. Returns null for anything not well-formed.
+ */
+function ipv6Groups(address: string): number[] | null {
+  let host = stripIpv6Brackets(address).toLowerCase();
+  const zone = host.indexOf('%');
+  if (zone !== -1)
+    host = host.slice(0, zone);
+  if (!host.includes(':'))
+    return null;
+
+  // Fold a trailing dotted-quad (e.g. `64:ff9b::1.2.3.4`) into two hex groups.
+  if (host.includes('.')) {
+    const lastColon = host.lastIndexOf(':');
+    const v4 = parseIpv4(host.slice(lastColon + 1));
+    if (!v4)
+      return null;
+    const hi = ((v4[0] << 8) | v4[1]).toString(16);
+    const lo = ((v4[2] << 8) | v4[3]).toString(16);
+    host = `${host.slice(0, lastColon + 1)}${hi}:${lo}`;
+  }
+
+  const halves = host.split('::');
+  if (halves.length > 2)
+    return null;
+  const head = halves[0] === '' ? [] : halves[0].split(':');
+  const tail = halves.length === 2 ? (halves[1] === '' ? [] : halves[1].split(':')) : null;
+
+  let parts: string[];
+  if (tail === null) {
+    parts = head; // no `::` — must already be 8 groups
+  }
+  else {
+    const missing = 8 - head.length - tail.length;
+    if (missing < 1)
+      return null;
+    parts = [...head, ...Array.from<string>({ length: missing }).fill('0'), ...tail];
+  }
+  if (parts.length !== 8)
+    return null;
+
+  const groups = parts.map(part => Number.parseInt(part, 16));
+  if (groups.some(g => !Number.isInteger(g) || g < 0 || g > 0xFFFF))
+    return null;
+  return groups;
+}
+
+/**
+ * Decode the IPv4 embedded in an RFC 6052 NAT64 well-known-prefix (`64:ff9b::/96`)
+ * address, or null if `address` isn't in that prefix. On a NAT64/DNS64 network
+ * the gateway connects to this translated IPv4, so it must face the same
+ * private-range checks — `64:ff9b::a9fe:a9fe` is the cloud metadata IP.
+ */
+function extractNat64Ipv4(address: string): string | null {
+  const groups = ipv6Groups(address);
+  if (!groups)
+    return null;
+  if (groups[0] === 0x0064 && groups[1] === 0xFF9B
+    && groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0) {
+    const g6 = groups[6];
+    const g7 = groups[7];
+    return `${(g6 >> 8) & 0xFF}.${g6 & 0xFF}.${(g7 >> 8) & 0xFF}.${g7 & 0xFF}`;
+  }
+  return null;
+}
+
+/** `true` if `address` is a loopback/private/link-local/CGNAT/multicast IP (v4, v6, `::ffff:` mapped, or `64:ff9b::/96` NAT64). */
 export function isPrivateIp(address: string): boolean {
   const host = stripIpv6Brackets(address).toLowerCase();
   const mapped = extractMappedIpv4(host);
   if (mapped)
     return isPrivateIpv4(mapped);
+  const nat64 = extractNat64Ipv4(host);
+  if (nat64)
+    return isPrivateIpv4(nat64);
   if (isPrivateIpv4(host))
     return true;
   if (host === '::' || host === '::1')

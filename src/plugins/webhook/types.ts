@@ -4,6 +4,7 @@
  * @module
  */
 
+import type { FetchFn } from '@bajustone/fetcher';
 import type { StandardSchemaV1 } from '../../core/standard-schema';
 import type { RetryMode } from './delivery';
 import type { WebhookQueue } from './queue/types';
@@ -71,7 +72,36 @@ export interface WebhookDeliveryConfig {
   onDeliveryFailed?: (delivery: WebhookDelivery) => void | Promise<void>;
   /** Called when an endpoint is auto-deactivated (permanent status or circuit breaker). */
   onEndpointDeactivated?: (endpoint: WebhookEndpoint, reason: string) => void | Promise<void>;
+  /**
+   * Override the delivery transport (a fetcher `FetchFn`). Defaults to the
+   * SSRF-guarded `ssrfSafeFetch()`. Use for custom transports or to intercept
+   * delivery in tests — **bypasses the SSRF guard**, so only override when you
+   * control the targets.
+   */
+  fetch?: FetchFn;
 }
+
+/** Options for `emit()`. */
+export interface EmitOptions {
+  /** Dedup key — a second `emit` with the same `(endpoint, idempotencyKey)` is a no-op. */
+  idempotencyKey?: string;
+}
+
+/** Options for `registerEndpoint()`. */
+export interface RegisterEndpointOptions {
+  /** Signing secret. If omitted, a CSPRNG secret is generated and returned once. */
+  secret?: string;
+}
+
+/** Patch accepted by `updateEndpoint()`. */
+export interface UpdateEndpointPatch {
+  url?: string;
+  events?: string[];
+  isActive?: boolean;
+}
+
+/** An endpoint with `secret` removed — the shape returned by `listEndpoints()`/`updateEndpoint()`. */
+export type RedactedWebhookEndpoint = Omit<WebhookEndpoint, 'secret'>;
 
 export interface WebhookConfig {
   /** Event registry. Defaults to {@link import('./builtin-events').builtinEvents}(). */

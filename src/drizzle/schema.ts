@@ -401,6 +401,8 @@ const webhookEndpoints = sqliteTable('fortress_webhook_endpoint', {
   events: text('events').notNull(), // JSON array
   secret: text('secret').notNull(),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  deactivatedReason: text('deactivated_reason'),
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
@@ -411,11 +413,16 @@ const webhookDeliveries = sqliteTable('fortress_webhook_delivery', {
   payload: text('payload').notNull(), // JSON
   status: text('status').notNull().default('pending'), // pending | success | failed
   attempts: integer('attempts').notNull().default(0),
+  idempotencyKey: text('idempotency_key'),
   lastAttemptAt: integer('last_attempt_at', { mode: 'timestamp' }),
   nextRetryAt: integer('next_retry_at', { mode: 'timestamp' }),
   responseStatus: integer('response_status'),
+  responseBody: text('response_body'),
+  errorKind: text('error_kind'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [
+  uniqueIndex('uniq_webhook_delivery_idempotency').on(table.endpointId, table.idempotencyKey).where(sql`${table.idempotencyKey} is not null`),
+]);
 
 // --- Plugins: WebAuthn ---
 

@@ -396,6 +396,8 @@ const webhookEndpoints = pgTable('fortress_webhook_endpoint', {
   events: text('events').notNull(), // JSON array
   secret: text('secret').notNull(),
   isActive: boolean('is_active').notNull().default(true),
+  deactivatedReason: text('deactivated_reason'),
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -406,11 +408,16 @@ const webhookDeliveries = pgTable('fortress_webhook_delivery', {
   payload: text('payload').notNull(), // JSON
   status: varchar('status', { length: 20 }).notNull().default('pending'), // pending | success | failed
   attempts: integer('attempts').notNull().default(0),
+  idempotencyKey: text('idempotency_key'),
   lastAttemptAt: timestamp('last_attempt_at'),
   nextRetryAt: timestamp('next_retry_at'),
   responseStatus: integer('response_status'),
+  responseBody: text('response_body'),
+  errorKind: text('error_kind'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
-});
+}, table => [
+  uniqueIndex('uniq_webhook_delivery_idempotency').on(table.endpointId, table.idempotencyKey).where(sql`${table.idempotencyKey} is not null`),
+]);
 
 // --- Plugins: WebAuthn ---
 

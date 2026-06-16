@@ -88,10 +88,10 @@ export function ssrfSafeFetch(): FetchFn {
  * explicitly (fetcher does not retry POST by default), which is safe because
  * every delivery carries a stable `webhook-id` for receiver-side dedup.
  */
-export function createDeliveryClient(opts: { timeoutMs?: number; retryMode: RetryMode }): ReturnType<typeof createFetch> {
+export function createDeliveryClient(opts: { timeoutMs?: number; retryMode: RetryMode; fetch?: FetchFn }): ReturnType<typeof createFetch> {
   return createFetch({
     baseUrl: '',
-    fetch: ssrfSafeFetch(),
+    fetch: opts.fetch ?? ssrfSafeFetch(),
     timeout: opts.timeoutMs ?? 10_000,
     ...(opts.retryMode === 'inProcess'
       ? {

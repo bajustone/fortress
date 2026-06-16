@@ -22,6 +22,8 @@ import { generateTOTP, twoFactor } from '../../plugins/two-factor';
 import { webhook } from '../../plugins/webhook';
 import { createDrizzleAdapter } from '../adapter';
 
+const WEBHOOK_SECRET_PREFIX = /^whsec_/;
+
 const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS fortress_user (
     id SERIAL PRIMARY KEY,
@@ -326,6 +328,8 @@ const CREATE_TABLES_SQL = `
     events TEXT NOT NULL,
     secret TEXT NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT true,
+    deactivated_reason TEXT,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
 
@@ -336,11 +340,18 @@ const CREATE_TABLES_SQL = `
     payload TEXT NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
+    idempotency_key TEXT,
     last_attempt_at TIMESTAMP,
     next_retry_at TIMESTAMP,
     response_status INTEGER,
+    response_body TEXT,
+    error_kind TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_webhook_delivery_idempotency
+    ON fortress_webhook_delivery (endpoint_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 `;
 
 const TRUNCATE_SQL = `
@@ -1291,9 +1302,11 @@ describe('pg: webhook plugin', () => {
       jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [webhook({
-        deliver: async (_url, payload) => {
-          delivered.push(payload);
-          return true;
+        delivery: {
+          fetch: async (req) => {
+            delivered.push(await req.text());
+            return new Response(null, { status: 200 });
+          },
         },
       })],
     });
@@ -1302,15 +1315,16 @@ describe('pg: webhook plugin', () => {
 
     const endpoint = await methods.registerEndpoint(
       'https://example.com/hook',
-      ['LOGIN_SUCCESS'],
-      'test-secret',
+      ['auth.login.success'],
     );
     expect(endpoint.id).toBeDefined();
+    expect(endpoint.secret).toMatch(WEBHOOK_SECRET_PREFIX);
     expect(endpoint.createdAt).toBeInstanceOf(Date);
 
     const endpoints = await methods.listEndpoints();
     expect(endpoints).toHaveLength(1);
     expect(endpoints[0].createdAt).toBeInstanceOf(Date);
+    expect(endpoints[0].secret).toBeUndefined(); // redacted
 
     // Trigger a webhook delivery via login
     await fortress.auth.createUser({
@@ -1320,13 +1334,15 @@ describe('pg: webhook plugin', () => {
     });
     await fortress.auth.login('wh@test.com', 'password-123');
 
-    // Delivery is dispatched out-of-band (queueMicrotask); wait for it.
-    for (let i = 0; i < 50 && delivered.length < 1; i++)
+    // Delivery is queued out-of-band; wait for it.
+    for (let i = 0; i < 100 && delivered.length < 1; i++)
       await new Promise(resolve => setTimeout(resolve, 10));
 
     expect(delivered.length).toBeGreaterThanOrEqual(1);
     const payload = JSON.parse(delivered[0]);
-    expect(payload.event).toBe('LOGIN_SUCCESS');
+    expect(payload.event).toBe('auth.login.success');
+
+    await methods.stop();
   });
 });
 

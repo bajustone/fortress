@@ -32,6 +32,17 @@ describe('ssrfSafeFetch — SSRF guard in the delivery transport', () => {
     ).rejects.toThrow();
   });
 
+  it('rejects NAT64 well-known-prefix (64:ff9b::/96) targets that embed private IPv4', async () => {
+    // 64:ff9b::a9fe:a9fe == NAT64 form of 169.254.169.254 (cloud metadata)
+    await expect(
+      fetchFn(new Request('https://[64:ff9b::a9fe:a9fe]/hook', { method: 'POST' })),
+    ).rejects.toThrow(/private/i);
+    // 64:ff9b::7f00:1 == NAT64 form of 127.0.0.1 (loopback)
+    await expect(
+      fetchFn(new Request('https://[64:ff9b::7f00:1]/hook', { method: 'POST' })),
+    ).rejects.toThrow(/private/i);
+  });
+
   it('rejects localhost by name', async () => {
     await expect(
       fetchFn(new Request('https://localhost/hook', { method: 'POST' })),
