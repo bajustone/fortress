@@ -122,6 +122,37 @@ describe('admin plugin bootstrap hardening', () => {
     }));
     expect(badSecret.status).toBe(403);
   });
+
+  it('rejects a second bootstrap once an admin exists, even with the correct secret (#46)', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [admin({ bootstrap: { enabled: true, secret: BOOTSTRAP_SECRET } })],
+    });
+    await fortress.auth.createUser({ email: 'first@example.com', name: 'First', password: 'password-123' });
+    await fortress.auth.createUser({ email: 'second@example.com', name: 'Second', password: 'password-123' });
+    const firstLogin = await fortress.auth.login('first@example.com', 'password-123');
+    const secondLogin = await fortress.auth.login('second@example.com', 'password-123');
+    if (firstLogin.status !== 'success' || secondLogin.status !== 'success')
+      throw new Error('expected login success');
+
+    // First caller bootstraps successfully with the one-time secret.
+    const first = await fortress.handleRequest(new Request('http://localhost/iam/admin/bootstrap', {
+      method: 'POST',
+      headers: { 'authorization': `Bearer ${firstLogin.accessToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ secret: BOOTSTRAP_SECRET }),
+    }));
+    expect(first.status).toBe(200);
+
+    // A second authenticated user cannot self-grant admin — even holding the
+    // correct secret — now that a fortress-admin already exists.
+    const second = await fortress.handleRequest(new Request('http://localhost/iam/admin/bootstrap', {
+      method: 'POST',
+      headers: { 'authorization': `Bearer ${secondLogin.accessToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ secret: BOOTSTRAP_SECRET }),
+    }));
+    expect(second.status).toBe(403);
+  });
 });
 
 describe('admin plugin — api-key routes', () => {

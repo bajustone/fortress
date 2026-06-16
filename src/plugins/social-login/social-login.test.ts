@@ -18,6 +18,45 @@ interface SocialLoginMethods {
   getProviders: () => string[];
 }
 
+// Stub a full custom-OIDC callback: discovery + a validly-signed id_token +
+// the matching token/userinfo/jwks responses. Each call MUST use a distinct
+// `issuer` — the plugin caches the remote JWKS by jwksUri at module scope, so
+// reusing an issuer across tests would verify a fresh keypair against a stale
+// cached key. `emailVerified` is set on both the id_token and userinfo claims
+// so the merged profile carries it faithfully.
+async function stubOidcProvider(opts: { issuer: string; email: string; emailVerified: boolean; sub: string }): Promise<void> {
+  const { publicKey, privateKey } = await generateKeyPair('RS256');
+  const jwk = await exportJWK(publicKey);
+  const kid = 'oidc-kid';
+  const idToken = await new SignJWT({ sub: opts.sub, email: opts.email, email_verified: opts.emailVerified, nonce: 'nonce' })
+    .setProtectedHeader({ alg: 'RS256', kid })
+    .setIssuer(opts.issuer)
+    .setAudience('oidc-client')
+    .setIssuedAt()
+    .setExpirationTime('5m')
+    .sign(privateKey);
+
+  vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+    const href = input instanceof Request ? input.url : String(input);
+    if (href === `${opts.issuer}/.well-known/openid-configuration`) {
+      return Response.json({
+        issuer: opts.issuer,
+        authorization_endpoint: `${opts.issuer}/authorize`,
+        token_endpoint: `${opts.issuer}/token`,
+        userinfo_endpoint: `${opts.issuer}/userinfo`,
+        jwks_uri: `${opts.issuer}/jwks`,
+      });
+    }
+    if (href === `${opts.issuer}/token`)
+      return Response.json({ access_token: 'provider-access-token', id_token: idToken });
+    if (href === `${opts.issuer}/userinfo`)
+      return Response.json({ sub: opts.sub, email: opts.email, email_verified: opts.emailVerified, name: 'Provider User' });
+    if (href === `${opts.issuer}/jwks`)
+      return Response.json({ keys: [{ ...jwk, kid, alg: 'RS256', use: 'sig' }] });
+    throw new Error(`unexpected fetch ${href}`);
+  }));
+}
+
 describe('social-login plugin', () => {
   let db: DatabaseAdapter;
   let methods: SocialLoginMethods;
@@ -226,6 +265,57 @@ describe('social-login plugin', () => {
       const tokens = await methods.getProviderTokens(result.user.id, 'google');
       expect(tokens.accessToken).toBe('provider-access-token');
       expect(tokens.refreshToken).toBe('provider-refresh-token');
+    });
+
+    it('does not auto-link to an existing account when the provider reports email_verified:false (#5/#7)', async () => {
+      const issuer = 'https://issuer-unverified.example.com';
+      // A real account a verified-email auto-link would otherwise take over.
+      const victim = await db.create<{ id: string }>({
+        model: 'user',
+        data: { email: 'victim@example.com', name: 'Victim', passwordHash: 'hashed', isActive: true },
+      });
+
+      // Attacker controls a provider account asserting the victim's email, but unverified.
+      await stubOidcProvider({ issuer, email: 'victim@example.com', emailVerified: false, sub: 'attacker-sub-999' });
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-x', clientId: 'oidc-client', clientSecret: 'secret', issuer }],
+        autoRegister: true,
+        linkAccounts: true,
+        tokenEncryptionKey,
+      });
+      const m = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      // The id_token verifies, so we reach the link logic — but the by-email gate
+      // (emailVerified===true) is skipped, leaving only JIT provisioning, which
+      // collides with the victim's UNIQUE email and fails. The attacker's account
+      // must NOT attach to the victim either way.
+      await expect(
+        m.handleCallback('oidc-x', 'code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce'),
+      ).rejects.toThrow();
+
+      expect(await m.getLinkedAccounts(victim.id)).toEqual([]);
+    });
+
+    it('rejects the callback when the matched verified-email account is inactive (#5/#7 isActive guard)', async () => {
+      const issuer = 'https://issuer-inactive.example.com';
+      await db.create({
+        model: 'user',
+        data: { email: 'disabled@example.com', name: 'Disabled', passwordHash: 'hashed', isActive: false },
+      });
+
+      // Verified email → the link-by-email path runs and finds the disabled account.
+      await stubOidcProvider({ issuer, email: 'disabled@example.com', emailVerified: true, sub: 'provider-sub-1' });
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-x', clientId: 'oidc-client', clientSecret: 'secret', issuer }],
+        autoRegister: true,
+        linkAccounts: true,
+        tokenEncryptionKey,
+      });
+      const m = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      await expect(
+        m.handleCallback('oidc-x', 'code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce'),
+      ).rejects.toThrow('User account not found or disabled');
     });
   });
 

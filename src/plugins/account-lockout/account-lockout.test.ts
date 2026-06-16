@@ -132,6 +132,69 @@ describe('account-lockout plugin', () => {
     });
   });
 
+  describe('window-expiry reset, re-lock guard & identifier normalization (#34/#35/M1)', () => {
+    /** A fortress whose lockout window is already in the past (-1s) the moment it's set. */
+    function expiredLockoutFortress(): { f: Fortress; plugin: NonNullable<Fortress['config']['plugins']>[number]; m: LockoutMethods } {
+      const f = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [accountLockout({ maxFailedAttempts: 2, lockoutDurationSeconds: -1, escalation: false })],
+      });
+      const plugin = f.config.plugins!.find(p => p.name === 'account-lockout')!;
+      const m = f.plugins['account-lockout'] as unknown as LockoutMethods;
+      return { f, plugin, m };
+    }
+
+    it('resets failedAttempts to zero when a login arrives after the window expired', async () => {
+      const { f, plugin, m } = expiredLockoutFortress();
+      await f.auth.createUser({ email: 'dave@example.com', name: 'Dave', password: 'correct-password' });
+      const fail = () => plugin.hooks!.onLoginFailure!({ db: f.config.database, config: f.config, identifier: 'dave@example.com', error: new Error('Invalid credentials') });
+
+      await fail();
+      await fail(); // reaches the threshold, but lockedUntil is already in the past
+
+      let status = await m.getLockoutStatus('dave@example.com');
+      expect(status.failedAttempts).toBe(2);
+      expect(status.isLocked).toBe(false); // window already expired
+
+      // A login attempt runs beforeLogin, which clears the stale counter.
+      await plugin.hooks!.beforeLogin!({ db: f.config.database, config: f.config, email: 'dave@example.com' });
+
+      status = await m.getLockoutStatus('dave@example.com');
+      expect(status.failedAttempts).toBe(0);
+      expect(status.lockedUntil).toBeNull();
+      expect(status.lastFailedAt).toBeNull();
+    });
+
+    it('cannot be re-locked by a single failure after the window expired (no self-DoS)', async () => {
+      const { f, plugin, m } = expiredLockoutFortress();
+      await f.auth.createUser({ email: 'erin@example.com', name: 'Erin', password: 'correct-password' });
+      const fail = () => plugin.hooks!.onLoginFailure!({ db: f.config.database, config: f.config, identifier: 'erin@example.com', error: new Error('Invalid credentials') });
+
+      await fail();
+      await fail(); // threshold reached, immediately expired
+      expect((await m.getLockoutStatus('erin@example.com')).failedAttempts).toBe(2);
+
+      // One more failure after expiry must reset-then-increment to 1, NOT stack to 3 and re-lock.
+      await fail();
+      const status = await m.getLockoutStatus('erin@example.com');
+      expect(status.failedAttempts).toBe(1);
+      expect(status.isLocked).toBe(false);
+    });
+
+    it('keys lockout state by normalized identifier (case / whitespace / NFC)', async () => {
+      // Three surface forms of the same identifier all accumulate against one
+      // normalized row (the default fortress: max 3) and reach the threshold.
+      await simulateLoginFailure('ALICE@example.com');
+      await simulateLoginFailure('  alice@example.com  ');
+      await simulateLoginFailure('Alice@Example.com');
+
+      const status = await methods.getLockoutStatus('alice@example.com');
+      expect(status.failedAttempts).toBe(3);
+      expect(status.isLocked).toBe(true);
+    });
+  });
+
   describe('successful login resets failure counter', () => {
     it('clears failedAttempts on successful login via afterLogin hook', async () => {
       await simulateLoginFailure(email);
