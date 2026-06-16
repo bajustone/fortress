@@ -11,9 +11,11 @@
 
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin } from '../../core/plugin';
-import { lookup } from 'node:dns/promises';
 import { request as httpsRequest } from 'node:https';
-import { isIP } from 'node:net';
+import { signPayload } from './signing';
+import { resolveSafeWebhookTarget } from './ssrf';
+
+export { assertSafeWebhookUrl } from './ssrf';
 
 export interface WebhookConfig {
   /** Events to deliver. Default: all. */
@@ -62,122 +64,6 @@ const RETRY_INTERVALS_MS = [
   2 * 60 * 60 * 1000, // 2h
   5 * 60 * 60 * 1000, // 5h
 ];
-
-async function signPayload(secret: string, webhookId: string, timestamp: number, body: string): Promise<string> {
-  const content = `${webhookId}.${timestamp}.${body}`;
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(content));
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(sig)));
-  return b64;
-}
-
-interface SafeWebhookTarget {
-  url: URL;
-  address: string;
-  family: 4 | 6;
-}
-
-function stripIpv6Brackets(host: string): string {
-  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
-}
-
-function parseIpv4(address: string): number[] | null {
-  const parts = address.split('.');
-  if (parts.length !== 4)
-    return null;
-  const octets = parts.map(part => Number(part));
-  if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255))
-    return null;
-  return octets;
-}
-
-function extractMappedIpv4(address: string): string | null {
-  const lower = stripIpv6Brackets(address).toLowerCase();
-  if (!lower.startsWith('::ffff:'))
-    return null;
-  const tail = lower.slice('::ffff:'.length);
-  if (parseIpv4(tail))
-    return tail;
-  const words = tail.split(':');
-  if (words.length !== 2)
-    return null;
-  const hi = Number.parseInt(words[0], 16);
-  const lo = Number.parseInt(words[1], 16);
-  if (!Number.isInteger(hi) || !Number.isInteger(lo) || hi < 0 || hi > 0xFFFF || lo < 0 || lo > 0xFFFF)
-    return null;
-  return `${hi >> 8}.${hi & 0xFF}.${lo >> 8}.${lo & 0xFF}`;
-}
-
-function isPrivateIpv4(address: string): boolean {
-  const octets = parseIpv4(address);
-  if (!octets)
-    return false;
-  const [a, b] = octets;
-  return a === 0
-    || a === 10
-    || a === 127
-    || (a === 100 && b >= 64 && b <= 127)
-    || (a === 169 && b === 254)
-    || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168)
-    || (a === 198 && (b === 18 || b === 19))
-    || a >= 224;
-}
-
-function isPrivateIp(address: string): boolean {
-  const host = stripIpv6Brackets(address).toLowerCase();
-  const mapped = extractMappedIpv4(host);
-  if (mapped)
-    return isPrivateIpv4(mapped);
-  if (isPrivateIpv4(host))
-    return true;
-  if (host === '::' || host === '::1')
-    return true;
-  return host.startsWith('fc')
-    || host.startsWith('fd')
-    || host.startsWith('fe80:')
-    || host.startsWith('ff');
-}
-
-async function resolveSafeWebhookTarget(url: string): Promise<SafeWebhookTarget> {
-  const parsed = new URL(url);
-  if (parsed.protocol !== 'https:')
-    throw new Error('Webhook URL must use https');
-  const host = stripIpv6Brackets(parsed.hostname.toLowerCase());
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local'))
-    throw new Error('Webhook URL host is not allowed');
-
-  const literalFamily = isIP(host);
-  const records = literalFamily === 0
-    ? await lookup(host, { all: true, verbatim: true })
-    : [{ address: host, family: literalFamily }];
-  if (records.length === 0)
-    throw new Error('Webhook URL host did not resolve');
-  if (records.some(record => isPrivateIp(record.address)))
-    throw new Error('Webhook URL resolves to a private address');
-
-  const selected = records[0];
-  return { url: parsed, address: selected.address, family: selected.family as 4 | 6 };
-}
-
-/**
- * Resolve `url` to an outbound webhook target and throw when it points at a
- * loopback, link-local, RFC1918, or otherwise non-public address (including
- * IPv4-mapped IPv6 forms like `::ffff:169.254.169.254`). Exported for tests
- * and for custom `config.deliver` transports that want to reuse fortress's
- * SSRF guard. The built-in `defaultDeliver` already calls this and pins the
- * resolved IP into the outbound request, so callers using the default
- * transport do not need to invoke it themselves.
- */
-export async function assertSafeWebhookUrl(url: string): Promise<void> {
-  await resolveSafeWebhookTarget(url);
-}
 
 async function defaultDeliver(url: string, payload: string, headers: Record<string, string>, timeoutMs: number): Promise<boolean> {
   const target = await resolveSafeWebhookTarget(url);
