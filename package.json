@@ -102,6 +102,206 @@
         "types": "./dist/otel.d.cts",
         "default": "./dist/otel.cjs"
       }
+    },
+    "./drizzle/pg": {
+      "import": {
+        "types": "./dist/drizzle/pg.d.ts",
+        "default": "./dist/drizzle/pg.js"
+      },
+      "require": {
+        "types": "./dist/drizzle/pg.d.cts",
+        "default": "./dist/drizzle/pg.cjs"
+      }
+    },
+    "./express": {
+      "import": {
+        "types": "./dist/express.d.ts",
+        "default": "./dist/express.js"
+      },
+      "require": {
+        "types": "./dist/express.d.cts",
+        "default": "./dist/express.cjs"
+      }
+    },
+    "./plugins/email-verification": {
+      "import": {
+        "types": "./dist/plugins/email-verification.d.ts",
+        "default": "./dist/plugins/email-verification.js"
+      },
+      "require": {
+        "types": "./dist/plugins/email-verification.d.cts",
+        "default": "./dist/plugins/email-verification.cjs"
+      }
+    },
+    "./plugins/api-key": {
+      "import": {
+        "types": "./dist/plugins/api-key.d.ts",
+        "default": "./dist/plugins/api-key.js"
+      },
+      "require": {
+        "types": "./dist/plugins/api-key.d.cts",
+        "default": "./dist/plugins/api-key.cjs"
+      }
+    },
+    "./plugins/two-factor": {
+      "import": {
+        "types": "./dist/plugins/two-factor.d.ts",
+        "default": "./dist/plugins/two-factor.js"
+      },
+      "require": {
+        "types": "./dist/plugins/two-factor.d.cts",
+        "default": "./dist/plugins/two-factor.cjs"
+      }
+    },
+    "./plugins/social-login": {
+      "import": {
+        "types": "./dist/plugins/social-login.d.ts",
+        "default": "./dist/plugins/social-login.js"
+      },
+      "require": {
+        "types": "./dist/plugins/social-login.d.cts",
+        "default": "./dist/plugins/social-login.cjs"
+      }
+    },
+    "./plugins/data-isolation": {
+      "import": {
+        "types": "./dist/plugins/data-isolation.d.ts",
+        "default": "./dist/plugins/data-isolation.js"
+      },
+      "require": {
+        "types": "./dist/plugins/data-isolation.d.cts",
+        "default": "./dist/plugins/data-isolation.cjs"
+      }
+    },
+    "./plugins/tenancy": {
+      "import": {
+        "types": "./dist/plugins/tenancy.d.ts",
+        "default": "./dist/plugins/tenancy.js"
+      },
+      "require": {
+        "types": "./dist/plugins/tenancy.d.cts",
+        "default": "./dist/plugins/tenancy.cjs"
+      }
+    },
+    "./plugins/oauth": {
+      "import": {
+        "types": "./dist/plugins/oauth.d.ts",
+        "default": "./dist/plugins/oauth.js"
+      },
+      "require": {
+        "types": "./dist/plugins/oauth.d.cts",
+        "default": "./dist/plugins/oauth.cjs"
+      }
+    },
+    "./plugins/rate-limit": {
+      "import": {
+        "types": "./dist/plugins/rate-limit.d.ts",
+        "default": "./dist/plugins/rate-limit.js"
+      },
+      "require": {
+        "types": "./dist/plugins/rate-limit.d.cts",
+        "default": "./dist/plugins/rate-limit.cjs"
+      }
+    },
+    "./plugins/rate-limit/hono": {
+      "import": {
+        "types": "./dist/plugins/rate-limit/hono.d.ts",
+        "default": "./dist/plugins/rate-limit/hono.js"
+      },
+      "require": {
+        "types": "./dist/plugins/rate-limit/hono.d.cts",
+        "default": "./dist/plugins/rate-limit/hono.cjs"
+      }
+    },
+    "./plugins/rate-limit/express": {
+      "import": {
+        "types": "./dist/plugins/rate-limit/express.d.ts",
+        "default": "./dist/plugins/rate-limit/express.js"
+      },
+      "require": {
+        "types": "./dist/plugins/rate-limit/express.d.cts",
+        "default": "./dist/plugins/rate-limit/express.cjs"
+      }
+    },
+    "./plugins/rate-limit/sveltekit": {
+      "import": {
+        "types": "./dist/plugins/rate-limit/sveltekit.d.ts",
+        "default": "./dist/plugins/rate-limit/sveltekit.js"
+      },
+      "require": {
+        "types": "./dist/plugins/rate-limit/sveltekit.d.cts",
+        "default": "./dist/plugins/rate-limit/sveltekit.cjs"
+      }
+    },
+    "./plugins/audit-log": {
+      "import": {
+        "types": "./dist/plugins/audit-log.d.ts",
+        "default": "./dist/plugins/audit-log.js"
+      },
+      "require": {
+        "types": "./dist/plugins/audit-log.d.cts",
+        "default": "./dist/plugins/audit-log.cjs"
+      }
+    },
+    "./plugins/account-lockout": {
+      "import": {
+        "types": "./dist/plugins/account-lockout.d.ts",
+        "default": "./dist/plugins/account-lockout.js"
+      },
+      "require": {
+        "types": "./dist/plugins/account-lockout.d.cts",
+        "default": "./dist/plugins/account-lockout.cjs"
+      }
+    },
+    "./plugins/webauthn": {
+      "import": {
+        "types": "./dist/plugins/webauthn.d.ts",
+        "default": "./dist/plugins/webauthn.js"
+      },
+      "require": {
+        "types": "./dist/plugins/webauthn.d.cts",
+        "default": "./dist/plugins/webauthn.cjs"
+      }
+    },
+    "./plugins/magic-link": {
+      "import": {
+        "types": "./dist/plugins/magic-link.d.ts",
+        "default": "./dist/plugins/magic-link.js"
+      },
+      "require": {
+        "types": "./dist/plugins/magic-link.d.cts",
+        "default": "./dist/plugins/magic-link.cjs"
+      }
+    },
+    "./plugins/webhook": {
+      "import": {
+        "types": "./dist/plugins/webhook.d.ts",
+        "default": "./dist/plugins/webhook.js"
+      },
+      "require": {
+        "types": "./dist/plugins/webhook.d.cts",
+        "default": "./dist/plugins/webhook.cjs"
+      }
+    },
+    "./plugins/openapi": {
+      "import": {
+        "types": "./dist/plugins/openapi.d.ts",
+        "default": "./dist/plugins/openapi.js"
+      },
+      "require": {
+        "types": "./dist/plugins/openapi.d.cts",
+        "default": "./dist/plugins/openapi.cjs"
+      }
+    },
+    "./plugins/admin": {
+      "import": {
+        "types": "./dist/plugins/admin.d.ts",
+        "default": "./dist/plugins/admin.js"
+      },
+      "require": {
+        "types": "./dist/plugins/admin.d.cts",
+        "default": "./dist/plugins/admin.cjs"
+      }
     }
   },
   "files": [
@@ -125,8 +325,9 @@
     "typecheck": "tsc --noEmit",
     "version": "bun scripts/changelog.ts",
     "check:version": "bun scripts/check-version-sync.ts",
-    "publish": "bun run check:version && npx jsr publish",
-    "publish:dry": "bun run check:version && npx jsr publish --dry-run --allow-dirty",
+    "check:exports": "bun scripts/check-exports-parity.ts",
+    "publish": "bun run check:version && bun run check:exports && npx jsr publish",
+    "publish:dry": "bun run check:version && bun run check:exports && npx jsr publish --dry-run --allow-dirty",
     "prepublishOnly": "tsup",
     "prepare": "husky"
   },

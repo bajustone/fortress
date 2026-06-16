@@ -16,6 +16,8 @@ jobs:
       - run: bun install
       - run: bun run lint
       - run: bun run typecheck
+      - name: Exports parity (jsr.json ⇄ package.json ⇄ tsup)
+        run: bun run check:exports
 
   # Unit suite (SQLite test adapter) across every supported runtime. Bun is the
   # primary runtime; the Node jobs run the same vitest suite under Node's
