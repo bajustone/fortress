@@ -6,20 +6,79 @@ _Derived from `fortress-audit-report.html` (audit @ v0.2.8) — generated 2026-0
 Six phases on a lock-in spine with a security hotfix bolted to the front. Phase 1 is a deploy-safety hotfix: every remaining critical auth-bypass / account-takeover and the highs that make a running deployment exploitable, shipped regardless of API freeze (breaking changes accepted because security trumps stability and these fixes also happen to pin the social-login surface). Phases 2-4 are the freeze spine: front-load every finding whose fix is FORCED to change a public surface, sequenced subsystem-by-subsystem (auth-core/2FA contracts → framework & DatabaseAdapter contracts → packaging/observability/IAM-policy/admin) so each subsystem can be frozen the moment its breaking changes land, each phase fanned out into disjoint-file parallel workstreams. Phases 5-6 are internal-only correctness (NULL-query bugs, SQLite serialization, validation, schema/migration hardening, plugin integrity) and the verification gate (conformance + CI publish-gate) that makes "frozen" provable. Findings are grouped by cluster so duplicates collapse into single work items.
 
 
+## ⚠️ Due-diligence update — 2026-06-16
+
+_This roadmap was written 2026-06-15. **Five commit clusters plus uncommitted work landed after it** and are **not** reflected in the phase bodies below. This section is the authoritative status overlay; the original phase sections remain the spec for everything still outstanding. Everything here was verified against the **current code** (not commit messages) in a full re-audit, including adversarial re-checks of every "done" claim._
+
+### What landed since the plan was written
+
+| Commit | What it did | Plan impact |
+|--------|-------------|-------------|
+| `be1753f` | **Executed almost all of Phase 1** — social-login id_token verify (jose/JWKS), Apple ES256, OAuth state, admin bootstrap, TOTP single-use, updateUser revocation, lockout, data-isolation, tenant-`IS NULL`, AES-GCM token encryption | **Phase 1 implementation DONE** (verification tests outstanding) |
+| `2edf217` | Adopted `@bajustone/fetcher` for schema validation; **deleted `src/core/json-schema-validator.ts`**; new `./fetcher` subpath; Node floor → `>=20.19.0` | **Phase 5 M15 obsolete**; new breaking 422/`oneOf` surfaces; export/engine deltas |
+| `8249a2b` | New `src/core/http/outbound.ts`; routed OAuth/OIDC/GitHub/HIBP through a shared client with timeouts | **Phase 2 F7/M40 now PARTIAL** (timeout half done) |
+| `0b20b53` | **Subject IDs are strings everywhere** — a NEW lock-in fix, not in any phase | Touches Phase 2/3/4 files; provenance corrections |
+| `39f1643` + **uncommitted** | Webhook plugin split into modules + hardening: 5 new columns, circuit breaker, idempotency, persistent outbox | **Phase 1 #48 DONE but re-architected**; new contract still undocumented |
+
+> **These are deliberate, separately-tracked workstreams**, not random drift. The fetcher swap follows `scratch/fetcher-adoption-plan-2026-06-16.md`; the webhook rewrite is a full "v1" rebuild per `scratch/webhook-v1-plan-2026-06-16.md` whose **Increment 4 already owns the docs/examples gap** flagged below. They are "out of plan" only relative to *this* lock-in roadmap. What follows is how they move the lock-in needle.
+
+### Revised phase status
+
+- **Phase 1 — IMPLEMENTATION COMPLETE; verification tests outstanding.** All 13 work items are coded and correct in the current tree. ⚠️ Three are **implemented but not test-proven** — do **not** treat Phase 1's exit criteria as met until these land:
+  - **#5/#7/M68 (verified-email linking):** guards correct (`social-login/index.ts:513,518-519`) but **zero tests** exercise `email_verified:false` blocking or the `isActive` guard. **+ latent Microsoft bypass** (watch-outs).
+  - **#34/#35/M1/M57 (lockout):** CAS/reset/normalize correct, but the window-expiry-reset branch, "cannot be re-locked by one failure", and identifier-normalization (M1) have **no tests**.
+  - **#45/#46 (admin bootstrap):** the self-grant gate the old footnote flagged as "only partially fixed" **now exists and is correct** — but there is **no test asserting a second bootstrap returns 403**, and the count-gate→insert is **non-transactional** (low sev; both callers hold the one-time secret).
+  - **Action:** add those three regression tests, then move Phase 1 into "Already fixed." #46 is implemented; its footnote is resolved-pending-test.
+- **Phase 2 — NOT STARTED except F7 (password), now PARTIAL.** `8249a2b` delivered the HIBP **timeout** (`outbound.ts`, 6 s). Still missing: `breachedFailureMode` + `PASSWORD_BREACH_CHECK_DEGRADED` (M40 — **0 grep hits**) and the **bounded HIBP cache** (M28 — still an unbounded `Map`). F9 (wire regen) must **rebase onto `auth-endpoints.ts` as rewritten by `0b20b53`**.
+- **Phase 3 — NOT STARTED; two corrections.** **PluginRequestContext already exists** in core (`plugin-middleware.ts:28`) → narrow item 1 from "define" to "**adopt** in the Express+Hono slots." The Drizzle-contract item now **overlaps `0b20b53`'s `stringifyIds`/`isIdField`** on the same read path — design empty-`where`-throw + rawQuery canonicalization to coexist, fold in the `isIdField` false-positive + the undocumented write-path coercion (watch-outs), and add `src/testing/adapter-conformance.test.ts` to its file list. Re-target file pointers: Express RBAC + form/CSRF logic lives in `src/express/{middleware,handle}.ts`, not `index.ts`.
+- **Phase 4 — NOT STARTED; export-parity is a LIVE ship bug.** `package.json` exports = **9 keys**, `jsr.json` = **29**: `./express` (already on disk), `./drizzle/pg`, and **all `./plugins/*`** are missing from npm — any npm consumer of a plugin subpath is **broken today** (also needs matching `tsup.config.ts` entries or the dist subpaths won't exist). Add `./fetcher` to the parity allowlist. Reframe the IamEvent item: `IamEvent.eventType` is a **free-form string, not a closed union** → "emit the 4 missing events + `deleteGroup` cascade + add them to the audit-log eventType allowlist." Drop the non-existent `applyPolicyPlanWithDb` reference in the policy item; note `applyResourceOps` does a `node:fs` disk write that breaks in workerd/Deno-no-fs.
+- **Phase 5 — NOT STARTED; M15 obsolete, M16 now HIGH.** `2edf217` deleted the file M15 targets; validation now delegates to fetcher's `fromJSONSchema` (already enforces const/additionalProperties/allOf/min/max/discriminator, prototype-pollution-safe). **Re-scope M15** to its one surviving gap: **`$ref` bodies are present-but-unconstrained** (`schema-builder.ts:35` resolves refs to `{}`). **M16 is fully unaddressed and now HIGH:** `validation.ts:52,58` still does `Number('')→0`, `Number('0x1f')→31`, `Number('1e3')→1000`, and that coerced value now flows into a **stricter** validator. M24's cache lives in **`permission-cache.ts`**, not `iam-service.ts`. Schema item: **social_account UNIQUE already done** (be1753f) → narrow to email-normalization + TIMESTAMPTZ + hot-column indexes.
+- **Phase 6 — NOT STARTED; two sweeps to add.** Audit-log (M70) must also fix the **string-id inconsistency** `0b20b53` left: TS interface `id:string` vs the plugin model field still `type:'number'`, and `getLastHash` orders by `id DESC` assuming numeric-monotonic ids (wrong link with string ids). Conformance (M76) must add a **runtime** string-id assertion (`typeof id === 'string'`) — today only the TS generic changed, so a numeric-id third-party adapter still passes. CLI #29: fix is `Object.values()` on the **endpoint maps** only (component-schema object-spreads already work).
+
+### Watch-outs introduced by the out-of-plan work (NEW — not in any phase yet)
+
+| Sev | Watch-out | Where | Action |
+|-----|-----------|-------|--------|
+| **HIGH** | M16 coercion bypass **amplified** — `Number('')→0`, hex/exponent params pass a now-stricter validator | `core/validation.ts:48-62` | Fix in Phase 5 M16; no longer "just an edge case" |
+| **MED** | Microsoft provider sets `emailVerified=true` when the claim is absent → unconditional by-email auto-link | `providers/microsoft.ts:19` | Fail-closed like the other 6, or document as a known per-provider trust assumption |
+| **MED** | Breaking **422 issue-path** shape change (`['email']` vs `[{key:'email'}]`) shipped ungated | `core/validation.ts:119-123` | Add to the Phase 4 error-envelope freeze checklist + CHANGELOG migration note |
+| **MED** | `oneOf` silently changed exactly-one → at-least-one (union) — validation-tightness regression | `core/schema-builder.ts:411` | Audit `oneOf()` sites; migrate exclusive ones to `discriminatedUnion()` |
+| **MED** | Write-path string-id coercion is **driver-dependent & undocumented** (no parse-back; relies on pg coercing string→int) | `drizzle/adapter.ts:78-107` | Pin + document in the Phase 3 DatabaseAdapter contract |
+| **MED** | Conformance suite doesn't **runtime-enforce** the new string-id contract (only TS generics changed) | `testing/adapter-conformance.test.ts:26` | Add runtime assertion (Phase 6 M76) |
+| **MED** | New webhook circuit-breaker / idempotency / 5-column contract shipped with **no docs/CHANGELOG/examples** | `docs/plugins/webhook.md` | Document + freeze before lock-in (violates standing sync rule) |
+| **LOW** | `response_body` persists ≤2 KB of receiver output → can capture receiver secrets/PII, emitted unredacted to `onDeliveryFailed` | `webhook/delivery.ts:115-123` | Redact / flag-gate / strip from the DLQ hook payload |
+| **LOW** | `isIdField` regex `/[a-z]Id$/` will silently stringify any future **numeric** `*Id` column | `drizzle/adapter.ts:133-168` | Document "any `*Id` column is an opaque string id"; optional drift-check |
+| **LOW** | Webhook timeout default silently rose 5000→10000 ms; full response buffered before the 2 KB slice | `webhook/delivery.ts:53-65,95` | Note in #48 / CHANGELOG; consider a streaming read cap |
+| **LOW** | Degraded OIDC discovery can disable id_token JWKS verification for providers without a static `jwksUri` | `social-login/index.ts:182-211` | Add a fail-closed regression test |
+| **LOW** | ReDoS-safety/format-correctness now depend entirely on `@bajustone/fetcher ^1.0.0` (unpinned); no test pins the lifted patterns | `schema-builder.ts:362-385` | Pin fetcher or snapshot the patterns |
+| **LOW** | Node engine floor bumped to `>=20.19.0` (fetcher) — CI matrix / docs / jsr `runtimeCompat` must match | `package.json:8-10` | Doc/CI sync |
+
+### New work items to fold into the phases
+
+- **Phase 4 + 6 — freeze & document the webhook contract** (= **Increment 4 of `scratch/webhook-v1-plan-2026-06-16.md`**, already owned but not yet done): the 5 columns (`consecutive_failures`, `deactivated_reason`, `idempotency_key`, `response_body`, `error_kind`), `maxConsecutiveFailures` (15), `permanentStatuses` ([404,410,421]) auto-deactivation, the `deactivatedReason` taxonomy, the `error_kind` enum, and `(endpointId, idempotencyKey)` dedup. Update `docs/plugins/webhook.md`, CHANGELOG, README, examples. **Note:** the uncommitted webhook changes have **not** been run through the pg/testcontainers integration suite — do that before publish (the memory flags this).
+- **Phase 4 freeze checklist:** capture the **422 issue-path** + **`oneOf` union** breaking changes with a documented migration window before the validation/error surface is frozen.
+- **Phase 5 M16:** coercion fix + regression test (reject empty-string, whitespace, hex, exponent, Infinity/NaN).
+- **Phase 6 M76:** runtime string-id conformance assertion; webhook tests for the parse try/catch + circuit-breaker + idempotency dedup; the three Phase-1 verification tests above.
+- **Provenance corrections** (see "Already fixed" register): **M27** landed in `0b20b53` (not `4dc8e20`); **M29** NFKC was wired via `normalizePasswordInput` in `0b20b53`; record **subject-IDs-as-strings (`0b20b53`)** as the resolution of the 2026-06-13 numeric-id lock-in.
+- **Process:** the PG-schema-sync gotcha is now **7 locations**, not 5 — it also includes `src/drizzle/pg/pg.integration-test.ts` and `src/drizzle/pg/adapter.integration-test.ts` inline DDL.
+
+
 ## Phases at a glance
 
-| # | Phase | Work items | Breaking surface | Releasable on its own |
-|---|-------|-----------|------------------|------------------------|
-| 1 | Security hotfix: make any deployment safe | 13 | 8 breaking | Yes — security patch |
-| 2 | Auth-core & 2FA behavioral-contract freeze | 7 | 5 breaking | Freeze gate |
-| 3 | Framework-adapter & DatabaseAdapter contract freeze | 5 | 5 breaking | Freeze gate |
-| 4 | Packaging, observability & IAM/policy public-API freeze | 9 | 9 breaking | Freeze gate |
-| 5 | Internal correctness: data-access, validation, IAM internals, schema & migrations | 8 | 0 breaking | No |
-| 6 | Plugin integrity, CLI, testing utilities & CI/release gating (verification gate) | 5 | 1 breaking | No (verification gate) |
+| # | Phase | Work items | Breaking surface | Releasable on its own | Status (2026-06-16) |
+|---|-------|-----------|------------------|------------------------|---------------------|
+| 1 | Security hotfix: make any deployment safe | 13 | 8 breaking | Yes — security patch | **Implemented (be1753f)** — 3 verification tests outstanding |
+| 2 | Auth-core & 2FA behavioral-contract freeze | 7 | 5 breaking | Freeze gate | Not started (F7 password **partial**: timeout done, M40/M28 left) |
+| 3 | Framework-adapter & DatabaseAdapter contract freeze | 5 | 5 breaking | Freeze gate | Not started (PluginRequestContext already exists; file re-targets) |
+| 4 | Packaging, observability & IAM/policy public-API freeze | 9 | 9 breaking | Freeze gate | Not started (**export parity is a live npm ship bug**) |
+| 5 | Internal correctness: data-access, validation, IAM internals, schema & migrations | 8 | 0 breaking | No | Not started (**M15 obsolete**, M16 now HIGH, schema item narrowed) |
+| 6 | Plugin integrity, CLI, testing utilities & CI/release gating (verification gate) | 5 | 1 breaking | No (verification gate) | Not started (+2 string-id sweeps) |
 
 ---
 
 ## Phase 1 — Security hotfix: make any deployment safe
+
+> **[2026-06-16 status] IMPLEMENTED by `be1753f`** (+ `8249a2b` HTTP routing, `39f1643`/uncommitted webhook rework). All 13 work items verified present and correct in the current tree. **Outstanding before exit criteria are met:** regression tests for #5/#7 (email_verified=false blocked + isActive guard), #34/#35 (window-expiry reset + cannot-re-lock + M1 normalization), and #46 (second-bootstrap→403). Plus the Microsoft-mapper watch-out below. See the Due-diligence update for details.
 
 **Objective.** Close every remaining account-takeover / auth-bypass vector exploitable on v0.2.8 today and ship as an emergency patch, independent of the freeze timeline. Because the social-login fixes are forced to change handleCallback/ProviderProfile/getAuthorizationUrl, landing them here also pins the Social Login and Hono-OpenAPI public surfaces first.
 
@@ -85,6 +144,8 @@ Six phases on a lock-in spine with a security hotfix bolted to the front. Phase 
 ---
 
 ## Phase 2 — Auth-core & 2FA behavioral-contract freeze
+
+> **[2026-06-16 status] NOT STARTED**, except **F7 (password) is PARTIAL**: `8249a2b` added the HIBP request timeout via `src/core/http/outbound.ts` (6 s, never-throws fail-open). Still to do in F7: `breachedFailureMode: 'open'|'closed'` + `PASSWORD_BREACH_CHECK_DEGRADED` (M40 — 0 grep hits) and the bounded HIBP cache (M28 — still an unbounded `Map`). **F9 (wire regen) must rebase onto `auth-endpoints.ts` as already rewritten by `0b20b53`.** `default password min length 8→15` (M4) is still not applied.
 
 **Objective.** Pin every AuthService / 2FA / JWT / password / event-taxonomy contract the lock-in matrix flags as must-decide-now, so AuthEvent, AfterHookContext, the 2FA verify() return type, and the refresh-rotation behavior can freeze. Downstream plugins/adapters in later phases are then written against final shapes once.
 
@@ -176,6 +237,8 @@ Six phases on a lock-in spine with a security hotfix bolted to the front. Phase 
 
 ## Phase 4 — Packaging, observability & IAM/policy public-API freeze
 
+> **[2026-06-16 status] NOT STARTED.** Export parity (#33) is a **live npm ship bug today**: `package.json` exports = 9 keys vs `jsr.json` = 29 — `./express` (on disk), `./drizzle/pg`, all `./plugins/*` are unreachable for npm consumers (backfill needs matching `tsup.config.ts` entries too). Add `./fetcher` to the parity allowlist. Reframe the IamEvent item — `IamEvent.eventType` is a free-form string, not a closed union (emit the 4 events + `deleteGroup` cascade + audit-log allowlist). The policy item references a non-existent `applyPolicyPlanWithDb`; `applyResourceOps` also does a `node:fs` disk write that breaks in workerd/Deno. Also fold in the webhook-contract freeze (new columns/breaker/idempotency) + the 422/`oneOf` migration note (see overlay).
+
 **Objective.** Finish all remaining gating public-surface changes — the npm export map, root type exports, observability/OTel types + span context, the IamEvent taxonomy, createFortress collision behavior, core logout/permission wire behavior, the policy/CLI public contracts, and host-route dispatch/tenancy shapes — so the entire freezable API has been touched exactly once.
 
 
@@ -229,6 +292,8 @@ Six phases on a lock-in spine with a security hotfix bolted to the front. Phase 
 
 ## Phase 5 — Internal correctness: data-access, validation, IAM internals, schema & migrations
 
+> **[2026-06-16 status] NOT STARTED**, with two scope changes from `2edf217`: **M15 is OBSOLETE** (its target file `json-schema-validator.ts` was deleted; fetcher's `fromJSONSchema` now enforces const/additionalProperties/allOf/min/max/discriminator — re-scope M15 to just `$ref`-body enforcement in `schema-builder.ts`). **M16 is now HIGH, not low**: `validation.ts:52,58` still coerces `''→0`/hex/exponent and that value now hits a stricter downstream validator. M24's cache is in `permission-cache.ts` (not `iam-service.ts`); the schema/normalization item drops `social_account UNIQUE` (already done by be1753f) and keeps email-normalization + TIMESTAMPTZ + hot-column indexes.
+
 **Objective.** Land the high-impact internal-only correctness fixes that change behavior but force no public-surface change, so they can safely follow the freeze: NULL-query data-access bugs, SQLite concurrency, validation/coercion gaps, path canonicalization, IAM evaluator/cache internals, schema/index/normalization drift, and migration-engine hardening.
 
 
@@ -243,9 +308,9 @@ Six phases on a lock-in spine with a security hotfix bolted to the front. Phase 
 - **[M]** Serialize all non-transactional SQLite ops through the same async chain so they don't join/rollback with an open transaction
   - findings: #16
   - files: `src/drizzle/adapter.ts`
-- **[M]** Harden validation: JSON Schema validator honor const/additionalProperties/allOf/$ref/format; fix query/param coercion (no empty-string→0, reject hex/exponent numerics)
-  - findings: M15, M16
-  - files: `src/core/json-schema-validator.ts`, `src/core/validation.ts`
+- **[M]** Harden validation: ~~JSON Schema validator honor const/additionalProperties/allOf/$ref/format~~ (**M15 OBSOLETE** — file deleted by `2edf217`; fetcher's `fromJSONSchema` now enforces all of these except `$ref`. Re-scope to: **pass the OpenAPI components/`$defs` map into `fromJSONSchema` so `ref()` bodies are constrained**, file `src/core/schema-builder.ts`); fix query/param coercion (no empty-string→0, reject hex/exponent numerics) — **M16 still fully live and now HIGH-severity**, file `src/core/validation.ts:48-62`
+  - findings: ~~M15~~ ($ref only), M16
+  - files: `src/core/schema-builder.ts` ($ref enforcement), `src/core/validation.ts` (M16 coercion)
 - **[M]** One shared path canonicalization for route + middleware matching so trailing/double-slash can't bypass rate-limit/audit middleware
   - findings: #12
   - files: `src/core/http/match.ts`, `src/core/http/plugin-middleware.ts`, `src/core/plugin-runner.ts`
@@ -306,10 +371,14 @@ Six phases on a lock-in spine with a security hotfix bolted to the front. Phase 
 
 - #9
 - #15
-- M27
-- M29
+- M27 — _re-credit to `0b20b53` (verifyAccessToken per-claim validation block), NOT `4dc8e20`_
+- M29 — _password NFKC wired via `normalizePasswordInput` in `0b20b53`_
+- **Numeric-id lock-in (2026-06-13 audit)** — resolved by `0b20b53` "subject IDs are strings everywhere"; `TokenClaims.sub`/`FortressUser.id`/all IAM & plugin ids are now `string`, deleting the `String()`/`Number()` round-trip. _Residual: write-path string→int coercion is driver-dependent + undocumented, and the conformance suite only type-checks (not runtime-checks) the new contract — see Phase 3 / Phase 6 watch-outs._
+- **All of Phase 1** (pending the 3 verification tests) — see the Phase 1 status banner.
 
-> Verified against current code: login timing-oracle (#9/#15) now runs a real Argon2id verify (commit `4dc8e20`); `verifyAccessToken` rejects missing claims (M27); password NFKC normalization is applied (M29); `jwt.secret`→`jwt.key` rename landed (`18a3289`). **Note:** the admin bootstrap self-grant (#46) is only *partially* fixed — re-bootstrap is gated but the first authenticated caller can still self-grant; it stays in Phase 1.
+> Verified against current code: login timing-oracle (#9/#15) now runs a real Argon2id verify (commit `4dc8e20`); `verifyAccessToken` rejects missing claims (M27, landed in `0b20b53`); password NFKC normalization is applied (M29, `0b20b53`); `jwt.secret`→`jwt.key` rename landed (`18a3289`).
+>
+> **#46 update (2026-06-16):** the admin bootstrap self-grant is now **fully gated** by `be1753f` — bootstrap is opt-in (not mounted by default), requires a one-time secret (constant-time compared) **and** zero existing fortress-admin bindings (`admin/index.ts:996-1003`), so the first authenticated caller can no longer self-grant. The old "only partially fixed" caveat is **resolved**, pending one regression test asserting a second bootstrap returns 403. A non-transactional count-gate→insert window remains (low sev: both racers hold the one-time secret).
 
 
 ## Product decisions
@@ -339,6 +408,10 @@ Six phases on a lock-in spine with a security hotfix bolted to the front. Phase 
 ### Still open
 
 - rawQuery placeholder contract (M17/M36): pick the canonical placeholder style ('?' positional, matching core today, vs. '$1') and enforce it via conformance tests — third-party adapters depend on this. _(Phase 3.)_
+- **Microsoft `emailVerified` default (NEW 2026-06-16):** `providers/microsoft.ts:19` treats an absent `email_verified` claim as `true`, so every Microsoft login satisfies the #5/#7 verified-email auto-link gate. **Decide:** fail-closed like the other 6 providers, or accept + document it as a known per-provider trust assumption in SECURITY.md. _(Phase 1 follow-up.)_
+- **`@bajustone/fetcher` version pin (NEW):** it is depended on as `^1.0.0` and is now the sole source of ReDoS-safe/format-correct patterns + the 422/`oneOf` validation semantics. Decide whether to pin an exact version (and/or snapshot the lifted patterns) before the validation surface is frozen, and whether the re-exported `./fetcher` API is in-scope for the freeze. _(Phase 4/5.)_
+- **422 issue-path + `oneOf` migration window (NEW):** both already shipped as breaking runtime changes (`2edf217`). Decide the documented migration note before Phase 4 freezes the error envelope. _(Phase 4.)_
+- **Webhook circuit-breaker/idempotency contract (NEW):** the 5 new columns + breaker + idempotency dedup shipped undocumented. Decide the frozen column/enum names + defaults and document them. _(Phase 4/6.)_
 
 ## Cross-cutting risks
 
@@ -350,3 +423,6 @@ Six phases on a lock-in spine with a security hotfix bolted to the front. Phase 
 - Strengthening runAdapterTests (Phase 6, #49) retroactively fails previously-'conformant' third-party adapters; if any are already in the wild this is a coordination cost. Lower risk pre-1.0 but worth flagging.
 - Phases 2-4 each touch auth-service.ts / fortress.ts / iam-service.ts from multiple workstreams; the parallel workstreams within a phase must coordinate ownership of these shared files or serialize against each other to avoid merge churn.
 - The audit HTML report referenced in the task was removed mid-session; the roadmap relies on /tmp/findings-curated.md and findings.json as the canonical source. If any finding text was lost, the curated list is authoritative.
+- **(NEW 2026-06-16) The PG-schema-sync gotcha is now 7 locations, not 5:** the two drizzle schemas, both `migrations.ts` blocks (sqlite + pg), both `migrations/{pg,sqlite}` SQL files, **and** the inline DDL in `src/drizzle/pg/pg.integration-test.ts` **plus** `src/drizzle/pg/adapter.integration-test.ts`. Any Phase 2 (`auth_continuation` + refresh v3) or Phase 5 (TIMESTAMPTZ, indexes, migration-journal table) schema change must hit all 7. The uncommitted webhook columns already exercised this.
+- **(NEW) Out-of-plan work shipped three ungated breaking runtime changes** the freeze must reconcile: the 422 issue-path shape, `oneOf`→union semantics (`2edf217`), and the webhook re-architecture/column contract (uncommitted). They are breaking under the no-compat 0.x policy but were not part of any phase; the Phase 4 freeze checklist must explicitly absorb them so a consumer-visible shape isn't locked without a migration note.
+- **(NEW) `0b20b53` rewrote files three later phases plan to touch** (`auth-endpoints.ts` → Phase 2 F9, `dispatch.ts` → Phase 4 #11, `drizzle/adapter.ts` → Phase 3 contract). Those phase items must rebase onto the new code, not the pre-`0b20b53` context the plan was written against, or the diffs will be stale.
