@@ -45,6 +45,18 @@ describe('microsoft provider', () => {
 
     expect(profile.email).toBe('bob@contoso.com');
   });
+
+  it('fails closed on an absent email_verified claim (no by-email auto-link takeover)', () => {
+    // Graph /me and most Entra id_tokens omit email_verified — must NOT be
+    // treated as verified (would enable a by-email account takeover).
+    const profile = provider.mapProfile({ id: 'ms-1', mail: 'eve@contoso.com', displayName: 'Eve' });
+    expect(profile.emailVerified).toBe(false);
+  });
+
+  it('honours an explicit email_verified claim when present', () => {
+    expect(provider.mapProfile({ id: 'ms-2', mail: 'x@contoso.com', email_verified: true }).emailVerified).toBe(true);
+    expect(provider.mapProfile({ id: 'ms-3', mail: 'y@contoso.com', email_verified: false }).emailVerified).toBe(false);
+  });
 });
 
 describe('google provider', () => {

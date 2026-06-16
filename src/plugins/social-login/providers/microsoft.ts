@@ -16,7 +16,13 @@ export function createMicrosoftProvider(options?: { tenant?: string }): Provider
       return {
         id: String(raw.id ?? raw.sub ?? ''),
         email: String(raw.mail ?? raw.userPrincipalName ?? raw.email ?? ''),
-        emailVerified: raw.email_verified === undefined ? true : raw.email_verified === true || raw.email_verified === 'true',
+        // Fail closed on an absent `email_verified` claim. Microsoft Graph `/me`
+        // and many Entra id_tokens omit it; treating "absent" as verified would
+        // let a Microsoft login auto-link by email to an existing account
+        // (takeover). Match the other providers — absent ⇒ unverified ⇒ no
+        // by-email auto-link. Tenants that trust their directory can opt back in
+        // with a custom `mapProfile`.
+        emailVerified: raw.email_verified === true || raw.email_verified === 'true',
         name: raw.givenName && raw.surname
           ? `${raw.givenName} ${raw.surname}`
           : String(raw.name ?? raw.displayName ?? ''),

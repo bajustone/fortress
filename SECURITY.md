@@ -184,7 +184,7 @@ requires zero-friction multi-tab opens, consider:
 
 ## Social login hardening
 
-Social-login callbacks verify OAuth `state` with a timing-safe comparison and keep it separate from the OIDC `nonce`. OIDC providers must return an `id_token`; Fortress verifies its JWS signature through the provider JWKS and validates issuer, audience, expiry, and nonce before account linking or provisioning. By-email account linking requires `emailVerified === true` and an active local user. Stored provider access and refresh tokens are encrypted at rest with AES-256-GCM using `socialLogin({ tokenEncryptionKey })`; token persistence fails closed without a key.
+Social-login callbacks verify OAuth `state` with a timing-safe comparison and keep it separate from the OIDC `nonce`. OIDC providers must return an `id_token`; Fortress verifies its JWS signature through the provider JWKS and validates issuer, audience, expiry, and nonce before account linking or provisioning. By-email account linking requires `emailVerified === true` and an active local user; provider profile mappers fail closed on an absent `email_verified` claim (including Microsoft/Entra, whose Graph `/me` and id_tokens commonly omit it), so a missing claim never satisfies the auto-link gate. Stored provider access and refresh tokens are encrypted at rest with AES-256-GCM using `socialLogin({ tokenEncryptionKey })`; token persistence fails closed without a key.
 
 ## Admin bootstrap hardening
 

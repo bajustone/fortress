@@ -317,6 +317,40 @@ describe('social-login plugin', () => {
         m.handleCallback('oidc-x', 'code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce'),
       ).rejects.toThrow('User account not found or disabled');
     });
+
+    it('fails closed when OIDC discovery degrades and the provider has no static jwksUri', async () => {
+      const issuer = 'https://issuer-degraded.example.com';
+      const { privateKey } = await generateKeyPair('RS256');
+      const idToken = await new SignJWT({ sub: 'x', email: 'x@example.com', email_verified: true, nonce: 'nonce' })
+        .setProtectedHeader({ alg: 'RS256', kid: 'k' })
+        .setIssuer(issuer)
+        .setAudience('oidc-client')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(privateKey);
+
+      // Discovery returns non-2xx → the plugin degrades to the static definition,
+      // which for a discovery-only OIDC provider carries NO jwksUri. id_token
+      // verification must then THROW (fail closed), never skip verification.
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const href = input instanceof Request ? input.url : String(input);
+        if (href === `${issuer}/.well-known/openid-configuration`)
+          return Response.json({ error: 'discovery down' }, { status: 503 });
+        if (href === `${issuer}/token`)
+          return Response.json({ access_token: 'provider-access-token', id_token: idToken });
+        throw new Error(`unexpected fetch ${href}`);
+      }));
+
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-degraded', clientId: 'oidc-client', clientSecret: 'secret', issuer }],
+        tokenEncryptionKey,
+      });
+      const m = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      await expect(
+        m.handleCallback('oidc-degraded', 'code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce'),
+      ).rejects.toThrow(/JWKS URI|ID token/);
+    });
   });
 
   describe('unlinkAccount', () => {
