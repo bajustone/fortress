@@ -49,7 +49,7 @@ import { honoRateLimit } from '../../src/plugins/rate-limit/hono';
 import { socialLogin } from '../../src/plugins/social-login';
 import { tenancy } from '../../src/plugins/tenancy';
 import { twoFactor } from '../../src/plugins/two-factor';
-import { webhook } from '../../src/plugins/webhook';
+import { builtinEvents, webhook } from '../../src/plugins/webhook';
 import { createTestAdapter } from '../../src/testing';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -188,9 +188,15 @@ const fortress = createFortress({
     // ── Observability plugins (log last) ──
     auditLog({ hashChain: true }),
     webhook({
-      deliver: async (url, payload, headers) => {
-        console.warn(`[webhook] → ${url}`, JSON.parse(payload), headers);
-        return true;
+      // Declare a custom event alongside the built-in auth events.
+      events: [...builtinEvents(), { name: 'order.shipped', schema: obj({ orderId: str() }, 'orderId') }],
+      delivery: {
+        // Demo transport: log instead of making a real outbound request. Omit
+        // `fetch` in production to use the SSRF-safe (IP-pinning) default.
+        fetch: async (req) => {
+          console.warn(`[webhook] → ${req.url}`, await req.text());
+          return new Response(null, { status: 200 });
+        },
       },
     }),
 
@@ -826,10 +832,11 @@ app.post('/admin/lockout/:identifier/reset', async (c) => {
 
 // curl -X POST http://localhost:3000/api/webhooks -H 'Authorization: Bearer <token>' \
 //   -H 'Content-Type: application/json' -H 'X-Fortress-CSRF: 1' \
-//   -d '{"url":"https://example.com/hook","events":["LOGIN_SUCCESS","REGISTER"],"secret":"wh-secret"}'
+//   -d '{"url":"https://example.com/hook","events":["auth.login.success","order.shipped"]}'
+// A signing secret is generated and returned ONCE on the response — store it now.
 app.post('/api/webhooks', async (c) => {
   const { url, events, secret } = await c.req.json();
-  const endpoint = await fortress.plugins.webhook.registerEndpoint(url, events, secret);
+  const endpoint = await fortress.plugins.webhook.registerEndpoint(url, events, secret ? { secret } : undefined);
   return c.json({ data: endpoint }, 201);
 });
 
@@ -841,9 +848,18 @@ app.get('/api/webhooks', async (c) => {
 
 // curl -X DELETE http://localhost:3000/api/webhooks/1 -H 'Authorization: Bearer <token>'
 app.delete('/api/webhooks/:id', async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = c.req.param('id');
   await fortress.plugins.webhook.removeEndpoint(id);
   return c.json({ data: { removed: true } });
+});
+
+// Emit a custom event — delivered to every endpoint subscribed to 'order.shipped'.
+// curl -X POST http://localhost:3000/api/events/order-shipped -H 'Authorization: Bearer <token>' \
+//   -H 'Content-Type: application/json' -H 'X-Fortress-CSRF: 1' -d '{"orderId":"o_123"}'
+app.post('/api/events/order-shipped', async (c) => {
+  const { orderId } = await c.req.json();
+  await fortress.plugins.webhook.emit('order.shipped', { orderId }, { idempotencyKey: orderId });
+  return c.json({ data: { emitted: true } });
 });
 
 // ── Data Isolation (demonstrates getScopedDb) ──

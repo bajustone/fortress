@@ -2067,47 +2067,46 @@ When `hashChain` is enabled, each log entry stores a SHA-256 hash of the previou
 
 ### Webhook
 
-Delivers webhook events using the [Standard Webhooks](https://www.standardwebhooks.com) spec with HMAC-SHA256 signing and exponential retry backoff.
+Delivers events to consumer endpoints using the [Standard Webhooks](https://www.standardwebhooks.com) spec — HMAC-SHA256 signing, **custom events**, **Bring-Your-Own-Queue**, SSRF-safe delivery with connect-time IP pinning, failure classification, a circuit breaker, and DLQ hooks. See [docs/plugins/webhook.md](docs/plugins/webhook.md) for the full reference.
 
 ```typescript
-import { webhook } from '@bajustone/fortress/plugins/webhook';
+import { builtinEvents, databaseQueue, webhook } from '@bajustone/fortress/plugins/webhook';
+import { obj, str } from '@bajustone/fortress';
 
 webhook({
-  events: [                         // default: all events
-    'LOGIN_SUCCESS',
-    'REGISTER',
+  events: [
+    ...builtinEvents(),                          // auth.login.success, auth.user.registered, …
+    { name: 'order.paid', schema: obj({ orderId: str() }, 'orderId') }, // declare your own
   ],
-  maxRetries: 5,                    // default: 5
-  deliver: async (url, payload, headers) => {
-    // Optional: custom delivery function (default uses fetch)
-    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
-    return res.ok;
+  queue: databaseQueue({ pollMs: 10_000 }),      // default: dev-only inMemoryQueue()
+  maxPayloadBytes: 256 * 1024,
+  delivery: {
+    timeoutMs: 10_000,
+    maxConsecutiveFailures: 15,                  // circuit breaker
+    onDeliveryFailed: d => deadLetter.push(d),   // DLQ seam
   },
 })
 ```
 
-Event types: `LOGIN_SUCCESS`, `LOGIN_FAILURE`, `LOGOUT`, `REGISTER`, `TOKEN_REFRESH`.
-
-Retry intervals: 5s, 5min, 30min, 2h, 5h.
+Built-in events (dispatched automatically): `auth.login.success`, `auth.login.failure`, `auth.logout`, `auth.user.registered`, `auth.token.refreshed`. Retry ladder (jittered): 5s, 5min, 30min, 2h, 5h.
 
 **Methods:**
 
 ```typescript
-// Register a webhook endpoint
-await fortress.plugins['webhook'].registerEndpoint(
-  'https://myapp.com/webhooks',
-  ['LOGIN_SUCCESS', 'REGISTER'],
-  'whsec_my-webhook-secret',
-);
+const wh = fortress.plugins.webhook;
 
-// List registered endpoints
-const endpoints = await fortress.plugins['webhook'].listEndpoints();
+// Register an endpoint — a CSPRNG secret is generated when omitted and returned ONCE.
+const endpoint = await wh.registerEndpoint('https://myapp.com/webhooks', ['auth.login.success', 'order.paid']);
+console.log(endpoint.secret); // whsec_… — store it now
 
-// Remove an endpoint
-await fortress.plugins['webhook'].removeEndpoint(endpointId);
+// Emit a custom event (validated against its schema + the payload cap)
+await wh.emit('order.paid', { orderId: 'o_123' }, { idempotencyKey: 'o_123' });
 
-// Process pending retries (call periodically via cron)
-await fortress.plugins['webhook'].processRetries();
+await wh.updateEndpoint(endpoint.id, { isActive: false });
+await wh.rotateSecret(endpoint.id);              // returns a fresh secret once
+const endpoints = await wh.listEndpoints();      // secret REDACTED
+await wh.removeEndpoint(endpoint.id);
+await wh.stop();                                 // tear down the queue worker on shutdown
 ```
 
 Webhook payloads include Standard Webhooks headers:
