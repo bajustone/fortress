@@ -2,6 +2,7 @@ import type { Fortress } from '../../core/fortress';
 import type { AuditLogEntry, AuditLogMethods, AuditLogQueryOptions, ChainVerificationResult } from './index';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
+import { assertSuccess } from '../../core/types';
 import { createTestAdapter } from '../../testing';
 import { auditLog } from './index';
 
@@ -93,6 +94,7 @@ describe('audit-log plugin', () => {
       });
 
       const loginResult = await fortress.auth.login('dave@example.com', 'password-123456');
+      assertSuccess(loginResult);
       await fortress.auth.logout(loginResult.refreshToken as string);
 
       const entries = await getAuditLog();
@@ -113,6 +115,7 @@ describe('audit-log plugin', () => {
       });
 
       const loginResult = await fortress.auth.login('eve@example.com', 'password-123456');
+      assertSuccess(loginResult);
       await fortress.auth.refresh(loginResult.refreshToken as string);
 
       const entries = await getAuditLog();

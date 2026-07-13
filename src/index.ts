@@ -30,7 +30,14 @@ export type { DatabaseAdapter } from './adapters/database';
 /** Where-clause primitives used by adapters and `scopeRules` to express filters. */
 export type { CoreOperator, ScopeRule, WhereClause } from './adapters/database/types';
 
-/** Pre-built endpoint definitions and component schemas for the core auth routes. */
+/** Pre-built endpoint definitions, schemas, and stable JSON wire types for core auth routes. */
+export type {
+  AuthChallengeWire,
+  AuthImpersonationWire,
+  AuthPendingWire,
+  AuthResultWire,
+  AuthSuccessWire,
+} from './core/auth/auth-endpoints';
 export { authComponentSchemas, authEndpoints } from './core/auth/auth-endpoints';
 
 /** Auth lifecycle event + listener types, emitted via `fortress.auth.addAuthObserver`. */

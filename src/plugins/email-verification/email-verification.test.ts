@@ -129,6 +129,8 @@ describe('email-verification plugin', () => {
 
       // Login should succeed
       const result = await fortress.auth.login('eve@example.com', 'password-123456');
+      if (result.status !== 'success')
+        throw new Error('Expected successful login');
       expect(result.accessToken).toBeTruthy();
       expect(result.user.email).toBe('eve@example.com');
     });
@@ -166,6 +168,8 @@ describe('email-verification plugin', () => {
       });
 
       const result = await noRequireFortress.auth.login('grace@example.com', 'password-123456');
+      if (result.status !== 'success')
+        throw new Error('Expected successful login');
       expect(result.accessToken).toBeTruthy();
     });
   });

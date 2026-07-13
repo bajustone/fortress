@@ -28,6 +28,11 @@ function factorPlugin(
         },
       },
     },
+    methods: ctx => ({
+      async verify(continuationToken: string, completion: string) {
+        return ctx.auth!.completePendingAuth(continuationToken, completion);
+      },
+    }),
   };
 }
 
@@ -66,8 +71,6 @@ describe('post-auth gate', () => {
     const pending = await fortress.auth.login('gated@example.com', 'password-123456');
     expect(pending).toMatchObject({
       status: 'pending',
-      accessToken: null,
-      refreshToken: null,
       pending: { reason: 'two-factor' },
       pluginData: { factor: 'two-factor' },
     });
@@ -103,6 +106,8 @@ describe('post-auth gate', () => {
       method: 'two-factor',
       user: { email: 'gated@example.com' },
     });
+    if (completed.status !== 'success')
+      throw new Error('Expected completed authentication');
     expect(completed.accessToken).toBeTruthy();
     expect(completed.refreshToken).toBeTruthy();
     expect('passwordHash' in completed.user).toBe(false);
@@ -143,6 +148,47 @@ describe('post-auth gate', () => {
     const completed = await fortress.auth.completePendingAuth(second.pending.continuationToken, 'passkey-ok');
     expect(completed.status).toBe('success');
     expect(await database.count({ model: 'refresh_token' })).toBe(1);
+  });
+
+  it('exposes pending and completion through the frozen HTTP wire without premature token fields', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [factorPlugin('two-factor', 'two-factor', '123456')],
+    });
+    await seedUser(fortress);
+
+    const loginResponse = await fortress.handleRequest(new Request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ identifier: 'gated@example.com', password: 'password-123456' }),
+    }));
+    const pending = await loginResponse.json() as {
+      pending: { continuationToken: string; reason: string };
+      [key: string]: unknown;
+    };
+    expect(pending).toMatchObject({
+      status: 'pending',
+      pending: { reason: 'two-factor' },
+    });
+    expect(pending).not.toHaveProperty('accessToken');
+    expect(pending).not.toHaveProperty('refreshToken');
+    expect(loginResponse.headers.getSetCookie()).toHaveLength(0);
+
+    const completedResponse = await fortress.handleRequest(new Request('http://localhost/auth/2fa/verify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        continuationToken: pending.pending.continuationToken,
+        code: '123456',
+      }),
+    }));
+    expect(completedResponse.status).toBe(200);
+    const completed = await completedResponse.json() as Record<string, unknown>;
+    expect(completed).toMatchObject({ status: 'success', method: 'two-factor' });
+    expect(completed.accessToken).toEqual(expect.any(String));
+    expect(completed.refreshToken).toEqual(expect.any(String));
+    expect(completedResponse.headers.getSetCookie().length).toBeGreaterThan(0);
   });
 
   it('allows only one concurrent completion to issue a session', async () => {

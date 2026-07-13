@@ -83,7 +83,7 @@ describe('spec-builder', () => {
     });
 
     expect(spec.components.schemas.User).toBeDefined();
-    expect(spec.components.schemas.AuthResponse).toBeDefined();
+    expect(spec.components.schemas.AuthResult).toBeDefined();
     expect(spec.components.schemas.ErrorResponse).toBeDefined();
     expect(spec.components.schemas.SessionInfo).toBeDefined();
   });

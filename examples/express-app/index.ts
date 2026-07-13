@@ -333,7 +333,7 @@ app.post('/magic-link/send', async (req, res, next) => {
 app.post('/magic-link/verify', async (req, res, next) => {
   try {
     const { token } = (req as any).body;
-    const result = await fortress.plugins['magic-link'].verifyMagicLink(token);
+    const result = await fortress.plugins['magic-link'].verify(token);
     res.json({ data: result });
   }
   catch (e) { next(e); }
@@ -352,7 +352,9 @@ app.get('/social/providers', (_req, res) => {
 
 app.use('/auth/me', authMiddleware);
 app.use('/auth/sessions', authMiddleware);
-app.use('/auth/2fa', authMiddleware);
+app.use('/auth/2fa/enable', authMiddleware);
+app.use('/auth/2fa/confirm-setup', authMiddleware);
+app.use('/auth/2fa/disable', authMiddleware);
 app.use('/auth/api-keys', authMiddleware);
 
 app.get('/auth/me', async (req, res, next) => {
@@ -397,11 +399,23 @@ app.post('/auth/2fa/enable', async (req, res, next) => {
   catch (e) { next(e); }
 });
 
-app.post('/auth/2fa/verify', async (req, res, next) => {
+app.post('/auth/2fa/confirm-setup', async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { code } = (req as any).body;
-    const result = await fortress.plugins['two-factor'].verify(userId, code, {
+    const result = await fortress.plugins['two-factor'].confirmSetup(userId, code, {
+      userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined,
+    });
+    res.json({ data: result });
+  }
+  catch (e) { next(e); }
+});
+
+// Pending-login completion is public: the single-use continuation is the credential.
+app.post('/auth/2fa/verify', async (req, res, next) => {
+  try {
+    const { continuationToken, code } = (req as any).body;
+    const result = await fortress.plugins['two-factor'].verify(continuationToken, code, {
       userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined,
     });
     res.json({ data: result });

@@ -1,3 +1,4 @@
+import { beforeEach, describe, expect, it } from 'vitest';
 /**
  * Pipeline CSRF check (H5) regression tests.
  *
@@ -10,9 +11,9 @@
  * - Opt-out via `csrf: { enabled: false }` disables the check.
  */
 
-import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
+import { assertSuccess } from '../types';
 
 interface LoginResult { accessToken: string; refreshToken: string }
 
@@ -25,6 +26,7 @@ async function setup(csrf?: { enabled?: boolean }): Promise<{ fortress: Awaited<
   });
   await fortress.auth.createUser({ email: 'csrf@test.com', name: 'C', password: 'pass-test-12345' });
   const login = await fortress.auth.login('csrf@test.com', 'pass-test-12345');
+  assertSuccess(login);
   return { fortress, login: { accessToken: login.accessToken!, refreshToken: login.refreshToken! } };
 }
 

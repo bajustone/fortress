@@ -60,6 +60,24 @@ describe('magic-link plugin', () => {
       expect(result.status === 'success' ? result.accessToken : null).toBeTruthy();
     });
 
+    it('verifies through the core HTTP endpoint and attaches auth cookies', async () => {
+      const send = fortress.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;
+      await send('bob@example.com');
+
+      const response = await fortress.handleRequest(new Request('http://localhost/auth/magic-link/verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: capturedToken }),
+      }));
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        status: 'success',
+        method: 'magic-link',
+        user: { email: 'bob@example.com' },
+      });
+      expect(response.headers.getSetCookie().length).toBeGreaterThan(0);
+    });
+
     it('runs configured post-auth gates before issuing tokens', async () => {
       const database = createTestAdapter();
       const gated = createFortress({

@@ -317,9 +317,10 @@ describe('rate-limit plugin', () => {
         password: 'valid-password-123456',
       });
       const meta = { ipAddress: '9.9.9.9' };
-      const { refreshToken } = await fortress.auth.login('r@example.com', 'valid-password-123456', meta);
-      if (!refreshToken)
-        throw new Error('expected refreshToken');
+      const login = await fortress.auth.login('r@example.com', 'valid-password-123456', meta);
+      if (login.status !== 'success')
+        throw new Error('expected successful login');
+      const { refreshToken } = login;
 
       // Two refreshes within limit
       let current = refreshToken;

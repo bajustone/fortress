@@ -399,7 +399,7 @@ app.post('/magic-link/send', async (c) => {
 //   -d '{"token":"<token-from-console>"}'
 app.post('/magic-link/verify', async (c) => {
   const { token } = await c.req.json();
-  const result = await fortress.plugins['magic-link'].verifyMagicLink(token);
+  const result = await fortress.plugins['magic-link'].verify(token);
   return c.json({ data: result });
 });
 
@@ -437,7 +437,9 @@ app.get('/social/authorize/:provider', async (c) => {
 app.use('/auth/me', authMiddleware);
 app.use('/auth/sessions/*', authMiddleware);
 app.use('/auth/sessions', authMiddleware);
-app.use('/auth/2fa/*', authMiddleware);
+app.use('/auth/2fa/enable', authMiddleware);
+app.use('/auth/2fa/confirm-setup', authMiddleware);
+app.use('/auth/2fa/disable', authMiddleware);
 app.use('/auth/email/*', authMiddleware);
 app.use('/auth/api-keys/*', authMiddleware);
 app.use('/auth/api-keys', authMiddleware);
@@ -486,12 +488,24 @@ app.post('/auth/2fa/enable', async (c) => {
   return c.json({ data: { otpauthUrl: result.otpauthUrl, backupCodes: result.backupCodes } });
 });
 
-// curl -X POST http://localhost:3000/auth/2fa/verify -H 'Authorization: Bearer <token>' \
+// curl -X POST http://localhost:3000/auth/2fa/confirm-setup -H 'Authorization: Bearer <token>' \
 //   -H 'Content-Type: application/json' -d '{"code":"123456"}'
-app.post('/auth/2fa/verify', async (c) => {
+app.post('/auth/2fa/confirm-setup', async (c) => {
   const userId = getUserId(c);
   const { code } = await c.req.json();
-  const result = await fortress.plugins['two-factor'].verify(userId, code, {
+  const result = await fortress.plugins['two-factor'].confirmSetup(userId, code, {
+    userAgent: c.req.header('user-agent'),
+  });
+  return c.json({ data: result });
+});
+
+// Pending-login completion is public: the single-use continuation is the credential.
+// curl -X POST http://localhost:3000/auth/2fa/verify \
+//   -H 'Content-Type: application/json' \
+//   -d '{"continuationToken":"<from-pending-login>","code":"123456"}'
+app.post('/auth/2fa/verify', async (c) => {
+  const { continuationToken, code } = await c.req.json();
+  const result = await fortress.plugins['two-factor'].verify(continuationToken, code, {
     userAgent: c.req.header('user-agent'),
   });
   return c.json({ data: result });

@@ -1,5 +1,6 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressSchema } from '../json-schema';
+import type { AuthMethod, PendingReason } from '../types';
 import { arr, bool, defineComponents, email, endpoint, enums, id, int, nullable, nullType, obj, oneOf, record, str, strFormat } from '../schema-builder';
 
 // Sentinel for "no body / query / params" that matches EndpointDefinition's
@@ -25,26 +26,32 @@ export interface UserWire {
   updatedAt: string;
 }
 
+/** Wire shape of a pending post-auth challenge. */
+export interface AuthChallengeWire {
+  reason: PendingReason;
+  continuationToken: string;
+}
+
 /** Wire shape of a successful sign-in. */
-export interface AuthResponseSuccessWire {
+export interface AuthSuccessWire {
   status: 'success';
   user: UserWire;
+  method: AuthMethod;
   accessToken: string;
   refreshToken: string;
   pluginData?: Record<string, unknown>;
 }
 
 /** Wire shape of a pending sign-in (2FA, email verification, etc.). */
-export interface AuthResponsePendingWire {
+export interface AuthPendingWire {
   status: 'pending';
   user: UserWire;
-  accessToken: null;
-  refreshToken: null;
+  pending: AuthChallengeWire;
   pluginData?: Record<string, unknown>;
 }
 
 /** Wire shape of an impersonation sign-in (no refresh token). */
-export interface AuthResponseImpersonationWire {
+export interface AuthImpersonationWire {
   status: 'impersonation';
   user: UserWire;
   accessToken: string;
@@ -53,10 +60,10 @@ export interface AuthResponseImpersonationWire {
 }
 
 /** Discriminated union of every auth-flow wire outcome. */
-export type AuthResponseWire
-  = | AuthResponseSuccessWire
-    | AuthResponsePendingWire
-    | AuthResponseImpersonationWire;
+export type AuthResultWire
+  = | AuthSuccessWire
+    | AuthPendingWire
+    | AuthImpersonationWire;
 
 /** Wire shape of a refreshed access/refresh token pair. */
 export interface AuthTokenPairWire {
@@ -122,17 +129,28 @@ const User: FortressSchema<UserWire> = obj(
   'updatedAt',
 ) as FortressSchema<UserWire>;
 
-const AuthResponse: FortressSchema<AuthResponseWire> = oneOf(
+const AuthChallenge: FortressSchema<AuthChallengeWire> = obj(
+  {
+    reason: enums('two-factor', 'webauthn', 'email-verification', 'magic-link'),
+    continuationToken: str('Single-use post-auth continuation token'),
+  },
+  'reason',
+  'continuationToken',
+) as FortressSchema<AuthChallengeWire>;
+
+const AuthResult: FortressSchema<AuthResultWire> = oneOf(
   obj(
     {
       status: enums('success'),
       user: User,
+      method: enums('password', 'refresh', 'two-factor', 'webauthn', 'magic-link', 'impersonation'),
       accessToken: str('JWT access token'),
       refreshToken: str('Refresh token for rotation'),
       pluginData: record(),
     },
     'status',
     'user',
+    'method',
     'accessToken',
     'refreshToken',
   ),
@@ -140,14 +158,12 @@ const AuthResponse: FortressSchema<AuthResponseWire> = oneOf(
     {
       status: enums('pending'),
       user: User,
-      accessToken: nullType(),
-      refreshToken: nullType(),
+      pending: AuthChallenge,
       pluginData: record(),
     },
     'status',
     'user',
-    'accessToken',
-    'refreshToken',
+    'pending',
   ),
   obj(
     {
@@ -162,7 +178,7 @@ const AuthResponse: FortressSchema<AuthResponseWire> = oneOf(
     'accessToken',
     'refreshToken',
   ),
-) as FortressSchema<AuthResponseWire>;
+) as FortressSchema<AuthResultWire>;
 
 const AuthTokenPair: FortressSchema<AuthTokenPairWire> = obj(
   {
@@ -225,7 +241,8 @@ const LoginIdentifier: FortressSchema<LoginIdentifierWire> = obj(
 interface AuthComponents {
   readonly components: {
     readonly User: FortressSchema<UserWire>;
-    readonly AuthResponse: FortressSchema<AuthResponseWire>;
+    readonly AuthChallenge: FortressSchema<AuthChallengeWire>;
+    readonly AuthResult: FortressSchema<AuthResultWire>;
     readonly AuthTokenPair: FortressSchema<AuthTokenPairWire>;
     readonly SessionInfo: FortressSchema<SessionInfoWire>;
     readonly CreateUserInput: FortressSchema<CreateUserInputWire>;
@@ -239,7 +256,8 @@ interface AuthComponents {
 
 const authComponents: AuthComponents = defineComponents({
   User,
-  AuthResponse,
+  AuthChallenge,
+  AuthResult,
   AuthTokenPair,
   SessionInfo,
   CreateUserInput,
@@ -266,7 +284,19 @@ export interface AuthEndpointsMap {
     { identifier: string; password: string },
     EmptyInput,
     EmptyInput,
-    { 200: AuthResponseWire; 401: ErrorResponseWire }
+    { 200: AuthResultWire; 401: ErrorResponseWire }
+  >;
+  verifyTwoFactor: EndpointDefinition<
+    { continuationToken: string; code: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: AuthResultWire; 400: ErrorResponseWire; 401: ErrorResponseWire }
+  >;
+  verifyMagicLink: EndpointDefinition<
+    { token: string },
+    EmptyInput,
+    EmptyInput,
+    { 200: AuthResultWire; 400: ErrorResponseWire; 404: ErrorResponseWire }
   >;
   createUser: EndpointDefinition<
     CreateUserInputWire,
@@ -332,7 +362,7 @@ export interface AuthEndpointsMap {
     { targetUserId: string; reason?: string; expirySeconds?: number },
     EmptyInput,
     EmptyInput,
-    { 200: AuthResponseWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
+    { 200: AuthResultWire; 401: ErrorResponseWire; 404: ErrorResponseWire }
   >;
 }
 
@@ -356,10 +386,39 @@ export const authEndpoints: AuthEndpointsMap = {
       'identifier',
       'password',
     ))
-    .response(200, 'Login successful', authRef('AuthResponse'))
+    .response(200, 'Login successful', authRef('AuthResult'))
     .response(401, 'Invalid credentials', authRef('ErrorResponse'))
     .handler('login')
     .build() as AuthEndpointsMap['login'],
+
+  verifyTwoFactor: endpoint('POST', '/auth/2fa/verify')
+    .summary('Complete a pending two-factor challenge')
+    .tags('Auth', 'Two-Factor')
+    .security('none')
+    .body(obj(
+      {
+        continuationToken: str('Single-use auth continuation token'),
+        code: str('TOTP or backup code'),
+      },
+      'continuationToken',
+      'code',
+    ))
+    .response(200, 'Authentication result', authRef('AuthResult'))
+    .response(400, 'Two-factor plugin unavailable', authRef('ErrorResponse'))
+    .response(401, 'Invalid continuation or verification code', authRef('ErrorResponse'))
+    .handler('verifyTwoFactor')
+    .build() as AuthEndpointsMap['verifyTwoFactor'],
+
+  verifyMagicLink: endpoint('POST', '/auth/magic-link/verify')
+    .summary('Verify a magic-link token')
+    .tags('Auth', 'Magic Link')
+    .security('none')
+    .body(obj({ token: str('Raw magic-link token') }, 'token'))
+    .response(200, 'Authentication result', authRef('AuthResult'))
+    .response(400, 'Magic-link plugin unavailable', authRef('ErrorResponse'))
+    .response(404, 'Invalid or expired magic link', authRef('ErrorResponse'))
+    .handler('verifyMagicLink')
+    .build() as AuthEndpointsMap['verifyMagicLink'],
 
   createUser: endpoint('POST', '/auth/register')
     .summary('Create a new user')
@@ -486,7 +545,7 @@ export const authEndpoints: AuthEndpointsMap = {
       },
       'targetUserId',
     ))
-    .response(200, 'Impersonation token issued', authRef('AuthResponse'))
+    .response(200, 'Impersonation token issued', authRef('AuthResult'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .response(404, 'Target user not found', authRef('ErrorResponse'))
     .handler('impersonate')

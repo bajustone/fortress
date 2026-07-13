@@ -293,6 +293,36 @@ describe('fortressActions.login', () => {
     expect(event.cookies._store.get(fortress.cookies.refreshName)).toBeTruthy();
   });
 
+  it('returns the typed pending challenge without setting cookies', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [{
+        name: 'factor',
+        hooks: {
+          postAuthGate: {
+            reason: 'two-factor',
+            evaluate: async () => ({}),
+            verify: async () => {},
+          },
+        },
+      }],
+    });
+    await fortress.auth.createUser({ email: 'pending@b.co', name: 'Pending', password: 'password1234567' });
+    const action = fortressActions.login(fortress);
+    const form = new FormData();
+    form.set('identifier', 'pending@b.co');
+    form.set('password', 'password1234567');
+    const event = fakeEvent({ method: 'POST', body: form });
+
+    const result = await action(event);
+    expect(result).toMatchObject({
+      success: true,
+      pending: { reason: 'two-factor', continuationToken: expect.any(String) },
+    });
+    expect(event.cookies._store.size).toBe(0);
+  });
+
   it('returns fail() shape on bad credentials', async () => {
     const fortress = makeFortress();
     const action = fortressActions.login(fortress);

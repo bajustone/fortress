@@ -5,6 +5,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { FortressError } from '../errors';
 import { createFortress } from '../fortress';
+import { assertSuccess } from '../types';
 
 const SECRET = 'call-test-secret-at-least-32-bytes-long!!';
 
@@ -33,7 +34,7 @@ describe('fortress.call', () => {
 
     it('infers login success response carries a tagged union', () => {
       type R = InferEndpointSuccessResponse<typeof authEndpoints.login>;
-      // The AuthResponse oneOf collapses to a discriminated union — exercise
+      // The AuthResult oneOf collapses to a discriminated union — exercise
       // that at least one variant has an accessToken string.
       expectTypeOf<R>().not.toBeNever();
       expectTypeOf<R>().not.toBeUnknown();
@@ -81,6 +82,7 @@ describe('fortress.call', () => {
         'sessions@example.com',
         'password-123456',
       );
+      assertSuccess(loginResult);
       const accessToken = loginResult.accessToken;
       expect(typeof accessToken).toBe('string');
       if (accessToken === null)

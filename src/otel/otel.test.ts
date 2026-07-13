@@ -9,6 +9,7 @@ import {
 } from '@opentelemetry/sdk-metrics';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../core/fortress';
+import { assertSuccess } from '../core/types';
 import { createTestAdapter } from '../testing';
 import { createOtelTelemetry } from './index';
 
@@ -152,6 +153,7 @@ describe('createOtelTelemetry', () => {
 
   it('emits fortress.auth.token_verify.duration on verifyToken calls', async () => {
     const login = await fortress.auth.login('otel@example.com', 'password-123456');
+    assertSuccess(login);
     expect(login.accessToken).toBeTruthy();
     // Successful verify
     await fortress.auth.verifyToken(login.accessToken as string);

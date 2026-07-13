@@ -44,7 +44,7 @@ All fields on `MagicLinkConfig` are optional:
 | Method | Signature | Returns |
 |---|---|---|
 | `sendMagicLink` | `(email: string)` | `Promise<{ sent: true }>` |
-| `verifyMagicLink` | `(rawToken: string)` | `Promise<{ userId: string; email: string; accessToken: string }>` |
+| `verify` | `(rawToken: string, meta?: RequestMeta)` | `Promise<AuthResult>` |
 
 ### sendMagicLink
 
@@ -56,24 +56,32 @@ await fortress.plugins['magic-link'].sendMagicLink('alice@example.com');
 
 The user does not need to exist in the database. If they do not exist, the account is created when the link is verified.
 
-### verifyMagicLink
+### verify
 
-Validates a magic link token and returns an authenticated session:
+Atomically consumes a magic-link token and returns the unified auth result:
 
 ```ts
-const result = await fortress.plugins['magic-link'].verifyMagicLink(rawToken);
+const result = await fortress.plugins['magic-link'].verify(rawToken);
 
-console.log(result.userId);      // authenticated user ID
-console.log(result.email);       // email the link was sent to
-console.log(result.accessToken); // JWT access token
+if (result.status === 'success') {
+  console.log(result.user.id);
+  console.log(result.user.email);
+  console.log(result.accessToken, result.refreshToken);
+}
+else if (result.status === 'pending') {
+  // Another configured post-auth gate must complete first.
+  console.log(result.pending.reason, result.pending.continuationToken);
+}
 ```
+
+The equivalent HTTP endpoint is `POST /auth/magic-link/verify` with `{ token }`.
 
 This method:
 1. Hashes the raw token and looks it up in the database.
 2. Checks that the token has not been used and has not expired.
 3. Marks the token as used (`usedAt` timestamp).
 4. Finds the user by email, or creates a new account if none exists (JIT provisioning).
-5. Issues a JWT access token for the user.
+5. Runs every configured post-auth gate and issues an access/refresh session only when they all pass.
 
 Throws:
 - `NotFound` -- Invalid or unknown token.
@@ -106,8 +114,10 @@ const fortress = createFortress({
 // Step 1: User requests a magic link
 await fortress.plugins['magic-link'].sendMagicLink('alice@example.com');
 
-// Step 2: User clicks the link -- your handler calls verifyMagicLink
-const { userId, email, accessToken } = await fortress.plugins['magic-link'].verifyMagicLink(tokenFromUrl);
+// Step 2: User clicks the link -- your handler calls verify
+const result = await fortress.plugins['magic-link'].verify(tokenFromUrl);
 
-// The user is now authenticated with accessToken
+if (result.status === 'success') {
+  // The user is authenticated with result.accessToken/result.refreshToken.
+}
 ```

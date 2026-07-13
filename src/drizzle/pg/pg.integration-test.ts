@@ -6,9 +6,10 @@ import type { FortressUser } from '../../core/types';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { GenericContainer, Wait } from 'testcontainers';
-
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
 import { createFortress } from '../../core/fortress';
+import { assertSuccess } from '../../core/types';
 import { accountLockout } from '../../plugins/account-lockout';
 import { apiKey } from '../../plugins/api-key';
 import { auditLog } from '../../plugins/audit-log';
@@ -599,6 +600,7 @@ describe('pg: auth lifecycle', () => {
     expect(user.createdAt).toBeInstanceOf(Date);
 
     const result = await fortress.auth.login('alice@test.com', 'password-123456');
+    assertSuccess(result);
     expect(result.accessToken).toBeTruthy();
     expect(result.refreshToken).toBeTruthy();
     expect(result.user.email).toBe('alice@test.com');
@@ -648,6 +650,7 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('refresh@test.com', 'password-123456');
+    assertSuccess(login);
     // Wait 1s so the new JWT has a different iat/exp (JWT timestamps are in seconds)
     await new Promise(r => setTimeout(r, 1100));
     const refreshed = await fortress.auth.refresh(login.refreshToken as string);
@@ -666,6 +669,7 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('reuse@test.com', 'password-123456');
+    assertSuccess(login);
     await fortress.auth.refresh(login.refreshToken as string);
 
     // Using the old refresh token again should fail
@@ -682,6 +686,7 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('logout@test.com', 'password-123456');
+    assertSuccess(login);
     await fortress.auth.logout(login.refreshToken as string);
 
     await expect(
@@ -697,6 +702,7 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login = await fortress.auth.login('verify@test.com', 'password-123456');
+    assertSuccess(login);
     const claims = await fortress.auth.verifyToken(login.accessToken as string);
 
     expect(claims.sub).toBe(login.user.id);
@@ -711,6 +717,7 @@ describe('pg: auth lifecycle', () => {
     });
 
     const login1 = await fortress.auth.login('sessions@test.com', 'password-123456');
+    assertSuccess(login1);
     await fortress.auth.login('sessions@test.com', 'password-123456');
 
     const sessions = await fortress.auth.listSessions(login1.user.id);
@@ -979,6 +986,7 @@ describe('pg: tenancy plugin', () => {
     await fortress.plugins.tenancy.addUserToTenant(user.id, tenant.id);
 
     const login = await fortress.auth.login('claims@test.com', 'password-123456');
+    assertSuccess(login);
     const claims = await fortress.auth.verifyToken(login.accessToken as string);
 
     expect(claims.customClaims?.tenantId).toBe(tenant.id);
@@ -1006,6 +1014,7 @@ describe('pg: tenancy plugin', () => {
     await fortress.plugins.tenancy.switchTenant({ taxId: 't2', userId: user.id });
 
     const login = await fortress.auth.login('switch@test.com', 'password-123456');
+    assertSuccess(login);
     const claims = await fortress.auth.verifyToken(login.accessToken as string);
     expect(claims.customClaims?.tenantCode).toBe('t2');
   });

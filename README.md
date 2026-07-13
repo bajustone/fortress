@@ -284,7 +284,8 @@ if (result.status === 'success') {
 }
 
 if (result.status === 'pending') {
-  // result.requires2FA -- two-factor verification needed
+  // No tokens exist yet. Route by result.pending.reason and retain the
+  // single-use result.pending.continuationToken for the verification step.
 }
 ```
 
@@ -1659,10 +1660,8 @@ const setup = await fortress.plugins['two-factor'].enable(userId);
 // setup.otpauthUrl  -- QR code URL for authenticator apps
 // setup.backupCodes -- one-time-use recovery codes
 
-// Step 2: Verify -- activates 2FA on first successful verification
-const result = await fortress.plugins['two-factor'].verify(userId, '123456', {
-  userAgent: 'Mozilla/5.0...',  // optional: trust this device
-});
+// Step 2: Confirm setup -- activates 2FA
+await fortress.plugins['two-factor'].confirmSetup(userId, '123456');
 
 // Disable 2FA (removes secret, backup codes, and trusted devices)
 await fortress.plugins['two-factor'].disable(userId);
@@ -1673,15 +1672,15 @@ await fortress.plugins['two-factor'].disable(userId);
 ```typescript
 const result = await fortress.auth.login('alice@example.com', 'password');
 
-if (result.status === 'pending' && result.requires2FA) {
-  // Prompt user for TOTP code
+if (result.status === 'pending' && result.pending.reason === 'two-factor') {
   const code = await promptUser();
+  const verification = await fortress.plugins['two-factor'].verify(
+    result.pending.continuationToken,
+    code,
+    { userAgent: request.headers['user-agent'] },
+  );
 
-  const verification = await fortress.plugins['two-factor'].verify(result.userId, code, {
-    userAgent: request.headers['user-agent'],
-  });
-
-  // Now re-login or use the tokens from the verification response
+  // verification is AuthResult; a success contains the real session tokens.
 }
 ```
 
@@ -1711,8 +1710,8 @@ magicLink({
 await fortress.plugins['magic-link'].sendMagicLink('alice@example.com');
 
 // Verify the token (from the email link)
-const result = await fortress.plugins['magic-link'].verifyMagicLink(rawToken);
-// result.userId, result.email, result.accessToken
+const result = await fortress.plugins['magic-link'].verify(rawToken);
+// AuthResult: success contains user + both session tokens; configured gates may return pending
 ```
 
 If no user exists with the given email, one is created automatically.
@@ -2329,10 +2328,10 @@ const { options: authOpts } = await fortress.plugins['webauthn'].generateAuthent
 const authResult = await fortress.plugins['webauthn'].verifyAuthentication({
   response: assertionFromBrowser,
 });
-// authResult.verified, authResult.userId, authResult.accessToken
+// authResult is AuthResult; success carries user, method, accessToken, refreshToken
 ```
 
-When `supportPasswordless` is `false`, the plugin acts as a second factor via the `afterLogin` hook instead of issuing tokens directly.
+When `supportPasswordless` is `false`, the plugin acts as a second factor via the `postAuthGate` hook. Complete the pending challenge with `completeAuthentication(continuationToken, assertion, meta)`.
 
 See [WebAuthn plugin docs](docs/plugins/webauthn.md) for the full configuration and API reference.
 

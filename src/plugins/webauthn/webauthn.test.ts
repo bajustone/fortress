@@ -244,6 +244,8 @@ describe('webauthn plugin', () => {
         response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       });
 
+      if (result.status !== 'success')
+        throw new Error('Expected successful passwordless login');
       expect(result.accessToken).toBeTruthy();
     });
 
@@ -385,7 +387,7 @@ describe('webauthn plugin', () => {
 
       // Login should be intercepted
       const result = await f.auth.login('bob@example.com', 'password-123456');
-      expect(result.accessToken).toBeNull();
+      expect('accessToken' in result).toBe(false);
       expect(result.pluginData?.requiresWebAuthn).toBe(true);
       expect(result.status === 'pending' ? result.pending?.reason : undefined).toBe('webauthn');
       expect(await database.count({ model: 'refresh_token' })).toBe(0);
@@ -405,6 +407,8 @@ describe('webauthn plugin', () => {
       });
 
       const result = await f.auth.login('bob@example.com', 'password-123456');
+      if (result.status !== 'success')
+        throw new Error('Expected successful login');
       expect(result.accessToken).toBeTruthy();
     });
   });

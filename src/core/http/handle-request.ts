@@ -280,7 +280,11 @@ async function maybeBuildAuthCookies(
   _request: Request,
 ): Promise<{ setCookies: string[]; response: Response; length: number }> {
   // Only inspect successful auth-related handlers.
-  const isAuthIssuing = handler === 'login' || handler === 'refresh' || handler === 'impersonate';
+  const isAuthIssuing = handler === 'login'
+    || handler === 'refresh'
+    || handler === 'impersonate'
+    || handler === 'verifyTwoFactor'
+    || handler === 'verifyMagicLink';
   if (!isAuthIssuing)
     return { setCookies: [], response, length: 0 };
   if (response.status >= 400)

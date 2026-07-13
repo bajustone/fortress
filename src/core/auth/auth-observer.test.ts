@@ -3,6 +3,7 @@ import type { AuthEvent } from './auth-service';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
+import { assertSuccess } from '../types';
 
 let fortress: Fortress;
 const SECRET = 'auth-observer-test-secret-32chars!!';
@@ -74,6 +75,7 @@ describe('addAuthObserver', () => {
   it('emits TOKEN_REFRESH on successful refresh', async () => {
     await seed();
     const login = await fortress.auth.login('auth-obs@example.com', 'password-123456');
+    assertSuccess(login);
     const events: AuthEvent[] = [];
     fortress.auth.addAuthObserver(e => void events.push(e));
 
@@ -88,6 +90,7 @@ describe('addAuthObserver', () => {
   it('emits TOKEN_REUSE_DETECTED on reuse of a revoked refresh token', async () => {
     await seed();
     const login = await fortress.auth.login('auth-obs@example.com', 'password-123456');
+    assertSuccess(login);
     await fortress.auth.refresh(login.refreshToken as string);
     const events: AuthEvent[] = [];
     fortress.auth.addAuthObserver(e => void events.push(e));
@@ -120,6 +123,7 @@ describe('addAuthObserver', () => {
       'password-123456',
       { userAgent: 'browser-a' },
     );
+    assertSuccess(login);
     const events: AuthEvent[] = [];
     hardened.auth.addAuthObserver(event => void events.push(event));
 
@@ -135,6 +139,7 @@ describe('addAuthObserver', () => {
   it('emits LOGOUT with actorId', async () => {
     await seed();
     const login = await fortress.auth.login('auth-obs@example.com', 'password-123456');
+    assertSuccess(login);
     const events: AuthEvent[] = [];
     fortress.auth.addAuthObserver(e => void events.push(e));
 
@@ -179,6 +184,7 @@ describe('addAuthObserver', () => {
 
     // Login should still succeed — the error is caught inside the listener list.
     const result = await fortress.auth.login('auth-obs@example.com', 'password-123456');
+    assertSuccess(result);
     expect(result.status).toBe('success');
     expect(result.accessToken).toBeTruthy();
   });

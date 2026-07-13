@@ -77,6 +77,8 @@ describe('impersonation', () => {
 
   it('returns an access token with act claim containing admin userId', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
+    if (result.status !== 'impersonation')
+      throw new Error('Expected impersonation result');
     const claims = await fortress.auth.verifyToken(result.accessToken as string);
 
     expect(claims.act).toEqual({ sub: adminId, subjectType: 'USER' });
@@ -84,6 +86,8 @@ describe('impersonation', () => {
 
   it('token has the target user sub, name, and groups', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
+    if (result.status !== 'impersonation')
+      throw new Error('Expected impersonation result');
     const claims = await fortress.auth.verifyToken(result.accessToken as string);
 
     expect(claims.sub).toBe(targetId);
@@ -93,12 +97,16 @@ describe('impersonation', () => {
 
   it('does not issue a refresh token', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
+    if (result.status !== 'impersonation')
+      throw new Error('Expected impersonation result');
 
     expect(result.refreshToken).toBeNull();
   });
 
   it('includes impersonation metadata in pluginData', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
+    if (result.status !== 'impersonation')
+      throw new Error('Expected impersonation result');
 
     expect(result.pluginData).toEqual({
       impersonation: {
@@ -111,6 +119,8 @@ describe('impersonation', () => {
 
   it('uses custom expiry when provided', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId, { expirySeconds: 600 });
+    if (result.status !== 'impersonation')
+      throw new Error('Expected impersonation result');
     const claims = await fortress.auth.verifyToken(result.accessToken as string);
 
     expect(result.pluginData).toMatchObject({
@@ -129,6 +139,8 @@ describe('impersonation', () => {
     const result = await fortress.auth.impersonate(adminId, targetId, {
       reason: 'Debugging user account issue #1234',
     });
+    if (result.status !== 'impersonation')
+      throw new Error('Expected impersonation result');
 
     expect(result.pluginData).toMatchObject({
       impersonation: {
@@ -140,6 +152,8 @@ describe('impersonation', () => {
 
   it('returns the target user object without passwordHash', async () => {
     const result = await fortress.auth.impersonate(adminId, targetId);
+    if (result.status !== 'impersonation')
+      throw new Error('Expected impersonation result');
 
     expect(result.user.id).toBe(targetId);
     expect(result.user.email).toBe('target@example.com');
@@ -153,6 +167,8 @@ describe('impersonation', () => {
     const result = await fortress.auth.impersonate(adminId, targetId, {
       expirySeconds: 60 * 60 * 24 * 365 * 10, // 10 years
     });
+    if (result.status !== 'impersonation')
+      throw new Error('Expected impersonation result');
     const impersonationData = (result.pluginData as { impersonation?: { expiresInSeconds?: number } } | undefined)?.impersonation;
     // Default cap is 3600s.
     expect(impersonationData?.expiresInSeconds).toBeLessThanOrEqual(3600);

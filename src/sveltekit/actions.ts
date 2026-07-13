@@ -28,7 +28,7 @@
  */
 
 import type { Fortress } from '../core/fortress';
-import type { CreateUserInput, LoginIdentifierType } from '../core/types';
+import type { AuthChallenge, CreateUserInput, LoginIdentifierType } from '../core/types';
 import type { SvelteKitAction, SvelteKitRequestEvent } from './types';
 import { FortressError } from '../core/errors';
 import { clearAuthCookies, setAuthCookies } from './cookies';
@@ -42,6 +42,8 @@ export interface FortressActionFailure {
 /** Shape returned on success when no `redirectTo` is configured. */
 export interface FortressActionSuccess {
   success: true;
+  /** Present when another auth step is required and no cookies were issued. */
+  pending?: AuthChallenge;
 }
 
 /** Common options for the auth-issuing helpers. */
@@ -123,10 +125,10 @@ export const fortressActions: FortressActions = {
       const password = field(form, 'password');
       try {
         const result = await fortress.auth.login(identifier, password, buildMeta(event));
-        if (result.status !== 'success' || !result.refreshToken) {
-          // Pending (e.g. 2FA required) — caller wires their own flow.
+        if (result.status === 'pending')
+          return { success: true, pending: result.pending } as const;
+        if (result.status !== 'success')
           return { success: true } as const;
-        }
         setAuthCookies(event, fortress, {
           accessToken: result.accessToken,
           refreshToken: result.refreshToken,
@@ -163,9 +165,10 @@ export const fortressActions: FortressActions = {
       try {
         await fortress.auth.createUser(data);
         const result = await fortress.auth.login(data.email, data.password ?? '', buildMeta(event));
-        if (result.status !== 'success' || !result.refreshToken) {
+        if (result.status === 'pending')
+          return { success: true, pending: result.pending } as const;
+        if (result.status !== 'success')
           return { success: true } as const;
-        }
         setAuthCookies(event, fortress, {
           accessToken: result.accessToken,
           refreshToken: result.refreshToken,

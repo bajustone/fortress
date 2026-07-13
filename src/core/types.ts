@@ -77,14 +77,11 @@ export interface AuthImpersonation {
   pluginData?: Record<string, unknown>;
 }
 
-/** Pending sign-in result — the user must complete an additional step (e.g. 2FA, email verification) before tokens are issued. */
+/** Pending sign-in result — the user must complete an additional step before tokens are issued. */
 export interface AuthPending {
   status: 'pending';
   user: FortressUser;
-  /** Present for post-auth-gate holds; required once wire consumers migrate. */
-  pending?: AuthChallenge;
-  accessToken: null;
-  refreshToken: null;
+  pending: AuthChallenge;
   pluginData?: Record<string, unknown>;
 }
 

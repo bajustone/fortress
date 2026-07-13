@@ -42,7 +42,7 @@ Once registered, methods are available at `fortress.plugins['webauthn']` with fu
 | `authenticatorSelection.userVerification` | `'discouraged' \| 'preferred' \| 'required'` | `'preferred'` | No | User verification preference. |
 | `timeout` | `number` | `60000` (60s) | No | Timeout for WebAuthn ceremonies in milliseconds. |
 | `challengeTTLSeconds` | `number` | `300` (5 min) | No | How long a challenge remains valid, in seconds. |
-| `supportPasswordless` | `boolean` | `true` | No | When `true`, `verifyAuthentication` returns JWT tokens for direct passwordless login. When `false`, the plugin hooks into `afterLogin` to require WebAuthn as a second factor. |
+| `supportPasswordless` | `boolean` | `true` | No | When `true`, `verifyAuthentication` returns `AuthResult` for direct passwordless login. When `false`, the plugin registers a pre-token `postAuthGate` and challenges password logins. |
 
 ## HTTP Routes
 
@@ -62,7 +62,8 @@ The plugin defines four routes that are auto-mounted via `mountFortress`:
 | `generateRegistrationOptions` | `(input: Record<string, unknown>, ctx: PluginRouteContext)` | `Promise<{ options: PublicKeyCredentialCreationOptionsJSON }>` |
 | `verifyRegistration` | `(input: { response: RegistrationResponseJSON }, ctx: PluginRouteContext)` | `Promise<{ verified, credentialId, credentialDeviceType, credentialBackedUp }>` |
 | `generateAuthenticationOptions` | `(input: { userId?: string })` | `Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>` |
-| `verifyAuthentication` | `(input: { response: AuthenticationResponseJSON })` | `Promise<{ verified, userId, accessToken?, refreshToken? }>` |
+| `completeAuthentication` | `(continuationToken, response, meta?)` | `Promise<AuthResult>` |
+| `verifyAuthentication` | `(input: { response: AuthenticationResponseJSON }, meta?)` | `Promise<AuthResult>` |
 
 > **Registration methods require `PluginRouteContext`.** The target user is always the verified caller (`ctx.userId`) — there is no body-supplied `userId` field. When a browser hits `POST /webauthn/register/options` or `/webauthn/register/verify`, `fortress.handleRequest` constructs the `ctx` automatically from the bearer token. Programmatic callers must build one by hand (see below).
 
@@ -111,16 +112,18 @@ const { options } = await fortress.plugins['webauthn'].generateAuthenticationOpt
 
 ### verifyAuthentication
 
-Verifies the authentication assertion. In passwordless mode, returns a JWT access token:
+Verifies the authentication assertion. In passwordless mode, returns the unified auth result and issues a full session:
 
 ```ts
 const result = await fortress.plugins['webauthn'].verifyAuthentication({
   response: authenticationResponseFromBrowser,
 });
-// result.verified, result.userId, result.accessToken (if supportPasswordless)
+if (result.status === 'success') {
+  // result.user, result.method === 'webauthn', result.accessToken, result.refreshToken
+}
 ```
 
-The method also validates the authenticator counter to detect credential cloning (skipped for synced passkeys where both counters are 0).
+For second-factor mode, pass the pending login's continuation token and browser assertion to `completeAuthentication(continuationToken, response, meta)`. Both paths validate the authenticator counter to detect credential cloning (skipped for synced passkeys where both counters are 0), and both rerun remaining gates before token issuance.
 
 Throws:
 - `Unauthorized` -- Unknown credential or verification failed.

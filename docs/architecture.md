@@ -238,7 +238,7 @@ jwt: { key: 'new-secret' }
 
 ```typescript
 interface AuthService {
-  login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResponse>;
+  login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResult>;
   refresh(refreshToken: string, meta?: RequestMeta): Promise<AuthTokenPair>;
   logout(refreshToken: string): Promise<void>;
   me(userId: string): Promise<FortressUser>;
@@ -251,7 +251,7 @@ interface AuthService {
   addLoginIdentifier(userId: string, type: 'email' | 'phone' | 'username', value: string): Promise<void>;
   removeLoginIdentifier(userId: string, type: string, value: string): Promise<void>;
   getLoginIdentifiers(userId: string): Promise<LoginIdentifier[]>;
-  impersonate(adminUserId: string, targetUserId: string, options?: { reason?: string; expiresInSeconds?: number }): Promise<AuthResponse>;
+  impersonate(adminUserId: string, targetUserId: string, options?: { reason?: string; expiresInSeconds?: number }): Promise<AuthResult>;
 
   // Admin user management
   listUsers(options: { limit?, offset?, search?, sortBy?, sortDirection? }): Promise<{ users: FortressUser[]; total: number }>;
@@ -283,27 +283,21 @@ Step-by-step walkthrough of `auth-service.ts:196`:
 
 5. Fetch user's groups via internal adapter (group_user → group names)
 
-6. Collect enriched token claims from all plugins (enrichTokenClaims)
+6. Run every registered post-auth gate before token issuance
+   → A hold returns AuthPending with a single-use continuation challenge
+   → Pending results have no accessToken or refreshToken properties
+
+7. Collect enriched token claims from all plugins (enrichTokenClaims)
    → Tenancy plugin adds tenantId, tenantCode
    → Claims are shallow-merged; later plugin wins on key conflicts
 
-7. Sign access token (JWT, HS256, short-lived — default 900s)
+8. Sign the access token and atomically persist the refresh-token family
 
-8. Generate refresh token:
-   a. 32 bytes cryptographic randomness → base64url
-   b. SHA-256 hash the raw token
-   c. Store hash + family ID + meta (IP, userAgent, deviceName) in DB
-   d. Optional: store SHA-256(userAgent) as fingerprint
+9. Build AuthSuccess { status: 'success', method, user, accessToken, refreshToken }
 
-9. Build AuthResponseSuccess { status: 'success', user, accessToken, refreshToken }
+10. Run success-only afterLogin hooks, then emit LOGIN_SUCCESS
 
-10. Run afterLogin hooks (all plugins, in registration order)
-    → 2FA plugin can change status to 'pending' and null out tokens
-    → Email verification plugin can block unverified users
-    → Audit log plugin records LOGIN_SUCCESS
-    → Webhook plugin queues delivery
-
-11. Return final AuthResponse
+11. Return the final AuthResult
 ```
 
 ### Refresh Flow
@@ -412,7 +406,7 @@ Admin impersonation using RFC 8693 actor claim:
 - Issues a **non-renewable** access token (no refresh token)
 - Token includes `act: { sub: adminUserId }` claim per RFC 8693
 - Short-lived: default 3600s, configurable
-- Returns `AuthResponseImpersonation { status: 'impersonation', refreshToken: null }`
+- Returns `AuthImpersonation { status: 'impersonation', refreshToken: null }`
 - **Caller responsibility:** Verify the admin has `fortress:impersonate` permission before calling
 - Includes `reason` and `expiresInSeconds` in `pluginData`
 
@@ -971,8 +965,9 @@ interface PluginHooks {
   beforeTokenRefresh?: (ctx: HookContext & { token: string }) => Promise<HookResult | void>;
   beforeLogout?: (ctx: HookContext & { token: string }) => Promise<void>;
 
-  // After hooks — can transform the response
-  afterLogin?: (ctx: AfterHookContext, result: AuthResponse) => Promise<AuthResponse>;
+  // Post-auth gates run before token issuance; afterLogin is success-only
+  postAuthGate?: PostAuthGateProvider;
+  afterLogin?: (ctx: AfterHookContext, result: AuthSuccess) => Promise<AuthSuccess>;
   afterRegister?: (ctx: AfterHookContext, user: FortressUser) => Promise<void>;
   afterTokenRefresh?: (ctx: AfterHookContext, result: AuthTokenPair) => Promise<AuthTokenPair>;
 
@@ -1146,11 +1141,12 @@ TOTP (RFC 6238), backup codes, and trusted devices.
 
 **Models:** `two_factor_secret` (Base32-encoded, enabled flag), `backup_code` (single-use), `trusted_device` (hash + expiry)
 
-**Hook: `afterLogin`** — If 2FA enabled for user, checks trusted device hash. If not trusted, returns `AuthResponsePending { status: 'pending', accessToken: null, refreshToken: null, pluginData: { requires2FA: true } }`. Consumer must then call `verify()` with the TOTP code.
+**Gate: `postAuthGate`** — If 2FA is enabled and the device is not trusted, returns an `AuthPending` challenge before any token row is written. The client presents its continuation token with the TOTP/backup code.
 
 **Methods:**
 - `enable(userId)` → `{ secret, otpauthUrl, backupCodes }` — generates TOTP secret + QR URL + backup codes
-- `verify(userId, code, meta?)` → `AuthTokenPair` — validates TOTP (±1 window for clock drift) or backup code, optionally trusts device, issues real tokens
+- `confirmSetup(userId, code, meta?)` → `{ verified: true }` — activates the newly configured factor
+- `verify(continuationToken, code, meta?)` → `AuthResult` — atomically consumes the continuation, verifies the factor, reruns remaining gates, and issues the session on success
 - `disable(userId)` — revokes secret, backup codes, and all trusted devices
 
 **Internal TOTP implementation:** `generateTOTP()` uses HMAC-SHA1 over the time counter (`floor(now / period)`), extracts a 6-digit code via dynamic truncation per RFC 4226. `verifyTOTP()` checks the current window ±1 step.
@@ -1198,7 +1194,7 @@ Passwordless authentication via single-use tokens.
 
 **Methods:**
 - `sendMagicLink(email)` — Generate token, call `onSendMagicLink`
-- `verifyMagicLink(token)` — Validate token, JIT provision user if needed, return `{ accessToken, refreshToken }`
+- `verify(token, meta?)` — Atomically consume the token, JIT provision if needed, run post-auth gates, and return `AuthResult` (success with both tokens or a pending continuation)
 
 #### API Key
 
@@ -1703,17 +1699,18 @@ interface AuthTokenPair {
 }
 
 // Discriminated union — check result.status to narrow
-type AuthResponse = AuthResponseSuccess | AuthResponseImpersonation | AuthResponsePending;
+type AuthResult = AuthSuccess | AuthImpersonation | AuthPending;
 
-interface AuthResponseSuccess {
+interface AuthSuccess {
   status: 'success';
   user: FortressUser;
+  method: AuthMethod;
   accessToken: string;
   refreshToken: string;
   pluginData?: Record<string, unknown>;
 }
 
-interface AuthResponseImpersonation {
+interface AuthImpersonation {
   status: 'impersonation';
   user: FortressUser;
   accessToken: string;                         // Non-renewable, short-lived
@@ -1721,12 +1718,14 @@ interface AuthResponseImpersonation {
   pluginData?: Record<string, unknown>;
 }
 
-interface AuthResponsePending {
-  status: 'pending';                           // e.g., 2FA required
+interface AuthPending {
+  status: 'pending';
   user: FortressUser;
-  accessToken: null;
-  refreshToken: null;
-  pluginData?: Record<string, unknown>;        // e.g., { requires2FA: true }
+  pending: {
+    reason: PendingReason;
+    continuationToken: string;
+  };
+  pluginData?: Record<string, unknown>;
 }
 
 interface RequestMeta {

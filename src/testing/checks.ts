@@ -97,6 +97,8 @@ const DEFAULT_PUBLIC_ALLOW: readonly string[] = [
   'POST /auth/register',
   'POST /auth/refresh',
   'POST /auth/logout',
+  'POST /auth/2fa/verify',
+  'POST /auth/magic-link/verify',
   'GET /oauth/authorize',
   'POST /oauth/token',
   'POST /oauth/introspect',

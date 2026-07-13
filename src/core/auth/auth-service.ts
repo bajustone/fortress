@@ -407,8 +407,6 @@ export function createAuthService(
         status: 'pending',
         user,
         pending: hold.challenge,
-        accessToken: null,
-        refreshToken: null,
         pluginData: hold.pluginData,
       };
       if (authEventListeners.size() > 0) {

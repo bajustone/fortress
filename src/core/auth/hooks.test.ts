@@ -1,8 +1,9 @@
 import type { Fortress } from '../fortress';
-
 import { describe, expect, it, vi } from 'vitest';
+
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
+import { assertSuccess } from '../types';
 
 let fortress: Fortress;
 const SECRET = 'hooks-test-secret-at-least-32chars!!';
@@ -28,6 +29,7 @@ describe('plugin hooks', () => {
 
       await seedUser();
       const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
+      assertSuccess(login);
       await fortress.auth.logout(login.refreshToken as string);
 
       expect(beforeLogout).toHaveBeenCalledOnce();
@@ -94,6 +96,7 @@ describe('plugin hooks', () => {
 
       await seedUser();
       const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
+      assertSuccess(login);
       await fortress.auth.refresh(login.refreshToken as string);
 
       expect(beforeTokenRefresh).toHaveBeenCalledOnce();
@@ -118,6 +121,7 @@ describe('plugin hooks', () => {
 
       await seedUser();
       const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
+      assertSuccess(login);
       const result = await fortress.auth.refresh(login.refreshToken as string);
 
       expect((result as any).blocked).toBe(true);
@@ -141,6 +145,7 @@ describe('plugin hooks', () => {
 
       await seedUser();
       const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
+      assertSuccess(login);
       const result = await fortress.auth.refresh(login.refreshToken as string);
 
       expect(result.accessToken).toMatch(/^modified-/);

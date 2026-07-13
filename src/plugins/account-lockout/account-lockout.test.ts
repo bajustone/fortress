@@ -2,6 +2,7 @@ import type { Fortress } from '../../core/fortress';
 import type { LockoutStatus } from './index';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
+import { assertSuccess } from '../../core/types';
 import { createTestAdapter } from '../../testing';
 import { accountLockout } from './index';
 
@@ -61,6 +62,7 @@ describe('account-lockout plugin', () => {
 
       // Login should still succeed
       const result = await fortress.auth.login(email, 'correct-password');
+      assertSuccess(result);
       expect(result.accessToken).toBeTruthy();
     });
   });
@@ -128,6 +130,7 @@ describe('account-lockout plugin', () => {
 
       // Lockout is set but with negative duration, so lockedUntil is in the past
       const result = await shortFortress.auth.login('bob@example.com', 'correct-password');
+      assertSuccess(result);
       expect(result.accessToken).toBeTruthy();
     });
   });

@@ -121,8 +121,8 @@ describe('two-factor plugin', () => {
 
       // Login should be intercepted
       const result = await fortress.auth.login('alice@example.com', 'password-123456');
-      expect(result.accessToken).toBeNull();
-      expect(result.refreshToken).toBeNull();
+      expect('accessToken' in result).toBe(false);
+      expect('refreshToken' in result).toBe(false);
       expect(result.pluginData?.requires2FA).toBe(true);
       expect(await fortress.config.database.count({ model: 'refresh_token' })).toBe(0);
       if (result.status !== 'pending' || !result.pending)
@@ -135,6 +135,8 @@ describe('two-factor plugin', () => {
 
     it('allows normal login when 2FA not enabled', async () => {
       const result = await fortress.auth.login('alice@example.com', 'password-123456');
+      if (result.status !== 'success')
+        throw new Error('Expected successful login');
       expect(result.accessToken).toBeTruthy();
       expect(result.refreshToken).toBeTruthy();
     });
@@ -149,6 +151,8 @@ describe('two-factor plugin', () => {
 
       // Login with same userAgent should bypass 2FA
       const result = await fortress.auth.login('alice@example.com', 'password-123456', { userAgent });
+      if (result.status !== 'success')
+        throw new Error('Expected successful login');
       expect(result.accessToken).toBeTruthy();
     });
   });

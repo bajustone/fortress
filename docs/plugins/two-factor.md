@@ -76,28 +76,25 @@ const qrDataUrl = await QRCode.toDataURL(setup.otpauthUrl);
 
 Display the backup codes and instruct the user to store them securely. These are the only time the raw codes are available.
 
-### Verify (activate and complete 2FA challenges)
+### Confirm setup and complete challenges
 
-Call `verify` with a 6-digit TOTP code from the authenticator app, or one of the backup codes.
-
-```ts
-// TOTP code from authenticator app
-const result = await fortress.plugins['two-factor'].verify(userId, '123456');
-// result.verified === true
-
-// Or use a backup code (each code works once)
-const result = await fortress.plugins['two-factor'].verify(userId, backupCode);
-```
-
-The first successful `verify` call activates 2FA (`isEnabled` becomes `true`). This is the confirmation step after `enable`.
-
-Pass `RequestMeta` as the third argument to automatically trust the device (see Trusted Devices below):
+After `enable`, activate the secret with `confirmSetup(userId, code)`. This setup-only method returns `{ verified: true }` and does not issue a session.
 
 ```ts
-await fortress.plugins['two-factor'].verify(userId, code, {
-  userAgent: request.headers.get('user-agent') ?? undefined,
-});
+await fortress.plugins['two-factor'].confirmSetup(userId, '123456');
 ```
+
+During login, call `verify` with the pending continuation token and a TOTP or backup code. It returns the unified `AuthResult` and issues tokens only when every configured gate is complete.
+
+```ts
+const result = await fortress.plugins['two-factor'].verify(
+  loginResult.pending.continuationToken,
+  code,
+  { userAgent: request.headers.get('user-agent') ?? undefined },
+);
+```
+
+The equivalent HTTP endpoint is `POST /auth/2fa/verify` with `{ continuationToken, code }`.
 
 ### Disable 2FA
 
@@ -109,43 +106,31 @@ await fortress.plugins['two-factor'].disable(userId);
 
 After disabling, the user can call `enable` again to set up fresh 2FA.
 
-### Login Flow with 2FA (`afterLogin` Hook)
+### Login flow with the post-auth gate
 
-The plugin hooks into `afterLogin` automatically. When a user with enabled 2FA logs in:
-
-1. Fortress checks if the user has an active `two_factor_secret` record.
-2. If a `userAgent` is present in the request meta, it checks for a matching trusted device that has not expired.
-3. If the device is trusted, login proceeds normally with tokens.
-4. If not trusted, the response returns `accessToken: null`, `refreshToken: null`, and `pluginData: { requires2FA: true }`.
-
-Your application checks for this and prompts for a 2FA code:
+When a user with enabled 2FA logs in, Fortress checks trusted-device state before token issuance. An untrusted login returns an `AuthPending` with a required challenge and **no token fields**.
 
 ```ts
 const loginResult = await fortress.auth.login(email, password, {
   userAgent: request.headers.get('user-agent') ?? undefined,
 });
 
-if (loginResult.pluginData?.requires2FA) {
-  // Show 2FA input form to the user
-  // After user submits code:
-  const verified = await fortress.plugins['two-factor'].verify(
-    loginResult.user.id,
+if (loginResult.status === 'pending' && loginResult.pending.reason === 'two-factor') {
+  const completed = await fortress.plugins['two-factor'].verify(
+    loginResult.pending.continuationToken,
     codeFromUser,
     { userAgent: request.headers.get('user-agent') ?? undefined },
   );
 
-  if (verified) {
-    // Issue tokens manually or re-login (device is now trusted)
-    const tokens = await fortress.auth.login(email, password, {
-      userAgent: request.headers.get('user-agent') ?? undefined,
-    });
+  if (completed.status === 'success') {
+    // completed.accessToken and completed.refreshToken are the issued session.
   }
 }
 ```
 
 ### Trusted Devices
 
-When `verify` is called with a `RequestMeta` containing a `userAgent`, the plugin automatically creates a trusted device record. On subsequent logins with the same `userAgent`, the `afterLogin` hook skips the 2FA challenge.
+When `verify` is called with a `RequestMeta` containing a `userAgent`, the plugin automatically creates a trusted device record. On subsequent logins with the same `userAgent`, the `postAuthGate` hook skips the 2FA challenge.
 
 - Device identity is a SHA-256 hash of `userId:userAgent`.
 - Trust expires after `trustedDeviceDays` (default 30).
@@ -158,11 +143,12 @@ All methods are accessed via `fortress.plugins['two-factor']`.
 
 | Method | Signature | Description |
 |---|---|---|
-| `enable` | `(userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>` | Generate TOTP secret and backup codes. Throws if 2FA is already enabled. |
-| `verify` | `(userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>` | Verify a TOTP or backup code. Activates 2FA on first success. Trusts device if `meta.userAgent` is provided. Throws `'Invalid two-factor code'` on failure. |
+| `enable` | `(userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>` | Generate an unconfirmed TOTP secret and backup codes. Throws if 2FA is already enabled. |
+| `confirmSetup` | `(userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: true }>` | Verify the first TOTP code and activate setup. |
+| `verify` | `(continuationToken: string, code: string, meta?: RequestMeta) => Promise<AuthResult>` | Complete a pending login with TOTP or a single-use backup code, rerun remaining gates, and issue the session on success. |
 | `disable` | `(userId: string) => Promise<void>` | Remove all 2FA data (secret, backup codes, trusted devices) for the user. |
 
-The plugin also installs an `afterLogin` hook. This is not called directly -- it runs automatically on every `fortress.auth.login()` call.
+The plugin also installs a `postAuthGate` hook. This is not called directly -- it runs automatically on every `fortress.auth.login()` call.
 
 ## How It Works
 

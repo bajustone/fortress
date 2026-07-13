@@ -2,6 +2,7 @@ import type { ExpressNextFunction, ExpressRequest, ExpressResponse } from './mid
 import { describe, expect, it } from 'vitest';
 import { FortressError } from '../core/errors';
 import { createFortress } from '../core/fortress';
+import { assertSuccess } from '../core/types';
 import { createTestAdapter } from '../testing';
 import { createAuthMiddleware, createErrorHandler, createExpressMiddleware, createRbacMiddleware, getClaims, getDb, getUserId } from './middleware';
 
@@ -68,6 +69,7 @@ describe('express adapter', () => {
       password: 'password-123456',
     });
     const loginResult = await fortress.auth.login('test@test.com', 'password-123456');
+    assertSuccess(loginResult);
 
     const middleware = createAuthMiddleware(fortress);
     const req: ExpressRequest = {
