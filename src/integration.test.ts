@@ -1,4 +1,5 @@
 import type { Fortress } from './core/fortress';
+import type { AuthSuccess } from './core/types';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { hashToken } from './core/auth/refresh-token';
 import { createFortress } from './core/fortress';
@@ -398,15 +399,30 @@ describe('auth integration', () => {
       where: [{ field: 'isRevoked', operator: '=', value: false }],
     })).toBe(2);
 
-    const oldest = concurrent[1];
-    assertSuccess(oldest);
-    const oldestHash = await hashToken(oldest.refreshToken as string);
+    const activeRows = await database.findMany<{ tokenHash: string }>({
+      model: 'refresh_token',
+      where: [{ field: 'isRevoked', operator: '=', value: false }],
+    });
+    const activeHashes = new Set(activeRows.map(row => row.tokenHash));
+    let oldest: AuthSuccess | undefined;
+    let oldestHash: string | undefined;
+    for (const candidate of concurrent) {
+      assertSuccess(candidate);
+      const candidateHash = await hashToken(candidate.refreshToken);
+      if (activeHashes.has(candidateHash)) {
+        oldest = candidate;
+        oldestHash = candidateHash;
+        break;
+      }
+    }
+    if (!oldest || !oldestHash)
+      throw new Error('Expected an active concurrent session');
     await database.update({
       model: 'refresh_token',
       where: [{ field: 'tokenHash', operator: '=', value: oldestHash }],
       data: { familyCreatedAt: new Date(Date.now() - 60_000) },
     });
-    const rotatedOldest = await limited.auth.refresh(oldest.refreshToken as string);
+    const rotatedOldest = await limited.auth.refresh(oldest.refreshToken);
     const newest = await limited.auth.login('session-race@example.com', 'password-123456');
     assertSuccess(newest);
 
