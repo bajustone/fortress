@@ -58,6 +58,8 @@ export interface InternalAdapter {
   getSubjectPermissions: (subject: Subject, tenantId?: string) => Promise<Permission[]>;
   /** Find an existing permission or create it if missing */
   findOrCreatePermission: (input: PermissionInput) => Promise<Permission>;
+  /** Internal mutation variant that reports whether this call inserted the row. */
+  findOrCreatePermissionWithStatus: (input: PermissionInput) => Promise<{ permission: Permission; created: boolean }>;
   /** Ensure a resource exists (no-op if already present) */
   ensureResource: (name: string) => Promise<void>;
 }
@@ -98,6 +100,47 @@ function serializePermissionConditions(
   const normalized = stableJson(conditions) as PermissionInput['conditions'];
   // PostgreSQL schema stores JSONB; SQLite stores text.
   return db.dialect === 'pg' ? normalized : JSON.stringify(normalized);
+}
+
+async function findOrCreatePermissionWithStatus(
+  db: DatabaseAdapter,
+  input: PermissionInput,
+): Promise<{ permission: Permission; created: boolean }> {
+  const conditions = serializePermissionConditions(db, input.conditions);
+  const where = [
+    { field: 'resource', operator: '=' as const, value: input.resource },
+    { field: 'action', operator: '=' as const, value: input.action },
+    { field: 'effect', operator: '=' as const, value: input.effect ?? 'ALLOW' },
+    conditions == null
+      ? { field: 'conditions', operator: 'isNull' as const, value: null }
+      : { field: 'conditions', operator: '=' as const, value: conditions },
+  ];
+
+  const existing = await db.findOne<Permission>({ model: 'permission', where });
+  if (existing)
+    return { permission: normalizePermission(existing), created: false };
+
+  try {
+    const created = await db.create<Permission>({
+      model: 'permission',
+      data: {
+        resource: input.resource,
+        action: input.action,
+        effect: input.effect ?? 'ALLOW',
+        conditions,
+        description: `${input.action} ${input.resource}`,
+      },
+    });
+    return { permission: normalizePermission(created), created: true };
+  }
+  catch (err) {
+    // A concurrent caller may win the unique-index race. Re-read its row;
+    // only the winner reports a creation event.
+    const winner = await db.findOne<Permission>({ model: 'permission', where });
+    if (winner)
+      return { permission: normalizePermission(winner), created: false };
+    throw err;
+  }
 }
 
 export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
@@ -316,47 +359,11 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
     },
 
     async findOrCreatePermission(input: PermissionInput): Promise<Permission> {
-      const conditions = serializePermissionConditions(db, input.conditions);
-      // The partial unique indexes (M8) guarantee at most one row per
-      // (resource, action, effect, conditions). Look it up by that tuple,
-      // honoring SQL's NULL-distinct rule for the no-conditions case.
-      const where = [
-        { field: 'resource', operator: '=' as const, value: input.resource },
-        { field: 'action', operator: '=' as const, value: input.action },
-        { field: 'effect', operator: '=' as const, value: input.effect ?? 'ALLOW' },
-        conditions == null
-          ? { field: 'conditions', operator: 'isNull' as const, value: null }
-          : { field: 'conditions', operator: '=' as const, value: conditions },
-      ];
+      return (await findOrCreatePermissionWithStatus(db, input)).permission;
+    },
 
-      const existing = await db.findOne<Permission>({ model: 'permission', where });
-      if (existing)
-        return normalizePermission(existing);
-
-      try {
-        const created = await db.create<Permission>({
-          model: 'permission',
-          data: {
-            resource: input.resource,
-            action: input.action,
-            effect: input.effect ?? 'ALLOW',
-            conditions,
-            description: `${input.action} ${input.resource}`,
-          },
-        });
-        return normalizePermission(created);
-      }
-      catch (err) {
-        // find-then-create is not atomic: a concurrent caller can insert the
-        // same permission between our findOne and create, tripping the unique
-        // index. That's the expected outcome, not an error — re-read the row
-        // the winner inserted and return it. Re-throw anything that isn't a
-        // resolvable duplicate.
-        const winner = await db.findOne<Permission>({ model: 'permission', where });
-        if (winner)
-          return normalizePermission(winner);
-        throw err;
-      }
+    findOrCreatePermissionWithStatus(input: PermissionInput) {
+      return findOrCreatePermissionWithStatus(db, input);
     },
 
     async ensureResource(name: string): Promise<void> {

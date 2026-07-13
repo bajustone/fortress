@@ -180,19 +180,20 @@ export function createIamService(
    * inserted the row, `false` if it already existed (before or via the race).
    */
   async function insertIfMissing(
+    database: DatabaseAdapter,
     model: string,
     where: WhereClause[],
     data: Record<string, unknown>,
   ): Promise<boolean> {
-    const existing = await db.findOne<{ id?: string }>({ model, where });
+    const existing = await database.findOne<{ id?: string }>({ model, where });
     if (existing)
       return false;
     try {
-      await db.create({ model, data });
+      await database.create({ model, data });
       return true;
     }
     catch (err) {
-      const winner = await db.findOne<{ id?: string }>({ model, where });
+      const winner = await database.findOne<{ id?: string }>({ model, where });
       if (winner)
         return false;
       throw err;
@@ -200,12 +201,14 @@ export function createIamService(
   }
 
   async function createRoleBindingIfMissing(
+    database: DatabaseAdapter,
     subjectType: SubjectType,
     subjectId: string,
     roleId: string,
     tenantId?: string,
   ): Promise<boolean> {
     return insertIfMissing(
+      database,
       'role_binding',
       [
         { field: 'roleId', operator: '=', value: roleId },
@@ -218,12 +221,14 @@ export function createIamService(
   }
 
   async function createDirectPermissionBindingIfMissing(
+    database: DatabaseAdapter,
     subjectType: SubjectType,
     subjectId: string,
     permissionId: string,
     tenantId?: string,
   ): Promise<boolean> {
     return insertIfMissing(
+      database,
       'direct_permission_binding',
       [
         { field: 'permissionId', operator: '=', value: permissionId },
@@ -235,8 +240,13 @@ export function createIamService(
     );
   }
 
-  async function addUserToGroupIfMissing(groupId: string, userId: string): Promise<boolean> {
+  async function addUserToGroupIfMissing(
+    database: DatabaseAdapter,
+    groupId: string,
+    userId: string,
+  ): Promise<boolean> {
     return insertIfMissing(
+      database,
       'group_user',
       [
         { field: 'groupId', operator: '=', value: groupId },
@@ -244,6 +254,51 @@ export function createIamService(
       ],
       { groupId, userId },
     );
+  }
+
+  // Serialize lifecycle-sensitive polymorphic bindings with deletion. The
+  // process-local queue covers every adapter; PostgreSQL additionally takes a
+  // transaction advisory lock so separate workers/replicas use the same key.
+  const mutationQueues = new Map<string, Promise<void>>();
+  async function withMutationLock<T>(
+    key: string,
+    operation: (tx: DatabaseAdapter) => Promise<T>,
+  ): Promise<T> {
+    const previous = mutationQueues.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mutationQueues.set(key, current);
+    await previous;
+    try {
+      return await db.transaction(async (tx) => {
+        if (tx.dialect === 'pg' && tx.rawQuery) {
+          await tx.rawQuery('SELECT pg_advisory_xact_lock(hashtext(?))', [`fortress:${key}`]);
+        }
+        return operation(tx);
+      });
+    }
+    finally {
+      release();
+      if (mutationQueues.get(key) === current)
+        mutationQueues.delete(key);
+    }
+  }
+
+  async function withExistingGroup<T>(
+    groupId: string,
+    operation: (tx: DatabaseAdapter, group: Group) => Promise<T>,
+  ): Promise<T> {
+    return withMutationLock(`group:${groupId}`, async (tx) => {
+      const group = await tx.findOne<Group>({
+        model: 'group',
+        where: [{ field: 'id', operator: '=', value: groupId }],
+      });
+      if (!group)
+        throw Errors.notFound('Group not found');
+      return operation(tx, group);
+    });
   }
 
   return {
@@ -365,14 +420,16 @@ export function createIamService(
     },
 
     async bindRole(subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string): Promise<void> {
-      const inserted = await createRoleBindingIfMissing(subjectType, subjectId, roleId, tenantId);
+      const inserted = subjectType === 'GROUP'
+        ? await withExistingGroup(subjectId, tx => createRoleBindingIfMissing(tx, subjectType, subjectId, roleId, tenantId))
+        : await createRoleBindingIfMissing(db, subjectType, subjectId, roleId, tenantId);
       if (!inserted)
         return;
       emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId, tenantId } });
     },
 
     async bindRoleToUser(userId: string, roleId: string, tenantId?: string): Promise<void> {
-      const inserted = await createRoleBindingIfMissing('USER', userId, roleId, tenantId);
+      const inserted = await createRoleBindingIfMissing(db, 'USER', userId, roleId, tenantId);
       if (!inserted)
         return;
       cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
@@ -380,7 +437,10 @@ export function createIamService(
     },
 
     async bindRoleToGroup(groupId: string, roleId: string, tenantId?: string): Promise<void> {
-      const inserted = await createRoleBindingIfMissing('GROUP', groupId, roleId, tenantId);
+      const inserted = await withExistingGroup(
+        groupId,
+        tx => createRoleBindingIfMissing(tx, 'GROUP', groupId, roleId, tenantId),
+      );
       if (!inserted)
         return;
       cache?.invalidateAll();
@@ -406,7 +466,7 @@ export function createIamService(
     async bindPermissionToUser(userId: string, permission: PermissionInput, tenantId?: string): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
-      const inserted = await createDirectPermissionBindingIfMissing('USER', userId, perm.id, tenantId);
+      const inserted = await createDirectPermissionBindingIfMissing(db, 'USER', userId, perm.id, tenantId);
       if (!inserted)
         return;
       cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
@@ -416,7 +476,10 @@ export function createIamService(
     async bindPermissionToGroup(groupId: string, permission: PermissionInput, tenantId?: string): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
-      const inserted = await createDirectPermissionBindingIfMissing('GROUP', groupId, perm.id, tenantId);
+      const inserted = await withExistingGroup(
+        groupId,
+        tx => createDirectPermissionBindingIfMissing(tx, 'GROUP', groupId, perm.id, tenantId),
+      );
       if (!inserted)
         return;
       cache?.invalidateAll();
@@ -457,7 +520,10 @@ export function createIamService(
     },
 
     async addUserToGroup(groupId: string, userId: string): Promise<void> {
-      const inserted = await addUserToGroupIfMissing(groupId, userId);
+      const inserted = await withExistingGroup(
+        groupId,
+        tx => addUserToGroupIfMissing(tx, groupId, userId),
+      );
       if (!inserted)
         return;
       cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
@@ -630,20 +696,38 @@ export function createIamService(
         data: updateData,
       });
 
+      emit({ eventType: 'GROUP_UPDATED', targetId: groupId, targetType: 'group', metadata: data });
       return updated!;
     },
 
     async deleteGroup(groupId: string): Promise<void> {
-      const existing = await db.findOne<Group>({
-        model: 'group',
-        where: [{ field: 'id', operator: '=', value: groupId }],
+      const existing = await withExistingGroup(groupId, async (tx, group) => {
+        // Delete the identity first, then remove polymorphic bindings while
+        // holding the shared mutation lock. A concurrent binder either wins
+        // before this transaction or observes the group as absent afterwards.
+        await tx.delete({ model: 'group', where: [{ field: 'id', operator: '=', value: groupId }] });
+        await tx.delete({
+          model: 'group_user',
+          where: [{ field: 'groupId', operator: '=', value: groupId }],
+        });
+        await tx.delete({
+          model: 'role_binding',
+          where: [
+            { field: 'subjectType', operator: '=', value: 'GROUP' },
+            { field: 'subjectId', operator: '=', value: groupId },
+          ],
+        });
+        await tx.delete({
+          model: 'direct_permission_binding',
+          where: [
+            { field: 'subjectType', operator: '=', value: 'GROUP' },
+            { field: 'subjectId', operator: '=', value: groupId },
+          ],
+        });
+        return group;
       });
-      if (!existing) {
-        throw Errors.notFound('Group not found');
-      }
-
-      await db.delete({ model: 'group', where: [{ field: 'id', operator: '=', value: groupId }] });
       cache?.invalidateAll();
+      emit({ eventType: 'GROUP_DELETED', targetId: groupId, targetType: 'group', metadata: { name: existing.name } });
     },
 
     async getGroupUsers(groupId: string): Promise<FortressUser[]> {
@@ -673,20 +757,46 @@ export function createIamService(
 
     async createPermission(permission: PermissionInput): Promise<Permission> {
       await adapter.ensureResource(permission.resource);
-      return adapter.findOrCreatePermission(permission);
+      const result = await adapter.findOrCreatePermissionWithStatus(permission);
+      if (result.created) {
+        emit({
+          eventType: 'PERMISSION_CREATED',
+          targetId: result.permission.id,
+          targetType: 'permission',
+          metadata: {
+            resource: result.permission.resource,
+            action: result.permission.action,
+            effect: result.permission.effect,
+            conditions: result.permission.conditions,
+          },
+        });
+      }
+      return result.permission;
     },
 
     async deletePermission(permissionId: string): Promise<void> {
-      const existing = await db.findOne<Permission>({
-        model: 'permission',
-        where: [{ field: 'id', operator: '=', value: permissionId }],
+      const existing = await withMutationLock(`permission:${permissionId}`, async (tx) => {
+        const permission = await tx.findOne<Permission>({
+          model: 'permission',
+          where: [{ field: 'id', operator: '=', value: permissionId }],
+        });
+        if (!permission)
+          throw Errors.notFound('Permission not found');
+        await tx.delete({ model: 'permission', where: [{ field: 'id', operator: '=', value: permissionId }] });
+        return permission;
       });
-      if (!existing) {
-        throw Errors.notFound('Permission not found');
-      }
-
-      await db.delete({ model: 'permission', where: [{ field: 'id', operator: '=', value: permissionId }] });
       cache?.invalidateAll();
+      emit({
+        eventType: 'PERMISSION_DELETED',
+        targetId: permissionId,
+        targetType: 'permission',
+        metadata: {
+          resource: existing.resource,
+          action: existing.action,
+          effect: existing.effect,
+          conditions: existing.conditions,
+        },
+      });
     },
 
     async addPermissionToRole(roleId: string, permission: PermissionInput): Promise<void> {
@@ -878,7 +988,7 @@ export function createIamService(
       roleId: string,
       tenantId?: string,
     ): Promise<void> {
-      const inserted = await createRoleBindingIfMissing('SERVICE_ACCOUNT', serviceAccountId, roleId, tenantId);
+      const inserted = await createRoleBindingIfMissing(db, 'SERVICE_ACCOUNT', serviceAccountId, roleId, tenantId);
       if (!inserted)
         return;
       cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));
@@ -918,7 +1028,7 @@ export function createIamService(
     ): Promise<void> {
       await adapter.ensureResource(permission.resource);
       const perm = await adapter.findOrCreatePermission(permission);
-      const inserted = await createDirectPermissionBindingIfMissing('SERVICE_ACCOUNT', serviceAccountId, perm.id, tenantId);
+      const inserted = await createDirectPermissionBindingIfMissing(db, 'SERVICE_ACCOUNT', serviceAccountId, perm.id, tenantId);
       if (!inserted)
         return;
       cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));

@@ -281,11 +281,13 @@ describe('tenant-scoped IAM', () => {
 
 describe('iam-service: admin CRUD', () => {
   let fortress: Fortress;
+  let database: ReturnType<typeof createTestAdapter>;
 
   beforeEach(() => {
+    database = createTestAdapter();
     fortress = createFortress({
       jwt: { key: SECRET },
-      database: createTestAdapter(),
+      database,
     });
   });
 
@@ -389,12 +391,17 @@ describe('iam-service: admin CRUD', () => {
   // ── updateGroup ──────────────────────────────────────────────
 
   describe('updateGroup', () => {
-    it('updates group name', async () => {
+    it('updates group name and emits GROUP_UPDATED', async () => {
       const group = await fortress.iam.createGroup('old-name');
+      const events: string[] = [];
+      fortress.iam.addIamObserver((event) => {
+        events.push(event.eventType);
+      });
 
       const updated = await fortress.iam.updateGroup(group.id, { name: 'new-name' });
 
       expect(updated.name).toBe('new-name');
+      expect(events).toEqual(['GROUP_UPDATED']);
     });
 
     it('throws NOT_FOUND for missing group', async () => {
@@ -405,13 +412,85 @@ describe('iam-service: admin CRUD', () => {
   // ── deleteGroup ──────────────────────────────────────────────
 
   describe('deleteGroup', () => {
-    it('deletes group', async () => {
+    it('atomically deletes group dependants and emits GROUP_DELETED', async () => {
       const group = await fortress.iam.createGroup('temp');
+      const user = await fortress.auth.createUser({
+        email: 'group-delete@test.com',
+        name: 'Group Delete',
+        password: 'password-123456',
+      });
+      const role = await fortress.iam.createRole('group-role', [{ resource: 'group-test', action: 'read' }]);
+      const permission = await fortress.iam.createPermission({ resource: 'group-test', action: 'write' });
+      await fortress.iam.addUserToGroup(group.id, user.id);
+      await fortress.iam.bindRoleToGroup(group.id, role.id);
+      await fortress.iam.bindPermissionToGroup(group.id, permission);
+      const events: string[] = [];
+      fortress.iam.addIamObserver((event) => {
+        events.push(event.eventType);
+      });
 
       await fortress.iam.deleteGroup(group.id);
 
       const result = await fortress.iam.listGroups();
       expect(result.total).toBe(0);
+      await expect(database.count({ model: 'group_user' })).resolves.toBe(0);
+      await expect(database.count({ model: 'role_binding' })).resolves.toBe(0);
+      await expect(database.count({ model: 'direct_permission_binding' })).resolves.toBe(0);
+      expect(events).toEqual(['GROUP_DELETED']);
+    });
+
+    it('serializes concurrent GROUP binding so deletion cannot leave an orphan', async () => {
+      const raceDatabase = createTestAdapter();
+      const originalTransaction = raceDatabase.transaction.bind(raceDatabase);
+      let markGroupDeleted!: () => void;
+      const groupDeleted = new Promise<void>((resolve) => {
+        markGroupDeleted = resolve;
+      });
+      let releaseDelete!: () => void;
+      const deleteGate = new Promise<void>((resolve) => {
+        releaseDelete = resolve;
+      });
+      raceDatabase.transaction = callback => originalTransaction(async (tx) => {
+        const wrapped = {
+          ...tx,
+          async delete(options: Parameters<typeof tx.delete>[0]) {
+            const result = await tx.delete(options);
+            if (options.model === 'group') {
+              markGroupDeleted();
+              await deleteGate;
+            }
+            return result;
+          },
+        };
+        return callback(wrapped);
+      });
+      const raceFortress = createFortress({ jwt: { key: SECRET }, database: raceDatabase });
+      const group = await raceFortress.iam.createGroup('race-group');
+      const role = await raceFortress.iam.createRole('race-role', []);
+
+      const deletion = raceFortress.iam.deleteGroup(group.id);
+      await groupDeleted;
+      const binding = raceFortress.iam.bindRoleToGroup(group.id, role.id);
+      releaseDelete();
+
+      await deletion;
+      await expect(binding).rejects.toThrow('Group not found');
+      await expect(raceDatabase.count({ model: 'role_binding' })).resolves.toBe(0);
+    });
+
+    it('emits one deletion event under concurrent duplicate deletes', async () => {
+      const group = await fortress.iam.createGroup('duplicate-delete');
+      const events: string[] = [];
+      fortress.iam.addIamObserver((event) => {
+        events.push(event.eventType);
+      });
+
+      const results = await Promise.allSettled([
+        fortress.iam.deleteGroup(group.id),
+        fortress.iam.deleteGroup(group.id),
+      ]);
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      expect(events).toEqual(['GROUP_DELETED']);
     });
 
     it('throws NOT_FOUND for missing group', async () => {
@@ -476,31 +555,42 @@ describe('iam-service: admin CRUD', () => {
   // ── createPermission ─────────────────────────────────────────
 
   describe('createPermission', () => {
-    it('creates a permission', async () => {
-      const perm = await fortress.iam.createPermission({
-        resource: 'invoice',
-        action: 'create',
+    it('emits PERMISSION_CREATED only for the inserting call', async () => {
+      const events: string[] = [];
+      fortress.iam.addIamObserver((event) => {
+        events.push(event.eventType);
       });
+      const [perm, existing] = await Promise.all([
+        fortress.iam.createPermission({ resource: 'invoice', action: 'create' }),
+        fortress.iam.createPermission({ resource: 'invoice', action: 'create' }),
+      ]);
 
       expect(perm.id).toBeDefined();
       expect(perm.resource).toBe('invoice');
       expect(perm.action).toBe('create');
+      expect(existing.id).toBe(perm.id);
+      expect(events).toEqual(['PERMISSION_CREATED']);
     });
   });
 
   // ── deletePermission ─────────────────────────────────────────
 
   describe('deletePermission', () => {
-    it('deletes a permission', async () => {
+    it('deletes a permission and emits PERMISSION_DELETED', async () => {
       const perm = await fortress.iam.createPermission({
         resource: 'invoice',
         action: 'delete',
+      });
+      const events: string[] = [];
+      fortress.iam.addIamObserver((event) => {
+        events.push(event.eventType);
       });
 
       await fortress.iam.deletePermission(perm.id);
 
       const remaining = await fortress.iam.listPermissions({ resource: 'invoice' });
       expect(remaining.find(p => p.action === 'delete')).toBeUndefined();
+      expect(events).toEqual(['PERMISSION_DELETED']);
     });
 
     it('throws NOT_FOUND for missing permission', async () => {

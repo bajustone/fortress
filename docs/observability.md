@@ -297,8 +297,10 @@ The `audit-log` plugin subscribes to `addIamObserver` automatically so IAM event
 | `ROLE_CREATED` / `ROLE_DELETED` / `ROLE_UPDATED` | `fortress.iam.createRole / deleteRole / updateRole` | log only |
 | `ROLE_PERMISSION_ADDED` / `ROLE_PERMISSION_REMOVED` | role-permission diff | log only |
 | `ROLE_BOUND` / `ROLE_UNBOUND` | role-binding mutations | log only |
-| `PERMISSION_CHANGED` | direct-permission mutations | log only |
-| `GROUP_CREATED` / `GROUP_MEMBER_ADDED` / `GROUP_MEMBER_REMOVED` | group mutations | log only |
+| `PERMISSION_CREATED` / `PERMISSION_DELETED` | permission catalog mutations | log only |
+| `PERMISSION_CHANGED` | direct-permission binding mutations | log only |
+| `GROUP_CREATED` / `GROUP_UPDATED` / `GROUP_DELETED` | group lifecycle mutations | log only |
+| `GROUP_MEMBER_ADDED` / `GROUP_MEMBER_REMOVED` | group membership mutations | log only |
 | `SERVICE_ACCOUNT_CREATED` / `SERVICE_ACCOUNT_UPDATED` / `SERVICE_ACCOUNT_DELETED` | service-account mutations | log only |
 
 All IAM mutation events carry `targetType`, `targetId`, and a `metadata` object suitable for audit-log persistence.
@@ -308,7 +310,7 @@ All IAM mutation events carry `targetType`, `targetId`, and a `metadata` object 
 | Field | Description |
 |---|---|
 | `subjectType` | `'USER'` \| `'GROUP'` \| `'SERVICE_ACCOUNT'` |
-| `subjectId` | numeric id (kept off metric attributes by Fortress — stays on the in-process event) |
+| `subjectId` | string id (kept off metric attributes by Fortress — stays on the in-process event) |
 | `resource`, `action` | what was checked |
 | `allowed` | final decision |
 | `cached` | whether the result was served from the permission cache |

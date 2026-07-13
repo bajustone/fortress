@@ -606,7 +606,7 @@ Bidirectional sync between `fortress.resources.json` and the database:
 
 ```
 ROLE_CREATED, ROLE_DELETED, ROLE_BOUND, ROLE_UNBOUND,
-PERMISSION_CHANGED, GROUP_CREATED, GROUP_MEMBER_ADDED, GROUP_MEMBER_REMOVED
+PERMISSION_CHANGED, PERMISSION_CREATED, PERMISSION_DELETED, GROUP_CREATED, GROUP_UPDATED, GROUP_DELETED, GROUP_MEMBER_ADDED, GROUP_MEMBER_REMOVED
 ```
 
 Events are consumed by the audit-log plugin (if registered) for tamper-evident logging.
@@ -1113,7 +1113,7 @@ Append-only event logging with optional SHA-256 hash chain for tamper detection.
 
 **Models:** `audit_log` — `timestamp`, `eventType`, `actorId`, `targetId`, `targetType`, `metadata` (JSON), `previousHash`
 
-**Events logged:** `LOGIN_SUCCESS`, `LOGIN_FAILURE`, `LOGOUT`, `REGISTER`, `TOKEN_REFRESH`, `TOKEN_REUSE`, `ROLE_CREATED`, `ROLE_DELETED`, `ROLE_BOUND`, `ROLE_UNBOUND`, `PERMISSION_CHANGED`, `GROUP_CREATED`, `GROUP_MEMBER_ADDED`, `GROUP_MEMBER_REMOVED`
+**Events logged:** Auth lifecycle events plus `ROLE_CREATED`, `ROLE_UPDATED`, `ROLE_DELETED`, `ROLE_BOUND`, `ROLE_UNBOUND`, `ROLE_PERMISSION_ADDED`, `ROLE_PERMISSION_REMOVED`, `PERMISSION_CREATED`, `PERMISSION_DELETED`, `PERMISSION_CHANGED`, `GROUP_CREATED`, `GROUP_UPDATED`, `GROUP_DELETED`, `GROUP_MEMBER_ADDED`, `GROUP_MEMBER_REMOVED`, and service-account lifecycle events
 
 **Hooks:** Integrated into `afterLogin`, `onLoginFailure`, `beforeLogout`, `afterRegister`, `afterTokenRefresh`. Also listens to IAM events via `setIamObserver()`.
 
