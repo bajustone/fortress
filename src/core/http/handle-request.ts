@@ -57,218 +57,224 @@ export function buildHandleRequest(
   const csrfConfig = resolveCsrfConfig(fortress.config.csrf);
   const plugins = fortress.config.plugins ?? [];
   const pluginPathPrefixes = getPluginPathPrefixes(plugins);
+  const startActiveSpan = fortress.telemetry.tracer.startActiveSpan?.bind(fortress.telemetry.tracer)
+    ?? (async (name, attributes, callback) => callback(
+      fortress.telemetry.tracer.startSpan(name, attributes),
+    ));
 
   return async function handleRequest(request: Request): Promise<Response> {
-    // Outer span for the whole pipeline. No-op when `config.observability`
-    // is unset — `NO_OP_TELEMETRY` returns a shared singleton span.
-    // Attributes are set progressively as they become available; the final
-    // `http.status_code` lands in the finally block.
-    const span = fortress.telemetry.tracer.startSpan('fortress.handleRequest', {
-      'http.method': request.method,
-    });
-    let response: Response | undefined;
-    try {
-      const url = new URL(request.url);
-      const pathname = url.pathname;
-
-      // 1. Plugin before-auth middleware (rate limit, audit log, etc.)
-      await runPluginMiddleware(plugins, fortress.config, 'before-auth', { request });
-
-      // 1a. H5 — CSRF check. Runs before token verification so a malicious
-      //     cross-site POST can't trigger any auth lookup work either. The
-      //     check is a no-op for safe methods, bearer/API-key flows, and
-      //     deployments that opt out.
-      enforceCsrf(request, pathname, csrfConfig, cookieConfig);
-
-      // 2. Match path + method to an endpoint
-      const matched = matchRoute(routeTable, request.method, pathname);
-      if (!matched) {
-        // Only return 404 for fortress-owned paths; otherwise the caller
-        // (an adapter) might want to fall through to its own router.
-        if (isFortressPath(pathname, pluginPathPrefixes)) {
-          throw Errors.notFound(`No endpoint matches ${request.method} ${pathname}`);
-        }
-        // Non-fortress path with no match — also a 404 from this entry point
-        throw Errors.notFound(`No endpoint matches ${request.method} ${pathname}`);
-      }
-      const { endpoint, params } = matched;
-      // Upgrade span attributes now that we know the matched route.
-      // `endpoint.path` is parameterized (e.g. `/iam/roles/:id`) so it's
-      // low-cardinality and safe to put on a span/metric attribute.
-      span.setAttribute('http.route', endpoint.path);
-      span.setAttribute('fortress.handler', endpoint.handler);
-
-      // 3. Principal resolution. Three paths, tried in order:
-      //
-      //    3a. Plugin-backed credential resolvers (api-key, future
-      //        OAuth client_credentials, future mTLS). First plugin to
-      //        return non-null wins — its subject + optional claims
-      //        become the request principal.
-      //    3b. JWT bearer fallback. Used when no plugin resolves the
-      //        request and the endpoint declared `security: 'bearer'`.
-      //    3c. Routes that declare `meta.bearerKind: 'oauth'` (the OAuth
-      //        protocol endpoints — token, userinfo, introspect, revoke,
-      //        authorize, jwks, discovery) self-parse their bearer
-      //        (which is an OAuth access token, not a Fortress JWT) so
-      //        we skip both the resolver chain and the JWT check here.
-      //        Other `/oauth/*` routes — e.g. the consent-flow endpoints
-      //        `/oauth/flows/:flowId{,/approve,/deny}` — default to
-      //        `bearerKind: 'jwt'` and go through the normal auth
-      //        pipeline so a host app SPA can call them with a Fortress
-      //        JWT and have RBAC honoured.
-      let subject: Subject | undefined;
-      let userId: string | undefined;
-      let claims: TokenClaims | undefined;
-      let scopes: string[] | null | undefined;
-      const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
-
-      if (!selfManagedBearer) {
-        const resolved = await tryPluginPrincipal(fortress, request);
-        if (resolved) {
-          subject = resolved.subject;
-          claims = resolved.claims;
-          scopes = resolved.scopes;
-        }
-      }
-
-      const requiresBearer = !selfManagedBearer
-        && ((endpoint.meta?.security?.includes('bearer') ?? false) || !!endpoint.meta?.permission);
-      if (!subject && requiresBearer) {
-        const token = extractAccessToken(request, cookieConfig);
-        if (!token)
-          throw Errors.unauthorized('Missing access token');
+    // Keep the request span active for the entire async pipeline so database,
+    // IAM, and plugin spans inherit it through the configured telemetry
+    // provider. The no-op provider invokes this callback without allocation.
+    return startActiveSpan(
+      'fortress.handleRequest',
+      { 'http.method': request.method },
+      async (span) => {
+        let response: Response | undefined;
         try {
-          claims = await fortress.auth.verifyToken(token);
-          subject = { type: claims.subjectType, id: claims.sub };
-        }
-        catch (err) {
-          if (err instanceof FortressError)
-            throw err;
-          throw Errors.unauthorized('Invalid access token');
-        }
-      }
+          const url = new URL(request.url);
+          const pathname = url.pathname;
 
-      // Convenience alias: downstream code that only needs `userId` (adapters,
-      // plugin middleware) still works for USER subjects. Non-user principals
-      // leave `userId` undefined, which is correct — they'd be hitting routes
-      // that RBAC-check via `subject` now.
-      if (subject?.type === 'USER')
-        userId = subject.id;
+          // 1. Plugin before-auth middleware (rate limit, audit log, etc.)
+          await runPluginMiddleware(plugins, fortress.config, 'before-auth', { request });
 
-      if (subject) {
-        span.setAttribute('fortress.subject_type', subject.type);
-      }
+          // 1a. H5 — CSRF check. Runs before token verification so a malicious
+          //     cross-site POST can't trigger any auth lookup work either. The
+          //     check is a no-op for safe methods, bearer/API-key flows, and
+          //     deployments that opt out.
+          enforceCsrf(request, pathname, csrfConfig, cookieConfig);
 
-      // 4. Plugin after-auth middleware
-      await runPluginMiddleware(plugins, fortress.config, 'after-auth', {
-        request,
-        fortressSubject: subject,
-        fortressUserId: userId,
-        fortressClaims: claims,
-        fortressScopes: scopes,
-      });
+          // 2. Match path + method to an endpoint
+          const matched = matchRoute(routeTable, request.method, pathname);
+          if (!matched) {
+            // Only return 404 for fortress-owned paths; otherwise the caller
+            // (an adapter) might want to fall through to its own router.
+            if (isFortressPath(pathname, pluginPathPrefixes)) {
+              throw Errors.notFound(`No endpoint matches ${request.method} ${pathname}`);
+            }
+            // Non-fortress path with no match — also a 404 from this entry point
+            throw Errors.notFound(`No endpoint matches ${request.method} ${pathname}`);
+          }
+          const { endpoint, params } = matched;
+          // Upgrade span attributes now that we know the matched route.
+          // `endpoint.path` is parameterized (e.g. `/iam/roles/:id`) so it's
+          // low-cardinality and safe to put on a span/metric attribute.
+          span.setAttribute('http.route', endpoint.path);
+          span.setAttribute('fortress.handler', endpoint.handler);
 
-      // 5. Fortress-managed default-deny RBAC. Routes flagged
-      //    `bearerKind: 'oauth'` self-authenticate inside their handlers
-      //    (the bearer is an OAuth token, not a JWT) so they're exempt
-      //    from the IAM check too.
-      if (!selfManagedBearer) {
-        await enforceFortressPermission(endpoint, subject, {
-          checkPermission: (subj, resource, action, credentialScopes): Promise<boolean> =>
-            fortress.iam.checkPermission(subj, resource, action, { credentialScopes }),
-        }, scopes);
-      }
+          // 3. Principal resolution. Three paths, tried in order:
+          //
+          //    3a. Plugin-backed credential resolvers (api-key, future
+          //        OAuth client_credentials, future mTLS). First plugin to
+          //        return non-null wins — its subject + optional claims
+          //        become the request principal.
+          //    3b. JWT bearer fallback. Used when no plugin resolves the
+          //        request and the endpoint declared `security: 'bearer'`.
+          //    3c. Routes that declare `meta.bearerKind: 'oauth'` (the OAuth
+          //        protocol endpoints — token, userinfo, introspect, revoke,
+          //        authorize, jwks, discovery) self-parse their bearer
+          //        (which is an OAuth access token, not a Fortress JWT) so
+          //        we skip both the resolver chain and the JWT check here.
+          //        Other `/oauth/*` routes — e.g. the consent-flow endpoints
+          //        `/oauth/flows/:flowId{,/approve,/deny}` — default to
+          //        `bearerKind: 'jwt'` and go through the normal auth
+          //        pipeline so a host app SPA can call them with a Fortress
+          //        JWT and have RBAC honoured.
+          let subject: Subject | undefined;
+          let userId: string | undefined;
+          let claims: TokenClaims | undefined;
+          let scopes: string[] | null | undefined;
+          const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
 
-      // 6. Plugin after-rbac middleware
-      await runPluginMiddleware(plugins, fortress.config, 'after-rbac', {
-        request,
-        fortressSubject: subject,
-        fortressUserId: userId,
-        fortressClaims: claims,
-        fortressScopes: scopes,
-      });
+          if (!selfManagedBearer) {
+            const resolved = await tryPluginPrincipal(fortress, request);
+            if (resolved) {
+              subject = resolved.subject;
+              claims = resolved.claims;
+              scopes = resolved.scopes;
+            }
+          }
 
-      // 7. Body parse + validation. Validation reads the body via clone()
-      //    so dispatch can re-read it. We sniff the content-type to know
-      //    whether validateRequest can parse JSON. Skipped for routes
-      //    flagged `bearerKind: 'oauth'` — their bodies are
-      //    `application/x-www-form-urlencoded` and the OAuth dispatcher
-      //    does its own parsing/validation per RFC 6749.
-      if (!selfManagedBearer) {
-        let parsedBody: unknown;
-        if (
-          request.method !== 'GET'
-          && request.method !== 'HEAD'
-          && (request.headers.get('content-type') ?? '').includes('json')
-        ) {
-          parsedBody = await request.clone().json().catch(() => undefined);
-        }
-        const query = Object.fromEntries(url.searchParams);
-        // URL-sourced data is always strings. Coerce query/params to the
-        // types declared in the endpoint's JSON Schema before validation
-        // so `:id`/`?limit=2` don't trip integer/number/boolean checks.
-        const coercedQuery = coerceBySchema(endpoint.input?.query, query);
-        const coercedParams = coerceBySchema(endpoint.input?.params, params);
-        await validateRequest(endpoint.input, { body: parsedBody, query: coercedQuery, params: coercedParams });
-      }
+          const requiresBearer = !selfManagedBearer
+            && ((endpoint.meta?.security?.includes('bearer') ?? false) || !!endpoint.meta?.permission);
+          if (!subject && requiresBearer) {
+            const token = extractAccessToken(request, cookieConfig);
+            if (!token)
+              throw Errors.unauthorized('Missing access token');
+            try {
+              claims = await fortress.auth.verifyToken(token);
+              subject = { type: claims.subjectType, id: claims.sub };
+            }
+            catch (err) {
+              if (err instanceof FortressError)
+                throw err;
+              throw Errors.unauthorized('Invalid access token');
+            }
+          }
 
-      // 8. Dispatch + serialize. Pass IP/UA from headers as RequestMeta so
-      //    auth handlers can stamp refresh tokens with their origin.
-      const meta = {
-        ipAddress:
+          // Convenience alias: downstream code that only needs `userId` (adapters,
+          // plugin middleware) still works for USER subjects. Non-user principals
+          // leave `userId` undefined, which is correct — they'd be hitting routes
+          // that RBAC-check via `subject` now.
+          if (subject?.type === 'USER')
+            userId = subject.id;
+
+          if (subject) {
+            span.setAttribute('fortress.subject_type', subject.type);
+          }
+
+          // 4. Plugin after-auth middleware
+          await runPluginMiddleware(plugins, fortress.config, 'after-auth', {
+            request,
+            fortressSubject: subject,
+            fortressUserId: userId,
+            fortressClaims: claims,
+            fortressScopes: scopes,
+          });
+
+          // 5. Fortress-managed default-deny RBAC. Routes flagged
+          //    `bearerKind: 'oauth'` self-authenticate inside their handlers
+          //    (the bearer is an OAuth token, not a JWT) so they're exempt
+          //    from the IAM check too.
+          if (!selfManagedBearer) {
+            await enforceFortressPermission(endpoint, subject, {
+              checkPermission: (subj, resource, action, credentialScopes): Promise<boolean> =>
+                fortress.iam.checkPermission(subj, resource, action, { credentialScopes }),
+            }, scopes);
+          }
+
+          // 6. Plugin after-rbac middleware
+          await runPluginMiddleware(plugins, fortress.config, 'after-rbac', {
+            request,
+            fortressSubject: subject,
+            fortressUserId: userId,
+            fortressClaims: claims,
+            fortressScopes: scopes,
+          });
+
+          // 7. Body parse + validation. Validation reads the body via clone()
+          //    so dispatch can re-read it. We sniff the content-type to know
+          //    whether validateRequest can parse JSON. Skipped for routes
+          //    flagged `bearerKind: 'oauth'` — their bodies are
+          //    `application/x-www-form-urlencoded` and the OAuth dispatcher
+          //    does its own parsing/validation per RFC 6749.
+          if (!selfManagedBearer) {
+            let parsedBody: unknown;
+            if (
+              request.method !== 'GET'
+              && request.method !== 'HEAD'
+              && (request.headers.get('content-type') ?? '').includes('json')
+            ) {
+              parsedBody = await request.clone().json().catch(() => undefined);
+            }
+            const query = Object.fromEntries(url.searchParams);
+            // URL-sourced data is always strings. Coerce query/params to the
+            // types declared in the endpoint's JSON Schema before validation
+            // so `:id`/`?limit=2` don't trip integer/number/boolean checks.
+            const coercedQuery = coerceBySchema(endpoint.input?.query, query);
+            const coercedParams = coerceBySchema(endpoint.input?.params, params);
+            await validateRequest(endpoint.input, { body: parsedBody, query: coercedQuery, params: coercedParams });
+          }
+
+          // 8. Dispatch + serialize. Pass IP/UA from headers as RequestMeta so
+          //    auth handlers can stamp refresh tokens with their origin.
+          const meta = {
+            ipAddress:
           request.headers.get('x-forwarded-for')
           ?? request.headers.get('x-real-ip')
           ?? undefined,
-        userAgent: request.headers.get('user-agent') ?? undefined,
-      };
-      const dispatched = await dispatchEndpoint(fortress, request, endpoint, params, {
-        subject,
-        userId,
-        claims,
-        scopes,
-        meta,
-      });
+            userAgent: request.headers.get('user-agent') ?? undefined,
+          };
+          const dispatched = await dispatchEndpoint(fortress, request, endpoint, params, {
+            subject,
+            userId,
+            claims,
+            scopes,
+            meta,
+          });
 
-      // 9. If the endpoint emitted an auth result, serialize cookies.
-      //    Detected by checking the response body for accessToken/refreshToken
-      //    fields. We avoid touching streamed/HTML responses.
-      const cookies = await maybeBuildAuthCookies(
-        endpoint.handler,
-        dispatched,
-        fortress,
-        request,
-      );
-      response = cookies.length > 0
-        ? withCookies(cookies.response, cookies.setCookies)
-        : dispatched;
-      return response;
-    }
-    catch (err) {
-      response = errorToResponse(err, fortress.logger);
-      span.recordException(err);
-      span.setStatus({
-        code: 'error',
-        message: err instanceof Error ? err.message : String(err),
-      });
-      return response;
-    }
-    finally {
-      if (response) {
-        span.setAttribute('http.status_code', response.status);
-        if (response.status >= 200 && response.status < 400) {
-          span.setStatus({ code: 'ok' });
+          // 9. If the endpoint emitted an auth result, serialize cookies.
+          //    Detected by checking the response body for accessToken/refreshToken
+          //    fields. We avoid touching streamed/HTML responses.
+          const cookies = await maybeBuildAuthCookies(
+            endpoint.handler,
+            dispatched,
+            fortress,
+            request,
+          );
+          response = cookies.length > 0
+            ? withCookies(cookies.response, cookies.setCookies)
+            : dispatched;
+          return response;
         }
-        else if (response.status >= 400) {
-          // 4xx/5xx without an exception (e.g. a FortressError already
-          // serialized). Mark the span as error so traces highlight it.
+        catch (err) {
+          response = errorToResponse(err, fortress.logger);
+          span.recordException(err);
           span.setStatus({
             code: 'error',
-            message: `HTTP ${response.status}`,
+            message: err instanceof Error ? err.message : String(err),
           });
+          return response;
         }
-      }
-      span.end();
-    }
+        finally {
+          if (response) {
+            span.setAttribute('http.status_code', response.status);
+            if (response.status >= 200 && response.status < 400) {
+              span.setStatus({ code: 'ok' });
+            }
+            else if (response.status >= 400) {
+              // 4xx/5xx without an exception (e.g. a FortressError already
+              // serialized). Mark the span as error so traces highlight it.
+              span.setStatus({
+                code: 'error',
+                message: `HTTP ${response.status}`,
+              });
+            }
+          }
+          span.end();
+        }
+      },
+    );
   };
 }
 

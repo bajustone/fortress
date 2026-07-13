@@ -2559,6 +2559,8 @@ const fortress = createFortress({
 });
 ```
 
+The adapter keeps `fortress.handleRequest` active across the full async pipeline, so nested database/IAM spans inherit the request span. Logger, telemetry, Auth/IAM event/listener, permission-check listener, and `Unsubscribe` types are exported from both the package root and `/otel`.
+
 When a global OTel `MeterProvider` / `TracerProvider` is registered (e.g., via `NodeSDK` or `BasicTracerProvider`), Fortress emits:
 
 | Metric | Type | Unit | Attributes |

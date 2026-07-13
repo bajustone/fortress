@@ -34,7 +34,27 @@
  * know about that name will automatically pick up Fortress's DB queries.
  */
 
-import type { TelemetryProvider } from '../core/observability/types';
+import type { Span, TelemetryProvider } from '../core/observability/types';
+
+export type { AuthEvent, AuthEventListener } from '../core/auth/auth-service';
+export type {
+  IamEvent,
+  IamEventListener,
+  PermissionCheckEvent,
+  PermissionCheckListener,
+} from '../core/iam/iam-service';
+export type { Unsubscribe } from '../core/observability/listener-list';
+export type { FortressLogger } from '../core/observability/logger';
+export type {
+  Attributes,
+  AttributeValue,
+  Counter,
+  Histogram,
+  Meter,
+  Span,
+  TelemetryProvider,
+  Tracer,
+} from '../core/observability/types';
 
 export interface OtelTelemetryOptions {
   /** Instrumentation scope name. Defaults to `'fortress'`. */
@@ -75,28 +95,39 @@ export async function createOtelTelemetry(
   const otelTracer = api.trace.getTracer(name, version);
   const otelMeter = api.metrics.getMeter(name, version);
   const { SpanStatusCode } = api;
+  const wrapSpan = (span: import('@opentelemetry/api').Span): Span => ({
+    setAttribute: (k, v): void => {
+      span.setAttribute(k, v);
+    },
+    recordException: (err): void => {
+      span.recordException(err as Error);
+    },
+    setStatus: (s): void => {
+      span.setStatus({
+        code: s.code === 'ok' ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+        message: s.message,
+      });
+    },
+    end: (): void => {
+      span.end();
+    },
+  });
 
   return {
     tracer: {
-      startSpan(spanName, attrs): import('../core/observability/types').Span {
-        const span = otelTracer.startSpan(spanName, { attributes: attrs });
-        return {
-          setAttribute: (k, v): void => {
-            span.setAttribute(k, v);
-          },
-          recordException: (err): void => {
-            span.recordException(err as Error);
-          },
-          setStatus: (s): void => {
-            span.setStatus({
-              code: s.code === 'ok' ? SpanStatusCode.OK : SpanStatusCode.ERROR,
-              message: s.message,
-            });
-          },
-          end: (): void => {
-            span.end();
-          },
-        };
+      startSpan(spanName, attrs): Span {
+        return wrapSpan(otelTracer.startSpan(spanName, { attributes: attrs }));
+      },
+      startActiveSpan<T>(
+        spanName: string,
+        attrs: import('../core/observability/types').Attributes | undefined,
+        callback: (span: Span) => T | Promise<T>,
+      ): Promise<T> {
+        return otelTracer.startActiveSpan(
+          spanName,
+          { attributes: attrs },
+          async span => callback(wrapSpan(span)),
+        );
       },
     },
     meter: {

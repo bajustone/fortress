@@ -53,7 +53,6 @@ export type {
 
 /** Top-level fortress configuration and pluggable password-hasher contract. */
 export type { FortressConfig, PasswordHasher, SessionConfig } from './core/config';
-
 /**
  * Endpoint definition primitives — declarative `EndpointDefinition` objects
  * carrying request/response schemas, OpenAPI metadata, and HTTP method info
@@ -78,7 +77,6 @@ export type {
   InferEndpointSuccessResponse,
   SecurityRequirement,
 } from './core/endpoint';
-
 /** Single error class plus the typed factory used throughout fortress. */
 export { Errors, FortressError } from './core/errors';
 
@@ -87,42 +85,67 @@ export type { FortressErrorCode } from './core/errors';
 
 /** Factory that builds a configured fortress instance and the helper for type-safe plugin method access. */
 export { createFortress, getPluginMethods } from './core/fortress';
+
 /** The fortress instance type returned by {@link createFortress}, plus the typed call-map helper. */
 export type { Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, TypedCall } from './core/fortress';
+
 /** Typed in-process client builder and per-call options. */
 export { buildCall } from './core/http/call';
 
 export type { CallOptions } from './core/http/call';
+
 /** Cross-adapter context passed to plugin middleware under core, Hono, and Express. */
 export type { PluginRequestContext } from './core/http/plugin-middleware';
 export { describeProtectedTarget, protect, resolveProtectedEndpoint } from './core/http/protect';
-
 export type { ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';
+
 /** Permission debugging helper — "why does subject X have / not have permission Y?". */
 export { explainPermission } from './core/iam/explain';
 export type { PermissionExplanation, PermissionExplanationSource } from './core/iam/explain';
 /** Pre-built endpoint definitions and component schemas for the core IAM routes. */
 export { iamComponentSchemas, iamEndpoints } from './core/iam/iam-endpoints';
 
+/** IAM mutation and permission-check observer contracts. */
+export type {
+  IamEvent,
+  IamEventListener,
+  IamService,
+  PermissionCheckEvent,
+  PermissionCheckListener,
+} from './core/iam/iam-service';
 /** Manifest-driven RBAC permission seeding. See {@link Fortress.syncPermissionsFromManifest}. */
 export { runPermissionSync } from './core/iam/permission-sync';
 export type { PermissionSyncOptions, PermissionSyncResult } from './core/iam/permission-sync';
-
 /** JSON Schema types and the inferred TypeScript type helpers used by the schema builder. */
 export type { FortressSchema, Infer, JSONSchema, Simplify } from './core/json-schema';
 
 /** Canonical route-security manifest and drift checker. */
 export { detectRouteManifestDrift, hasRouteManifestDrift } from './core/manifest/drift';
-
 export type { DetectRouteManifestDriftOptions, RouteManifestDrift } from './core/manifest/drift';
+
 export { buildRouteManifest } from './core/manifest/route-manifest';
+
 export type { RouteClassification, RouteManifestEntry } from './core/manifest/route-manifest';
+
 /** Fortress schema migration metadata and runner helpers. */
 export { detectMigrationDrift, getMigrationStatus, hasMigrationDrift, migrateDown, migrateUp } from './core/migrations/engine';
-
 export type { MigrationApplyResult, MigrationDownResult, MigrationDrift, MigrationStatus } from './core/migrations/engine';
 export { FORTRESS_TABLES, fortressMigrations, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion, getMigrationUpSql } from './core/migrations/migrations';
 export type { FortressMigration, MigrationDialect } from './core/migrations/migrations';
+
+export type { Unsubscribe } from './core/observability/listener-list';
+/** Runtime-neutral logging, telemetry, and observer contracts. */
+export type { FortressLogger } from './core/observability/logger';
+export type {
+  Attributes,
+  AttributeValue,
+  Counter,
+  Histogram,
+  Meter,
+  Span,
+  TelemetryProvider,
+  Tracer,
+} from './core/observability/types';
 export { toOpenAPI } from './core/openapi';
 
 export type { ToOpenAPIOptions } from './core/openapi';

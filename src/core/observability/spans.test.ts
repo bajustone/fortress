@@ -21,30 +21,34 @@ interface SpanRecord {
  */
 function createSpyTelemetry(): { provider: TelemetryProvider; spans: SpanRecord[] } {
   const spans: SpanRecord[] = [];
+  const startSpan = (name: string, attributes?: Attributes): Span => {
+    const record: SpanRecord = {
+      name,
+      attributes: { ...(attributes ?? {}) },
+      ended: false,
+    };
+    spans.push(record);
+    return {
+      setAttribute(key, value): void {
+        record.attributes[key] = value;
+      },
+      recordException(error): void {
+        record.exception = error;
+      },
+      setStatus(status): void {
+        record.status = status;
+      },
+      end(): void {
+        record.ended = true;
+      },
+    };
+  };
   return {
     provider: {
       tracer: {
-        startSpan(name: string, attributes?: Attributes): Span {
-          const record: SpanRecord = {
-            name,
-            attributes: { ...(attributes ?? {}) },
-            ended: false,
-          };
-          spans.push(record);
-          return {
-            setAttribute(key, value): void {
-              record.attributes[key] = value;
-            },
-            recordException(error): void {
-              record.exception = error;
-            },
-            setStatus(status): void {
-              record.status = status;
-            },
-            end(): void {
-              record.ended = true;
-            },
-          };
+        startSpan,
+        async startActiveSpan(name, attributes, callback) {
+          return callback(startSpan(name, attributes));
         },
       },
       meter: NO_OP_TELEMETRY.meter,
@@ -72,6 +76,20 @@ describe('handleRequest outer span', () => {
       name: 'Span User',
       password: 'password-123456',
     });
+  });
+
+  it('falls back to startSpan for legacy custom telemetry providers', async () => {
+    const telemetry = createSpyTelemetry();
+    delete telemetry.provider.tracer.startActiveSpan;
+    const legacyFortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      observability: telemetry.provider,
+    });
+
+    const response = await legacyFortress.handleRequest(new Request('http://localhost/nope'));
+    expect(response.status).toBe(404);
+    expect(telemetry.spans.find(span => span.name === 'fortress.handleRequest')?.ended).toBe(true);
   });
 
   it('starts and ends a fortress.handleRequest span for every dispatched request', async () => {

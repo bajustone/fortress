@@ -21,6 +21,12 @@ export interface Span {
 
 export interface Tracer {
   startSpan: (name: string, attributes?: Attributes) => Span;
+  /** Run a callback with this span as the active parent for nested spans. */
+  startActiveSpan?: <T>(
+    name: string,
+    attributes: Attributes | undefined,
+    callback: (span: Span) => T | Promise<T>,
+  ) => Promise<T>;
 }
 
 export interface Counter {
@@ -63,7 +69,10 @@ const NO_OP_HISTOGRAM: Histogram = { record: () => {} };
  * shared no-op singletons and {@link Tracer.startSpan} returns a shared span.
  */
 export const NO_OP_TELEMETRY: TelemetryProvider = {
-  tracer: { startSpan: () => NO_OP_SPAN },
+  tracer: {
+    startSpan: () => NO_OP_SPAN,
+    startActiveSpan: async (_name, _attributes, callback) => callback(NO_OP_SPAN),
+  },
   meter: {
     createCounter: () => NO_OP_COUNTER,
     createHistogram: () => NO_OP_HISTOGRAM,

@@ -1,12 +1,18 @@
 import type { MetricData, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { Fortress } from '../core/fortress';
-import { metrics } from '@opentelemetry/api';
+import { context, metrics, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
   MeterProvider,
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../core/fortress';
 import { assertSuccess } from '../core/types';
@@ -19,6 +25,9 @@ let fortress: Fortress;
 let exporter: InMemoryMetricExporter;
 let reader: PeriodicExportingMetricReader;
 let provider: MeterProvider;
+let traceProvider: BasicTracerProvider;
+let spanExporter: InMemorySpanExporter;
+let contextManager: AsyncLocalStorageContextManager;
 
 async function collectMetrics(): Promise<MetricData[]> {
   await reader.forceFlush();
@@ -45,6 +54,13 @@ describe('createOtelTelemetry', () => {
     });
     provider = new MeterProvider({ readers: [reader] });
     metrics.setGlobalMeterProvider(provider);
+    spanExporter = new InMemorySpanExporter();
+    traceProvider = new BasicTracerProvider({
+      spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+    });
+    trace.setGlobalTracerProvider(traceProvider);
+    contextManager = new AsyncLocalStorageContextManager().enable();
+    context.setGlobalContextManager(contextManager);
 
     const telemetry = await createOtelTelemetry({ name: 'fortress-test' });
     fortress = createFortress({
@@ -63,7 +79,11 @@ describe('createOtelTelemetry', () => {
 
   afterEach(async () => {
     await provider.shutdown();
+    await traceProvider.shutdown();
     metrics.disable();
+    trace.disable();
+    context.disable();
+    contextManager.disable();
   });
 
   it('emits fortress.auth.events.total on successful login', async () => {
@@ -149,6 +169,25 @@ describe('createOtelTelemetry', () => {
       return 'db.system.name' in attrs && 'db.operation.name' in attrs;
     });
     expect(hasDbAttrs).toBe(true);
+  });
+
+  it('parents nested database spans under the active request span', async () => {
+    const response = await fortress.handleRequest(new Request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ identifier: 'otel@example.com', password: 'password-123456' }),
+    }));
+    expect(response.status).toBe(200);
+    await traceProvider.forceFlush();
+
+    const spans = spanExporter.getFinishedSpans();
+    const requestSpan = spans.find(span => span.name === 'fortress.handleRequest');
+    const databaseSpans = spans.filter(span => span.attributes['db.operation.name'] !== undefined);
+    expect(requestSpan).toBeDefined();
+    expect(databaseSpans.length).toBeGreaterThan(0);
+    expect(databaseSpans.some(
+      span => span.parentSpanContext?.spanId === requestSpan?.spanContext().spanId,
+    )).toBe(true);
   });
 
   it('emits fortress.auth.token_verify.duration on verifyToken calls', async () => {

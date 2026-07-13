@@ -255,7 +255,14 @@ If you want to plug a non-OTel metric backend (custom Prometheus client, DataDog
 import type { TelemetryProvider } from '@bajustone/fortress';
 
 const customTelemetry: TelemetryProvider = {
-  tracer: { startSpan: (name, attrs) => ({ /* ... */ }) },
+  tracer: {
+    startSpan: (name, attrs) => makeSpan(name, attrs),
+    startActiveSpan: async (name, attrs, callback) => {
+      // Your backend must keep this span active across the async callback so
+      // nested database/IAM spans inherit it.
+      return myBackend.withActiveSpan(makeSpan(name, attrs), callback);
+    },
+  },
   meter: {
     createCounter: (name, opts) => ({ add: (v, a) => myBackend.counter(name).add(v, a) }),
     createHistogram: (name, opts) => ({ record: (v, a) => myBackend.histogram(name).observe(v, a) }),
@@ -265,7 +272,7 @@ const customTelemetry: TelemetryProvider = {
 createFortress({ /* ... */ observability: customTelemetry });
 ```
 
-This is the escape hatch — most users should stick with `createOtelTelemetry()` because the OpenTelemetry SDK ecosystem already has exporters for every major backend.
+Optional `startActiveSpan` is part of the frozen provider contract and is used at the request boundary for async parent propagation. Existing providers that implement only `startSpan` remain valid (Fortress falls back to it, without parent propagation). This is the escape hatch—most users should stick with `createOtelTelemetry()` because the OpenTelemetry SDK ecosystem already has exporters for every major backend.
 
 ## 4. Event catalog (P2-13)
 
