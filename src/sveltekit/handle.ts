@@ -36,7 +36,7 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { Fortress } from '../core/fortress';
 import type { PluginContext } from '../core/plugin';
-import type { Subject, TokenClaims } from '../core/types';
+import type { AuthTokenPair, RequestMeta, Subject, TokenClaims } from '../core/types';
 import type {
   FortressLocals,
   SvelteKitAdapterOptions,
@@ -67,8 +67,44 @@ export function createSvelteKitHandle(
   const routeTable = buildRouteTable(fortress.manifest.filter(route => route.mounted));
   const skipPatterns = (options.skipPaths ?? []).map(p => pathToRegex(p));
   const routeMap = options.routeMap ?? {};
+  // Coalesce overlapping SSR requests that arrive with the same expired
+  // cookie pair. Entries remain until every request that joined has finished
+  // its full handle/resolve lifecycle—not merely until refresh() settles—so a
+  // stale-cookie request still in the same SSR wave receives the successor
+  // instead of replaying the predecessor. User agent is part of the key so a
+  // mismatched fingerprint can never piggyback on another request's check.
+  interface RefreshFlight {
+    consumers: number;
+    promise: Promise<AuthTokenPair>;
+  }
+  const refreshFlights = new Map<string, RefreshFlight>();
+  const refreshFlightKey = (refreshToken: string, meta: RequestMeta): string =>
+    `${refreshToken}\u0000${meta.userAgent ?? ''}`;
+  const acquireRefreshFlight = (
+    refreshToken: string,
+    meta: RequestMeta,
+  ): { key: string; promise: Promise<AuthTokenPair> } => {
+    const key = refreshFlightKey(refreshToken, meta);
+    const existing = refreshFlights.get(key);
+    if (existing) {
+      existing.consumers++;
+      return { key, promise: existing.promise };
+    }
+    const promise = fortress.auth.refresh(refreshToken, meta);
+    refreshFlights.set(key, { consumers: 1, promise });
+    return { key, promise };
+  };
+  const releaseRefreshFlight = (key: string): void => {
+    const flight = refreshFlights.get(key);
+    if (!flight)
+      return;
+    flight.consumers--;
+    if (flight.consumers === 0)
+      refreshFlights.delete(key);
+  };
 
   return async ({ event, resolve }) => {
+    let acquiredRefreshKey: string | undefined;
     try {
       // 1. Strip basePath if provided. Paths outside the prefix are user-owned.
       const fullPath = event.url.pathname;
@@ -131,7 +167,9 @@ export function createSvelteKitHandle(
               : undefined;
             if (refreshToken) {
               try {
-                const refreshed = await fortress.auth.refresh(refreshToken);
+                const flight = acquireRefreshFlight(refreshToken, requestMeta(event.request));
+                acquiredRefreshKey = flight.key;
+                const refreshed = await flight.promise;
                 setAuthCookies(event, fortress, refreshed);
                 claims = await fortress.auth.verifyToken(refreshed.accessToken);
                 subject = { type: claims.subjectType, id: claims.sub };
@@ -201,10 +239,24 @@ export function createSvelteKitHandle(
     catch (err) {
       return errorToResponse(err);
     }
+    finally {
+      if (acquiredRefreshKey)
+        releaseRefreshFlight(acquiredRefreshKey);
+    }
   };
 }
 
 // ── helpers ─────────────────────────────────────────────────────────
+
+function requestMeta(request: Request): RequestMeta {
+  return {
+    ipAddress:
+      request.headers.get('x-forwarded-for')
+      ?? request.headers.get('x-real-ip')
+      ?? undefined,
+    userAgent: request.headers.get('user-agent') ?? undefined,
+  };
+}
 
 /**
  * Populate `event.locals.fortress` with the request-scoped DB adapter and

@@ -1136,7 +1136,9 @@ export const actions = {
 </form>
 ```
 
-`fortressActions` ships `login`, `logout`, `register`, and `refresh`.
+`fortressActions` ships `login`, `logout`, `register`, and `refresh`. Login/register return a discriminated result when no redirect is configured: `{ success: true, pending: false }` after cookies are issued, or `{ success: true, pending: true, challenge }` when another factor is required. Failures are real SvelteKit `ActionFailure`s and `redirectTo` uses SvelteKit's `redirect()` primitive (not a thrown raw `Response`).
+
+The adapter silently refreshes expired access cookies only on safe methods and coalesces overlapping SSR refreshes for the same refresh token and user-agent fingerprint through the full request lifecycle. It forwards `x-forwarded-for`/`x-real-ip` and `user-agent` as refresh metadata, preserving hard fingerprint validation. This single-flight is process-local; use core `jwt.session.refreshGraceSeconds` for cross-worker/replica retries.
 
 #### Optional catch-all `+server.ts` (escape hatch)
 

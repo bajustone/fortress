@@ -33,9 +33,9 @@ runtime check (the only such gate is the `bin:sqlite` vs
 
 The Express adapter uses minimal duck-typed interfaces (`ExpressRequest`,
 `ExpressResponse`, `ExpressMiddleware`) so consumers bring their own
-Express version. The SvelteKit adapter uses structural types compatible
-with `@sveltejs/kit`'s real `RequestEvent` / `Handle` shapes; no peer
-import is required.
+Express version. The SvelteKit subpath uses the optional `@sveltejs/kit@^2`
+peer directly for its strict public `Handle`/`Action` types and runtime
+`redirect()`/`fail()` primitives; install that peer when using the adapter.
 
 ## Databases
 

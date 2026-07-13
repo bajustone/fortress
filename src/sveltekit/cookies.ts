@@ -58,8 +58,10 @@ export function replayCookies(response: Response, event: SvelteKitRequestEvent):
   }
 }
 
-function optsFor(cookies: ResolvedCookieConfig, maxAgeSeconds?: number): SvelteKitCookieOptions {
-  const opts: SvelteKitCookieOptions = {
+type RequiredPathCookieOptions = SvelteKitCookieOptions & { path: string };
+
+function optsFor(cookies: ResolvedCookieConfig, maxAgeSeconds?: number): RequiredPathCookieOptions {
+  const opts: RequiredPathCookieOptions = {
     path: cookies.path,
     httpOnly: true,
     secure: cookies.secure,
@@ -75,7 +77,7 @@ function optsFor(cookies: ResolvedCookieConfig, maxAgeSeconds?: number): SvelteK
 interface ParsedSetCookie {
   name: string;
   value: string;
-  opts: SvelteKitCookieOptions;
+  opts: RequiredPathCookieOptions;
 }
 
 /**
@@ -108,7 +110,7 @@ function parseSetCookie(raw: string): ParsedSetCookie | null {
   // Reuse parseCookieHeader by formatting the attribute list as a single
   // header string would not work — attributes have boolean variants like
   // `Secure` and `HttpOnly`. Walk parts manually.
-  const opts: SvelteKitCookieOptions = {};
+  const opts: RequiredPathCookieOptions = { path: '/' };
   for (const part of parts) {
     const [k, v = ''] = part.split('=', 2);
     const key = k.toLowerCase();

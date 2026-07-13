@@ -1,13 +1,11 @@
 /**
- * Minimal SvelteKit types used by the fortress SvelteKit adapter.
- *
- * Defining these locally instead of importing from `@sveltejs/kit` keeps the
- * adapter self-contained — fortress can ship to JSR without forcing
- * `@sveltejs/kit` to be a hard dependency. The shapes are structurally
- * compatible with the real SvelteKit types, so consumers can pass their own
- * `RequestEvent` / `Handle` / `Action` values without casting.
+ * SvelteKit adapter types. Public handle/action signatures are anchored to
+ * the real optional `@sveltejs/kit` peer so strict-mode consumers can assign
+ * them without casts. Small request/cookie subsets remain for framework-free
+ * helpers and tests; every real RequestEvent structurally satisfies them.
  */
 
+import type { Handle, RequestEvent } from '@sveltejs/kit';
 import type { DatabaseAdapter } from '../adapters/database';
 import type { Subject, TokenClaims } from '../core/types';
 
@@ -27,8 +25,8 @@ export interface SvelteKitCookieOptions {
 /** SvelteKit `Cookies` API surface used by the fortress adapter. */
 export interface SvelteKitCookies {
   get: (name: string) => string | undefined;
-  set: (name: string, value: string, opts?: SvelteKitCookieOptions) => void;
-  delete: (name: string, opts?: SvelteKitCookieOptions) => void;
+  set: (name: string, value: string, opts: SvelteKitCookieOptions & { path: string }) => void;
+  delete: (name: string, opts: SvelteKitCookieOptions & { path: string }) => void;
   getAll?: () => { name: string; value: string }[];
 }
 
@@ -42,7 +40,7 @@ export interface SvelteKitCookies {
  * the {@link FortressLocals} interface — which only declares the
  * `fortress` key without an index signature — satisfies it.
  */
-export interface SvelteKitRequestEvent<TLocals extends object = Record<string, unknown>> {
+export interface SvelteKitRequestEvent<TLocals extends object = object> {
   request: Request;
   url: URL;
   cookies: SvelteKitCookies;
@@ -51,15 +49,12 @@ export interface SvelteKitRequestEvent<TLocals extends object = Record<string, u
   setHeaders?: (headers: Record<string, string>) => void;
 }
 
-/** SvelteKit `Handle` hook signature. */
-export type SvelteKitHandle = (input: {
-  event: SvelteKitRequestEvent;
-  resolve: (event: SvelteKitRequestEvent) => Response | Promise<Response>;
-}) => Promise<Response>;
+/** Exact SvelteKit `Handle` hook signature, including the resolve options overload. */
+export type SvelteKitHandle = Handle;
 
-/** SvelteKit form `Action` signature. */
+/** SvelteKit-compatible form action signature with a narrowed result type. */
 export type SvelteKitAction<TResult = unknown> = (
-  event: SvelteKitRequestEvent,
+  event: RequestEvent,
 ) => Promise<TResult> | TResult;
 
 // ── Fortress-specific types ─────────────────────────────────────────

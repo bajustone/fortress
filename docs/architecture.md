@@ -97,7 +97,7 @@ src/
     actions.ts                          # fortressActions.login/logout/register/refresh
     cookies.ts                          # setAuthCookies, clearAuthCookies, replayCookies
     helpers.ts                          # getUserId, getClaims, getDb, getScopedDb (read event.locals.fortress)
-    types.ts                            # FortressLocals, SvelteKitAdapterOptions, minimal SvelteKit types
+    types.ts                            # FortressLocals/options + real @sveltejs/kit-compatible Handle/Action types
 
   plugins/
     tenancy/index.ts                    # Schema-per-tenant isolation (PostgreSQL only)

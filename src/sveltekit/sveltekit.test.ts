@@ -4,9 +4,11 @@
  * end-to-end (with the in-memory test DB).
  */
 
+import type { RequestEvent } from '@sveltejs/kit';
 import type { Fortress } from '../core/fortress';
 import type { Subject } from '../core/types';
-import type { FortressLocals, SvelteKitCookieOptions, SvelteKitCookies, SvelteKitRequestEvent } from './types';
+import type { FortressLocals, SvelteKitCookieOptions, SvelteKitCookies } from './types';
+import { isActionFailure, isRedirect } from '@sveltejs/kit';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { signAccessToken } from '../core/auth/jwt';
 import { createFortress } from '../core/fortress';
@@ -52,7 +54,7 @@ interface FakeEventOpts {
 }
 
 /** Build a fake SvelteKit `RequestEvent` for tests. */
-function fakeEvent(opts: FakeEventOpts = {}): SvelteKitRequestEvent & { cookies: ReturnType<typeof fakeCookies> } {
+function fakeEvent(opts: FakeEventOpts = {}): RequestEvent & { cookies: ReturnType<typeof fakeCookies> } {
   const url = new URL(opts.url ?? 'http://localhost/');
   const headers = new Headers(opts.headers);
   // Merge cookies into the request header so fortress.extractAccessToken sees them too.
@@ -71,8 +73,8 @@ function fakeEvent(opts: FakeEventOpts = {}): SvelteKitRequestEvent & { cookies:
     cookies,
     locals: {} as Record<string, unknown>,
     params: {},
-  } satisfies SvelteKitRequestEvent;
-  return event as SvelteKitRequestEvent & { cookies: ReturnType<typeof fakeCookies> };
+  };
+  return event as unknown as RequestEvent & { cookies: ReturnType<typeof fakeCookies> };
 }
 
 // ── createSvelteKitHandle: Fortress-managed paths ───────────────────
@@ -220,6 +222,165 @@ describe('createSvelteKitHandle: user routes', () => {
     expect((event.locals as { fortress?: { userId?: string } }).fortress?.userId).toBeTruthy();
   });
 
+  it('single-flights concurrent silent refreshes and forwards RequestMeta', async () => {
+    const local = createFortress({
+      jwt: { key: SECRET, validateRefreshFingerprint: true },
+      database: createTestAdapter(),
+    });
+    const user = await local.auth.createUser({
+      email: 'single-flight@example.com',
+      name: 'Single Flight',
+      password: 'password-123456',
+    });
+    const userAgent = 'SSR Browser/1.0';
+    const login = await local.auth.login('single-flight@example.com', 'password-123456', { userAgent });
+    if (login.status !== 'success')
+      throw new Error('expected success');
+    const expiredAccess = await signAccessToken({
+      sub: user.id,
+      subjectType: 'USER',
+      name: user.name,
+      groups: [],
+      iss: 'fortress',
+    }, SECRET, -1);
+
+    const originalRefresh = local.auth.refresh;
+    let refreshCalls = 0;
+    let observedMeta: { ipAddress?: string; userAgent?: string } | undefined;
+    local.auth.refresh = async (token, meta) => {
+      refreshCalls++;
+      observedMeta = meta;
+      return originalRefresh(token, meta);
+    };
+
+    const handle = createSvelteKitHandle(local);
+    const makeEvent = () => fakeEvent({
+      url: 'http://localhost/dashboard',
+      headers: {
+        'user-agent': userAgent,
+        'x-forwarded-for': '192.0.2.42',
+      },
+      cookies: {
+        [local.cookies.accessName]: expiredAccess,
+        [local.cookies.refreshName]: login.refreshToken,
+      },
+    });
+    const first = makeEvent();
+    const second = makeEvent();
+    let releaseFirstResolve!: () => void;
+    const firstResolveGate = new Promise<void>((resolve) => {
+      releaseFirstResolve = resolve;
+    });
+    let markFirstResolveEntered!: () => void;
+    const firstResolveEntered = new Promise<void>((resolve) => {
+      markFirstResolveEntered = resolve;
+    });
+    const firstRequest = handle({
+      event: first,
+      resolve: async () => {
+        markFirstResolveEntered();
+        await firstResolveGate;
+        return new Response();
+      },
+    });
+
+    // Wait until refresh() has already settled and the first request is still
+    // inside resolve(). A correct flight must remain joinable for this whole
+    // overlapping request lifetime, not only while refresh() is pending.
+    await firstResolveEntered;
+    await handle({ event: second, resolve: async () => new Response() });
+    releaseFirstResolve();
+    await firstRequest;
+
+    expect(refreshCalls).toBe(1);
+    expect(observedMeta).toEqual({ ipAddress: '192.0.2.42', userAgent });
+    const firstSuccessor = first.cookies._store.get(local.cookies.refreshName);
+    const secondSuccessor = second.cookies._store.get(local.cookies.refreshName);
+    expect(firstSuccessor).toBeTruthy();
+    if (!firstSuccessor)
+      throw new Error('Expected refresh successor');
+    expect(secondSuccessor).toBe(firstSuccessor);
+    expect((first.locals as FortressLocals).fortress.userId).toBe(user.id);
+    expect((second.locals as FortressLocals).fortress.userId).toBe(user.id);
+
+    // The shared successor remains usable; no losing refresh revoked it.
+    await expect(originalRefresh(firstSuccessor, { userAgent })).resolves.toBeDefined();
+  });
+
+  it('does not let mismatched fingerprint metadata join a refresh flight', async () => {
+    const local = createFortress({
+      jwt: {
+        key: SECRET,
+        validateRefreshFingerprint: true,
+        session: { refreshGraceSeconds: 30 },
+      },
+      database: createTestAdapter(),
+    });
+    const user = await local.auth.createUser({
+      email: 'fingerprint-flight@example.com',
+      name: 'Fingerprint Flight',
+      password: 'password-123456',
+    });
+    const legitimateAgent = 'Legitimate Browser/1.0';
+    const login = await local.auth.login(
+      'fingerprint-flight@example.com',
+      'password-123456',
+      { userAgent: legitimateAgent },
+    );
+    if (login.status !== 'success')
+      throw new Error('expected success');
+    const expiredAccess = await signAccessToken({
+      sub: user.id,
+      subjectType: 'USER',
+      name: user.name,
+      groups: [],
+      iss: 'fortress',
+    }, SECRET, -1);
+    const originalRefresh = local.auth.refresh;
+    let refreshCalls = 0;
+    local.auth.refresh = async (token, meta) => {
+      refreshCalls++;
+      return originalRefresh(token, meta);
+    };
+    const handle = createSvelteKitHandle(local);
+    const eventFor = (userAgent: string) => fakeEvent({
+      url: 'http://localhost/dashboard',
+      headers: { 'user-agent': userAgent },
+      cookies: {
+        [local.cookies.accessName]: expiredAccess,
+        [local.cookies.refreshName]: login.refreshToken,
+      },
+    });
+
+    let releaseLegitimate!: () => void;
+    const legitimateGate = new Promise<void>((resolve) => {
+      releaseLegitimate = resolve;
+    });
+    let markLegitimateEntered!: () => void;
+    const legitimateEntered = new Promise<void>((resolve) => {
+      markLegitimateEntered = resolve;
+    });
+    const legitimate = eventFor(legitimateAgent);
+    const legitimateRequest = handle({
+      event: legitimate,
+      resolve: async () => {
+        markLegitimateEntered();
+        await legitimateGate;
+        return new Response();
+      },
+    });
+    await legitimateEntered;
+
+    const mismatched = eventFor('Different Browser/9.9');
+    await handle({ event: mismatched, resolve: async () => new Response() });
+    expect(refreshCalls).toBe(2);
+    expect((mismatched.locals as FortressLocals).fortress.userId).toBeUndefined();
+    expect(mismatched.cookies._store.get(local.cookies.refreshName)).toBe(login.refreshToken);
+
+    releaseLegitimate();
+    await legitimateRequest;
+  });
+
   it('does NOT silently refresh on unsafe methods (CSRF — P1.5/H5)', async () => {
     // A silent refresh rotates the refresh token, so it must not be triggered
     // by an unsafe (cross-site-reachable) request. SSR loads are GETs; an
@@ -288,7 +449,7 @@ describe('fortressActions.login', () => {
     form.set('password', 'password1234567');
     const event = fakeEvent({ method: 'POST', body: form });
     const result = await action(event);
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, pending: false });
     expect(event.cookies._store.get(fortress.cookies.accessName)).toBeTruthy();
     expect(event.cookies._store.get(fortress.cookies.refreshName)).toBeTruthy();
   });
@@ -318,7 +479,8 @@ describe('fortressActions.login', () => {
     const result = await action(event);
     expect(result).toMatchObject({
       success: true,
-      pending: { reason: 'two-factor', continuationToken: expect.any(String) },
+      pending: true,
+      challenge: { reason: 'two-factor', continuationToken: expect.any(String) },
     });
     expect(event.cookies._store.size).toBe(0);
   });
@@ -330,9 +492,12 @@ describe('fortressActions.login', () => {
     form.set('identifier', 'nope@b.co');
     form.set('password', 'wrong');
     const event = fakeEvent({ method: 'POST', body: form });
-    const result = await action(event) as { status: number; data: { code: string } };
+    const result = await action(event);
+    expect(isActionFailure(result)).toBe(true);
+    if (!isActionFailure(result))
+      throw new Error('Expected SvelteKit ActionFailure');
     expect(result.status).toBe(401);
-    expect(result.data.code).toBe('UNAUTHORIZED');
+    expect((result.data as unknown as { code: string }).code).toBe('UNAUTHORIZED');
     expect(event.cookies._store.size).toBe(0);
   });
 
@@ -345,17 +510,18 @@ describe('fortressActions.login', () => {
     form.set('password', 'password1234567');
     const event = fakeEvent({ method: 'POST', body: form });
 
-    let thrown: Response | undefined;
+    let thrown: unknown;
     try {
       await action(event);
     }
-    catch (e) {
-      if (e instanceof Response)
-        thrown = e;
+    catch (error) {
+      thrown = error;
     }
-    expect(thrown).toBeDefined();
-    expect(thrown?.status).toBe(303);
-    expect(thrown?.headers.get('location')).toBe('/dashboard');
+    expect(isRedirect(thrown)).toBe(true);
+    if (!isRedirect(thrown))
+      throw new Error('Expected SvelteKit Redirect');
+    expect(thrown.status).toBe(303);
+    expect(thrown.location).toBe('/dashboard');
   });
 });
 
