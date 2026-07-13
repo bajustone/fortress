@@ -1,4 +1,5 @@
 import type { Fortress } from '../../core/fortress';
+import type { AuthResult } from '../../core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
@@ -7,7 +8,7 @@ import { magicLink } from './index';
 const SECRET = 'magic-link-test-secret-32chars!!';
 
 describe('magic-link plugin', () => {
-  let fortress: Fortress;
+  let fortress: Fortress<any>;
   let capturedToken: string | null;
   let capturedEmail: string | null;
   const onSend = vi.fn(async (email: string, token: string) => {
@@ -39,7 +40,7 @@ describe('magic-link plugin', () => {
     });
   });
 
-  describe('verifyMagicLink', () => {
+  describe('verify', () => {
     it('returns user info and access token for existing user', async () => {
       // Pre-create the user
       await fortress.auth.createUser({
@@ -51,27 +52,56 @@ describe('magic-link plugin', () => {
       const send = fortress.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;
       await send('bob@example.com');
 
-      const verify = fortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<{ userId: string; email: string; accessToken: string }>;
+      const verify = fortress.plugins['magic-link'].verify as (token: string) => Promise<AuthResult>;
       const result = await verify(capturedToken!);
 
-      expect(result.email).toBe('bob@example.com');
-      expect(result.userId).toBeDefined();
-      expect(result.accessToken).toBeTruthy();
+      expect(result.user.email).toBe('bob@example.com');
+      expect(result.user.id).toBeDefined();
+      expect(result.status === 'success' ? result.accessToken : null).toBeTruthy();
+    });
+
+    it('runs configured post-auth gates before issuing tokens', async () => {
+      const database = createTestAdapter();
+      const gated = createFortress({
+        jwt: { key: SECRET },
+        database,
+        plugins: [
+          magicLink({ onSendMagicLink: onSend }),
+          {
+            name: 'factor',
+            hooks: {
+              postAuthGate: {
+                reason: 'two-factor',
+                evaluate: async () => ({ pluginData: { requires2FA: true } }),
+                verify: async () => {},
+              },
+            },
+          },
+        ],
+      });
+      const send = gated.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;
+      const verify = gated.plugins['magic-link'].verify as (token: string) => Promise<AuthResult>;
+      await send('gated@example.com');
+
+      const result = await verify(capturedToken!);
+      expect(result.status).toBe('pending');
+      expect(result.status === 'pending' ? result.pending?.reason : undefined).toBe('two-factor');
+      expect(await database.count({ model: 'refresh_token' })).toBe(0);
     });
 
     it('auto-creates user for unknown email (JIT provisioning)', async () => {
       const send = fortress.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;
       await send('newuser@example.com');
 
-      const verify = fortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<{ userId: string; email: string; accessToken: string }>;
+      const verify = fortress.plugins['magic-link'].verify as (token: string) => Promise<AuthResult>;
       const result = await verify(capturedToken!);
 
-      expect(result.email).toBe('newuser@example.com');
-      expect(result.userId).toBeDefined();
-      expect(result.accessToken).toBeTruthy();
+      expect(result.user.email).toBe('newuser@example.com');
+      expect(result.user.id).toBeDefined();
+      expect(result.status === 'success' ? result.accessToken : null).toBeTruthy();
 
       // Confirm the user was actually created
-      const user = await fortress.auth.me(result.userId);
+      const user = await fortress.auth.me(result.user.id);
       expect(user.email).toBe('newuser@example.com');
       expect(user.name).toBe('newuser');
     });
@@ -86,23 +116,23 @@ describe('magic-link plugin', () => {
       const send = expiredFortress.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;
       await send('expired@example.com');
 
-      const verify = expiredFortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<unknown>;
-      await expect(verify(capturedToken!)).rejects.toThrow('Magic link token expired');
+      const verify = expiredFortress.plugins['magic-link'].verify as (token: string) => Promise<unknown>;
+      await expect(verify(capturedToken!)).rejects.toThrow('Invalid or expired magic link token');
     });
 
     it('rejects already-used tokens', async () => {
       const send = fortress.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;
       await send('carol@example.com');
 
-      const verify = fortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<unknown>;
+      const verify = fortress.plugins['magic-link'].verify as (token: string) => Promise<unknown>;
       await verify(capturedToken!);
 
-      await expect(verify(capturedToken!)).rejects.toThrow('Magic link token already used');
+      await expect(verify(capturedToken!)).rejects.toThrow('Invalid or expired magic link token');
     });
 
     it('rejects invalid tokens', async () => {
-      const verify = fortress.plugins['magic-link'].verifyMagicLink as (token: string) => Promise<unknown>;
-      await expect(verify('bogus-token')).rejects.toThrow('Invalid magic link token');
+      const verify = fortress.plugins['magic-link'].verify as (token: string) => Promise<unknown>;
+      await expect(verify('bogus-token')).rejects.toThrow('Invalid or expired magic link token');
     });
   });
 });

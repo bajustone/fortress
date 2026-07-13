@@ -9,7 +9,7 @@
  */
 
 import type { FortressPlugin } from '../../core/plugin';
-import type { FortressUser } from '../../core/types';
+import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
 
@@ -18,6 +18,11 @@ export interface MagicLinkConfig {
   tokenExpirySeconds?: number;
   /** Called when a magic link token is created -- send the link to the user */
   onSendMagicLink?: (email: string, token: string) => Promise<void>;
+}
+
+export interface MagicLinkMethods {
+  sendMagicLink: (email: string) => Promise<{ sent: true }>;
+  verify: (rawToken: string, meta?: RequestMeta) => Promise<AuthResult>;
 }
 
 interface MagicLinkTokenRecord {
@@ -35,7 +40,7 @@ interface MagicLinkTokenRecord {
  * delivered out-of-band (email) and exchanged for fortress access/refresh
  * tokens via the verify endpoint.
  */
-export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
+export function magicLink(config: MagicLinkConfig = {}): FortressPlugin & { readonly name: 'magic-link' } {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 600;
 
   return {
@@ -75,32 +80,20 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
         return { sent: true };
       },
 
-      async verifyMagicLink(rawToken: string): Promise<{ userId: string; email: string; accessToken: string }> {
+      async verify(rawToken: string, meta?: RequestMeta): Promise<AuthResult> {
         const hash = await hashToken(rawToken);
-
-        const record = await ctx.db.findOne<MagicLinkTokenRecord>({
+        const usedAt = new Date();
+        const record = await ctx.db.transaction(tx => tx.update<MagicLinkTokenRecord>({
           model: 'magic_link_token',
-          where: [{ field: 'token', operator: '=', value: hash }],
-        });
-
-        if (!record) {
-          throw Errors.notFound('Invalid magic link token');
-        }
-
-        if (record.usedAt) {
-          throw Errors.badRequest('Magic link token already used');
-        }
-
-        if (record.expiresAt < new Date()) {
-          throw Errors.badRequest('Magic link token expired');
-        }
-
-        // Mark token as used
-        await ctx.db.update({
-          model: 'magic_link_token',
-          where: [{ field: 'id', operator: '=', value: record.id }],
-          data: { usedAt: new Date() },
-        });
+          where: [
+            { field: 'token', operator: '=', value: hash },
+            { field: 'usedAt', operator: 'isNull', value: null },
+            { field: 'expiresAt', operator: 'gt', value: usedAt },
+          ],
+          data: { usedAt },
+        }));
+        if (!record)
+          throw Errors.notFound('Invalid or expired magic link token');
 
         // Find or create user by email (JIT provisioning)
         let user = await ctx.db.findOne<FortressUser>({
@@ -115,16 +108,9 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin {
           }) as FortressUser;
         }
 
-        // Issue access token via the auth service
-        const accessToken = await ctx.auth!.signToken({
-          sub: user.id,
-          subjectType: 'USER',
-          name: user.name,
-          groups: [],
-          iss: 'fortress',
-        }) as string;
-
-        return { userId: user.id, email: record.email, accessToken };
+        if (!ctx.auth)
+          throw Errors.badRequest('Auth service is unavailable');
+        return ctx.auth.completePluginAuth(user.id, 'magic-link', meta);
       },
     }),
   };

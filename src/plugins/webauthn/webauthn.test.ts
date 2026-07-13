@@ -225,15 +225,16 @@ describe('webauthn plugin', () => {
       await methods.generateAuthenticationOptions({ userId });
     }
 
-    it('verifies and returns userId', async () => {
+    it('verifies and returns a full auth result', async () => {
       await registerAndPrepareAuth();
 
       const result = await methods.verifyAuthentication({
         response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       });
 
-      expect(result.verified).toBe(true);
-      expect(result.userId).toBe(userId);
+      expect(result.status).toBe('success');
+      expect(result.user.id).toBe(userId);
+      expect(result.status === 'success' ? result.method : null).toBe('webauthn');
     });
 
     it('issues access token when passwordless', async () => {
@@ -244,6 +245,46 @@ describe('webauthn plugin', () => {
       });
 
       expect(result.accessToken).toBeTruthy();
+    });
+
+    it('runs configured gates before passwordless token issuance', async () => {
+      const database = createTestAdapter();
+      const gated = createFortress({
+        jwt: { key: SECRET },
+        database,
+        plugins: [
+          webauthn({ rpName: 'Test', rpID: 'localhost', origin: 'http://localhost:3000' }),
+          {
+            name: 'factor',
+            hooks: {
+              postAuthGate: {
+                reason: 'two-factor',
+                evaluate: async () => ({ pluginData: { requires2FA: true } }),
+                verify: async () => {},
+              },
+            },
+          },
+        ],
+      });
+      const gatedMethods = gated.plugins.webauthn as unknown as WebAuthnMethods;
+      const user = await gated.auth.createUser({
+        email: 'passwordless-gated@example.com',
+        name: 'Passwordless Gated',
+        password: 'password-123',
+      });
+      await gatedMethods.generateRegistrationOptions({}, httpCtx(user.id));
+      await gatedMethods.verifyRegistration(
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        httpCtx(user.id),
+      );
+      await gatedMethods.generateAuthenticationOptions({ userId: user.id });
+
+      const result = await gatedMethods.verifyAuthentication({
+        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
+      });
+      expect(result.status).toBe('pending');
+      expect(result.status === 'pending' ? result.pending?.reason : undefined).toBe('two-factor');
+      expect(await database.count({ model: 'refresh_token' })).toBe(0);
     });
 
     it('throws on unknown credential', async () => {
@@ -318,11 +359,12 @@ describe('webauthn plugin', () => {
     });
   });
 
-  describe('afterLogin hook (second-factor mode)', () => {
-    it('returns requiresWebAuthn when supportPasswordless is false', async () => {
+  describe('post-auth gate (second-factor mode)', () => {
+    it('holds token issuance when supportPasswordless is false', async () => {
+      const database = createTestAdapter();
       const f = createFortress({
         jwt: { key: SECRET },
-        database: createTestAdapter(),
+        database,
         plugins: [webauthn({ rpName: 'Test', rpID: 'localhost', origin: 'http://localhost:3000', supportPasswordless: false })],
       });
 
@@ -345,6 +387,8 @@ describe('webauthn plugin', () => {
       const result = await f.auth.login('bob@example.com', 'password-123');
       expect(result.accessToken).toBeNull();
       expect(result.pluginData?.requiresWebAuthn).toBe(true);
+      expect(result.status === 'pending' ? result.pending?.reason : undefined).toBe('webauthn');
+      expect(await database.count({ model: 'refresh_token' })).toBe(0);
     });
 
     it('allows normal login when no credentials registered', async () => {

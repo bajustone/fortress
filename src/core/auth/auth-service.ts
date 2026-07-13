@@ -1,6 +1,6 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressConfig, PasswordHasher } from '../config';
-import type { StoredRefreshToken } from '../internal-adapter';
+import type { StoredContinuation, StoredRefreshToken } from '../internal-adapter';
 import type { Unsubscribe } from '../observability/listener-list';
 import type { FortressLogger } from '../observability/logger';
 import type { Histogram, TelemetryProvider } from '../observability/types';
@@ -11,7 +11,9 @@ import type {
   HookResult,
 } from '../plugin';
 import type {
+  AuthMethod,
   AuthResult,
+  AuthSuccess,
   AuthTokenPair,
   CreateUserInput,
   FortressUser,
@@ -31,6 +33,7 @@ import { SILENT_LOGGER } from '../observability/logger';
 import { signAccessToken, verifyAccessToken } from './jwt';
 import { createDefaultHasher, normalizePasswordInput } from './password';
 import { validatePassword } from './password-policy';
+import { consumeAuthContinuation, runPostAuthGates, verifyAuthContinuation } from './post-auth-gate';
 import { generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
 
 /**
@@ -89,6 +92,14 @@ function resolveConfig(config: FortressConfig): ResolvedConfig {
 
 export interface AuthService {
   login: (identifier: string, password: string, meta?: RequestMeta) => Promise<AuthResult>;
+  /** Consume a verified factor's continuation, rerun remaining gates, then issue tokens. */
+  completePendingAuth: (continuationToken: string, completion: unknown, meta?: RequestMeta) => Promise<AuthResult>;
+  /** Finish a trusted plugin-owned primary credential (for example a magic link). */
+  completePluginAuth: (
+    userId: string,
+    method: Exclude<AuthMethod, 'refresh' | 'impersonation'>,
+    meta?: RequestMeta,
+  ) => Promise<AuthResult>;
   refresh: (refreshToken: string, meta?: RequestMeta) => Promise<AuthTokenPair>;
   logout: (refreshToken: string) => Promise<void>;
   me: (userId: string) => Promise<FortressUser>;
@@ -187,8 +198,8 @@ export function createAuthService(
 
   async function runAfterLoginHooks(
     ctx: AfterHookContext,
-    result: AuthResult,
-  ): Promise<AuthResult> {
+    result: AuthSuccess,
+  ): Promise<AuthSuccess> {
     let current = result;
     for (const plugin of plugins) {
       if (plugin.hooks?.afterLogin) {
@@ -297,6 +308,78 @@ export function createAuthService(
     return { accessToken, refreshToken: raw };
   }
 
+  type CompletedAuthMethod = Exclude<AuthMethod, 'refresh' | 'impersonation'>;
+
+  function eventMethodFor(method: CompletedAuthMethod): AuthEvent['method'] {
+    switch (method) {
+      case 'two-factor':
+        return '2fa';
+      case 'magic-link':
+        return 'magic_link';
+      default:
+        return method;
+    }
+  }
+
+  async function finishAuthentication(
+    user: FortressUser,
+    method: CompletedAuthMethod,
+    meta?: RequestMeta,
+    identifier?: string,
+    completedReasons: readonly PendingReason[] = [],
+  ): Promise<AuthResult> {
+    const hold = await runPostAuthGates(plugins, db, config, user, meta, completedReasons);
+    if (hold) {
+      const pending: AuthResult = {
+        status: 'pending',
+        user,
+        pending: hold.challenge,
+        accessToken: null,
+        refreshToken: null,
+        pluginData: hold.pluginData,
+      };
+      if (authEventListeners.size() > 0) {
+        authEventListeners.emit({
+          eventType: 'LOGIN_PENDING',
+          actorId: user.id,
+          identifier,
+          method: eventMethodFor(method),
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          outcome: 'pending',
+          pendingReason: hold.challenge.reason,
+        });
+      }
+      return pending;
+    }
+
+    const tokens = await issueTokens(user, meta);
+    let response: AuthSuccess = {
+      status: 'success',
+      user,
+      method,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+
+    const afterCtx: AfterHookContext = { db, config, meta, responseHeaders: new Headers(), identifier };
+    response = await runAfterLoginHooks(afterCtx, response);
+
+    if (authEventListeners.size() > 0) {
+      authEventListeners.emit({
+        eventType: 'LOGIN_SUCCESS',
+        actorId: user.id,
+        identifier,
+        method: eventMethodFor(method),
+        ipAddress: meta?.ipAddress,
+        userAgent: meta?.userAgent,
+        outcome: 'success',
+      });
+    }
+
+    return response;
+  }
+
   return {
     async login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResult> {
       const normalizedPassword = normalizePasswordInput(password);
@@ -352,32 +435,84 @@ export function createAuthService(
         throw error;
       }
 
-      const tokens = await issueTokens(user, meta);
-
       const { passwordHash: _, ...safeUser } = user;
-      let response: AuthResult = {
-        status: 'success',
-        user: safeUser,
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-      };
+      return finishAuthentication(safeUser, 'password', meta, identifier);
+    },
 
-      const afterCtx: AfterHookContext = { db, config, meta, responseHeaders: new Headers(), identifier };
-      response = await runAfterLoginHooks(afterCtx, response);
+    async completePluginAuth(
+      userId: string,
+      method: CompletedAuthMethod,
+      meta?: RequestMeta,
+    ): Promise<AuthResult> {
+      const storedUser = await db.findOne<FortressUser & { passwordHash?: string | null }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: userId }],
+      });
+      if (!storedUser || !storedUser.isActive)
+        throw Errors.unauthorized('User not found or disabled');
+      const { passwordHash: _, ...user } = storedUser;
+      return finishAuthentication(user, method, meta);
+    },
 
-      if (authEventListeners.size() > 0) {
+    async completePendingAuth(continuationToken: string, completion: unknown, meta?: RequestMeta): Promise<AuthResult> {
+      let attempted: { reason: PendingReason; userId: string } | undefined;
+      let continuation: StoredContinuation;
+      try {
+        continuation = await consumeAuthContinuation(db, continuationToken, async (tx, pending) => {
+          attempted = { reason: pending.reason, userId: pending.userId };
+          const storedUser = await tx.findOne<FortressUser & { passwordHash?: string | null }>({
+            model: 'user',
+            where: [{ field: 'id', operator: '=', value: pending.userId }],
+          });
+          if (!storedUser || !storedUser.isActive)
+            throw Errors.unauthorized('User not found or disabled');
+          const { passwordHash: _, ...user } = storedUser;
+          await verifyAuthContinuation(plugins, tx, config, user, pending, completion, meta);
+        });
+      }
+      catch (error) {
+        if (attempted && (attempted.reason === 'two-factor' || attempted.reason === 'webauthn')) {
+          authEventListeners.emit({
+            eventType: 'MFA_VERIFY_FAILURE',
+            actorId: attempted.userId,
+            method: attempted.reason === 'two-factor' ? '2fa' : 'webauthn',
+            ipAddress: meta?.ipAddress,
+            userAgent: meta?.userAgent,
+            outcome: 'failure',
+            error: { message: error instanceof Error ? error.message : String(error) },
+          });
+        }
+        throw error;
+      }
+
+      if (continuation.reason === 'two-factor' || continuation.reason === 'webauthn') {
         authEventListeners.emit({
-          eventType: 'LOGIN_SUCCESS',
-          actorId: user.id,
-          identifier,
-          method: 'password',
+          eventType: 'MFA_VERIFY_SUCCESS',
+          actorId: continuation.userId,
+          method: continuation.reason === 'two-factor' ? '2fa' : 'webauthn',
           ipAddress: meta?.ipAddress,
           userAgent: meta?.userAgent,
           outcome: 'success',
         });
       }
 
-      return response;
+      const storedUser = await db.findOne<FortressUser & { passwordHash?: string | null }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: continuation.userId }],
+      });
+      if (!storedUser || !storedUser.isActive)
+        throw Errors.unauthorized('User not found or disabled');
+      const { passwordHash: _, ...refreshedUser } = storedUser;
+
+      const method: CompletedAuthMethod = continuation.reason === 'two-factor'
+        ? 'two-factor'
+        : continuation.reason === 'magic-link'
+          ? 'magic-link'
+          : continuation.reason === 'webauthn'
+            ? 'webauthn'
+            : 'password';
+
+      return finishAuthentication(refreshedUser, method, meta, undefined, [continuation.reason]);
     },
 
     async refresh(refreshToken: string, meta?: RequestMeta): Promise<AuthTokenPair> {

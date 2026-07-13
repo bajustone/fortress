@@ -6,10 +6,11 @@ import type { EndpointDefinition } from './endpoint';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
 import type {
-  AuthResult,
+  AuthSuccess,
   AuthTokenPair,
   CreateUserInput,
   FortressUser,
+  PendingReason,
   RequestMeta,
   Subject,
   TokenClaims,
@@ -93,7 +94,10 @@ export interface PluginHooks {
   beforeLogout?: (ctx: HookContext & { token: string }) => Promise<void>;
   onLoginFailure?: (ctx: HookContext & { identifier: string; error: Error }) => Promise<void>;
 
-  afterLogin?: (ctx: AfterHookContext, result: AuthResult) => Promise<AuthResult>;
+  /** Runs after primary credentials succeed but before any token is issued. */
+  postAuthGate?: PostAuthGateProvider;
+
+  afterLogin?: (ctx: AfterHookContext, result: AuthSuccess) => Promise<AuthSuccess>;
   afterRegister?: (ctx: AfterHookContext, user: FortressUser) => Promise<void>;
   afterTokenRefresh?: (ctx: AfterHookContext, result: AuthTokenPair) => Promise<AuthTokenPair>;
 }
@@ -113,6 +117,31 @@ export interface AfterHookContext extends HookContext {
 export interface HookResult {
   stop: true;
   response: Record<string, unknown>;
+}
+
+export interface PostAuthGateContext extends HookContext {
+  user: FortressUser;
+  /** Reasons already satisfied by the continuation currently being completed. */
+  completedReasons: readonly PendingReason[];
+}
+
+export interface PostAuthGateDecision {
+  pluginData?: Record<string, unknown>;
+}
+
+export interface PostAuthGateVerificationContext extends HookContext {
+  user: FortressUser;
+  continuation: {
+    id: string;
+    reason: PendingReason;
+    expiresAt: Date;
+  };
+}
+
+export interface PostAuthGateProvider {
+  reason: PendingReason;
+  evaluate: (ctx: PostAuthGateContext) => Promise<PostAuthGateDecision | void>;
+  verify: (ctx: PostAuthGateVerificationContext, completion: unknown) => Promise<void>;
 }
 
 // --- Supporting Types ---

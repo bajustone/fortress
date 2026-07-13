@@ -8,8 +8,9 @@
  * @module
  */
 
+import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin } from '../../core/plugin';
-import type { FortressUser } from '../../core/types';
+import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
 
@@ -34,6 +35,11 @@ interface VerificationTokenRecord {
 export interface EmailVerificationMethods {
   sendVerification: (userId: string, email?: string) => Promise<{ token: string }>;
   verify: (rawToken: string) => Promise<{ userId: string; email: string }>;
+  completeVerification: (
+    continuationToken: string,
+    verificationToken: string,
+    meta?: RequestMeta,
+  ) => Promise<AuthResult>;
 }
 /**
  * Email verification plugin factory. Returns a {@link FortressPlugin} that
@@ -43,6 +49,34 @@ export interface EmailVerificationMethods {
 export function emailVerification(config: EmailVerificationConfig = {}): FortressPlugin & { readonly name: 'email-verification' } {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 86400;
   const requireVerification = config.requireVerification ?? true;
+
+  async function consumeVerificationToken(
+    db: DatabaseAdapter,
+    rawToken: string,
+    expectedUserId?: string,
+  ): Promise<VerificationTokenRecord> {
+    const hash = await hashToken(rawToken);
+    const usedAt = new Date();
+    const record = await db.update<VerificationTokenRecord>({
+      model: 'email_verification_token',
+      where: [
+        { field: 'token', operator: '=', value: hash },
+        { field: 'usedAt', operator: 'isNull', value: null },
+        { field: 'expiresAt', operator: 'gt', value: usedAt },
+        ...(expectedUserId ? [{ field: 'userId', operator: '=' as const, value: expectedUserId }] : []),
+      ],
+      data: { usedAt },
+    });
+    if (!record)
+      throw Errors.notFound('Invalid or expired verification token');
+
+    await db.update({
+      model: 'user',
+      where: [{ field: 'id', operator: '=', value: record.userId }],
+      data: { emailVerified: true },
+    });
+    return record;
+  }
 
   return {
     name: 'email-verification',
@@ -61,39 +95,25 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
     }],
 
     hooks: {
-      async beforeLogin(ctx) {
-        if (!requireVerification)
-          return;
+      postAuthGate: {
+        reason: 'email-verification',
+        async evaluate(ctx) {
+          if (!requireVerification || ctx.user.emailVerified)
+            return;
 
-        // Look up user by the login identifier
-        const user = await ctx.db.findOne<FortressUser>({
-          model: 'user',
-          where: [{ field: 'email', operator: '=', value: ctx.email }],
-        });
-
-        if (!user)
-          return; // Let auth-service handle "user not found"
-
-        // Fast path: check emailVerified field on user
-        if (user.emailVerified)
-          return;
-
-        // Fallback: check verification tokens (for users verified before emailVerified field existed)
-        const tokens = await ctx.db.findMany<VerificationTokenRecord>({
-          model: 'email_verification_token',
-          where: [{ field: 'userId', operator: '=', value: user.id }],
-        });
-
-        const isVerified = tokens.some(t => t.usedAt !== null);
-
-        if (!isVerified) {
-          return {
-            stop: true as const,
-            response: { error: 'EMAIL_NOT_VERIFIED', message: 'Please verify your email before logging in' },
-          };
-        }
-
-        return undefined;
+          const tokens = await ctx.db.findMany<VerificationTokenRecord>({
+            model: 'email_verification_token',
+            where: [{ field: 'userId', operator: '=', value: ctx.user.id }],
+          });
+          return tokens.some(token => token.usedAt !== null)
+            ? undefined
+            : { pluginData: { requiresEmailVerification: true } };
+        },
+        async verify(ctx, completion) {
+          if (typeof completion !== 'string')
+            throw Errors.unauthorized('Invalid verification token');
+          await consumeVerificationToken(ctx.db, completion, ctx.user.id);
+        },
       },
 
       async afterRegister(ctx, user) {
@@ -150,36 +170,18 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
       },
 
       async verify(rawToken: string): Promise<{ userId: string; email: string }> {
-        const hash = await hashToken(rawToken);
-
-        const record = await ctx.db.findOne<VerificationTokenRecord>({
-          model: 'email_verification_token',
-          where: [{ field: 'token', operator: '=', value: hash }],
-        });
-
-        if (!record)
-          throw Errors.notFound('Invalid verification token');
-
-        if (record.usedAt)
-          throw Errors.badRequest('Token already used');
-
-        if (record.expiresAt < new Date())
-          throw Errors.badRequest('Verification token expired');
-
-        await ctx.db.update({
-          model: 'email_verification_token',
-          where: [{ field: 'id', operator: '=', value: record.id }],
-          data: { usedAt: new Date() },
-        });
-
-        // Mark user as email-verified
-        await ctx.db.update({
-          model: 'user',
-          where: [{ field: 'id', operator: '=', value: record.userId }],
-          data: { emailVerified: true },
-        });
-
+        const record = await ctx.db.transaction(tx => consumeVerificationToken(tx, rawToken));
         return { userId: record.userId, email: record.email };
+      },
+
+      async completeVerification(
+        continuationToken: string,
+        verificationToken: string,
+        meta?: RequestMeta,
+      ): Promise<AuthResult> {
+        if (!ctx.auth)
+          throw Errors.badRequest('Auth service is unavailable');
+        return ctx.auth.completePendingAuth(continuationToken, verificationToken, meta);
       },
     }),
   };

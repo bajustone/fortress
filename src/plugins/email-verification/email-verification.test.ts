@@ -65,12 +65,12 @@ describe('email-verification plugin', () => {
       const verify = fortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
       await verify(capturedToken!);
 
-      await expect(verify(capturedToken!)).rejects.toThrow('Token already used');
+      await expect(verify(capturedToken!)).rejects.toThrow('Invalid or expired verification token');
     });
 
     it('rejects invalid token', async () => {
       const verify = fortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
-      await expect(verify('bogus-token')).rejects.toThrow('Invalid verification token');
+      await expect(verify('bogus-token')).rejects.toThrow('Invalid or expired verification token');
     });
 
     it('rejects expired token', async () => {
@@ -88,22 +88,32 @@ describe('email-verification plugin', () => {
       });
 
       const verify = shortFortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
-      await expect(verify(capturedToken!)).rejects.toThrow('Verification token expired');
+      await expect(verify(capturedToken!)).rejects.toThrow('Invalid or expired verification token');
     });
   });
 
-  describe('beforeLogin hook', () => {
-    it('blocks unverified user login', async () => {
+  describe('post-auth gate', () => {
+    it('holds unverified login and completes after token verification', async () => {
       await fortress.auth.createUser({
         email: 'dave@example.com',
         name: 'Dave',
         password: 'password-123',
       });
 
-      // Login should be blocked (email not verified)
       const result = await fortress.auth.login('dave@example.com', 'password-123');
-      // beforeLogin returns a stop response, which becomes the auth response
-      expect((result as unknown as { error: string }).error).toBe('EMAIL_NOT_VERIFIED');
+      expect(result.status).toBe('pending');
+      expect(result.pluginData?.requiresEmailVerification).toBe(true);
+      expect(await fortress.config.database.count({ model: 'refresh_token' })).toBe(0);
+      if (result.status !== 'pending' || !result.pending)
+        throw new Error('Expected email-verification continuation');
+
+      const complete = fortress.plugins['email-verification'].completeVerification as (
+        continuationToken: string,
+        verificationToken: string,
+      ) => Promise<unknown>;
+      await expect(complete(result.pending.continuationToken, capturedToken!)).resolves.toMatchObject({
+        status: 'success',
+      });
     });
 
     it('allows verified user login', async () => {

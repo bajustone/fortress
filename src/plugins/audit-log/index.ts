@@ -21,6 +21,9 @@ export interface AuditLogConfig {
 export type AuditEventType
   = | 'LOGIN_SUCCESS'
     | 'LOGIN_FAILURE'
+    | 'LOGIN_PENDING'
+    | 'MFA_VERIFY_SUCCESS'
+    | 'MFA_VERIFY_FAILURE'
     | 'LOGOUT'
     | 'REGISTER'
     | 'TOKEN_REFRESH'

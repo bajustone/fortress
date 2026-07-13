@@ -8,8 +8,9 @@
  * @module
  */
 
+import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin } from '../../core/plugin';
-import type { FortressUser, RequestMeta } from '../../core/types';
+import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import { hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
 
@@ -192,7 +193,8 @@ async function generateBackupCodes(count: number): Promise<{ raw: string[]; hash
 
 export interface TwoFactorMethods {
   enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
-  verify: (userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: boolean }>;
+  confirmSetup: (userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: true }>;
+  verify: (continuationToken: string, code: string, meta?: RequestMeta) => Promise<AuthResult>;
   disable: (userId: string) => Promise<void>;
 }
 /**
@@ -206,6 +208,88 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
   const digits = config.totp?.digits ?? 6;
   const backupCodeCount = config.backupCodes?.count ?? 10;
   const trustedDeviceDays = config.trustedDeviceDays ?? 30;
+
+  async function verifyCode(
+    db: DatabaseAdapter,
+    userId: string,
+    code: string,
+    meta?: RequestMeta,
+  ): Promise<void> {
+    const secretRecord = await db.findOne<TwoFactorSecretRecord>({
+      model: 'two_factor_secret',
+      where: [{ field: 'userId', operator: '=', value: userId }],
+    });
+    if (!secretRecord)
+      throw Errors.badRequest('Two-factor authentication is not set up');
+
+    const matchedCounter = await verifyTOTPWithCounter(secretRecord.secret, code, period, digits);
+    if (matchedCounter !== null) {
+      const previousCounter = secretRecord.lastUsedCounter;
+      if (previousCounter !== null && matchedCounter <= previousCounter)
+        throw Errors.unauthorized('Two-factor code has already been used');
+
+      const claimed = await db.update<TwoFactorSecretRecord>({
+        model: 'two_factor_secret',
+        where: [
+          { field: 'id', operator: '=', value: secretRecord.id },
+          previousCounter === null
+            ? { field: 'lastUsedCounter', operator: 'isNull', value: null }
+            : { field: 'lastUsedCounter', operator: '=', value: previousCounter },
+        ],
+        data: { isEnabled: true, lastUsedCounter: matchedCounter },
+      });
+      if (!claimed)
+        throw Errors.unauthorized('Two-factor code has already been used');
+
+      if (meta?.userAgent) {
+        const deviceHash = await hashToken(`${userId}:${meta.userAgent}`);
+        const expiresAt = new Date(Date.now() + trustedDeviceDays * 24 * 60 * 60 * 1000);
+        await db.delete({
+          model: 'trusted_device',
+          where: [
+            { field: 'userId', operator: '=', value: userId },
+            { field: 'deviceHash', operator: '=', value: deviceHash },
+          ],
+        });
+        await db.create({
+          model: 'trusted_device',
+          data: { userId, deviceHash, expiresAt, lastUsedAt: new Date() },
+        });
+      }
+      return;
+    }
+
+    const backupCodes = await db.findMany<BackupCodeRecord>({
+      model: 'backup_code',
+      where: [
+        { field: 'userId', operator: '=', value: userId },
+        { field: 'isUsed', operator: '=', value: false },
+      ],
+    });
+    const codeHash = await hashToken(code);
+    const matchingCode = backupCodes.find(backupCode => backupCode.codeHash === codeHash);
+    if (!matchingCode)
+      throw Errors.unauthorized('Invalid two-factor code');
+
+    const claimed = await db.update({
+      model: 'backup_code',
+      where: [
+        { field: 'id', operator: '=', value: matchingCode.id },
+        { field: 'isUsed', operator: '=', value: false },
+      ],
+      data: { isUsed: true },
+    });
+    if (!claimed)
+      throw Errors.unauthorized('Invalid two-factor code');
+
+    if (!secretRecord.isEnabled) {
+      await db.update({
+        model: 'two_factor_secret',
+        where: [{ field: 'id', operator: '=', value: secretRecord.id }],
+        data: { isEnabled: true },
+      });
+    }
+  }
 
   return {
     name: 'two-factor',
@@ -246,51 +330,45 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
     ],
 
     hooks: {
-      async afterLogin(ctx, result) {
-        if (!result.user)
-          return result;
-
-        const secret = await ctx.db.findOne<TwoFactorSecretRecord>({
-          model: 'two_factor_secret',
-          where: [
-            { field: 'userId', operator: '=', value: result.user.id },
-            { field: 'isEnabled', operator: '=', value: true },
-          ],
-        });
-
-        if (!secret)
-          return result;
-
-        // Check trusted device
-        if (ctx.meta?.userAgent) {
-          const deviceHash = await hashToken(`${result.user.id}:${ctx.meta.userAgent}`);
-          const trusted = await ctx.db.findOne<TrustedDeviceRecord>({
-            model: 'trusted_device',
+      postAuthGate: {
+        reason: 'two-factor',
+        async evaluate(ctx) {
+          const secret = await ctx.db.findOne<TwoFactorSecretRecord>({
+            model: 'two_factor_secret',
             where: [
-              { field: 'userId', operator: '=', value: result.user.id },
-              { field: 'deviceHash', operator: '=', value: deviceHash },
+              { field: 'userId', operator: '=', value: ctx.user.id },
+              { field: 'isEnabled', operator: '=', value: true },
             ],
           });
+          if (!secret)
+            return;
 
-          if (trusted && trusted.expiresAt > new Date()) {
-            // Device is trusted — update lastUsedAt and allow login
-            await ctx.db.update({
+          if (ctx.meta?.userAgent) {
+            const deviceHash = await hashToken(`${ctx.user.id}:${ctx.meta.userAgent}`);
+            const trusted = await ctx.db.findOne<TrustedDeviceRecord>({
               model: 'trusted_device',
-              where: [{ field: 'id', operator: '=', value: trusted.id }],
-              data: { lastUsedAt: new Date() },
+              where: [
+                { field: 'userId', operator: '=', value: ctx.user.id },
+                { field: 'deviceHash', operator: '=', value: deviceHash },
+              ],
             });
-            return result;
+            if (trusted && trusted.expiresAt > new Date()) {
+              await ctx.db.update({
+                model: 'trusted_device',
+                where: [{ field: 'id', operator: '=', value: trusted.id }],
+                data: { lastUsedAt: new Date() },
+              });
+              return;
+            }
           }
-        }
 
-        // 2FA required — return partial response without tokens
-        return {
-          status: 'pending' as const,
-          user: result.user,
-          accessToken: null,
-          refreshToken: null,
-          pluginData: { requires2FA: true },
-        };
+          return { pluginData: { requires2FA: true } };
+        },
+        async verify(ctx, completion) {
+          if (typeof completion !== 'string')
+            throw Errors.unauthorized('Invalid two-factor code');
+          await verifyCode(ctx.db, ctx.user.id, completion, ctx.meta);
+        },
       },
     },
 
@@ -355,97 +433,15 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           return { secret, otpauthUrl, backupCodes: backupCodesRaw };
         },
 
-        async verify(userId: string, code: string, meta?: RequestMeta): Promise<{ verified: boolean }> {
-          const secretRecord = await ctx.db.findOne<TwoFactorSecretRecord>({
-            model: 'two_factor_secret',
-            where: [{ field: 'userId', operator: '=', value: userId }],
-          });
+        async confirmSetup(userId: string, code: string, meta?: RequestMeta): Promise<{ verified: true }> {
+          await verifyCode(ctx.db, userId, code, meta);
+          return { verified: true };
+        },
 
-          if (!secretRecord)
-            throw Errors.badRequest('Two-factor authentication is not set up');
-
-          // Try TOTP verification. A valid counter can be used only once;
-          // the conditional update makes replay rejection atomic.
-          const matchedCounter = await verifyTOTPWithCounter(secretRecord.secret, code, period, digits);
-
-          if (matchedCounter !== null) {
-            const previousCounter = secretRecord.lastUsedCounter;
-            if (previousCounter !== null && matchedCounter <= previousCounter)
-              throw Errors.unauthorized('Two-factor code has already been used');
-
-            const claimed = await ctx.db.update<TwoFactorSecretRecord>({
-              model: 'two_factor_secret',
-              where: [
-                { field: 'id', operator: '=', value: secretRecord.id },
-                previousCounter === null
-                  ? { field: 'lastUsedCounter', operator: 'isNull', value: null }
-                  : { field: 'lastUsedCounter', operator: '=', value: previousCounter },
-              ],
-              data: { isEnabled: true, lastUsedCounter: matchedCounter },
-            });
-            if (!claimed)
-              throw Errors.unauthorized('Two-factor code has already been used');
-
-            // Trust this device if meta is provided
-            if (meta?.userAgent) {
-              const deviceHash = await hashToken(`${userId}:${meta.userAgent}`);
-              const expiresAt = new Date(Date.now() + trustedDeviceDays * 24 * 60 * 60 * 1000);
-
-              // Remove existing trust for this device
-              await ctx.db.delete({
-                model: 'trusted_device',
-                where: [
-                  { field: 'userId', operator: '=', value: userId },
-                  { field: 'deviceHash', operator: '=', value: deviceHash },
-                ],
-              });
-
-              await ctx.db.create({
-                model: 'trusted_device',
-                data: {
-                  userId,
-                  deviceHash,
-                  expiresAt,
-                  lastUsedAt: new Date(),
-                },
-              });
-            }
-
-            return { verified: true };
-          }
-
-          // Try backup code
-          const backupCodes = await ctx.db.findMany<BackupCodeRecord>({
-            model: 'backup_code',
-            where: [
-              { field: 'userId', operator: '=', value: userId },
-              { field: 'isUsed', operator: '=', value: false },
-            ],
-          });
-
-          const codeHash = await hashToken(code);
-          const matchingCode = backupCodes.find(bc => bc.codeHash === codeHash);
-
-          if (matchingCode) {
-            await ctx.db.update({
-              model: 'backup_code',
-              where: [{ field: 'id', operator: '=', value: matchingCode.id }],
-              data: { isUsed: true },
-            });
-
-            // Enable 2FA on first successful verification
-            if (!secretRecord.isEnabled) {
-              await ctx.db.update({
-                model: 'two_factor_secret',
-                where: [{ field: 'id', operator: '=', value: secretRecord.id }],
-                data: { isEnabled: true },
-              });
-            }
-
-            return { verified: true };
-          }
-
-          throw Errors.unauthorized('Invalid two-factor code');
+        async verify(continuationToken: string, code: string, meta?: RequestMeta): Promise<AuthResult> {
+          if (!ctx.auth)
+            throw Errors.badRequest('Auth service is unavailable');
+          return ctx.auth.completePendingAuth(continuationToken, code, meta);
         },
 
         async disable(userId: string): Promise<void> {

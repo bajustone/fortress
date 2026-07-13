@@ -16,8 +16,9 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
 } from '@simplewebauthn/server';
+import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin, PluginRouteContext } from '../../core/plugin';
-import type { FortressUser } from '../../core/types';
+import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import {
   generateAuthenticationOptions as generateAuthOptions,
   generateRegistrationOptions as generateRegOptions,
@@ -69,12 +70,15 @@ export interface WebAuthnMethods {
     credentialBackedUp: boolean;
   }>;
   generateAuthenticationOptions: (input: { userId?: string }) => Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>;
-  verifyAuthentication: (input: { response: AuthenticationResponseJSON }) => Promise<{
-    verified: boolean;
-    userId: string;
-    accessToken?: string;
-    refreshToken?: string;
-  }>;
+  verifyAuthentication: (
+    input: { response: AuthenticationResponseJSON },
+    meta?: RequestMeta,
+  ) => Promise<AuthResult>;
+  completeAuthentication: (
+    continuationToken: string,
+    response: AuthenticationResponseJSON,
+    meta?: RequestMeta,
+  ) => Promise<AuthResult>;
 }
 
 // ── Internal Record Types ───────────────────────────────────────────
@@ -215,6 +219,72 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
       : {}),
   };
 
+  async function verifyAuthenticationProof(
+    db: DatabaseAdapter,
+    response: AuthenticationResponseJSON,
+  ): Promise<string> {
+    const credentialRecord = await db.findOne<CredentialRecord>({
+      model: 'webauthn_credential',
+      where: [{ field: 'credentialId', operator: '=', value: response.id }],
+    });
+    if (!credentialRecord)
+      throw Errors.unauthorized('Unknown credential');
+
+    const challengeRecord = await db.findOne<ChallengeRecord>({
+      model: 'webauthn_challenge',
+      where: [{ field: 'userId', operator: '=', value: credentialRecord.userId }],
+    });
+    const discoverableChallenge = challengeRecord
+      ? null
+      : await db.findOne<ChallengeRecord>({
+          model: 'webauthn_challenge',
+          where: [{ field: 'userId', operator: 'isNull', value: null }],
+        });
+    const challenge = challengeRecord ?? discoverableChallenge;
+    if (!challenge)
+      throw Errors.badRequest('No pending authentication challenge');
+
+    if (new Date(challenge.expiresAt) < new Date()) {
+      await db.delete({
+        model: 'webauthn_challenge',
+        where: [{ field: 'id', operator: '=', value: challenge.id }],
+      });
+      throw Errors.badRequest('Challenge expired');
+    }
+
+    const verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
+      credential: {
+        id: credentialRecord.credentialId,
+        publicKey: base64urlToUint8Array(credentialRecord.publicKey),
+        counter: credentialRecord.counter,
+        transports: credentialRecord.transports
+          ? JSON.parse(credentialRecord.transports) as AuthenticatorTransportFuture[]
+          : undefined,
+      },
+    });
+    if (!verification.verified)
+      throw Errors.unauthorized('Authentication verification failed');
+
+    const { newCounter } = verification.authenticationInfo;
+    if (newCounter > 0 && credentialRecord.counter > 0 && newCounter <= credentialRecord.counter)
+      throw Errors.unauthorized('Authenticator counter validation failed');
+
+    await db.update({
+      model: 'webauthn_credential',
+      where: [{ field: 'id', operator: '=', value: credentialRecord.id }],
+      data: { counter: newCounter },
+    });
+    await db.delete({
+      model: 'webauthn_challenge',
+      where: [{ field: 'id', operator: '=', value: challenge.id }],
+    });
+    return credentialRecord.userId;
+  }
+
   return {
     name: 'webauthn',
 
@@ -250,25 +320,25 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
     hooks: supportPasswordless
       ? undefined
       : {
-          async afterLogin(ctx, result) {
-            if (!result.user)
-              return result;
-
-            const credential = await ctx.db.findOne<CredentialRecord>({
-              model: 'webauthn_credential',
-              where: [{ field: 'userId', operator: '=', value: result.user.id }],
-            });
-
-            if (!credential)
-              return result;
-
-            return {
-              ...result,
-              status: 'pending' as const,
-              accessToken: null,
-              refreshToken: null,
-              pluginData: { ...result.pluginData, requiresWebAuthn: true },
-            };
+          postAuthGate: {
+            reason: 'webauthn',
+            async evaluate(ctx) {
+              const credential = await ctx.db.findOne<CredentialRecord>({
+                model: 'webauthn_credential',
+                where: [{ field: 'userId', operator: '=', value: ctx.user.id }],
+              });
+              return credential ? { pluginData: { requiresWebAuthn: true } } : undefined;
+            },
+            async verify(ctx, completion) {
+              if (!completion || typeof completion !== 'object' || !('response' in completion))
+                throw Errors.unauthorized('Invalid WebAuthn completion');
+              const userId = await verifyAuthenticationProof(
+                ctx.db,
+                (completion as { response: AuthenticationResponseJSON }).response,
+              );
+              if (userId !== ctx.user.id)
+                throw Errors.unauthorized('WebAuthn credential belongs to another user');
+            },
           },
         },
 
@@ -449,111 +519,26 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
         return { options };
       },
 
-      async verifyAuthentication(input: { response: AuthenticationResponseJSON }): Promise<{
-        verified: boolean;
-        userId: string;
-        accessToken?: string;
-        refreshToken?: string;
-      }> {
-        const { response } = input;
+      async completeAuthentication(
+        continuationToken: string,
+        response: AuthenticationResponseJSON,
+        meta?: RequestMeta,
+      ): Promise<AuthResult> {
+        if (!ctx.auth)
+          throw Errors.badRequest('Auth service is unavailable');
+        return ctx.auth.completePendingAuth(continuationToken, { response }, meta);
+      },
 
-        // Look up the credential by its ID
-        const credentialRecord = await ctx.db.findOne<CredentialRecord>({
-          model: 'webauthn_credential',
-          where: [{ field: 'credentialId', operator: '=', value: response.id }],
-        });
-        if (!credentialRecord)
-          throw Errors.unauthorized('Unknown credential');
-
-        // Find matching challenge
-        const challengeRecord = await ctx.db.findOne<ChallengeRecord>({
-          model: 'webauthn_challenge',
-          where: [{ field: 'userId', operator: '=', value: credentialRecord.userId }],
-        });
-
-        // Also try null-userId challenges (discoverable credential flow)
-        const discoverableChallenge = challengeRecord
-          ? null
-          : await ctx.db.findOne<ChallengeRecord>({
-              model: 'webauthn_challenge',
-              where: [{ field: 'userId', operator: '=', value: null }],
-            });
-
-        const challenge = challengeRecord ?? discoverableChallenge;
-        if (!challenge)
-          throw Errors.badRequest('No pending authentication challenge');
-
-        if (new Date(challenge.expiresAt) < new Date()) {
-          await ctx.db.delete({
-            model: 'webauthn_challenge',
-            where: [{ field: 'id', operator: '=', value: challenge.id }],
-          });
-          throw Errors.badRequest('Challenge expired');
-        }
-
-        const verification = await verifyAuthenticationResponse({
-          response,
-          expectedChallenge: challenge.challenge,
-          expectedOrigin: origin,
-          expectedRPID: rpID,
-          credential: {
-            id: credentialRecord.credentialId,
-            publicKey: base64urlToUint8Array(credentialRecord.publicKey),
-            counter: credentialRecord.counter,
-            transports: credentialRecord.transports
-              ? JSON.parse(credentialRecord.transports) as AuthenticatorTransportFuture[]
-              : undefined,
-          },
-        });
-
-        if (!verification.verified) {
-          throw Errors.unauthorized('Authentication verification failed');
-        }
-
-        const { newCounter } = verification.authenticationInfo;
-
-        // Counter validation: detect cloning (skip if either is 0 for synced passkeys)
-        if (newCounter > 0 && credentialRecord.counter > 0 && newCounter <= credentialRecord.counter) {
-          throw Errors.unauthorized('Authenticator counter validation failed');
-        }
-
-        // Update counter
-        await ctx.db.update({
-          model: 'webauthn_credential',
-          where: [{ field: 'id', operator: '=', value: credentialRecord.id }],
-          data: { counter: newCounter },
-        });
-
-        // Delete used challenge
-        await ctx.db.delete({
-          model: 'webauthn_challenge',
-          where: [{ field: 'id', operator: '=', value: challenge.id }],
-        });
-
-        // Issue tokens for passwordless flow
-        let accessToken: string | undefined;
-        if (supportPasswordless && ctx.auth) {
-          const user = await ctx.db.findOne<FortressUser>({
-            model: 'user',
-            where: [{ field: 'id', operator: '=', value: credentialRecord.userId }],
-          });
-
-          if (user) {
-            accessToken = await ctx.auth.signToken({
-              sub: user.id,
-              subjectType: 'USER',
-              name: user.name,
-              groups: [],
-              iss: 'fortress',
-            }) as string;
-          }
-        }
-
-        return {
-          verified: true,
-          userId: credentialRecord.userId,
-          ...(accessToken ? { accessToken } : {}),
-        };
+      async verifyAuthentication(
+        input: { response: AuthenticationResponseJSON },
+        meta?: RequestMeta,
+      ): Promise<AuthResult> {
+        const userId = await verifyAuthenticationProof(ctx.db, input.response);
+        if (!supportPasswordless)
+          throw Errors.badRequest('Use completeAuthentication for second-factor WebAuthn');
+        if (!ctx.auth)
+          throw Errors.badRequest('Auth service is unavailable');
+        return ctx.auth.completePluginAuth(userId, 'webauthn', meta);
       },
     }),
   };

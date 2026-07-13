@@ -8,7 +8,8 @@ const SECRET = 'two-factor-test-secret-at-least32';
 
 interface TwoFactorMethods {
   enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
-  verify: (userId: string, code: string, meta?: { userAgent?: string }) => Promise<{ verified: boolean }>;
+  confirmSetup: (userId: string, code: string, meta?: { userAgent?: string }) => Promise<{ verified: true }>;
+  verify: (continuationToken: string, code: string, meta?: { userAgent?: string }) => Promise<unknown>;
   disable: (userId: string) => Promise<void>;
 }
 
@@ -48,7 +49,7 @@ describe('two-factor plugin', () => {
       const setup = await methods.enable(userId);
       // Verify to enable
       const code = await generateTOTP(setup.secret, 30, 6);
-      await methods.verify(userId, code);
+      await methods.confirmSetup(userId, code);
 
       await expect(methods.enable(userId)).rejects.toThrow('already enabled');
     });
@@ -59,7 +60,7 @@ describe('two-factor plugin', () => {
       const setup = await methods.enable(userId);
       const code = await generateTOTP(setup.secret, 30, 6);
 
-      const result = await methods.verify(userId, code);
+      const result = await methods.confirmSetup(userId, code);
       expect(result.verified).toBe(true);
     });
 
@@ -67,20 +68,20 @@ describe('two-factor plugin', () => {
       const setup = await methods.enable(userId);
       const code = await generateTOTP(setup.secret, 30, 6);
 
-      await expect(methods.verify(userId, code)).resolves.toEqual({ verified: true });
-      await expect(methods.verify(userId, code)).rejects.toThrow('already been used');
+      await expect(methods.confirmSetup(userId, code)).resolves.toEqual({ verified: true });
+      await expect(methods.confirmSetup(userId, code)).rejects.toThrow('already been used');
     });
 
     it('rejects invalid TOTP code', async () => {
       await methods.enable(userId);
-      await expect(methods.verify(userId, '000000')).rejects.toThrow('Invalid two-factor code');
+      await expect(methods.confirmSetup(userId, '000000')).rejects.toThrow('Invalid two-factor code');
     });
 
     it('accepts a backup code', async () => {
       const setup = await methods.enable(userId);
       const backupCode = setup.backupCodes[0];
 
-      const result = await methods.verify(userId, backupCode);
+      const result = await methods.confirmSetup(userId, backupCode);
       expect(result.verified).toBe(true);
     });
 
@@ -88,12 +89,12 @@ describe('two-factor plugin', () => {
       const setup = await methods.enable(userId);
       const backupCode = setup.backupCodes[0];
 
-      await methods.verify(userId, backupCode);
-      await expect(methods.verify(userId, backupCode)).rejects.toThrow('Invalid two-factor code');
+      await methods.confirmSetup(userId, backupCode);
+      await expect(methods.confirmSetup(userId, backupCode)).rejects.toThrow('Invalid two-factor code');
     });
 
     it('rejects when 2FA not set up', async () => {
-      await expect(methods.verify(userId, '123456')).rejects.toThrow('not set up');
+      await expect(methods.confirmSetup(userId, '123456')).rejects.toThrow('not set up');
     });
   });
 
@@ -101,7 +102,7 @@ describe('two-factor plugin', () => {
     it('removes all 2FA data', async () => {
       const setup = await methods.enable(userId);
       const code = await generateTOTP(setup.secret, 30, 6);
-      await methods.verify(userId, code);
+      await methods.confirmSetup(userId, code);
 
       await methods.disable(userId);
 
@@ -111,18 +112,25 @@ describe('two-factor plugin', () => {
     });
   });
 
-  describe('afterLogin hook (2FA intercept)', () => {
-    it('returns requires2FA when 2FA is enabled', async () => {
+  describe('post-auth gate', () => {
+    it('holds token issuance and completes with a full auth result', async () => {
       const setup = await methods.enable(userId);
       // Enable by verifying first
       const code = await generateTOTP(setup.secret, 30, 6);
-      await methods.verify(userId, code);
+      await methods.confirmSetup(userId, code);
 
       // Login should be intercepted
       const result = await fortress.auth.login('alice@example.com', 'password-123');
       expect(result.accessToken).toBeNull();
       expect(result.refreshToken).toBeNull();
       expect(result.pluginData?.requires2FA).toBe(true);
+      expect(await fortress.config.database.count({ model: 'refresh_token' })).toBe(0);
+      if (result.status !== 'pending' || !result.pending)
+        throw new Error('Expected a two-factor continuation');
+
+      const completed = await methods.verify(result.pending.continuationToken, setup.backupCodes[0]);
+      expect(completed).toMatchObject({ status: 'success', method: 'two-factor' });
+      expect(await fortress.config.database.count({ model: 'refresh_token' })).toBe(1);
     });
 
     it('allows normal login when 2FA not enabled', async () => {
@@ -137,7 +145,7 @@ describe('two-factor plugin', () => {
       const userAgent = 'TestBrowser/1.0';
 
       // First verify with device info to trust it
-      await methods.verify(userId, code, { userAgent });
+      await methods.confirmSetup(userId, code, { userAgent });
 
       // Login with same userAgent should bypass 2FA
       const result = await fortress.auth.login('alice@example.com', 'password-123', { userAgent });

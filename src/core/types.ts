@@ -62,6 +62,7 @@ export interface AuthChallenge {
 export interface AuthSuccess {
   status: 'success';
   user: FortressUser;
+  method: AuthMethod;
   accessToken: string;
   refreshToken: string;
   pluginData?: Record<string, unknown>;
@@ -80,6 +81,8 @@ export interface AuthImpersonation {
 export interface AuthPending {
   status: 'pending';
   user: FortressUser;
+  /** Present for post-auth-gate holds; required once wire consumers migrate. */
+  pending?: AuthChallenge;
   accessToken: null;
   refreshToken: null;
   pluginData?: Record<string, unknown>;

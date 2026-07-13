@@ -126,6 +126,10 @@ export type {
   ModelDefinition,
   PluginContext,
   PluginHooks,
+  PostAuthGateContext,
+  PostAuthGateDecision,
+  PostAuthGateProvider,
+  PostAuthGateVerificationContext,
 } from './core/plugin';
 
 /** Type-level mapping helpers used to expose plugin methods and typed call maps on the fortress instance. */
@@ -240,6 +244,9 @@ export type { DataIsolationMethods } from './plugins/data-isolation';
 
 /** Type-safe method surface contributed by the email verification plugin. */
 export type { EmailVerificationMethods } from './plugins/email-verification';
+
+/** Type-safe method surface contributed by the magic-link plugin. */
+export type { MagicLinkMethods } from './plugins/magic-link';
 
 /** Type-safe method surface and request/response shapes for the OAuth server plugin. */
 export type { AuthorizeRequestParams, ClientAuth, OAuthMethods, PendingFlowRecord, TokenRequestBody } from './plugins/oauth';

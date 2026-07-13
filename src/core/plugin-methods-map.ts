@@ -2,6 +2,7 @@ import type { ApiKeyMethods } from '../plugins/api-key';
 import type { AuditLogMethods } from '../plugins/audit-log';
 import type { DataIsolationMethods } from '../plugins/data-isolation';
 import type { EmailVerificationMethods } from '../plugins/email-verification';
+import type { MagicLinkMethods } from '../plugins/magic-link';
 import type { OAuthMethods } from '../plugins/oauth';
 import type { OpenAPIMethods } from '../plugins/openapi';
 import type { SocialLoginMethods } from '../plugins/social-login';
@@ -22,6 +23,7 @@ export interface PluginMethodsMap {
   'audit-log': AuditLogMethods;
   'data-isolation': DataIsolationMethods;
   'email-verification': EmailVerificationMethods;
+  'magic-link': MagicLinkMethods;
   'oauth': OAuthMethods;
   'openapi': OpenAPIMethods;
   'social-login': SocialLoginMethods;
