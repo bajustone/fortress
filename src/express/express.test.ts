@@ -114,6 +114,52 @@ describe('express adapter', () => {
     expect(nextCalled).toBe(true);
   });
 
+  it('rbac middleware denies unmapped routes when unmappedRoutes: deny', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+    });
+
+    const middleware = createRbacMiddleware(fortress, { routeMap: {}, unmappedRoutes: 'deny' });
+    const req: ExpressRequest = {
+      headers: {},
+      method: 'GET',
+      path: '/api/unmapped',
+      fortressUserId: '1',
+    };
+    let nextErr: unknown;
+
+    await middleware(req, mockRes(), ((err?: unknown) => {
+      nextErr = err;
+    }) as ExpressNextFunction);
+    expect(nextErr).toBeInstanceOf(FortressError);
+    expect((nextErr as FortressError).statusCode).toBe(403);
+  });
+
+  it('rbac middleware still allows skipPaths under unmappedRoutes: deny', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+    });
+
+    const middleware = createRbacMiddleware(fortress, {
+      routeMap: {},
+      unmappedRoutes: 'deny',
+      skipPaths: ['/api/health'],
+    });
+    const req: ExpressRequest = { headers: {}, method: 'GET', path: '/api/health' };
+    let nextErr: unknown;
+    let nextCalled = false;
+
+    await middleware(req, mockRes(), ((err?: unknown) => {
+      if (err)
+        nextErr = err;
+      else nextCalled = true;
+    }) as ExpressNextFunction);
+    expect(nextErr).toBeUndefined();
+    expect(nextCalled).toBe(true);
+  });
+
   it('error handler formats FortressError correctly', () => {
     const handler = createErrorHandler();
     const res = mockRes() as any;

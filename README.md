@@ -912,6 +912,31 @@ createHonoMiddleware(fortress, {
 });
 ```
 
+#### Fail-closed Unmapped Routes
+
+By default a route with no `routeMap`/`mapRequest` entry is treated as
+public (the RBAC middleware only guards routes you map). To fail closed
+instead — so a forgotten mapping can't silently expose a route — set
+`defaultDeny: true` (Hono) or `unmappedRoutes: 'deny'` (Express). Any
+non-skipped, unmapped route is then refused with a 403; list genuinely
+public routes in `skipPaths`.
+
+```typescript
+// Hono
+createHonoMiddleware(fortress, {
+  routeMap: { 'GET /api/posts': { resource: 'post', action: 'list' } },
+  skipPaths: ['/api/public/*'],
+  defaultDeny: true, // unmapped /api/* routes → 403
+});
+
+// Express
+createExpressMiddleware(fortress, {
+  routeMap: { 'GET /api/posts': { resource: 'post', action: 'list' } },
+  skipPaths: ['/api/public/*'],
+  unmappedRoutes: 'deny', // unmapped routes → 403
+});
+```
+
 #### Hono Helpers
 
 ```typescript

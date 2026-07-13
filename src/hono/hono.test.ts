@@ -172,6 +172,35 @@ describe('hono rbacMiddleware', () => {
     });
     expect(res.status).toBe(200);
   });
+
+  it('denies unmapped routes when defaultDeny is set, but honors skipPaths', async () => {
+    const token = await loginAndGetToken();
+
+    const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fortress, {
+      routeMap: { 'GET /api/posts': { resource: 'post', action: 'list' } },
+      skipPaths: ['/api/public/*'],
+      defaultDeny: true,
+    });
+    const denyApp = new Hono<FortressEnv>();
+    denyApp.onError(errorHandler);
+    denyApp.use('/api/*', authMiddleware);
+    denyApp.use('/api/*', rbacMiddleware);
+    denyApp.get('/api/unmapped', c => c.json({ ok: true }));
+    denyApp.get('/api/public/info', c => c.json({ ok: true }));
+
+    // Unmapped, non-skipped route → fail closed with 403.
+    const denied = await denyApp.request('/api/unmapped', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(denied.status).toBe(403);
+    expect((await denied.json() as any).code).toBe('FORBIDDEN');
+
+    // Skip-listed route is still allowed even under defaultDeny.
+    const allowed = await denyApp.request('/api/public/info', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(allowed.status).toBe(200);
+  });
 });
 
 describe('hono authMiddleware — fortressDb and getScopedDb', () => {

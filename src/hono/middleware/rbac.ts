@@ -17,6 +17,13 @@ export interface RbacOptions {
   mapRequest?: (method: string, path: string) => RouteMapping | null;
   /** Paths that skip permission checks entirely (supports * wildcards) */
   skipPaths?: string[];
+  /**
+   * When `true`, a non-skipped route that matches no `routeMap`/`mapRequest`
+   * entry is refused with a 403 (fail closed) instead of being allowed as
+   * public. List genuinely public routes in {@link RbacOptions.skipPaths}.
+   * Default: `false` (unmapped routes are allowed).
+   */
+  defaultDeny?: boolean;
 }
 
 /**
@@ -31,8 +38,8 @@ export interface RbacOptions {
  * 2. {@link RbacOptions.routeMap} — exact `'METHOD /path'` then
  *    parameterized match.
  * 3. {@link RbacOptions.mapRequest} — dynamic resolver fallback.
- * 4. No mapping found → allow (the route is public from the adapter's
- *    point of view).
+ * 4. No mapping found → allow, unless {@link RbacOptions.defaultDeny} is set,
+ *    in which case the route is refused with a 403 (fail closed).
  *
  * Throws {@link FortressError} on missing/insufficient permissions.
  */
@@ -43,6 +50,7 @@ export function createRbacMiddleware(
   const routeMap = options?.routeMap ?? {};
   const skipPaths = options?.skipPaths ?? [];
   const skipPatterns = skipPaths.map(p => pathToRegex(p));
+  const defaultDeny = options?.defaultDeny ?? false;
 
   return async (c, next) => {
     const path = c.req.path;
@@ -65,6 +73,11 @@ export function createRbacMiddleware(
     }
 
     if (!mapping) {
+      if (defaultDeny) {
+        // Fail closed: an unmapped route is refused rather than treated as
+        // public. Genuinely public routes belong in skipPaths.
+        throw new FortressError('FORBIDDEN', 'No permission mapping for this route', 403);
+      }
       // No declarative mapping — caller treats this as a public route from
       // the adapter's perspective. (Fortress-managed paths have already
       // been caught and protected inside fortress.handleRequest.)

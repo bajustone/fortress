@@ -77,6 +77,14 @@ export interface RbacOptions {
   routeMap?: Record<string, RouteMapping>;
   mapRequest?: (method: string, path: string) => RouteMapping | null;
   skipPaths?: string[];
+  /**
+   * Behavior when a non-skipped route matches no `routeMap`/`mapRequest`
+   * entry. `'allow'` (default) treats it as public; `'deny'` fails closed
+   * with a 403 so a forgotten mapping can't silently expose a user route.
+   * List genuinely public routes in {@link RbacOptions.skipPaths} when using
+   * `'deny'`.
+   */
+  unmappedRoutes?: 'allow' | 'deny';
 }
 
 // --- Auth middleware ---
@@ -159,6 +167,7 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
   const routeMap = options?.routeMap ?? {};
   const skipPaths = options?.skipPaths ?? [];
   const skipPatterns = skipPaths.map(p => pathToRegex(p));
+  const unmappedRoutes = options?.unmappedRoutes ?? 'allow';
 
   return async (req, _res, next) => {
     try {
@@ -182,6 +191,12 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
       }
 
       if (!mapping) {
+        if (unmappedRoutes === 'deny') {
+          // Fail closed: an unmapped route under deny mode is refused rather
+          // than treated as public. Authenticating won't help — the route
+          // needs an explicit mapping or a skipPaths entry.
+          throw new FortressError('FORBIDDEN', 'No permission mapping for this route', 403);
+        }
         // No declarative mapping — caller treats this as a public route.
         next();
         return;
