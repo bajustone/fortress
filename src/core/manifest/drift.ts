@@ -49,10 +49,12 @@ export function detectRouteManifestDrift(
   fortress: Pick<Fortress, 'endpoints' | 'config' | 'manifest'>,
   options: DetectRouteManifestDriftOptions = {},
 ): RouteManifestDrift {
-  const manifest = options.manifest ?? fortress.manifest ?? buildRouteManifest(fortress);
+  const canonicalManifest = buildRouteManifest(fortress);
+  const manifest = options.manifest ?? fortress.manifest ?? canonicalManifest;
 
-  const mounted = new Set(fortress.endpoints.map(endpointKey));
-  const manifestRoutes = new Set(manifest.filter(entry => entry.mounted).map(manifestKey));
+  const mounted = new Set(canonicalManifest.filter(entry => entry.mounted).map(manifestKey));
+  const manifestMountedRoutes = new Set(manifest.filter(entry => entry.mounted).map(manifestKey));
+  const manifestRoutes = new Set(manifest.map(manifestKey));
 
   let openapiRoutes = new Set<string>();
   if (options.openapi) {
@@ -84,8 +86,8 @@ export function detectRouteManifestDrift(
   }
 
   return {
-    mountedMissingFromManifest: diffSets(mounted, manifestRoutes),
-    manifestMissingFromMounted: diffSets(manifestRoutes, mounted),
+    mountedMissingFromManifest: diffSets(mounted, manifestMountedRoutes),
+    manifestMissingFromMounted: diffSets(manifestMountedRoutes, mounted),
     openapiMissingFromManifest: diffSets(openapiRoutes, manifestRoutes),
     manifestMissingFromOpenapi: diffSets(manifestRoutes, openapiRoutes),
     rbacPermissionMismatches,

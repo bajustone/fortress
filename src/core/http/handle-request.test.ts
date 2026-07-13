@@ -133,6 +133,34 @@ describe('fortress.handleRequest', () => {
     });
   });
 
+  describe('logout flow', () => {
+    it('revokes the refresh token and clears both configured auth cookies', async () => {
+      await fortress.auth.createUser({ email: 'logout@b.co', name: 'Logout', password: 'password1234567' });
+      const login = await fortress.auth.login('logout@b.co', 'password1234567');
+      if (login.status !== 'success')
+        throw new Error('expected success');
+
+      const res = await fortress.handleRequest(new Request('http://localhost/auth/logout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refreshToken: login.refreshToken }),
+      }));
+      expect(res.status).toBe(200);
+      const setCookies = res.headers.getSetCookie();
+      expect(setCookies).toHaveLength(2);
+      expect(setCookies).toEqual(expect.arrayContaining([
+        expect.stringMatching(new RegExp(`^${fortress.cookies.accessName}=;.*Max-Age=0`)),
+        expect.stringMatching(new RegExp(`^${fortress.cookies.refreshName}=;.*Max-Age=0`)),
+      ]));
+      for (const cookie of setCookies) {
+        expect(cookie).toMatch(/Expires=[^;]+GMT/);
+        expect(cookie).toContain('Path=/');
+        expect(cookie).toContain('HttpOnly');
+      }
+      await expect(fortress.auth.refresh(login.refreshToken)).rejects.toMatchObject({ code: 'TOKEN_REUSE' });
+    });
+  });
+
   describe('iam endpoints (bearer + permission)', () => {
     let accessToken: string;
 
@@ -196,6 +224,17 @@ describe('fortress.handleRequest', () => {
             meta: { summary: 'Public echo', tags: ['Test'], security: ['none'] },
             responses: { 200: { description: 'ok' } },
           },
+          permissionOnly: {
+            method: 'GET',
+            path: '/spy/permission-only',
+            handler: 'permissionOnly',
+            meta: {
+              summary: 'Permission only',
+              tags: ['Test'],
+              permission: { resource: 'spy', action: 'read' },
+            },
+            responses: { 200: { description: 'ok' } },
+          },
         },
         methods: () => ({
           echo(_body: unknown, ctx: PluginRouteContext): { ok: true } {
@@ -203,6 +242,10 @@ describe('fortress.handleRequest', () => {
             return { ok: true };
           },
           publicEcho(_body: unknown, ctx: PluginRouteContext): { ok: true } {
+            received.push(ctx);
+            return { ok: true };
+          },
+          permissionOnly(_body: unknown, ctx: PluginRouteContext): { ok: true } {
             received.push(ctx);
             return { ok: true };
           },
@@ -248,6 +291,45 @@ describe('fortress.handleRequest', () => {
       expect(ctx.meta?.userAgent).toBe('spy-agent/1.0');
       expect(ctx.request).toBeInstanceOf(Request);
       expect(new URL(ctx.request.url).pathname).toBe('/spy/echo');
+    });
+
+    it('authenticates JWTs for permission-only routes without explicit bearer metadata', async () => {
+      const { plugin, received } = makeSpyPlugin();
+      const spyFortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [plugin],
+      });
+      const user = await spyFortress.auth.createUser({
+        email: 'permission-only@b.co',
+        name: 'Permission Only',
+        password: 'password1234567',
+      });
+      const login = await spyFortress.auth.login('permission-only@b.co', 'password1234567');
+      if (login.status !== 'success')
+        throw new Error('expected success');
+
+      let checkedSubject: { type: string; id: string } | undefined;
+      spyFortress.iam.checkPermission = async (subject) => {
+        checkedSubject = subject;
+        return true;
+      };
+      const allowed = await spyFortress.handleRequest(new Request(
+        'http://localhost/spy/permission-only',
+        { headers: { authorization: `Bearer ${login.accessToken}` } },
+      ));
+      expect(allowed.status).toBe(200);
+      expect(checkedSubject).toEqual({ type: 'USER', id: user.id });
+      expect(received[0]?.userId).toBe(user.id);
+
+      const missing = await spyFortress.handleRequest(new Request('http://localhost/spy/permission-only'));
+      expect(missing.status).toBe(401);
+      spyFortress.iam.checkPermission = async () => false;
+      const denied = await spyFortress.handleRequest(new Request(
+        'http://localhost/spy/permission-only',
+        { headers: { authorization: `Bearer ${login.accessToken}` } },
+      ));
+      expect(denied.status).toBe(403);
     });
 
     it('passes request + meta but leaves userId/claims undefined on public routes', async () => {

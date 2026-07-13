@@ -220,15 +220,9 @@ const fortress = createFortress({
 });
 ```
 
-`routes` is a shorthand for the boilerplate plugin every host app would otherwise write:
+Fortress represents top-level routes internally under the reserved name `__host`. Declaring a user plugin named `__host` alongside `routes` is a configuration error.
 
-```ts
-plugins: [{ name: 'host-routes', routes: appEndpoints }]
-```
-
-Fortress synthesizes that plugin internally under the reserved name `__host`. Declaring a user plugin named `__host` alongside `routes` is a configuration error.
-
-Top-level `routes` are metadata-only: they do not create `fortress.call.*` entries because no handler methods are registered. If you need typed in-process callables for custom routes, use a real plugin with both `routes` and matching `methods`.
+Top-level `routes` are metadata-only: they participate in the manifest, OpenAPI, and protection helpers, but framework adapters do not mount or dispatch them. Requests fall through to your host router; direct `fortress.handleRequest()` calls return 404 rather than a fabricated success. They also do not create `fortress.call.*` entries because no handler methods are registered. If you need Fortress-mounted routes or typed in-process callables, use a real plugin with both `routes` and matching `methods`. Duplicate method/path or `fortress.call` keys across plugins fail at startup; a plugin may still intentionally override a core route.
 
 ### Secret Rotation
 
@@ -307,6 +301,8 @@ Refresh tokens are rotated on every use. The old token is revoked, and a new one
 ```typescript
 await fortress.auth.logout(refreshToken);
 ```
+
+`POST /auth/logout` revokes the refresh token and expires both configured auth cookies (`Max-Age=0`).
 
 ### Current User
 

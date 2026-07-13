@@ -92,12 +92,12 @@ export interface FortressConfig {
   /**
    * Host-application endpoint definitions to register with the manifest,
    * OpenAPI generation, and `protect()` / adapter `protectedRoute()` helpers
-   * without authoring a one-field plugin. Equivalent to passing a
-   * `FortressPlugin` whose only field is `routes` — fortress synthesizes
-   * exactly that plugin under the reserved name `__host`.
+   * without authoring a plugin. Fortress tracks them internally under the
+   * reserved name `__host`.
    *
-   * Top-level `routes` are metadata-only: they do not add `fortress.call.*`
-   * entries because no handler methods are registered. If you need typed
+   * Top-level `routes` are metadata-only: adapters leave them to the host
+   * router and they do not add `fortress.call.*` entries because no handler
+   * methods are registered. If you need Fortress-mounted routes or typed
    * in-process callables for custom routes, declare a real plugin with both
    * `routes` and matching `methods`.
    *

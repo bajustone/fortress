@@ -17,7 +17,7 @@ import type { RouteEntry } from './match';
 import { resolveCookieConfig } from '../config';
 import { Errors, FortressError } from '../errors';
 import { coerceBySchema, validateRequest } from '../validation';
-import { serializeAuthCookies } from './cookie-serialize';
+import { clearAuthCookies, serializeAuthCookies } from './cookie-serialize';
 import { enforceCsrf, resolveCsrfConfig } from './csrf';
 import { dispatchEndpoint } from './dispatch';
 import { errorToResponse, withCookies } from './error-response';
@@ -43,7 +43,14 @@ import { extractAccessToken } from './token-extraction';
 export function buildHandleRequest(
   fortress: Fortress,
 ): (request: Request) => Promise<Response> {
-  const routeTable = buildRouteTable(fortress.endpoints);
+  const mountedRoutes = new Set(
+    fortress.manifest
+      .filter(route => route.mounted)
+      .map(route => `${route.method.toUpperCase()} ${route.path}`),
+  );
+  const routeTable = buildRouteTable(
+    fortress.endpoints.filter(endpoint => mountedRoutes.has(`${endpoint.method.toUpperCase()} ${endpoint.path}`)),
+  );
   const cookieConfig = resolveCookieConfig(fortress.config.cookies);
   // H5: pipeline CSRF check resolved once at startup so per-request cost
   // is just header / cookie inspection.
@@ -124,8 +131,8 @@ export function buildHandleRequest(
         }
       }
 
-      const requiresBearer
-        = !selfManagedBearer && (endpoint.meta?.security?.includes('bearer') ?? false);
+      const requiresBearer = !selfManagedBearer
+        && ((endpoint.meta?.security?.includes('bearer') ?? false) || !!endpoint.meta?.permission);
       if (!subject && requiresBearer) {
         const token = extractAccessToken(request, cookieConfig);
         if (!token)
@@ -279,6 +286,15 @@ async function maybeBuildAuthCookies(
   fortress: Fortress,
   _request: Request,
 ): Promise<{ setCookies: string[]; response: Response; length: number }> {
+  // Logout succeeds only after dispatch revokes the supplied refresh token;
+  // clear both browser credentials on that successful response.
+  if (handler === 'logout') {
+    if (response.status >= 400)
+      return { setCookies: [], response, length: 0 };
+    const setCookies = clearAuthCookies(resolveCookieConfig(fortress.config.cookies));
+    return { setCookies, response, length: setCookies.length };
+  }
+
   // Only inspect successful auth-related handlers.
   const isAuthIssuing = handler === 'login'
     || handler === 'refresh'

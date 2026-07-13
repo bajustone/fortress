@@ -111,6 +111,9 @@ function collectEndpointOrigins(fortress: Pick<Fortress, 'endpoints' | 'config'>
   for (const endpoint of coreIam)
     origins.set(endpointKey(endpoint), { endpoint, plugin: 'iam' });
 
+  for (const endpoint of Object.values(fortress.config.routes ?? {}) as EndpointDefinition[]) {
+    origins.set(endpointKey(endpoint), { endpoint, plugin: null });
+  }
   for (const plugin of fortress.config.plugins ?? []) {
     for (const endpoint of Object.values(plugin.routes ?? {}) as EndpointDefinition[]) {
       origins.set(endpointKey(endpoint), { endpoint, plugin: plugin.name });
@@ -141,7 +144,9 @@ export function buildRouteManifest(fortress: Pick<Fortress, 'endpoints' | 'confi
         ...(endpoint.meta?.bearerKind ? { bearerKind: endpoint.meta.bearerKind } : {}),
         csrfApplicable: csrfApplies(endpoint, fortress),
         rateLimited: isRateLimited(endpoint, plugins),
-        mounted: true,
+        // Top-level host routes are metadata/protection declarations only.
+        // Framework adapters must fall through to the host's own handler.
+        mounted: plugin !== null,
       };
     })
     .sort((a, b) => `${a.method} ${a.path}`.localeCompare(`${b.method} ${b.path}`));

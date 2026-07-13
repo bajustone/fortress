@@ -90,14 +90,13 @@ describe('protect()', () => {
     expect(calls).toEqual(['before-auth', 'after-auth', 'after-rbac']);
   });
 
-  it('enforces bearer auth and RBAC from endpoint metadata on host-owned handlers', async () => {
+  it('authenticates JWTs and enforces RBAC for permission-only host handlers', async () => {
     const ep = {
       method: 'GET',
       path: '/reports/:id',
       handler: 'readReport',
       meta: {
         summary: 'Read report',
-        security: ['bearer'],
         permission: { resource: 'report', action: 'read' },
       },
       input: {

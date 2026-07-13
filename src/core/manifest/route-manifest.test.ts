@@ -80,6 +80,20 @@ describe('route manifest', () => {
     expect(manifest.every(entry => entry.classification !== 'default-deny')).toBe(true);
   });
 
+  it('does not report valid metadata-only host routes as manifest drift', () => {
+    const host = endpoint('GET', '/host')
+      .summary('Host route')
+      .security('none')
+      .response(200, 'OK', obj({ ok: str() }, 'ok'))
+      .handler('host')
+      .build() as EndpointDefinition;
+    const fortress = fakeFortress([host]);
+    const drift = detectRouteManifestDrift(fortress as any);
+
+    expect(buildRouteManifest(fortress as any)[0]).toMatchObject({ mounted: false, plugin: null });
+    expect(hasRouteManifestDrift(drift)).toBe(false);
+  });
+
   it('detects drift in mounted routes, OpenAPI routes, and RBAC permissions', () => {
     const endpointDef = endpoint('POST', '/things/:id')
       .summary('Update thing')
@@ -95,7 +109,10 @@ describe('route manifest', () => {
       .response(200, 'OK', obj({ ok: str() }, 'ok'))
       .handler('updateOtherThing')
       .build() as EndpointDefinition;
-    const fortress = fakeFortress([endpointDef, otherEndpointDef]);
+    const fortress = fakeFortress(
+      [endpointDef, otherEndpointDef],
+      [{ name: 'test-routes', routes: { updateThing: endpointDef, updateOtherThing: otherEndpointDef } }],
+    );
     const manifest = buildRouteManifest(fortress as any);
 
     const brokenManifest = [

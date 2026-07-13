@@ -531,7 +531,7 @@ Every request resolves to a `Subject` (or `undefined` for public routes) via two
 
 Crucially, this two-stage resolution fires on **both** surfaces:
 
-- **Fortress-owned routes** (`/auth/*`, `/iam/*`, plugin routes, OAuth, OpenAPI) run it inside `fortress.handleRequest` via `tryPluginPrincipal`. The JWT fallback is gated by the endpoint's `security: 'bearer'` metadata.
+- **Fortress-owned routes** (`/auth/*`, `/iam/*`, plugin routes, OAuth, OpenAPI) run it inside `fortress.handleRequest` via `tryPluginPrincipal`. The JWT fallback runs for `security: 'bearer'` routes and for any route with permission metadata, so permission-only declarations authenticate consistently before RBAC.
 - **User-owned routes** (your own `app.get(...)` handlers in Hono / Express / SvelteKit) run it inside the adapter auth middleware via `fortress.resolvePrincipal(request)` — which is just `tryPluginPrincipal` + a non-throwing JWT fallback. Every adapter pinpoints the resolved subject on its framework-native request context:
   - Hono: `c.get('fortressSubject')` (plus `c.get('fortressUserId')` as a USER-only alias)
   - Express: `req.fortressSubject` (plus `req.fortressUserId` as a USER-only alias)

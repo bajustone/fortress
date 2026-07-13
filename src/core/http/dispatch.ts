@@ -80,8 +80,11 @@ export async function dispatchEndpoint(
     return jsonResponse(result, successStatus(endpoint));
   }
 
-  // Unknown endpoint family — return ok shape
-  return jsonResponse({ ok: true }, 200);
+  // Top-level host routes are metadata-only and have no Fortress handler.
+  // Framework adapters exclude them from their mounted route table so the
+  // host handler runs; direct core dispatch fails closed instead of inventing
+  // a successful response.
+  throw Errors.notFound(`No Fortress handler is mounted for ${endpoint.method} ${endpoint.path}`);
 }
 
 // ── Body parsing ─────────────────────────────────────────────────────

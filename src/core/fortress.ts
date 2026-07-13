@@ -395,25 +395,32 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     iam.addIamObserver(event => logCustomEvent(event));
   }
 
-  // Assemble all endpoint definitions: core auth + IAM + plugin routes.
-  // `authEndpoints` / `iamEndpoints` are keyed records (preserving per-handler
-  // generic types for `fortress.call.*`) — we flatten them to the array the
-  // route matcher expects via `Object.values`. Plugin route records are
-  // flattened the same way. Deduplication by `method + path` lets plugin
-  // routes override core definitions.
-  const pluginEndpoints: EndpointDefinition[] = [];
-  for (const plugin of plugins) {
-    if (plugin.routes) {
-      pluginEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
-    }
-  }
+  // Assemble all endpoint definitions. A plugin may intentionally override a
+  // core route, but two plugins claiming the same method+path is ambiguous and
+  // therefore rejected instead of depending on registration order.
   const endpointMap = new Map<string, EndpointDefinition>();
+  const endpointOwners = new Map<string, string>();
   const coreEndpoints: EndpointDefinition[] = [
     ...Object.values(authEndpoints) as EndpointDefinition[],
     ...Object.values(iamEndpoints) as EndpointDefinition[],
   ];
-  for (const ep of [...coreEndpoints, ...pluginEndpoints]) {
-    endpointMap.set(`${ep.method} ${ep.path}`, ep);
+  for (const ep of coreEndpoints) {
+    const routeKey = `${ep.method} ${ep.path}`;
+    endpointMap.set(routeKey, ep);
+    endpointOwners.set(routeKey, 'core');
+  }
+  for (const plugin of plugins) {
+    for (const ep of Object.values(plugin.routes ?? {}) as EndpointDefinition[]) {
+      const routeKey = `${ep.method} ${ep.path}`;
+      const owner = endpointOwners.get(routeKey);
+      if (owner && owner !== 'core') {
+        throw Errors.badRequest(
+          `Duplicate endpoint ${routeKey} declared by plugins "${owner}" and "${plugin.name}"`,
+        );
+      }
+      endpointMap.set(routeKey, ep);
+      endpointOwners.set(routeKey, plugin.name);
+    }
   }
   const endpoints = Array.from(endpointMap.values());
 
@@ -514,6 +521,9 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     ...(authEndpoints as unknown as Record<string, EndpointDefinition>),
     ...(iamEndpoints as unknown as Record<string, EndpointDefinition>),
   };
+  const callOwners = new Map<string, string>();
+  for (const key of Object.keys(callEndpoints))
+    callOwners.set(key, 'core');
   for (const plugin of plugins) {
     // Top-level `routes` are metadata for manifest/OpenAPI/protected host
     // routes; they do not come with plugin methods, so exposing them through
@@ -522,8 +532,16 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     // plugin that supplies both `routes` and matching `methods`.
     if (plugin.name === HOST_ROUTES_PLUGIN_NAME)
       continue;
-    if (plugin.routes)
-      Object.assign(callEndpoints, plugin.routes);
+    for (const [key, endpoint] of Object.entries(plugin.routes ?? {}) as [string, EndpointDefinition][]) {
+      const owner = callOwners.get(key);
+      if (owner && owner !== 'core') {
+        throw Errors.badRequest(
+          `Duplicate fortress.call key "${key}" declared by plugins "${owner}" and "${plugin.name}"`,
+        );
+      }
+      callEndpoints[key] = endpoint;
+      callOwners.set(key, plugin.name);
+    }
   }
   instance.call = buildCall(instance as Fortress, callEndpoints) as TypedCall<T>;
 

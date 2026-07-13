@@ -297,7 +297,8 @@ export function protect(
         }
       }
 
-      const requiresBearer = !selfManagedBearer && (endpoint.meta?.security?.includes('bearer') ?? false);
+      const requiresBearer = !selfManagedBearer
+        && ((endpoint.meta?.security?.includes('bearer') ?? false) || !!endpoint.meta?.permission);
       if (!subject && requiresBearer) {
         const token = fortress.extractAccessToken(pipelineRequest);
         if (!token)

@@ -141,12 +141,66 @@ describe('createFortress', () => {
       const registered = fortress.endpoints.find(e => e.handler === 'getSchool');
       expect(registered).toBeDefined();
       expect(registered?.path).toBe('/schools/:id');
-      expect(fortress.manifest.some(m => m.path === '/schools/:id')).toBe(true);
+      expect(fortress.manifest.find(m => m.path === '/schools/:id')).toMatchObject({
+        plugin: null,
+        mounted: false,
+      });
+      const direct = await fortress.handleRequest(new Request('http://localhost/schools/1'));
+      expect(direct.status).toBe(404);
       // Top-level routes are metadata-only. They don't register plugin
       // methods, so exposing them on fortress.call would create a runtime
       // NOT_FOUND footgun. Use a real plugin with routes+methods for custom
       // typed callables.
       expect((fortress.call as Record<string, unknown>).getSchool).toBeUndefined();
+    });
+
+    it('keeps a top-level host override of a core route metadata-only', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const hostMe = endpoint('GET', '/auth/me')
+        .summary('Host-owned me')
+        .security('none')
+        .handler('hostMe')
+        .build();
+      const fortress = createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        routes: { hostMe },
+      });
+
+      expect(fortress.manifest.find(route => route.path === '/auth/me')).toMatchObject({
+        handler: 'hostMe',
+        plugin: null,
+        mounted: false,
+      });
+      await expect(fortress.handleRequest(new Request('http://localhost/auth/me')))
+        .resolves
+        .toMatchObject({ status: 404 });
+    });
+
+    it('returns 404 before auth/RBAC for protected metadata-only host routes', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const bearer = endpoint('GET', '/host-bearer')
+        .summary('Bearer host route')
+        .security('bearer')
+        .handler('hostBearer')
+        .build();
+      const permission = endpoint('GET', '/host-permission')
+        .summary('Permission host route')
+        .permission('host', 'read')
+        .handler('hostPermission')
+        .build();
+      const fortress = createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        routes: { bearer, permission },
+      });
+
+      await expect(fortress.handleRequest(new Request('http://localhost/host-bearer')))
+        .resolves
+        .toMatchObject({ status: 404 });
+      await expect(fortress.handleRequest(new Request('http://localhost/host-permission')))
+        .resolves
+        .toMatchObject({ status: 404 });
     });
 
     it('rejects a user plugin that collides with the reserved __host name', async () => {
@@ -167,6 +221,64 @@ describe('createFortress', () => {
       });
       // No __host plugin should appear in fortress.plugins
       expect((fortress.plugins as Record<string, unknown>).__host).toBeUndefined();
+    });
+  });
+
+  describe('plugin collision detection', () => {
+    it('rejects duplicate method+path declarations across plugins', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const first = endpoint('GET', '/duplicate').summary('first').security('none').handler('first').build();
+      const second = endpoint('GET', '/duplicate').summary('second').security('none').handler('second').build();
+
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [
+          { name: 'first-plugin', routes: { first } },
+          { name: 'second-plugin', routes: { second } },
+        ],
+      })).toThrow(/Duplicate endpoint GET \/duplicate.*first-plugin.*second-plugin/);
+    });
+
+    it('preserves intentional plugin overrides of core route and call keys', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const me = endpoint('GET', '/auth/me')
+        .summary('Override me')
+        .security('none')
+        .handler('me')
+        .build();
+      const fortress = createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'core-override',
+          routes: { me },
+          methods: () => ({ me: () => ({ source: 'plugin' }) }),
+        }],
+      });
+
+      const response = await fortress.handleRequest(new Request('http://localhost/auth/me'));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ source: 'plugin' });
+      expect(fortress.manifest.find(route => route.path === '/auth/me')).toMatchObject({
+        plugin: 'core-override',
+        mounted: true,
+      });
+    });
+
+    it('rejects duplicate fortress.call keys across plugins', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const first = endpoint('GET', '/first').summary('first').security('none').handler('shared').build();
+      const second = endpoint('GET', '/second').summary('second').security('none').handler('shared').build();
+
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [
+          { name: 'first-plugin', routes: { shared: first } },
+          { name: 'second-plugin', routes: { shared: second } },
+        ],
+      })).toThrow(/Duplicate fortress\.call key "shared".*first-plugin.*second-plugin/);
     });
   });
 
