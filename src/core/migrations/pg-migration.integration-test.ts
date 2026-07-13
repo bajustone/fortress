@@ -73,24 +73,27 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
 
     await db.rawQuery!(
       `INSERT INTO fortress_user (email, name, password_hash, is_active, created_at, updated_at)
-       VALUES ($1, $2, $3, true, $4, $4)`,
-      ['legacy-pg@test.com', 'Legacy PG', 'h', '2025-01-01T00:00:00Z'],
+       VALUES (?, ?, ?, true, ?, ?)`,
+      ['legacy-pg@test.com', 'Legacy PG', 'h', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z'],
     );
     const [legacyUser] = await db.rawQuery!<{ id: string }>(
-      'SELECT id FROM fortress_user WHERE email = $1',
+      'SELECT id FROM fortress_user WHERE email = ?',
       ['legacy-pg@test.com'],
     );
     await db.rawQuery!(
       `INSERT INTO fortress_refresh_token
         (user_id, token_hash, token_family, is_revoked, expires_at, created_at)
-       VALUES ($1, $2, $3, false, $4, $5), ($1, $6, $3, true, $4, $7)`,
+       VALUES (?, ?, ?, false, ?, ?), (?, ?, ?, true, ?, ?)`,
       [
         legacyUser.id,
         'legacy-pg-hash-1',
         'legacy-pg-family',
         '2030-01-01T00:00:00Z',
         '2025-01-01T00:00:00Z',
+        legacyUser.id,
         'legacy-pg-hash-2',
+        'legacy-pg-family',
+        '2030-01-01T00:00:00Z',
         '2025-02-01T00:00:00Z',
       ],
     );
@@ -102,7 +105,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
 
     const familyRows = await db.rawQuery!<{ tokenHash: string; familyCreatedAt: string }>(
       `SELECT token_hash AS "tokenHash", family_created_at AS "familyCreatedAt"
-       FROM fortress_refresh_token WHERE token_family = $1 ORDER BY created_at`,
+       FROM fortress_refresh_token WHERE token_family = ? ORDER BY created_at`,
       ['legacy-pg-family'],
     );
     expect(familyRows.map(row => row.tokenHash)).toEqual([
@@ -115,12 +118,12 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     await db.rawQuery!(
       `INSERT INTO fortress_refresh_token
         (user_id, token_hash, token_family, is_revoked, expires_at)
-       VALUES ($1, $2, $3, false, $4)`,
+       VALUES (?, ?, ?, false, ?)`,
       [legacyUser.id, 'default-pg-hash', 'default-pg-family', '2030-01-01T00:00:00Z'],
     );
     const [defaulted] = await db.rawQuery!<{ recent: boolean }>(
       `SELECT family_created_at >= now() - interval '5 seconds' AS recent
-       FROM fortress_refresh_token WHERE token_hash = $1`,
+       FROM fortress_refresh_token WHERE token_hash = ?`,
       ['default-pg-hash'],
     );
     expect(defaulted.recent).toBe(true);

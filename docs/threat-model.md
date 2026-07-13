@@ -132,7 +132,7 @@ Mitigations:
 - Tenant context comes from verified `claims.customClaims.tenantId`, issued from `tenant_user` membership.
 - Tenant schema names use numeric database ids (`tenant_<id>`) and validated prefix.
 - Invalid tenant claims are rejected before schema switching.
-- PostgreSQL `search_path` is pinned with bound `set_config('search_path', $1, true)` inside the same transaction/connection as the operation.
+- PostgreSQL `search_path` is pinned with bound `set_config('search_path', ?, true)` inside the same transaction/connection as the operation.
 - Tenant business tables should live only in tenant schemas, not `public`.
 
 Residual risks:

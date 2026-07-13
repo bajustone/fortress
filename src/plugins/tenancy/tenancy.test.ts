@@ -234,7 +234,7 @@ describe('tenancy plugin', () => {
       await wrapped.findMany({ model: 'document' });
 
       expect(calls[0]).toEqual({
-        sql: `SELECT set_config('search_path', $1, true)`,
+        sql: `SELECT set_config('search_path', ?, true)`,
         params: ['tenant_7, public'],
       });
       expect(calls[1]).toEqual({ sql: '', op: 'findMany' });

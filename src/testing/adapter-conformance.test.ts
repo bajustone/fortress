@@ -166,6 +166,15 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
     });
   });
 
+  describe('rawQuery placeholder contract', () => {
+    it('accepts canonical ? placeholders on every dialect', async () => {
+      if (!db.rawQuery)
+        return;
+      const rows = await db.rawQuery<{ value: number | string }>('SELECT ? AS value', [42]);
+      expect(Number(rows[0]?.value)).toBe(42);
+    });
+  });
+
   describe('transaction', () => {
     it('commits on success', async () => {
       await db.transaction(async (tx) => {

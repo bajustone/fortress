@@ -136,7 +136,7 @@ async function listColumns(
   }
 
   const rows = await rawQuery<{ column_name: string }>(
-    'SELECT column_name FROM information_schema.columns WHERE table_schema = \'public\' AND table_name = $1',
+    'SELECT column_name FROM information_schema.columns WHERE table_schema = \'public\' AND table_name = ?',
     [table],
   );
   return new Set(rows.map(row => row.column_name.toLowerCase()));
@@ -165,7 +165,7 @@ async function recordVersion(db: DatabaseAdapter, dialect: MigrationDialect, ver
   }
 
   await rawQuery(
-    'INSERT INTO fortress_schema_version (id, version, applied_at) VALUES (1, $1, now()) ON CONFLICT(id) DO UPDATE SET version = excluded.version, applied_at = excluded.applied_at',
+    'INSERT INTO fortress_schema_version (id, version, applied_at) VALUES (1, ?, now()) ON CONFLICT(id) DO UPDATE SET version = excluded.version, applied_at = excluded.applied_at',
     [version],
   );
 }

@@ -71,7 +71,7 @@ Each item is "what to do" + "why" + "how to verify".
 
 ### Tenancy
 
-- **Do:** Use the verified `tenantId` JWT claim (set by `enrichTokenClaims`); never an `X-Tenant-Code` header. Use numeric tenant IDs in schema names (`tenant_<id>`). For PostgreSQL, the adapter pins `search_path` per transaction via `set_config('search_path', $1, true)`.
+- **Do:** Use the verified `tenantId` JWT claim (set by `enrichTokenClaims`); never an `X-Tenant-Code` header. Use numeric tenant IDs in schema names (`tenant_<id>`). For PostgreSQL, the adapter pins `search_path` per transaction via `set_config('search_path', ?, true)`.
 - **Why:** The hardening plan documented in [docs/plugins/tenancy.md](./plugins/tenancy.md) closes a class of cross-tenant data-leak bugs.
 
 ### Multi-tenant scope rules

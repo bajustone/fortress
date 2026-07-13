@@ -929,7 +929,8 @@ createHonoMiddleware(fortress, {
   defaultDeny: true, // unmapped /api/* routes → 403
 });
 
-// Express
+// Express (routeMap always uses the full original path, even when mounted
+// under app.use('/api', ...))
 createExpressMiddleware(fortress, {
   routeMap: { 'GET /api/posts': { resource: 'post', action: 'list' } },
   skipPaths: ['/api/public/*'],
@@ -1419,7 +1420,8 @@ const myAdapter: DatabaseAdapter = {
   async count({ model, where }) { /* return count */ },
   async transaction(fn) { /* execute fn within a transaction */ },
 
-  // Optional: raw SQL for multi-table queries (improves IAM performance)
+  // Optional: raw SQL for multi-table queries. The public contract always
+  // uses `?` positional placeholders; translate them to driver syntax here.
   async rawQuery(sql, params) { /* return rows */ },
   dialect: 'pg',  // helps plugins generate correct SQL
 };

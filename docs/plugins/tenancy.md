@@ -6,7 +6,7 @@ The `tenancy` plugin adds schema-per-tenant isolation for PostgreSQL. Each tenan
 
 Tenant selection is derived from the verified JWT claim produced by `enrichTokenClaims`: `claims.customClaims.tenantId`. It is never read from client-supplied tenant context. A caller can therefore only get a tenant claim after being a member of that tenant via `tenant_user`.
 
-Isolation is transaction-pinned and fail-closed: each wrapped operation starts a transaction, calls `set_config('search_path', $1, true)` with a bound parameter on the pinned connection, then runs the operation. If there is no verified tenant claim, or the adapter is not PostgreSQL, the adapter is returned unchanged. Business tables should live only in tenant schemas, so missing tenant context fails by not finding those tables rather than silently reading another tenant.
+Isolation is transaction-pinned and fail-closed: each wrapped operation starts a transaction, calls `set_config('search_path', ?, true)` with a bound parameter on the pinned connection, then runs the operation. If there is no verified tenant claim, or the adapter is not PostgreSQL, the adapter is returned unchanged. Business tables should live only in tenant schemas, so missing tenant context fails by not finding those tables rather than silently reading another tenant.
 
 This plugin is PostgreSQL-specific. For database-agnostic row-level isolation, see [Data Isolation](./data-isolation.md).
 

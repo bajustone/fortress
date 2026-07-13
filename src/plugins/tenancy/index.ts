@@ -286,12 +286,12 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
 
       const schemaName = tenantSchemaName(tenantId);
 
-      // Pin search_path on the transaction's pinned connection. `$1` is a bound
-      // parameter (never SQL), and `set_config(..., true)` is transaction-local,
+      // Pin search_path on the transaction's pinned connection. `?` is the
+      // adapter-canonical bound placeholder, and `set_config(..., true)` is transaction-local,
       // so the path applies to exactly the operation that follows on the same
       // connection.
       const setPath = (tx: DatabaseAdapter): Promise<unknown> =>
-        tx.rawQuery!(`SELECT set_config('search_path', $1, true)`, [`${schemaName}, public`]);
+        tx.rawQuery!(`SELECT set_config('search_path', ?, true)`, [`${schemaName}, public`]);
 
       return {
         ...adapter,

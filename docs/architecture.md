@@ -632,7 +632,7 @@ interface DatabaseAdapter {
   /** Optional: raw SQL for performance-critical multi-table operations.
    *  Adapters that implement this get optimized IAM queries (single JOIN
    *  instead of 4 sequential findMany calls).
-   *  Placeholders: ? for SQLite, $1 for PostgreSQL. */
+   *  Placeholders: `?` on every dialect; adapters translate to driver syntax. */
   rawQuery?<T>(sql: string, params?: unknown[]): Promise<T[]>;
 
   /** Database dialect hint for rawQuery SQL generation */
@@ -1301,7 +1301,7 @@ Schema-per-tenant isolation — **PostgreSQL only**. Tenant schemas use the nume
 **Models:** `tenant` (`taxId` unique, `name`, `description`), `tenant_user` (userId, tenantId, `isDefault` flag)
 
 **Capabilities used:**
-- `wrapAdapter` — Reads `tenantId` from the verified JWT custom claim, then uses a transaction-pinned `set_config('search_path', $1, true)` before each operation; with no claim or non-PG adapters it returns the adapter unchanged (fail closed/no-op)
+- `wrapAdapter` — Reads `tenantId` from the verified JWT custom claim, then uses a transaction-pinned `set_config('search_path', ?, true)` before each operation; with no claim or non-PG adapters it returns the adapter unchanged (fail closed/no-op)
 - `enrichTokenClaims` — Adds `tenantId` and `tenantCode` to JWT custom claims from the user's default `tenant_user` membership
 
 **Methods:** `createTenant(input)`, `deleteTenant(input)`, `addUserToTenant(userId, tenantId)`, `getUserTenants(userId)`, `getMyTenants(input, routeCtx?)`, `switchTenant(input, routeCtx?)`

@@ -121,7 +121,13 @@ export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
           headerJar.set(k, v);
         }
       }
-      const probe = new Request('http://localhost/', { headers: headerJar });
+      const requestPath = expressRequestPath(req);
+      const host = expressHeader(req, 'host') ?? 'localhost';
+      const protocol = req.protocol ?? expressHeader(req, 'x-forwarded-proto') ?? 'http';
+      const probe = new Request(`${protocol}://${host}${requestPath}`, {
+        method: req.method,
+        headers: headerJar,
+      });
 
       const resolved = await fortress.resolvePrincipal(probe);
       if (!resolved) {
@@ -225,7 +231,10 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
 
   return async (req, _res, next) => {
     try {
-      const path = req.path;
+      // Express strips an `app.use('/mount', ...)` prefix from req.path/url.
+      // Match against originalUrl so route maps use the same full path as
+      // Hono/SvelteKit and as the host wrote in configuration.
+      const path = new URL(expressRequestPath(req), 'http://localhost').pathname;
       const method = req.method;
 
       if (skipPatterns.some(pattern => pattern.test(path))) {
@@ -333,7 +342,7 @@ export function createExpressPluginMiddleware(
           headers.set(name, value);
         }
       }
-      const requestPath = req.originalUrl ?? req.url ?? req.path;
+      const requestPath = expressRequestPath(req);
       const forwardedProtocol = req.headers['x-forwarded-proto'];
       const protocol = req.protocol
         ?? (Array.isArray(forwardedProtocol) ? forwardedProtocol[0] : forwardedProtocol)
@@ -361,7 +370,13 @@ export function createExpressPluginMiddleware(
         fortressClaims: req.fortressClaims,
         fortressScopes: req.fortressScopes,
       };
-      await executePluginMiddleware(plugins, position, req.path, ctx, requestContext);
+      await executePluginMiddleware(
+        plugins,
+        position,
+        new URL(requestPath, 'http://localhost').pathname,
+        ctx,
+        requestContext,
+      );
       next();
     }
     catch (err) {
@@ -473,6 +488,11 @@ function findRouteMapMatch(method: string, path: string, routeMap: Record<string
       return mapping;
   }
   return null;
+}
+
+function expressRequestPath(req: ExpressRequest): string {
+  const path = req.originalUrl ?? req.url ?? req.path;
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 function expressHeader(req: ExpressRequest, name: string): string | undefined {

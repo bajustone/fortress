@@ -87,7 +87,7 @@ membership, never from a client-controlled header.
 Tenant schema names use the numeric tenant id (`tenant_<id>` by default), so
 untrusted tenant codes/tax IDs are not interpolated as SQL identifiers. For
 PostgreSQL requests with a tenant claim, the adapter wrapper pins
-`search_path` with `set_config('search_path', $1, true)` inside the same
+`search_path` with `set_config('search_path', ?, true)` inside the same
 transaction and connection as the operation. Without a tenant claim, the
 adapter is unchanged; tenant business tables should live outside `public`, so
 missing tenant context fails closed.

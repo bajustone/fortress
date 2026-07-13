@@ -191,22 +191,9 @@ function buildRawSql(sqlText: string, params: unknown[] = []): SQL {
     return query;
   }
 
-  const placeholder = /\$(\d+)/g;
-  let cursor = 0;
-  let query: SQL = sql.raw('');
-  let seen = 0;
-  for (const match of sqlText.matchAll(placeholder)) {
-    const index = Number(match[1]) - 1;
-    if (index < 0 || index >= params.length)
-      throw Errors.badRequest(`rawQuery placeholder ${match[0]} has no matching param`);
-    query = sql`${query}${sql.raw(sqlText.slice(cursor, match.index))}${params[index]}`;
-    cursor = (match.index ?? 0) + match[0].length;
-    seen++;
-  }
-  if (seen === 0)
-    throw Errors.badRequest('rawQuery params were provided but no placeholders were found');
-  query = sql`${query}${sql.raw(sqlText.slice(cursor))}`;
-  return query;
+  throw Errors.badRequest(
+    'rawQuery uses ? positional placeholders on every dialect; params were provided but no ? placeholders were found',
+  );
 }
 
 function normalizeRawRows<T>(result: unknown): T[] {

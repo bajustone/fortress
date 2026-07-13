@@ -69,7 +69,7 @@ file + line range for each so you can copy what you need.
 - Create tenant: `await fortress.plugins.tenancy.createTenant({ name: 'Acme', taxId: 'acme-001' })` — the plugin creates `tenant_<id>` schema and runs your `onSchemaCreated` hook.
 - Add user to tenant: `await fortress.plugins.tenancy.addUserToTenant(userId, tenantId)`. Triggers `enrichTokenClaims` so future JWTs carry `customClaims.tenantId`.
 - Switch tenant: `POST /tenancy/switch` (when `routes: true`).
-- Adapter pin: PostgreSQL connections inside any DB operation run `set_config('search_path', $1, true)` for the resolved tenant before the operation, so the schema selection and query share one connection.
+- Adapter pin: PostgreSQL connections inside any DB operation run `set_config('search_path', ?, true)` for the resolved tenant before the operation, so the schema selection and query share one connection.
 - Full guide: [docs/plugins/tenancy.md](../docs/plugins/tenancy.md). Migration notes from pre-hardening tenants: same doc, "Migration notes" section.
 
 ## Adding your own example

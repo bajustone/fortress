@@ -279,6 +279,27 @@ describe('express adapter', () => {
     expect(nextCalled).toBe(true);
   });
 
+  it('matches routeMap against originalUrl when Express strips a mount path', async () => {
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
+    const middleware = createRbacMiddleware(fortress, {
+      routeMap: { 'GET /api/posts': { resource: 'post', action: 'list' } },
+    });
+    const req: ExpressRequest = {
+      headers: {},
+      method: 'GET',
+      path: '/posts',
+      url: '/posts',
+      originalUrl: '/api/posts?limit=10',
+    };
+    let nextError: unknown;
+
+    await middleware(req, mockRes(), ((error?: unknown) => {
+      nextError = error;
+    }) as ExpressNextFunction);
+    // If req.path were used, this would silently fall through as unmapped.
+    expect(nextError).toMatchObject({ code: 'UNAUTHORIZED', statusCode: 401 });
+  });
+
   it('rbac middleware denies unmapped routes when unmappedRoutes: deny', async () => {
     const fortress = createFortress({
       jwt: { key: SECRET },
