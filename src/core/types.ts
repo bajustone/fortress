@@ -42,8 +42,24 @@ export interface AuthTokenPair {
   refreshToken: string;
 }
 
+/** The credential method that completed authentication. Carried on a successful result. */
+export type AuthMethod = 'password' | 'refresh' | 'two-factor' | 'webauthn' | 'magic-link' | 'impersonation';
+
+/** Why a sign-in is pending an additional step before tokens are issued. */
+export type PendingReason = 'two-factor' | 'webauthn' | 'email-verification' | 'magic-link';
+
+/**
+ * The challenge a pending sign-in must satisfy before tokens are issued.
+ * `reason` tells the client which step to run; the single-use `continuationToken`
+ * is presented back to `auth.completePendingAuth` to finish the flow.
+ */
+export interface AuthChallenge {
+  reason: PendingReason;
+  continuationToken: string;
+}
+
 /** Successful sign-in / refresh result — both tokens are issued. */
-export interface AuthResponseSuccess {
+export interface AuthSuccess {
   status: 'success';
   user: FortressUser;
   accessToken: string;
@@ -52,7 +68,7 @@ export interface AuthResponseSuccess {
 }
 
 /** Impersonation sign-in result — only an access token is issued (refresh is suppressed for safety). */
-export interface AuthResponseImpersonation {
+export interface AuthImpersonation {
   status: 'impersonation';
   user: FortressUser;
   accessToken: string;
@@ -61,7 +77,7 @@ export interface AuthResponseImpersonation {
 }
 
 /** Pending sign-in result — the user must complete an additional step (e.g. 2FA, email verification) before tokens are issued. */
-export interface AuthResponsePending {
+export interface AuthPending {
   status: 'pending';
   user: FortressUser;
   accessToken: null;
@@ -70,7 +86,32 @@ export interface AuthResponsePending {
 }
 
 /** Discriminated union of every possible auth flow outcome. */
-export type AuthResponse = AuthResponseSuccess | AuthResponseImpersonation | AuthResponsePending;
+export type AuthResult = AuthSuccess | AuthImpersonation | AuthPending;
+
+/** Narrow an {@link AuthResult} to the successful (tokens-issued) variant. */
+export function isSuccess(result: AuthResult): result is AuthSuccess {
+  return result.status === 'success';
+}
+
+/** Narrow an {@link AuthResult} to the pending (additional-step-required) variant. */
+export function isPending(result: AuthResult): result is AuthPending {
+  return result.status === 'pending';
+}
+
+/** Narrow an {@link AuthResult} to the impersonation variant. */
+export function isImpersonation(result: AuthResult): result is AuthImpersonation {
+  return result.status === 'impersonation';
+}
+
+/**
+ * Assert an {@link AuthResult} is successful, throwing otherwise. Use when a
+ * caller has already ruled out the pending/impersonation variants and wants the
+ * token fields without a manual narrow.
+ */
+export function assertSuccess(result: AuthResult): asserts result is AuthSuccess {
+  if (result.status !== 'success')
+    throw new Error(`Expected a successful auth result, but got status '${result.status}'`);
+}
 
 /** Per-request metadata fortress threads through hooks for audit logging, lockout, and trusted-device tracking. */
 export interface RequestMeta {

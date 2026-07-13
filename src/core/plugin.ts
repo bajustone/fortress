@@ -6,7 +6,7 @@ import type { EndpointDefinition } from './endpoint';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
 import type {
-  AuthResponse,
+  AuthResult,
   AuthTokenPair,
   CreateUserInput,
   FortressUser,
@@ -93,7 +93,7 @@ export interface PluginHooks {
   beforeLogout?: (ctx: HookContext & { token: string }) => Promise<void>;
   onLoginFailure?: (ctx: HookContext & { identifier: string; error: Error }) => Promise<void>;
 
-  afterLogin?: (ctx: AfterHookContext, result: AuthResponse) => Promise<AuthResponse>;
+  afterLogin?: (ctx: AfterHookContext, result: AuthResult) => Promise<AuthResult>;
   afterRegister?: (ctx: AfterHookContext, user: FortressUser) => Promise<void>;
   afterTokenRefresh?: (ctx: AfterHookContext, result: AuthTokenPair) => Promise<AuthTokenPair>;
 }

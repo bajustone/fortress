@@ -11,12 +11,13 @@ import type {
   HookResult,
 } from '../plugin';
 import type {
-  AuthResponse,
+  AuthResult,
   AuthTokenPair,
   CreateUserInput,
   FortressUser,
   LoginIdentifier,
   LoginIdentifierType,
+  PendingReason,
   RequestMeta,
   SessionInfo,
   TokenClaims,
@@ -40,16 +41,23 @@ import { generateRefreshToken, generateTokenFamily, hashToken } from './refresh-
  */
 export interface AuthEvent {
   eventType:
-    | 'LOGIN_SUCCESS' | 'LOGIN_FAILURE'
+    | 'LOGIN_SUCCESS' | 'LOGIN_FAILURE' | 'LOGIN_PENDING'
     | 'LOGOUT' | 'REGISTER'
-    | 'TOKEN_REFRESH' | 'TOKEN_REUSE_DETECTED' | 'TOKEN_FINGERPRINT_MISMATCH'
+    | 'TOKEN_REFRESH' | 'TOKEN_REUSE_DETECTED' | 'TOKEN_REUSE_GRACED' | 'TOKEN_FINGERPRINT_MISMATCH'
+    | 'MFA_VERIFY_SUCCESS' | 'MFA_VERIFY_FAILURE'
+    | 'SESSION_EXPIRED_IDLE' | 'SESSION_EXPIRED_ABSOLUTE'
+    | 'PASSWORD_BREACH_CHECK_DEGRADED'
     | 'IMPERSONATE';
   actorId?: string;
   identifier?: string;
   method?: 'password' | 'oauth' | 'magic_link' | 'webauthn' | '2fa' | 'api_key';
   ipAddress?: string;
   userAgent?: string;
-  outcome?: 'success' | 'failure';
+  outcome?: 'success' | 'failure' | 'pending';
+  /** Set on `LOGIN_PENDING` — which additional step the sign-in is waiting on. */
+  pendingReason?: PendingReason;
+  /** Free-form sub-action label (e.g. the specific fingerprint/session action that fired the event). */
+  action?: string;
   error?: { message: string; code?: string };
   metadata?: Record<string, unknown>;
 }
@@ -80,7 +88,7 @@ function resolveConfig(config: FortressConfig): ResolvedConfig {
 }
 
 export interface AuthService {
-  login: (identifier: string, password: string, meta?: RequestMeta) => Promise<AuthResponse>;
+  login: (identifier: string, password: string, meta?: RequestMeta) => Promise<AuthResult>;
   refresh: (refreshToken: string, meta?: RequestMeta) => Promise<AuthTokenPair>;
   logout: (refreshToken: string) => Promise<void>;
   me: (userId: string) => Promise<FortressUser>;
@@ -99,7 +107,7 @@ export interface AuthService {
    *
    * Requires the admin user to hold `fortress:impersonate`. The built-in HTTP route also enforces this via endpoint metadata.
    */
-  impersonate: (adminUserId: string, targetUserId: string, options?: { reason?: string; expirySeconds?: number }) => Promise<AuthResponse>;
+  impersonate: (adminUserId: string, targetUserId: string, options?: { reason?: string; expirySeconds?: number }) => Promise<AuthResult>;
 
   // ── Admin user management ──────────────────────────────────────────
   listUsers: (options: { limit?: number; offset?: number; search?: string; sortBy?: string; sortDirection?: 'asc' | 'desc' }) => Promise<{ users: FortressUser[]; total: number }>;
@@ -179,8 +187,8 @@ export function createAuthService(
 
   async function runAfterLoginHooks(
     ctx: AfterHookContext,
-    result: AuthResponse,
-  ): Promise<AuthResponse> {
+    result: AuthResult,
+  ): Promise<AuthResult> {
     let current = result;
     for (const plugin of plugins) {
       if (plugin.hooks?.afterLogin) {
@@ -286,12 +294,12 @@ export function createAuthService(
   }
 
   return {
-    async login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResponse> {
+    async login(identifier: string, password: string, meta?: RequestMeta): Promise<AuthResult> {
       const normalizedPassword = normalizePasswordInput(password);
       const hookCtx: HookContext & { email: string } = { db, config, meta, email: identifier };
       const beforeResult = await runBeforeHooks('beforeLogin', hookCtx);
       if (beforeResult?.stop) {
-        return beforeResult.response as unknown as AuthResponse;
+        return beforeResult.response as unknown as AuthResult;
       }
 
       // Resolve user via login_identifier first, fall back to email on user table
@@ -343,7 +351,7 @@ export function createAuthService(
       const tokens = await issueTokens(user, meta);
 
       const { passwordHash: _, ...safeUser } = user;
-      let response: AuthResponse = {
+      let response: AuthResult = {
         status: 'success',
         user: safeUser,
         accessToken: tokens.accessToken,
@@ -755,7 +763,7 @@ export function createAuthService(
       adminUserId: string,
       targetUserId: string,
       options?: { reason?: string; expirySeconds?: number },
-    ): Promise<AuthResponse> {
+    ): Promise<AuthResult> {
       // Defense in depth for programmatic callers. The HTTP route also
       // enforces this via endpoint metadata before dispatch, but direct
       // service calls must fail closed too.

@@ -33,6 +33,9 @@ export type { CoreOperator, ScopeRule, WhereClause } from './adapters/database/t
 /** Pre-built endpoint definitions and component schemas for the core auth routes. */
 export { authComponentSchemas, authEndpoints } from './core/auth/auth-endpoints';
 
+/** Auth lifecycle event + listener types, emitted via `fortress.auth.addAuthObserver`. */
+export type { AuthEvent, AuthEventListener } from './core/auth/auth-service';
+
 /** Top-level fortress configuration and pluggable password-hasher contract. */
 export type { FortressConfig, PasswordHasher } from './core/config';
 
@@ -69,25 +72,25 @@ export type { FortressErrorCode } from './core/errors';
 
 /** Factory that builds a configured fortress instance and the helper for type-safe plugin method access. */
 export { createFortress, getPluginMethods } from './core/fortress';
-
 /** The fortress instance type returned by {@link createFortress}, plus the typed call-map helper. */
 export type { Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, TypedCall } from './core/fortress';
 /** Typed in-process client builder and per-call options. */
 export { buildCall } from './core/http/call';
+
 export type { CallOptions } from './core/http/call';
-
 export { describeProtectedTarget, protect, resolveProtectedEndpoint } from './core/http/protect';
-export type { ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';
 
+export type { ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';
 /** Permission debugging helper — "why does subject X have / not have permission Y?". */
 export { explainPermission } from './core/iam/explain';
 export type { PermissionExplanation, PermissionExplanationSource } from './core/iam/explain';
 /** Pre-built endpoint definitions and component schemas for the core IAM routes. */
 export { iamComponentSchemas, iamEndpoints } from './core/iam/iam-endpoints';
+
 /** Manifest-driven RBAC permission seeding. See {@link Fortress.syncPermissionsFromManifest}. */
 export { runPermissionSync } from './core/iam/permission-sync';
-
 export type { PermissionSyncOptions, PermissionSyncResult } from './core/iam/permission-sync';
+
 /** JSON Schema types and the inferred TypeScript type helpers used by the schema builder. */
 export type { FortressSchema, Infer, JSONSchema, Simplify } from './core/json-schema';
 
@@ -95,16 +98,16 @@ export type { FortressSchema, Infer, JSONSchema, Simplify } from './core/json-sc
 export { detectRouteManifestDrift, hasRouteManifestDrift } from './core/manifest/drift';
 
 export type { DetectRouteManifestDriftOptions, RouteManifestDrift } from './core/manifest/drift';
-
 export { buildRouteManifest } from './core/manifest/route-manifest';
 export type { RouteClassification, RouteManifestEntry } from './core/manifest/route-manifest';
 /** Fortress schema migration metadata and runner helpers. */
 export { detectMigrationDrift, getMigrationStatus, hasMigrationDrift, migrateDown, migrateUp } from './core/migrations/engine';
-export type { MigrationApplyResult, MigrationDownResult, MigrationDrift, MigrationStatus } from './core/migrations/engine';
 
+export type { MigrationApplyResult, MigrationDownResult, MigrationDrift, MigrationStatus } from './core/migrations/engine';
 export { FORTRESS_TABLES, fortressMigrations, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion, getMigrationUpSql } from './core/migrations/migrations';
 export type { FortressMigration, MigrationDialect } from './core/migrations/migrations';
 export { toOpenAPI } from './core/openapi';
+
 export type { ToOpenAPIOptions } from './core/openapi';
 
 /**
@@ -127,13 +130,13 @@ export type {
 
 /** Type-level mapping helpers used to expose plugin methods and typed call maps on the fortress instance. */
 export type { CallableForEndpoints, InferPluginCallMap, InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
-
 /** Declarative policy-as-code: loader, diff, and apply primitives. */
 export { applyPolicyPlan, applyResourceOps } from './core/policy/apply';
 export type { ApplyPolicyResult } from './core/policy/apply';
 export { diffPolicy } from './core/policy/diff';
 export { DEFAULT_POLICY_FILE, loadPolicy, resolvePolicyPath } from './core/policy/loader';
 export type { LoadPolicyOptions } from './core/policy/loader';
+
 export type { DiffPolicyOptions, PolicyDocument, PolicyGroup, PolicyOp, PolicyPermission, PolicyPlan, PolicyResource, PolicyRole, PolicyServiceAccount } from './core/policy/types';
 
 /**
@@ -179,18 +182,20 @@ export {
 
 /** Input type accepted by `endpoint(...).input()` and friends. */
 export type { NumberOptions, SchemaInput, StringOptions } from './core/schema-builder';
-
 /** Standard Schema v1 interop type — fortress schemas implement this. */
 export type { StandardSchemaV1 } from './core/standard-schema';
+
 /**
  * Core domain types — users, identifiers, groups, roles, permissions, and
- * the auth response shapes returned by sign-in / refresh / impersonate.
+ * the auth result shapes returned by sign-in / refresh / impersonate.
  */
 export type {
-  AuthResponse,
-  AuthResponseImpersonation,
-  AuthResponsePending,
-  AuthResponseSuccess,
+  AuthChallenge,
+  AuthImpersonation,
+  AuthMethod,
+  AuthPending,
+  AuthResult,
+  AuthSuccess,
   AuthTokenPair,
   ConditionRef,
   ConditionValue,
@@ -199,6 +204,7 @@ export type {
   Group,
   LoginIdentifier,
   LoginIdentifierType,
+  PendingReason,
   Permission,
   PermissionCondition,
   PermissionContext,
@@ -209,6 +215,9 @@ export type {
   SubjectType,
   TokenClaims,
 } from './core/types';
+
+/** Runtime guards for narrowing an {@link AuthResult} (`status`-discriminated). */
+export { assertSuccess, isImpersonation, isPending, isSuccess } from './core/types';
 
 /**
  * Framework-agnostic validation primitive. Validates a `{ body, query, params }`
