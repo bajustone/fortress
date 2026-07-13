@@ -1,8 +1,10 @@
+import type { PluginRequestContext } from '../core/http/plugin-middleware';
 import type { ExpressNextFunction, ExpressRequest, ExpressResponse } from './middleware';
 import { describe, expect, it } from 'vitest';
 import { FortressError } from '../core/errors';
 import { createFortress } from '../core/fortress';
 import { assertSuccess } from '../core/types';
+import { rateLimit } from '../plugins/rate-limit';
 import { createTestAdapter } from '../testing';
 import { createAuthMiddleware, createErrorHandler, createExpressMiddleware, createRbacMiddleware, getClaims, getDb, getUserId } from './middleware';
 
@@ -91,6 +93,82 @@ describe('express adapter', () => {
     expect(getUserId(req)).toBe(user.id);
     expect(getClaims(req)).toBeDefined();
     expect(getDb(req)).toBeDefined();
+  });
+
+  it('passes a faithful authenticated PluginRequestContext after auth', async () => {
+    let captured: PluginRequestContext | undefined;
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [{
+        name: 'context-spy',
+        middleware: [{
+          path: '/api/*',
+          position: 'after-auth',
+          handler: async (_ctx, request, next) => {
+            captured = request;
+            await next();
+          },
+        }],
+      }],
+    });
+    const user = await fortress.auth.createUser({
+      email: 'context@test.com',
+      name: 'Context',
+      password: 'password-123456',
+    });
+    const login = await fortress.auth.login('context@test.com', 'password-123456');
+    assertSuccess(login);
+    const middleware = createExpressMiddleware(fortress);
+    const req: ExpressRequest = {
+      headers: {
+        'authorization': `Bearer ${login.accessToken}`,
+        'host': 'example.test',
+        'content-type': 'application/json',
+      },
+      method: 'POST',
+      path: '/api/items',
+      originalUrl: '/api/items?include=all',
+      protocol: 'https',
+      body: { name: 'item' },
+    };
+    await middleware.authMiddleware(req, mockRes(), (() => {}) as ExpressNextFunction);
+    await middleware.pluginMiddleware.afterAuth(req, mockRes(), (() => {}) as ExpressNextFunction);
+
+    expect(captured?.request.url).toBe('https://example.test/api/items?include=all');
+    expect(captured?.request.method).toBe('POST');
+    await expect(captured?.request.json()).resolves.toEqual({ name: 'item' });
+    expect(captured?.fortressSubject).toEqual({ type: 'USER', id: user.id });
+    expect(captured?.fortressUserId).toBe(user.id);
+    expect(captured?.fortressClaims?.sub).toBe(user.id);
+  });
+
+  it('normalizes plugin middleware to PluginRequestContext so path rate limits fire', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [rateLimit({
+        login: { disabled: true },
+        register: { disabled: true },
+        paths: [{ match: '/api/*', rule: { maxPerIp: 1, windowSeconds: 60 } }],
+      })],
+    });
+    const middleware = createExpressMiddleware(fortress).pluginMiddleware.beforeAuth;
+    const req: ExpressRequest = {
+      headers: { 'x-forwarded-for': '192.0.2.1' },
+      method: 'GET',
+      path: '/api/items',
+    };
+    const invoke = async (): Promise<unknown> => {
+      let nextError: unknown;
+      await middleware(req, mockRes(), ((error?: unknown) => {
+        nextError = error;
+      }) as ExpressNextFunction);
+      return nextError;
+    };
+
+    await expect(invoke()).resolves.toBeUndefined();
+    await expect(invoke()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
   });
 
   it('rbac middleware skips when no route mapping matches', async () => {

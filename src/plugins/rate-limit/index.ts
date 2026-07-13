@@ -12,6 +12,7 @@
  * @module
  */
 
+import type { PluginRequestContext } from '../../core/http/plugin-middleware';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext } from '../../core/plugin';
 import type { RateLimitStore } from './memory-store';
 import { Errors } from '../../core/errors';
@@ -283,17 +284,15 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
     middleware.push({
       path: match,
       position,
-      handler: async (_ctx: PluginContext, request: unknown, next: () => Promise<void>) => {
-        const req = (request as { request?: Request }).request;
-        if (!req) {
-          await next();
-          return;
-        }
+      handler: async (_ctx: PluginContext, request: PluginRequestContext, next: () => Promise<void>) => {
+        const req = request.request;
+        if (!(req instanceof Request))
+          throw Errors.badRequest('PluginRequestContext.request is required');
         if (methodFilter && !methodFilter.includes(req.method)) {
           await next();
           return;
         }
-        const userId = (request as { fortressUserId?: string }).fortressUserId;
+        const { fortressUserId: userId } = request;
         await check(ruleName, { ip: ipFromRequest(req), userId });
         await next();
       },
@@ -318,17 +317,15 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
     middleware.push({
       path: binding.match,
       position,
-      handler: async (_ctx: PluginContext, request: unknown, next: () => Promise<void>) => {
-        const req = (request as { request?: Request }).request;
-        if (!req) {
-          await next();
-          return;
-        }
+      handler: async (_ctx: PluginContext, request: PluginRequestContext, next: () => Promise<void>) => {
+        const req = request.request;
+        if (!(req instanceof Request))
+          throw Errors.badRequest('PluginRequestContext.request is required');
         if (methodFilter && !methodFilter.includes(req.method)) {
           await next();
           return;
         }
-        const userId = (request as { fortressUserId?: string }).fortressUserId;
+        const { fortressUserId: userId } = request;
         await check(ruleName, { ip: ipFromRequest(req), userId });
         await next();
       },

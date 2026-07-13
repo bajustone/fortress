@@ -455,6 +455,21 @@ describe('rate-limit plugin', () => {
       expect(plugin.middleware?.[1].path).toBe('/public/*');
     });
 
+    it('fails closed when invoked without a valid PluginRequestContext', async () => {
+      const plugin = rateLimit({
+        paths: [{ match: '/api/*', rule: { maxPerIp: 1, windowSeconds: 60 } }],
+      });
+      const middleware = plugin.middleware?.[0];
+      if (!middleware)
+        throw new Error('Expected path middleware');
+
+      await expect(middleware.handler(
+        {} as never,
+        {} as never,
+        async () => {},
+      )).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    });
+
     it('emits no middleware when only hook-based configs are present', () => {
       const plugin = rateLimit({
         login: { maxPerIp: 5, windowSeconds: 60 },

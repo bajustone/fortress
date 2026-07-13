@@ -1442,7 +1442,7 @@ Protects IAM routes and provides full admin management endpoints. Mounts all cor
 
 **File:** `src/core/plugin-runner.ts` — `executePluginMiddleware()`
 
-Plugins can now define `middleware[]` with `position: 'before-auth' | 'after-auth' | 'after-rbac'` and a `path` pattern. The middleware is executed in plugin registration order via `pluginMiddleware.beforeAuth`, `pluginMiddleware.afterAuth`, and `pluginMiddleware.afterRbac` from the adapter factories.
+Plugins can define `middleware[]` with `position: 'before-auth' | 'after-auth' | 'after-rbac'` and a `path` pattern. The middleware is executed in plugin registration order via `pluginMiddleware.beforeAuth`, `pluginMiddleware.afterAuth`, and `pluginMiddleware.afterRbac` from the adapter factories. Every runtime passes the same exported `PluginRequestContext` containing a web-standard `request: Request` plus optional `fortressSubject`, `fortressUserId`, `fortressClaims`, and `fortressScopes`; plugin middleware never depends on a Hono or Express native context.
 
 ---
 

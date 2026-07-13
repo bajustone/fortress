@@ -3,6 +3,7 @@ import type { ScopeRule } from '../adapters/database/types';
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
 import type { EndpointDefinition } from './endpoint';
+import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
 import type {
@@ -201,5 +202,5 @@ export interface PluginRouteContext {
 export interface MiddlewareDefinition {
   path: string;
   position: 'before-auth' | 'after-auth' | 'after-rbac';
-  handler: (ctx: PluginContext, request: unknown, next: () => Promise<void>) => Promise<void>;
+  handler: (ctx: PluginContext, request: PluginRequestContext, next: () => Promise<void>) => Promise<void>;
 }

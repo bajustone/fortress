@@ -2,6 +2,7 @@ import type { DatabaseAdapter } from '../adapters/database';
 import type { ScopeRule, WhereClause } from '../adapters/database/types';
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
+import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext } from './plugin';
@@ -250,7 +251,7 @@ export async function executePluginMiddleware(
   position: MiddlewareDefinition['position'],
   requestPath: string,
   ctx: PluginContext,
-  request: unknown,
+  request: PluginRequestContext,
 ): Promise<void> {
   const matching = collectPluginMiddleware(plugins, position)
     .filter(({ middleware: mw }) => middlewarePathToRegex(mw.path).test(requestPath));

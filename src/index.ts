@@ -93,6 +93,8 @@ export type { Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult,
 export { buildCall } from './core/http/call';
 
 export type { CallOptions } from './core/http/call';
+/** Cross-adapter context passed to plugin middleware under core, Hono, and Express. */
+export type { PluginRequestContext } from './core/http/plugin-middleware';
 export { describeProtectedTarget, protect, resolveProtectedEndpoint } from './core/http/protect';
 
 export type { ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';

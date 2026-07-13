@@ -1,5 +1,6 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { Fortress } from '../core/fortress';
+import type { PluginRequestContext } from '../core/http/plugin-middleware';
 import type { MiddlewareDefinition, PluginContext } from '../core/plugin';
 import type { Subject, TokenClaims } from '../core/types';
 import { FortressError } from '../core/errors';
@@ -49,7 +50,16 @@ export interface FortressExpressFields {
 export interface ExpressRequest extends FortressExpressFields {
   headers: Record<string, string | string[] | undefined>;
   method: string;
+  /** Express's route path without the query string. */
   path: string;
+  /** Original path including query string, when supplied by Express. */
+  originalUrl?: string;
+  /** Node/Express request URL fallback, usually including the query string. */
+  url?: string;
+  /** Resolved request protocol (`http`/`https`) when supplied by Express. */
+  protocol?: string;
+  /** Parsed request body, if body middleware ran before this slot. */
+  body?: unknown;
 }
 
 /** Minimal Express response shape fortress writes to. */
@@ -270,7 +280,44 @@ export function createExpressPluginMiddleware(
   return async (req, _res, next) => {
     try {
       const ctx: PluginContext = { db: fortress.config.database, config: fortress.config };
-      await executePluginMiddleware(plugins, position, req.path, ctx, req);
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(req.headers)) {
+        if (Array.isArray(value)) {
+          for (const item of value) headers.append(name, item);
+        }
+        else if (typeof value === 'string') {
+          headers.set(name, value);
+        }
+      }
+      const requestPath = req.originalUrl ?? req.url ?? req.path;
+      const forwardedProtocol = req.headers['x-forwarded-proto'];
+      const protocol = req.protocol
+        ?? (Array.isArray(forwardedProtocol) ? forwardedProtocol[0] : forwardedProtocol)
+        ?? 'http';
+      const hostHeader = req.headers.host;
+      const host = (Array.isArray(hostHeader) ? hostHeader[0] : hostHeader) ?? 'localhost';
+      const method = req.method.toUpperCase();
+      let body: BodyInit | undefined;
+      if (method !== 'GET' && method !== 'HEAD' && req.body !== undefined) {
+        if (typeof req.body === 'string' || req.body instanceof URLSearchParams)
+          body = req.body;
+        else if (req.body instanceof ArrayBuffer || ArrayBuffer.isView(req.body))
+          body = req.body as BodyInit;
+        else
+          body = JSON.stringify(req.body);
+      }
+      const requestContext: PluginRequestContext = {
+        request: new Request(`${protocol}://${host}${requestPath}`, {
+          method,
+          headers,
+          body,
+        }),
+        fortressSubject: req.fortressSubject,
+        fortressUserId: req.fortressUserId,
+        fortressClaims: req.fortressClaims,
+        fortressScopes: req.fortressScopes,
+      };
+      await executePluginMiddleware(plugins, position, req.path, ctx, requestContext);
       next();
     }
     catch (err) {

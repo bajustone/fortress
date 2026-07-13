@@ -1,9 +1,11 @@
 import type { Fortress } from '../core/fortress';
+import type { PluginRequestContext } from '../core/http/plugin-middleware';
 import type { FortressEnv } from './middleware/auth';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../core/fortress';
 import { dataIsolation } from '../plugins/data-isolation';
+import { rateLimit } from '../plugins/rate-limit';
 import { createTestAdapter } from '../testing';
 import { getDb, getScopedDb, getUserId } from './helpers';
 import { createHonoMiddleware } from './index';
@@ -114,6 +116,73 @@ describe('hono authMiddleware', () => {
       body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123456' }),
     });
     expect(res.status).toBe(200);
+  });
+});
+
+describe('hono plugin middleware', () => {
+  it('passes resolved auth fields in PluginRequestContext after auth', async () => {
+    let captured: PluginRequestContext | undefined;
+    const local = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [{
+        name: 'context-spy',
+        middleware: [{
+          path: '/api/*',
+          position: 'after-auth',
+          handler: async (_ctx, request, next) => {
+            captured = request;
+            await next();
+          },
+        }],
+      }],
+    });
+    const user = await local.auth.createUser({
+      email: 'context@example.com',
+      name: 'Context',
+      password: 'password-123456',
+    });
+    const login = await local.auth.login('context@example.com', 'password-123456');
+    if (login.status !== 'success')
+      throw new Error('Expected successful login');
+    const { authMiddleware, pluginMiddleware, errorHandler } = createHonoMiddleware(local);
+    const localApp = new Hono<FortressEnv>();
+    localApp.onError(errorHandler);
+    localApp.use('/api/*', authMiddleware);
+    localApp.use('/api/*', pluginMiddleware.afterAuth);
+    localApp.get('/api/items', c => c.json({ ok: true }));
+
+    const response = await localApp.request('/api/items?include=all', {
+      headers: { authorization: `Bearer ${login.accessToken}` },
+    });
+    expect(response.status).toBe(200);
+    expect(captured?.request.url).toBe('http://localhost/api/items?include=all');
+    expect(captured?.fortressSubject).toEqual({ type: 'USER', id: user.id });
+    expect(captured?.fortressUserId).toBe(user.id);
+    expect(captured?.fortressClaims?.sub).toBe(user.id);
+  });
+
+  it('normalizes PluginRequestContext so path rate limits fire', async () => {
+    const limited = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [rateLimit({
+        login: { disabled: true },
+        register: { disabled: true },
+        paths: [{ match: '/api/*', rule: { maxPerIp: 1, windowSeconds: 60 } }],
+      })],
+    });
+    const { pluginMiddleware, errorHandler } = createHonoMiddleware(limited);
+    const limitedApp = new Hono<FortressEnv>();
+    limitedApp.onError(errorHandler);
+    limitedApp.use('/api/*', pluginMiddleware.beforeAuth);
+    limitedApp.get('/api/items', c => c.json({ ok: true }));
+
+    const headers = { 'x-forwarded-for': '192.0.2.1' };
+    expect((await limitedApp.request('/api/items', { headers })).status).toBe(200);
+    const rejected = await limitedApp.request('/api/items', { headers });
+    expect(rejected.status).toBe(429);
+    expect((await rejected.json() as any).code).toBe('RATE_LIMITED');
   });
 });
 
