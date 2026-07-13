@@ -1468,7 +1468,7 @@ HTTP Request
   │   ├─ Skip if path matches skipPaths
   │   └─ Call fortress.iam.checkPermission(userId, resource, action)
   │
-  ├─ CSRF Middleware (Hono only)
+  ├─ CSRF Middleware (Hono + Express standalone)
   │   ├─ Require X-Fortress-CSRF header on unsafe methods (POST, PUT, DELETE, PATCH)
   │   └─ Check Sec-Fetch-Site header to reject cross-site requests
   │
@@ -1487,9 +1487,9 @@ HTTP Request
 **Files:** `src/hono/middleware/*.ts`, `src/hono/helpers.ts`, `src/hono/plugin-routes.ts`
 
 ```typescript
-import { createHonoMiddleware } from '@bajustone/fortress/hono';
+import { createCsrfMiddleware, createHonoMiddleware, createSecurityHeadersMiddleware } from '@bajustone/fortress/hono';
 
-const { authMiddleware, rbacMiddleware, csrfMiddleware, securityHeaders, errorHandler } =
+const { authMiddleware, rbacMiddleware, errorHandler } =
   createHonoMiddleware(fortress, {
     routeMap: {
       'POST /api/users': { resource: 'user', action: 'create' },
@@ -1498,8 +1498,10 @@ const { authMiddleware, rbacMiddleware, csrfMiddleware, securityHeaders, errorHa
     mapRequest: (method, path) => { /* dynamic mapping */ },
     skipPaths: ['/health', '/auth/*'],
   });
+const csrfMiddleware = createCsrfMiddleware();
+const securityHeaders = createSecurityHeadersMiddleware();
 
-app.use('*', errorHandler);
+app.onError(errorHandler);
 app.use('*', securityHeaders);
 app.use('/api/*', csrfMiddleware);
 app.use('/api/*', authMiddleware);
@@ -1515,7 +1517,7 @@ mountFortress(app, fortress);  // Mounts all Fortress routes (auth, IAM, plugins
 
 **RBAC route mapping:** Supports both declarative `routeMap` and dynamic `mapRequest()`. Pattern matching for parameterized routes (`:id` → `[^/]+` regex).
 
-**CSRF middleware** (`src/hono/middleware/csrf.ts`): Custom-header strategy — requires `X-Fortress-CSRF` header (any value) on unsafe methods. Also checks `Sec-Fetch-Site` header to reject cross-site requests. Configurable safe methods (default: GET, HEAD, OPTIONS).
+**CSRF middleware** (`src/hono/middleware/csrf.ts`): Custom-header strategy — requires `X-Fortress-CSRF` header (any value) on unsafe methods. Also checks `Sec-Fetch-Site` to reject cross-site requests. Configurable safe methods (default: GET, HEAD, OPTIONS); skip paths match at segment boundaries, with trailing `/*` supported.
 
 **Security headers** (`src/hono/middleware/security-headers.ts`): Sets HSTS, X-Frame-Options (DENY), X-Content-Type-Options (nosniff), Content-Security-Policy, Referrer-Policy (strict-origin-when-cross-origin), X-Permitted-Cross-Domain-Policies (none). All configurable.
 
@@ -1532,14 +1534,15 @@ Parallel implementation of the Hono adapter for Express.js.
 ```typescript
 import { createExpressMiddleware, getUserId, getClaims, getDb, getScopedDb } from '@bajustone/fortress/express';
 
-const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress, {
+const { authMiddleware, csrfMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress, {
   routeMap: { 'POST /api/users': { resource: 'user', action: 'create' } },
   skipPaths: ['/health'],
 });
 
-app.use(errorHandler);
+app.use('/api', csrfMiddleware);
 app.use('/api', authMiddleware);
 app.use('/api', rbacMiddleware);
+app.use(errorHandler);
 ```
 
 **Request extension:** Sets properties on `req`:
@@ -1547,6 +1550,10 @@ app.use('/api', rbacMiddleware);
 - `req.fortressClaims`
 - `req.fortressDb`
 - `req.fortressGetScopedDb`
+
+**CSRF:** `createCsrfMiddleware` is also exported standalone; the factory's `csrfMiddleware` uses `options.csrf`. It mirrors Hono's custom-header/cross-site strategy and segment-safe skip matching.
+
+**OAuth form bodies:** mount `express.urlencoded({ extended: false })` before `mountFortress`; the adapter re-encodes parsed objects to `application/x-www-form-urlencoded` before core OAuth dispatch.
 
 **Key difference from Hono:** Uses minimal Express-compatible interface types (caller provides express package). Express is a peer dependency, not bundled.
 

@@ -84,7 +84,7 @@ export function mountFortress(
  * URL, and body (for non-GET/HEAD) are preserved. The host comes from the
  * `host` header so the URL is parseable.
  */
-function expressToWebRequest(req: ExpressRequest, pathname: string): Request {
+export function expressToWebRequest(req: ExpressRequest, pathname: string): Request {
   const host = (req.headers.host as string | undefined) ?? 'localhost';
   const protocol = ((req as { protocol?: string }).protocol) ?? 'http';
   const search = ((req as { originalUrl?: string }).originalUrl ?? '').includes('?')
@@ -115,6 +115,17 @@ function expressToWebRequest(req: ExpressRequest, pathname: string): Request {
       }
       else if (body instanceof Uint8Array) {
         init.body = body as BodyInit;
+      }
+      else if ((headers.get('content-type') ?? '').toLowerCase().includes('application/x-www-form-urlencoded')) {
+        const form = new URLSearchParams();
+        for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+          const values = Array.isArray(value) ? value : [value];
+          for (const item of values) {
+            if (item !== undefined && item !== null)
+              form.append(key, String(item));
+          }
+        }
+        init.body = form.toString();
       }
       else {
         init.body = JSON.stringify(body);

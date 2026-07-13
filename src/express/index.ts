@@ -34,6 +34,7 @@ export { mountFortress } from './handle';
 export type { MountFortressOptions } from './handle';
 export {
   createAuthMiddleware,
+  createCsrfMiddleware,
   createErrorHandler,
   createExpressMiddleware,
   createExpressPluginMiddleware,
@@ -45,6 +46,7 @@ export {
   getUserId,
 } from './middleware';
 export type {
+  CsrfConfig,
   ExpressAdapterOptions,
   ExpressMiddleware,
   ExpressNextFunction,

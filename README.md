@@ -1010,13 +1010,15 @@ import {
 
 const app = express();
 app.use(express.json());
+// Required for OAuth token/introspection/revocation form bodies.
+app.use(express.urlencoded({ extended: false }));
 
 // One-line mount: handles all Fortress routes (auth, IAM, plugins, OAuth,
 // OpenAPI). Auth-issuing endpoints attach Set-Cookie headers automatically.
 mountFortress(app, fortress);
 
 // Optional: protect your own user routes via the IAM middleware.
-const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress, {
+const { authMiddleware, csrfMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress, {
   routeMap: {
     'GET /api/posts': { resource: 'post', action: 'list' },
     'POST /api/posts': { resource: 'post', action: 'create' },
@@ -1024,6 +1026,7 @@ const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware
   skipPaths: ['/health'],
 });
 
+app.use('/api', csrfMiddleware); // standalone CSRF for host-owned routes
 app.use('/api', authMiddleware);
 app.use('/api', rbacMiddleware);
 

@@ -33,13 +33,12 @@ export function createCsrfMiddleware(config?: CsrfConfig): MiddlewareHandler {
       return;
     }
 
-    // Check skip paths
+    // Check skip paths at segment boundaries: `/foo` covers `/foo/bar` but
+    // never `/foobar`. A trailing `/*` is accepted as subtree notation.
     const path = new URL(c.req.url).pathname;
-    for (const skipPath of skipPaths) {
-      if (path === skipPath || path.startsWith(skipPath)) {
-        await next();
-        return;
-      }
+    if (matchesSkipPath(path, skipPaths)) {
+      await next();
+      return;
     }
 
     // Check Sec-Fetch-Site header - reject cross-site requests
@@ -56,4 +55,14 @@ export function createCsrfMiddleware(config?: CsrfConfig): MiddlewareHandler {
 
     await next();
   };
+}
+
+function matchesSkipPath(path: string, skipPaths: string[]): boolean {
+  return skipPaths.some((configured) => {
+    const withoutWildcard = configured.endsWith('/*') ? configured.slice(0, -2) : configured;
+    const base = withoutWildcard.length > 1 && withoutWildcard.endsWith('/')
+      ? withoutWildcard.slice(0, -1)
+      : withoutWildcard;
+    return path === base || path.startsWith(`${base}/`);
+  });
 }

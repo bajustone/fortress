@@ -58,6 +58,16 @@ describe('csrf middleware', () => {
     expect(body).toEqual({ ok: true });
   });
 
+  it('matches skip paths at segment boundaries', async () => {
+    const app = new Hono();
+    app.use('/*', createCsrfMiddleware({ skipPaths: ['/webhook'] }));
+    app.post('/webhook/delivery', c => c.json({ ok: true }));
+    app.post('/webhook-evil', c => c.json({ ok: true }));
+
+    expect((await app.request('/webhook/delivery', { method: 'POST' })).status).toBe(200);
+    expect((await app.request('/webhook-evil', { method: 'POST' })).status).toBe(403);
+  });
+
   it('blocks cross-site requests (Sec-Fetch-Site: cross-site)', async () => {
     const app = new Hono();
     app.use('/*', createCsrfMiddleware());

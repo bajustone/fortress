@@ -164,6 +164,50 @@ export function createAuthMiddleware(fortress: Fortress): ExpressMiddleware {
   };
 }
 
+// --- CSRF middleware (user routes only) ---
+
+/** Options accepted by {@link createCsrfMiddleware}. */
+export interface CsrfConfig {
+  /** Header name required on unsafe methods. Default: `X-Fortress-CSRF`. */
+  headerName?: string;
+  /** Paths/subtrees exempt from CSRF checking. A trailing `/*` is accepted. */
+  skipPaths?: string[];
+  /** Methods exempt from CSRF checking. Default: GET, HEAD, OPTIONS. */
+  safeMethods?: string[];
+}
+
+/**
+ * Build standalone Express CSRF middleware for host-owned routes. Fortress-
+ * managed routes already enforce cookie-aware CSRF inside `handleRequest`.
+ * This middleware uses the custom-header strategy and rejects cross-site
+ * browser requests on unsafe methods.
+ */
+export function createCsrfMiddleware(config?: CsrfConfig): ExpressMiddleware {
+  const headerName = (config?.headerName ?? 'X-Fortress-CSRF').toLowerCase();
+  const skipPaths = config?.skipPaths ?? [];
+  const safeMethods = new Set((config?.safeMethods ?? ['GET', 'HEAD', 'OPTIONS']).map(method => method.toUpperCase()));
+
+  return (req, _res, next) => {
+    try {
+      if (safeMethods.has(req.method.toUpperCase()) || matchesCsrfSkipPath(req.path, skipPaths)) {
+        next();
+        return;
+      }
+
+      const fetchSite = expressHeader(req, 'sec-fetch-site');
+      if (fetchSite === 'cross-site')
+        throw new FortressError('FORBIDDEN', 'CSRF: cross-site request rejected', 403);
+      if (!expressHeader(req, headerName))
+        throw new FortressError('FORBIDDEN', `CSRF: missing ${config?.headerName ?? 'X-Fortress-CSRF'} header`, 403);
+
+      next();
+    }
+    catch (error) {
+      next(error);
+    }
+  };
+}
+
 // --- RBAC middleware (user routes only) ---
 
 /**
@@ -329,15 +373,19 @@ export function createExpressPluginMiddleware(
 // --- Factory ---
 
 /** Options for {@link createExpressMiddleware}. Extends {@link RbacOptions}. */
-export interface ExpressAdapterOptions extends RbacOptions {}
+export interface ExpressAdapterOptions extends RbacOptions {
+  /** Standalone CSRF middleware options for host-owned Express routes. */
+  csrf?: CsrfConfig;
+}
 
 /**
- * Build the full set of fortress Express middleware: auth, RBAC, error
+ * Build the full set of fortress Express middleware: auth, CSRF, RBAC, error
  * handler, and the three plugin middleware slots (`beforeAuth`, `afterAuth`,
  * `afterRbac`). Mount each in the corresponding place in your Express app.
  */
 export function createExpressMiddleware(fortress: Fortress, options?: ExpressAdapterOptions): {
   authMiddleware: ExpressMiddleware;
+  csrfMiddleware: ExpressMiddleware;
   rbacMiddleware: ExpressMiddleware;
   errorHandler: ReturnType<typeof createErrorHandler>;
   pluginMiddleware: {
@@ -348,6 +396,7 @@ export function createExpressMiddleware(fortress: Fortress, options?: ExpressAda
 } {
   return {
     authMiddleware: createAuthMiddleware(fortress),
+    csrfMiddleware: createCsrfMiddleware(options?.csrf),
     rbacMiddleware: createRbacMiddleware(fortress, options),
     errorHandler: createErrorHandler(fortress),
     pluginMiddleware: {
@@ -424,6 +473,26 @@ function findRouteMapMatch(method: string, path: string, routeMap: Record<string
       return mapping;
   }
   return null;
+}
+
+function expressHeader(req: ExpressRequest, name: string): string | undefined {
+  const target = name.toLowerCase();
+  for (const [headerName, value] of Object.entries(req.headers)) {
+    if (headerName.toLowerCase() !== target)
+      continue;
+    return Array.isArray(value) ? value[0] : value;
+  }
+  return undefined;
+}
+
+function matchesCsrfSkipPath(path: string, skipPaths: string[]): boolean {
+  return skipPaths.some((configured) => {
+    const withoutWildcard = configured.endsWith('/*') ? configured.slice(0, -2) : configured;
+    const base = withoutWildcard.length > 1 && withoutWildcard.endsWith('/')
+      ? withoutWildcard.slice(0, -1)
+      : withoutWildcard;
+    return path === base || path.startsWith(`${base}/`);
+  });
 }
 
 function pathToRegex(pattern: string): RegExp {

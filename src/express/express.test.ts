@@ -6,7 +6,8 @@ import { createFortress } from '../core/fortress';
 import { assertSuccess } from '../core/types';
 import { rateLimit } from '../plugins/rate-limit';
 import { createTestAdapter } from '../testing';
-import { createAuthMiddleware, createErrorHandler, createExpressMiddleware, createRbacMiddleware, getClaims, getDb, getUserId } from './middleware';
+import { expressToWebRequest } from './handle';
+import { createAuthMiddleware, createCsrfMiddleware, createErrorHandler, createExpressMiddleware, createRbacMiddleware, getClaims, getDb, getUserId } from './middleware';
 
 const SECRET = 'express-test-secret-32-chars!!!x';
 
@@ -28,14 +29,39 @@ function mockRes(): ExpressResponse {
 }
 
 describe('express adapter', () => {
-  it('createExpressMiddleware returns auth, rbac, and error handler', () => {
+  it('preserves parsed form-urlencoded bodies for OAuth dispatch', async () => {
+    const request = expressToWebRequest({
+      headers: {
+        'host': 'example.test',
+        'content-type': 'Application/X-WWW-Form-Urlencoded; Charset=UTF-8',
+      },
+      method: 'POST',
+      path: '/oauth/token',
+      originalUrl: '/oauth/token?trace=1',
+      protocol: 'https',
+      body: {
+        grant_type: 'client_credentials',
+        client_id: 'client id',
+        client_secret: 'secret+value',
+        scope: ['read', 'write'],
+      },
+    }, '/oauth/token');
+
+    expect(request.url).toBe('https://example.test/oauth/token?trace=1');
+    expect(await request.text()).toBe(
+      'grant_type=client_credentials&client_id=client+id&client_secret=secret%2Bvalue&scope=read&scope=write',
+    );
+  });
+
+  it('createExpressMiddleware returns auth, rbac, csrf, and error handler', () => {
     const fortress = createFortress({
       jwt: { key: SECRET },
       database: createTestAdapter(),
     });
 
-    const { authMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress);
+    const { authMiddleware, csrfMiddleware, rbacMiddleware, errorHandler } = createExpressMiddleware(fortress);
     expect(typeof authMiddleware).toBe('function');
+    expect(typeof csrfMiddleware).toBe('function');
     expect(typeof rbacMiddleware).toBe('function');
     expect(typeof errorHandler).toBe('function');
   });
@@ -169,6 +195,67 @@ describe('express adapter', () => {
 
     await expect(invoke()).resolves.toBeUndefined();
     await expect(invoke()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
+  });
+
+  it('standalone CSRF middleware rejects unsafe requests and matches skips at segment boundaries', async () => {
+    const middleware = createCsrfMiddleware({ skipPaths: ['/webhook'] });
+    const invoke = async (req: ExpressRequest): Promise<unknown> => {
+      let nextError: unknown;
+      await middleware(req, mockRes(), ((error?: unknown) => {
+        nextError = error;
+      }) as ExpressNextFunction);
+      return nextError;
+    };
+
+    await expect(invoke({ headers: {}, method: 'GET', path: '/api/items' })).resolves.toBeUndefined();
+    await expect(invoke({ headers: {}, method: 'POST', path: '/api/items' }))
+      .resolves
+      .toMatchObject({ code: 'FORBIDDEN', statusCode: 403 });
+    await expect(invoke({
+      headers: { 'x-fortress-csrf': '1' },
+      method: 'POST',
+      path: '/api/items',
+    })).resolves.toBeUndefined();
+    await expect(invoke({ headers: {}, method: 'POST', path: '/webhook/delivery' })).resolves.toBeUndefined();
+    await expect(invoke({ headers: {}, method: 'POST', path: '/webhook-evil' }))
+      .resolves
+      .toMatchObject({ code: 'FORBIDDEN' });
+    await expect(invoke({
+      headers: { 'x-fortress-csrf': '1', 'sec-fetch-site': 'cross-site' },
+      method: 'POST',
+      path: '/api/items',
+    })).resolves.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('propagates custom CSRF factory options including safe methods and wildcard skips', async () => {
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
+    const middleware = createExpressMiddleware(fortress, {
+      csrf: {
+        headerName: 'X-Custom-CSRF',
+        safeMethods: ['get', 'post'],
+        skipPaths: ['/hooks/*'],
+      },
+    }).csrfMiddleware;
+    const invoke = async (req: ExpressRequest): Promise<unknown> => {
+      let nextError: unknown;
+      await middleware(req, mockRes(), ((error?: unknown) => {
+        nextError = error;
+      }) as ExpressNextFunction);
+      return nextError;
+    };
+
+    await expect(invoke({ headers: {}, method: 'POST', path: '/api/items' })).resolves.toBeUndefined();
+    await expect(invoke({ headers: {}, method: 'DELETE', path: '/hooks/delivery' })).resolves.toBeUndefined();
+    await expect(invoke({
+      headers: { 'X-Custom-CSRF': '1' },
+      method: 'PUT',
+      path: '/api/items',
+    })).resolves.toBeUndefined();
+    await expect(invoke({
+      headers: { 'x-fortress-csrf': '1' },
+      method: 'PUT',
+      path: '/api/items',
+    })).resolves.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('rbac middleware skips when no route mapping matches', async () => {
