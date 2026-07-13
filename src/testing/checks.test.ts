@@ -79,14 +79,13 @@ describe('checkMigrationDrift', () => {
   it('reports a clean SQLite test adapter as upgraded', async () => {
     const fortress = makeFortress();
     const result = await checkMigrationDrift(fortress.config.database, 'sqlite');
-    // Test adapter pre-creates every table but does NOT seed the version
-    // row, so every bundled migration shows as pending and missingTables /
-    // missingColumns are empty (the schema itself is complete).
+    // The test adapter installs the current schema and stamps the matching
+    // migration version, so it is ready for checks without a redundant migrate.
     expect(result.drift.missingTables).toEqual([]);
     expect(result.drift.missingColumns).toEqual([]);
-    expect(result.drift.pendingVersions).toEqual([1, 2]);
-    expect(result.ok).toBe(false);
-    expect(result.messages.some(m => m.startsWith('Pending migrations'))).toBe(true);
+    expect(result.drift.pendingVersions).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.messages).toEqual([]);
   });
 });
 

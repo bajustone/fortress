@@ -40,6 +40,9 @@ const refreshTokens = sqliteTable('fortress_refresh_token', {
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').notNull().unique(),
   tokenFamily: text('token_family').notNull(),
+  familyCreatedAt: integer('family_created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  successorTokenHash: text('successor_token_hash'),
+  rotatedAt: integer('rotated_at', { mode: 'timestamp' }),
   isRevoked: integer('is_revoked', { mode: 'boolean' }).notNull().default(false),
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   ipAddress: text('ip_address'),
@@ -47,6 +50,16 @@ const refreshTokens = sqliteTable('fortress_refresh_token', {
   deviceName: text('device_name'),
   lastActiveAt: integer('last_active_at', { mode: 'timestamp' }),
   fingerprintHash: text('fingerprint_hash'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
+const authContinuations = sqliteTable('fortress_auth_continuation', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull().unique(),
+  reason: text('reason').notNull(),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  consumedAt: integer('consumed_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
@@ -463,6 +476,7 @@ export const fortressSchema: Record<string, AnySQLiteTable> = {
   users,
   loginIdentifiers,
   refreshTokens,
+  authContinuations,
   groups,
   groupUsers,
   serviceAccounts,

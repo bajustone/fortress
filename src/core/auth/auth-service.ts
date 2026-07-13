@@ -269,6 +269,7 @@ export function createAuthService(
 
     const { raw, hash } = await generateRefreshToken();
     const family = generateTokenFamily();
+    const issuedAt = new Date();
 
     const fingerprintHash = meta?.userAgent
       ? await computeFingerprintHash(meta.userAgent)
@@ -280,12 +281,15 @@ export function createAuthService(
         userId: user.id,
         tokenHash: hash,
         tokenFamily: family,
+        familyCreatedAt: issuedAt,
+        successorTokenHash: null,
+        rotatedAt: null,
         isRevoked: false,
-        expiresAt: new Date(Date.now() + resolved.refreshTokenExpiry * 1000),
+        expiresAt: new Date(issuedAt.getTime() + resolved.refreshTokenExpiry * 1000),
         ipAddress: meta?.ipAddress ?? null,
         userAgent: meta?.userAgent ?? null,
         deviceName: meta?.deviceName ?? null,
-        lastActiveAt: null,
+        lastActiveAt: issuedAt,
         fingerprintHash,
       },
     });
@@ -497,6 +501,9 @@ export function createAuthService(
             userId: stored.userId,
             tokenHash: newToken.hash,
             tokenFamily: stored.tokenFamily, // same family for rotation tracking
+            familyCreatedAt: stored.familyCreatedAt,
+            successorTokenHash: null,
+            rotatedAt: null,
             isRevoked: false,
             expiresAt: new Date(Date.now() + resolved.refreshTokenExpiry * 1000),
             ipAddress: meta?.ipAddress ?? stored.ipAddress,

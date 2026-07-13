@@ -66,13 +66,67 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(hasMigrationDrift(initialDrift)).toBe(true);
     expect(initialDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
 
+    const baseline = await migrateUp(db, 'pg', 2);
+    expect(baseline.fromVersion).toBe(0);
+    expect(baseline.toVersion).toBe(2);
+    expect(baseline.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema']);
+
+    await db.rawQuery!(
+      `INSERT INTO fortress_user (email, name, password_hash, is_active, created_at, updated_at)
+       VALUES ($1, $2, $3, true, $4, $4)`,
+      ['legacy-pg@test.com', 'Legacy PG', 'h', '2025-01-01T00:00:00Z'],
+    );
+    const [legacyUser] = await db.rawQuery!<{ id: string }>(
+      'SELECT id FROM fortress_user WHERE email = $1',
+      ['legacy-pg@test.com'],
+    );
+    await db.rawQuery!(
+      `INSERT INTO fortress_refresh_token
+        (user_id, token_hash, token_family, is_revoked, expires_at, created_at)
+       VALUES ($1, $2, $3, false, $4, $5), ($1, $6, $3, true, $4, $7)`,
+      [
+        legacyUser.id,
+        'legacy-pg-hash-1',
+        'legacy-pg-family',
+        '2030-01-01T00:00:00Z',
+        '2025-01-01T00:00:00Z',
+        'legacy-pg-hash-2',
+        '2025-02-01T00:00:00Z',
+      ],
+    );
+
     const up = await migrateUp(db, 'pg');
-    expect(up.fromVersion).toBe(0);
-    expect(up.toVersion).toBe(2);
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema']);
+    expect(up.fromVersion).toBe(2);
+    expect(up.toVersion).toBe(3);
+    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation']);
+
+    const familyRows = await db.rawQuery!<{ tokenHash: string; familyCreatedAt: string }>(
+      `SELECT token_hash AS "tokenHash", family_created_at AS "familyCreatedAt"
+       FROM fortress_refresh_token WHERE token_family = $1 ORDER BY created_at`,
+      ['legacy-pg-family'],
+    );
+    expect(familyRows.map(row => row.tokenHash)).toEqual([
+      'legacy-pg-hash-1',
+      'legacy-pg-hash-2',
+    ]);
+    expect(familyRows[0].familyCreatedAt).toBe(familyRows[1].familyCreatedAt);
+    expect(familyRows[0].familyCreatedAt).toContain('2025-01-01');
+
+    await db.rawQuery!(
+      `INSERT INTO fortress_refresh_token
+        (user_id, token_hash, token_family, is_revoked, expires_at)
+       VALUES ($1, $2, $3, false, $4)`,
+      [legacyUser.id, 'default-pg-hash', 'default-pg-family', '2030-01-01T00:00:00Z'],
+    );
+    const [defaulted] = await db.rawQuery!<{ recent: boolean }>(
+      `SELECT family_created_at >= now() - interval '5 seconds' AS recent
+       FROM fortress_refresh_token WHERE token_hash = $1`,
+      ['default-pg-hash'],
+    );
+    expect(defaulted.recent).toBe(true);
 
     const after = await getMigrationStatus(db, 'pg');
-    expect(after.currentVersion).toBe(2);
+    expect(after.currentVersion).toBe(3);
     expect(after.upToDate).toBe(true);
 
     // Real-engine schema check: no missing tables, no missing columns.
@@ -95,6 +149,25 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     // Re-running is idempotent.
     const reapply = await migrateUp(db, 'pg');
     expect(reapply.applied).toEqual([]);
+
+    // A targeted rollback preserves refresh rows while removing only v3.
+    const rollback = await migrateDown(db, 'pg', 2);
+    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['auth_continuation']);
+    expect(await db.count({ model: 'refresh_token' })).toBe(3);
+    const v3Columns = await db.rawQuery!<{ columnName: string }>(
+      `SELECT column_name AS "columnName" FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'fortress_refresh_token'
+         AND column_name IN ('family_created_at', 'successor_token_hash', 'rotated_at')`,
+    );
+    expect(v3Columns).toEqual([]);
+    const continuationTables = await db.rawQuery!<{ tableName: string }>(
+      `SELECT table_name AS "tableName" FROM information_schema.tables
+       WHERE table_schema = current_schema() AND table_name = 'fortress_auth_continuation'`,
+    );
+    expect(continuationTables).toEqual([]);
+
+    const restore = await migrateUp(db, 'pg');
+    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation']);
 
     // Roll back drops every Fortress table (FK-safe via CASCADE ordering).
     const down = await migrateDown(db, 'pg');

@@ -1,4 +1,6 @@
+import type { DatabaseAdapter } from '../../adapters/database';
 import { describe, expect, it } from 'vitest';
+import { createDrizzleAdapter } from '../../drizzle/adapter';
 import { createTestAdapter } from '../../testing';
 import {
   detectMigrationDrift,
@@ -11,27 +13,35 @@ import { FORTRESS_TABLES } from './migrations';
 
 const dialect = 'sqlite';
 
+function createBareSqliteAdapter(): DatabaseAdapter {
+  // eslint-disable-next-line ts/no-require-imports
+  const BetterSqlite3 = require('better-sqlite3');
+  // eslint-disable-next-line ts/no-require-imports
+  const { drizzle } = require('drizzle-orm/better-sqlite3');
+  return createDrizzleAdapter(drizzle(new BetterSqlite3(':memory:')));
+}
+
 describe('migration engine', () => {
   it('reports pending migrations, applies up, and rolls down', async () => {
-    const db = createTestAdapter();
+    const db = createBareSqliteAdapter();
 
     const before = await getMigrationStatus(db, dialect);
     expect(before.currentVersion).toBe(0);
-    expect(before.latestVersion).toBe(2);
-    expect(before.pending.map(migration => migration.version)).toEqual([1, 2]);
+    expect(before.latestVersion).toBe(3);
+    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3]);
 
     const up = await migrateUp(db, dialect);
-    expect(up).toMatchObject({ fromVersion: 0, toVersion: 2 });
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema']);
+    expect(up).toMatchObject({ fromVersion: 0, toVersion: 3 });
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation']);
 
     const after = await getMigrationStatus(db, dialect);
-    expect(after.currentVersion).toBe(2);
+    expect(after.currentVersion).toBe(3);
     expect(after.upToDate).toBe(true);
     expect(hasMigrationDrift(await detectMigrationDrift(db, dialect))).toBe(false);
 
     const down = await migrateDown(db, dialect);
-    expect(down).toMatchObject({ fromVersion: 2, toVersion: 0 });
-    expect(down.rolledBack.map(migration => migration.name)).toEqual(['initial_schema', 'schema_version']);
+    expect(down).toMatchObject({ fromVersion: 3, toVersion: 0 });
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['auth_continuation', 'initial_schema', 'schema_version']);
 
     const final = await getMigrationStatus(db, dialect);
     expect(final.hasVersionTable).toBe(false);

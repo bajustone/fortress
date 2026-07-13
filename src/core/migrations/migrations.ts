@@ -874,14 +874,135 @@ DROP TABLE IF EXISTS fortress_login_identifier CASCADE;
 DROP TABLE IF EXISTS fortress_user CASCADE;
 `.trim();
 
+// --- 0003: auth continuation + refresh-session metadata ---
+//
+// Adds the single-use state carrier used by the post-auth gate and the
+// refresh-family metadata needed by grace-window rotation and session caps.
+// Existing refresh families are backfilled from their original row creation
+// time so an upgrade does not reset their absolute age.
+
+const SQLITE_0003_UP = `
+CREATE TABLE fortress_refresh_token_v3 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  token_family TEXT NOT NULL,
+  family_created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  successor_token_hash TEXT,
+  rotated_at INTEGER,
+  is_revoked INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  device_name TEXT,
+  last_active_at INTEGER,
+  fingerprint_hash TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+INSERT INTO fortress_refresh_token_v3 (
+  id, user_id, token_hash, token_family, family_created_at,
+  successor_token_hash, rotated_at, is_revoked, expires_at, ip_address,
+  user_agent, device_name, last_active_at, fingerprint_hash, created_at
+)
+SELECT
+  token.id, token.user_id, token.token_hash, token.token_family,
+  (SELECT MIN(family.created_at)
+   FROM fortress_refresh_token AS family
+   WHERE family.token_family = token.token_family),
+  NULL, NULL, token.is_revoked, token.expires_at, token.ip_address,
+  token.user_agent, token.device_name, token.last_active_at,
+  token.fingerprint_hash, token.created_at
+FROM fortress_refresh_token AS token;
+DROP TABLE fortress_refresh_token;
+ALTER TABLE fortress_refresh_token_v3 RENAME TO fortress_refresh_token;
+
+CREATE TABLE fortress_auth_continuation (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  reason TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+`.trim();
+
+const SQLITE_0003_DOWN = `
+DROP TABLE IF EXISTS fortress_auth_continuation;
+CREATE TABLE fortress_refresh_token_v2 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  token_family TEXT NOT NULL,
+  is_revoked INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  device_name TEXT,
+  last_active_at INTEGER,
+  fingerprint_hash TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+INSERT INTO fortress_refresh_token_v2 (
+  id, user_id, token_hash, token_family, is_revoked, expires_at,
+  ip_address, user_agent, device_name, last_active_at, fingerprint_hash, created_at
+)
+SELECT
+  id, user_id, token_hash, token_family, is_revoked, expires_at,
+  ip_address, user_agent, device_name, last_active_at, fingerprint_hash, created_at
+FROM fortress_refresh_token;
+DROP TABLE fortress_refresh_token;
+ALTER TABLE fortress_refresh_token_v2 RENAME TO fortress_refresh_token;
+`.trim();
+
+const PG_0003_UP = `
+ALTER TABLE fortress_refresh_token
+  ADD COLUMN family_created_at TIMESTAMP;
+UPDATE fortress_refresh_token AS token
+  SET family_created_at = family.created_at
+  FROM (
+    SELECT token_family, MIN(created_at) AS created_at
+    FROM fortress_refresh_token
+    GROUP BY token_family
+  ) AS family
+  WHERE token.token_family = family.token_family;
+ALTER TABLE fortress_refresh_token
+  ALTER COLUMN family_created_at SET NOT NULL;
+ALTER TABLE fortress_refresh_token
+  ALTER COLUMN family_created_at SET DEFAULT now();
+ALTER TABLE fortress_refresh_token
+  ADD COLUMN successor_token_hash VARCHAR(64);
+ALTER TABLE fortress_refresh_token
+  ADD COLUMN rotated_at TIMESTAMP;
+
+CREATE TABLE fortress_auth_continuation (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  token_hash VARCHAR(64) NOT NULL UNIQUE,
+  reason VARCHAR(32) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  consumed_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+`.trim();
+
+const PG_0003_DOWN = `
+DROP TABLE IF EXISTS fortress_auth_continuation CASCADE;
+ALTER TABLE fortress_refresh_token DROP COLUMN rotated_at;
+ALTER TABLE fortress_refresh_token DROP COLUMN successor_token_hash;
+ALTER TABLE fortress_refresh_token DROP COLUMN family_created_at;
+`.trim();
+
 export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> = {
   sqlite: [
     { version: 1, name: 'schema_version', dialect: 'sqlite', up: SQLITE_0001_UP, down: SQLITE_0001_DOWN },
     { version: 2, name: 'initial_schema', dialect: 'sqlite', up: SQLITE_0002_UP, down: SQLITE_0002_DOWN },
+    { version: 3, name: 'auth_continuation', dialect: 'sqlite', up: SQLITE_0003_UP, down: SQLITE_0003_DOWN },
   ],
   pg: [
     { version: 1, name: 'schema_version', dialect: 'pg', up: PG_0001_UP, down: PG_0001_DOWN },
     { version: 2, name: 'initial_schema', dialect: 'pg', up: PG_0002_UP, down: PG_0002_DOWN },
+    { version: 3, name: 'auth_continuation', dialect: 'pg', up: PG_0003_UP, down: PG_0003_DOWN },
   ],
 };
 
@@ -917,6 +1038,7 @@ export const FORTRESS_TABLES: readonly string[] = [
   'fortress_user',
   'fortress_login_identifier',
   'fortress_refresh_token',
+  'fortress_auth_continuation',
   'fortress_group',
   'fortress_group_user',
   'fortress_service_account',
@@ -953,6 +1075,8 @@ export const FORTRESS_TABLES: readonly string[] = [
 const CONSTRAINT_KEYWORDS = new Set(['primary', 'unique', 'foreign', 'constraint', 'check']);
 
 const CREATE_TABLE_RE = /create\s+table\s+(?:if\s+not\s+exists\s+)?(\w+)\s*\(/gi;
+const ADD_COLUMN_RE = /alter\s+table\s+(\w+)\s+add\s+column\s+(\w+)/gi;
+const RENAME_TABLE_RE = /alter\s+table\s+(\w+)\s+rename\s+to\s+(\w+)/gi;
 const WHITESPACE_RE = /\s+/;
 const QUOTE_CHARS_RE = /["'`]/g;
 
@@ -965,8 +1089,10 @@ const QUOTE_CHARS_RE = /["'`]/g;
  *
  * The parser is intentionally narrow: it understands the controlled DDL
  * Fortress emits (`CREATE TABLE [IF NOT EXISTS] name ( ... );` with
- * comma-separated definitions). Constraint-only lines (PRIMARY KEY (...),
- * UNIQUE (...), etc.) and standalone CREATE INDEX statements are skipped.
+ * comma-separated definitions, plus the controlled `ALTER TABLE` add-column
+ * and rename forms used by incremental migrations). Constraint-only lines
+ * (PRIMARY KEY (...), UNIQUE (...), etc.) and
+ * standalone CREATE INDEX statements are skipped.
  */
 export function getExpectedColumns(dialect: MigrationDialect): Record<string, string[]> {
   const sql = getMigrationUpSql(dialect)
@@ -999,6 +1125,33 @@ export function getExpectedColumns(dialect: MigrationDialect): Record<string, st
     result[tableName] = extractColumnNames(body);
     CREATE_TABLE_RE.lastIndex = i;
     match = CREATE_TABLE_RE.exec(sql);
+  }
+
+  // Later migrations add columns to tables created by an earlier version.
+  // Include those additions in drift expectations without rewriting the
+  // immutable baseline migration.
+  ADD_COLUMN_RE.lastIndex = 0;
+  let addMatch = ADD_COLUMN_RE.exec(sql);
+  while (addMatch !== null) {
+    const [, tableName, columnName] = addMatch;
+    const columns = result[tableName] ?? (result[tableName] = []);
+    const normalized = columnName.toLowerCase();
+    if (!columns.includes(normalized))
+      columns.push(normalized);
+    addMatch = ADD_COLUMN_RE.exec(sql);
+  }
+
+  // SQLite table rebuilds create a versioned replacement and rename it over
+  // the prior table. Reflect that final name/shape in drift expectations.
+  RENAME_TABLE_RE.lastIndex = 0;
+  let renameMatch = RENAME_TABLE_RE.exec(sql);
+  while (renameMatch !== null) {
+    const [, fromName, toName] = renameMatch;
+    if (result[fromName]) {
+      result[toName] = result[fromName];
+      delete result[fromName];
+    }
+    renameMatch = RENAME_TABLE_RE.exec(sql);
   }
 
   return result;

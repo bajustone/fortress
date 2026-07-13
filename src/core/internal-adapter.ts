@@ -2,6 +2,7 @@ import type { DatabaseAdapter } from '../adapters/database';
 import type {
   FortressUser,
   LoginIdentifier,
+  PendingReason,
   Permission,
   PermissionInput,
   ServiceAccount,
@@ -14,6 +15,9 @@ export interface StoredRefreshToken {
   id: string;
   userId: string;
   tokenFamily: string;
+  familyCreatedAt: Date;
+  successorTokenHash: string | null;
+  rotatedAt: Date | null;
   isRevoked: boolean;
   expiresAt: Date;
   ipAddress: string | null;
@@ -21,6 +25,17 @@ export interface StoredRefreshToken {
   deviceName: string | null;
   lastActiveAt: Date | null;
   fingerprintHash: string | null;
+}
+
+/** Hashed, short-lived state for completing a pending authentication flow. */
+export interface StoredContinuation {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  reason: PendingReason;
+  expiresAt: Date;
+  consumedAt: Date | null;
+  createdAt: Date;
 }
 
 // --- Interface ---

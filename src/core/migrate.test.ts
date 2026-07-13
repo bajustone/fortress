@@ -1,14 +1,24 @@
+import type { DatabaseAdapter } from '../adapters/database';
 import { describe, expect, it, vi } from 'vitest';
+import { createDrizzleAdapter } from '../drizzle/adapter';
 import { createTestAdapter } from '../testing';
 import { createFortress } from './fortress';
 
 const SECRET = 'fortress-migrate-test-secret-32!';
 
+function createBareSqliteAdapter(): DatabaseAdapter {
+  // eslint-disable-next-line ts/no-require-imports
+  const BetterSqlite3 = require('better-sqlite3');
+  // eslint-disable-next-line ts/no-require-imports
+  const { drizzle } = require('drizzle-orm/better-sqlite3');
+  return createDrizzleAdapter(drizzle(new BetterSqlite3(':memory:')));
+}
+
 describe('fortress.migrate', () => {
   it('runs fortress migrations and reports the applied result', async () => {
     const fortress = createFortress({
       jwt: { key: SECRET },
-      database: createTestAdapter(),
+      database: createBareSqliteAdapter(),
     });
 
     const result = await fortress.migrate();

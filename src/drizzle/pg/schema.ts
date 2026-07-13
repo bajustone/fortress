@@ -40,6 +40,9 @@ const refreshTokens = pgTable('fortress_refresh_token', {
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
   tokenFamily: varchar('token_family', { length: 64 }).notNull(),
+  familyCreatedAt: timestamp('family_created_at').notNull().defaultNow(),
+  successorTokenHash: varchar('successor_token_hash', { length: 64 }),
+  rotatedAt: timestamp('rotated_at'),
   isRevoked: boolean('is_revoked').notNull().default(false),
   expiresAt: timestamp('expires_at').notNull(),
   ipAddress: varchar('ip_address', { length: 45 }),
@@ -47,6 +50,16 @@ const refreshTokens = pgTable('fortress_refresh_token', {
   deviceName: text('device_name'),
   lastActiveAt: timestamp('last_active_at'),
   fingerprintHash: varchar('fingerprint_hash', { length: 64 }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+const authContinuations = pgTable('fortress_auth_continuation', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
+  reason: varchar('reason', { length: 32 }).notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  consumedAt: timestamp('consumed_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -458,6 +471,7 @@ export const fortressPgSchema: Record<string, AnyPgTable> = {
   users,
   loginIdentifiers,
   refreshTokens,
+  authContinuations,
   groups,
   groupUsers,
   serviceAccounts,

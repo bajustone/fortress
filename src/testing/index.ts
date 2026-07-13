@@ -18,7 +18,7 @@
  */
 
 import type { DatabaseAdapter } from '../adapters/database';
-import { getMigrationUpSql } from '../core/migrations/migrations';
+import { getLatestMigrationVersion, getMigrationUpSql } from '../core/migrations/migrations';
 import { createDrizzleAdapter } from '../drizzle/adapter';
 
 export {
@@ -44,6 +44,13 @@ export type {
  * forward SQL.
  */
 const CREATE_TABLES_SQL = getMigrationUpSql('sqlite');
+const STAMP_SCHEMA_VERSION_SQL = `
+  INSERT INTO fortress_schema_version (id, version, applied_at)
+  VALUES (1, ${getLatestMigrationVersion('sqlite')}, unixepoch())
+  ON CONFLICT(id) DO UPDATE SET
+    version = excluded.version,
+    applied_at = excluded.applied_at;
+`;
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';
 
@@ -75,6 +82,7 @@ function createBunAdapter(): DatabaseAdapter {
   sqlite.exec('PRAGMA journal_mode = WAL;');
   sqlite.exec('PRAGMA foreign_keys = ON;');
   sqlite.exec(CREATE_TABLES_SQL);
+  sqlite.exec(STAMP_SCHEMA_VERSION_SQL);
 
   const db = drizzle(sqlite);
   return createDrizzleAdapter(db);
@@ -91,6 +99,7 @@ function createNodeAdapter(): DatabaseAdapter {
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   sqlite.exec(CREATE_TABLES_SQL);
+  sqlite.exec(STAMP_SCHEMA_VERSION_SQL);
 
   const db = drizzle(sqlite);
   return createDrizzleAdapter(db);

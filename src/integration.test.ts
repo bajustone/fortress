@@ -31,6 +31,36 @@ describe('auth integration', () => {
     expect(result.refreshToken).toBeTruthy();
   });
 
+  it('seeds refresh-family session metadata at issuance', async () => {
+    const database = createTestAdapter();
+    const localFortress = createFortress({
+      jwt: { key: 'integration-test-secret-32chars!!' },
+      database,
+    });
+    const user = await localFortress.auth.createUser({
+      email: 'session-metadata@example.com',
+      name: 'Session Metadata',
+      password: 'secure-password-123',
+    });
+
+    await localFortress.auth.login('session-metadata@example.com', 'secure-password-123');
+    const stored = await database.findOne<{
+      familyCreatedAt: Date;
+      lastActiveAt: Date;
+      successorTokenHash: string | null;
+      rotatedAt: Date | null;
+    }>({
+      model: 'refresh_token',
+      where: [{ field: 'userId', operator: '=', value: user.id }],
+    });
+
+    expect(stored?.familyCreatedAt).toBeInstanceOf(Date);
+    expect(stored?.lastActiveAt).toBeInstanceOf(Date);
+    expect(stored?.familyCreatedAt.getTime()).toBe(stored?.lastActiveAt.getTime());
+    expect(stored?.successorTokenHash).toBeNull();
+    expect(stored?.rotatedAt).toBeNull();
+  });
+
   it('rejects invalid credentials', async () => {
     await fortress.auth.createUser({
       email: 'bob@example.com',

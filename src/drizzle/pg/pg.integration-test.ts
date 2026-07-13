@@ -48,6 +48,9 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     token_hash VARCHAR(64) NOT NULL UNIQUE,
     token_family VARCHAR(64) NOT NULL,
+    family_created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    successor_token_hash VARCHAR(64),
+    rotated_at TIMESTAMP,
     is_revoked BOOLEAN NOT NULL DEFAULT false,
     expires_at TIMESTAMP NOT NULL,
     ip_address VARCHAR(45),
@@ -55,6 +58,16 @@ const CREATE_TABLES_SQL = `
     device_name TEXT,
     last_active_at TIMESTAMP,
     fingerprint_hash VARCHAR(64),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS fortress_auth_continuation (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    reason VARCHAR(32) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
 
@@ -385,6 +398,7 @@ const TRUNCATE_SQL = `
     fortress_service_account,
     fortress_group_user,
     fortress_group,
+    fortress_auth_continuation,
     fortress_refresh_token,
     fortress_login_identifier,
     fortress_user
