@@ -147,6 +147,33 @@ describe('plugin hooks', () => {
     });
   });
 
+  describe('onLoginFailure isolation', () => {
+    it('preserves the auth error and continues after a hook throws', async () => {
+      const secondHook = vi.fn(async () => {});
+      fortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          {
+            name: 'broken',
+            hooks: {
+              async onLoginFailure() {
+                throw new Error('hook bug');
+              },
+            },
+          },
+          { name: 'observer', hooks: { onLoginFailure: secondHook } },
+        ],
+      });
+      await seedUser();
+
+      await expect(
+        fortress.auth.login('hook-user@example.com', 'wrong-password'),
+      ).rejects.toThrow('Invalid credentials');
+      expect(secondHook).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('hook execution order', () => {
     it('runs hooks in plugin registration order', async () => {
       const order: string[] = [];

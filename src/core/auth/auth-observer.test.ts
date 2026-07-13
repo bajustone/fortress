@@ -101,6 +101,37 @@ describe('addAuthObserver', () => {
     expect(reuse?.metadata?.tokenFamily).toBeDefined();
   });
 
+  it('commits hard fingerprint revocation and emits before rejecting', async () => {
+    const database = createTestAdapter();
+    const hardened = createFortress({
+      jwt: {
+        key: SECRET,
+        validateRefreshFingerprint: true,
+      },
+      database,
+    });
+    await hardened.auth.createUser({
+      email: 'fingerprint-hard@example.com',
+      name: 'Fingerprint Hard',
+      password: 'password-123',
+    });
+    const login = await hardened.auth.login(
+      'fingerprint-hard@example.com',
+      'password-123',
+      { userAgent: 'browser-a' },
+    );
+    const events: AuthEvent[] = [];
+    hardened.auth.addAuthObserver(event => void events.push(event));
+
+    await expect(
+      hardened.auth.refresh(login.refreshToken as string, { userAgent: 'browser-b' }),
+    ).rejects.toThrow('Refresh token fingerprint mismatch');
+
+    expect(events.some(event => event.eventType === 'TOKEN_FINGERPRINT_MISMATCH')).toBe(true);
+    const rows = await database.findMany<{ isRevoked: boolean }>({ model: 'refresh_token' });
+    expect(rows.every(row => row.isRevoked)).toBe(true);
+  });
+
   it('emits LOGOUT with actorId', async () => {
     await seed();
     const login = await fortress.auth.login('auth-obs@example.com', 'password-123');

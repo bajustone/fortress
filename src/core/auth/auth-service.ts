@@ -224,8 +224,16 @@ export function createAuthService(
 
   async function runOnLoginFailureHooks(identifier: string, error: Error): Promise<void> {
     for (const plugin of plugins) {
-      if (plugin.hooks?.onLoginFailure) {
+      if (!plugin.hooks?.onLoginFailure)
+        continue;
+      try {
         await plugin.hooks.onLoginFailure({ db, config, identifier, error });
+      }
+      catch (hookError) {
+        logger?.error(
+          { plugin: plugin.name, error: hookError },
+          'onLoginFailure hook failed',
+        );
       }
     }
   }
@@ -743,13 +751,18 @@ export function createAuthService(
 
           if (currentFingerprint !== stored.fingerprintHash) {
             if (config.jwt.validateRefreshFingerprint === true) {
-              // Hard mode: invalidate entire token family and reject
+              // Do not throw inside the transaction: the family revocation
+              // must commit before the caller receives the rejection.
               await tx.update({
                 model: 'refresh_token',
                 where: [{ field: 'tokenFamily', operator: '=', value: stored.tokenFamily }],
                 data: { isRevoked: true },
               });
-              throw Errors.unauthorized('Refresh token fingerprint mismatch');
+              return {
+                fingerprintMismatch: true as const,
+                userId: stored.userId,
+                tokenFamily: stored.tokenFamily,
+              };
             }
             else {
               // Warn mode: log but allow
@@ -830,6 +843,18 @@ export function createAuthService(
           } satisfies AuthTokenPair,
         };
       });
+
+      if ('fingerprintMismatch' in txResult) {
+        authEventListeners.emit({
+          eventType: 'TOKEN_FINGERPRINT_MISMATCH',
+          actorId: txResult.userId,
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          outcome: 'failure',
+          metadata: { tokenFamily: txResult.tokenFamily, action: 'family-revoked' },
+        });
+        throw Errors.unauthorized('Refresh token fingerprint mismatch');
+      }
 
       if ('sessionExpired' in txResult) {
         const eventType = txResult.sessionExpired === 'idle'
