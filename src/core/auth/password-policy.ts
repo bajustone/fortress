@@ -2,8 +2,19 @@ import { Errors } from '../errors';
 import { outboundClient } from '../http/outbound';
 import { normalizePasswordInput } from './password';
 
+export type PasswordBreachFailureMode = 'open' | 'closed';
+
+export interface PasswordBreachDegradedEvent {
+  failureMode: PasswordBreachFailureMode;
+  status?: number;
+  error?: unknown;
+}
+
+/** Called whenever the HIBP control is unavailable, regardless of failure mode. */
+export type PasswordPolicyObserver = (event: PasswordBreachDegradedEvent) => void;
+
 export interface PasswordPolicyConfig {
-  /** Minimum password length. Default: 8 (NIST 800-63B). */
+  /** Minimum password length. Default: 15 (NIST 800-63B). */
   minLength?: number;
   /** Maximum password length. Default: 128 (NIST 800-63B). */
   maxLength?: number;
@@ -11,17 +22,29 @@ export interface PasswordPolicyConfig {
   checkBreached?: boolean;
   /** Cache TTL for HIBP range responses in milliseconds. Default: 86400000 (24h). */
   breachedCacheTtlMs?: number;
+  /** Maximum cached HIBP range responses. Default: 1000. Set to 0 to disable caching. */
+  breachedCacheMaxEntries?: number;
+  /** Whether HIBP unavailability permits password writes. Default: 'open'. */
+  breachedFailureMode?: PasswordBreachFailureMode;
 }
 
-const DEFAULT_MIN_LENGTH = 8;
+export interface PasswordBreachCheckOptions {
+  cacheTtlMs?: number;
+  cacheMaxEntries?: number;
+  failureMode?: PasswordBreachFailureMode;
+  observer?: PasswordPolicyObserver;
+}
+
+const DEFAULT_MIN_LENGTH = 15;
 const DEFAULT_MAX_LENGTH = 128;
 const DEFAULT_CACHE_TTL_MS = 86_400_000; // 24 hours
+const DEFAULT_CACHE_MAX_ENTRIES = 1_000;
 // Tighter timeout than the default outbound budget: the breach check runs in
-// the password-validation hot path and fails open, so a slow HIBP must not
-// stall registration/login.
+// the password-validation hot path, so a slow HIBP must not stall writes.
 const HIBP_TIMEOUT_MS = 6_000;
 
-// Module-level cache for HIBP range responses (keyed by 5-char prefix)
+// Module-level LRU cache for HIBP range responses (keyed by 5-char prefix).
+// Map insertion order is used as recency order.
 const hibpCache = new Map<string, { data: string; expiresAt: number }>();
 
 /**
@@ -31,10 +54,17 @@ const hibpCache = new Map<string, { data: string; expiresAt: number }>();
 export async function validatePassword(
   password: string,
   config: PasswordPolicyConfig = {},
+  observer?: PasswordPolicyObserver,
 ): Promise<void> {
   const normalizedPassword = normalizePasswordInput(password);
   const minLength = config.minLength ?? DEFAULT_MIN_LENGTH;
   const maxLength = config.maxLength ?? DEFAULT_MAX_LENGTH;
+  if (!Number.isInteger(minLength) || minLength <= 0)
+    throw Errors.badRequest('passwordPolicy.minLength must be a positive integer');
+  if (!Number.isInteger(maxLength) || maxLength <= 0)
+    throw Errors.badRequest('passwordPolicy.maxLength must be a positive integer');
+  if (minLength > maxLength)
+    throw Errors.badRequest('passwordPolicy.minLength cannot exceed maxLength');
 
   if (normalizedPassword.length < minLength) {
     throw Errors.badRequest(`Password must be at least ${minLength} characters`);
@@ -45,11 +75,52 @@ export async function validatePassword(
   }
 
   if (config.checkBreached) {
-    const breached = await isPasswordBreached(normalizedPassword, config.breachedCacheTtlMs);
+    const breached = await isPasswordBreached(normalizedPassword, {
+      cacheTtlMs: config.breachedCacheTtlMs,
+      cacheMaxEntries: config.breachedCacheMaxEntries,
+      failureMode: config.breachedFailureMode,
+      observer,
+    });
     if (breached) {
       throw Errors.badRequest('This password has appeared in a data breach and cannot be used');
     }
   }
+}
+
+function rememberRange(prefix: string, data: string, expiresAt: number, maxEntries: number): void {
+  if (maxEntries <= 0)
+    return;
+
+  hibpCache.delete(prefix);
+  while (hibpCache.size >= maxEntries) {
+    const oldest = hibpCache.keys().next().value as string | undefined;
+    if (oldest === undefined)
+      break;
+    hibpCache.delete(oldest);
+  }
+  hibpCache.set(prefix, { data, expiresAt });
+}
+
+function handleDegradedCheck(
+  options: PasswordBreachCheckOptions,
+  details: { status?: number; error?: unknown },
+): false {
+  const failureMode = options.failureMode ?? 'open';
+  options.observer?.({ failureMode, ...details });
+
+  // Direct callers may not provide an observer. Keep degraded controls visible
+  // rather than silently failing open/closed.
+  if (!options.observer) {
+    const reason = details.status !== undefined
+      ? `HTTP ${details.status}`
+      : details.error instanceof Error ? details.error.message : String(details.error);
+    console.warn(`[fortress/password-policy] HIBP range API unavailable (${reason}); failing ${failureMode}.`);
+  }
+
+  if (failureMode === 'closed') {
+    throw Errors.serviceUnavailable('Password breach check unavailable', { cause: details.error });
+  }
+  return false;
 }
 
 /**
@@ -58,8 +129,17 @@ export async function validatePassword(
  */
 export async function isPasswordBreached(
   password: string,
-  cacheTtlMs: number = DEFAULT_CACHE_TTL_MS,
+  options: PasswordBreachCheckOptions = {},
 ): Promise<boolean> {
+  const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+  const cacheMaxEntries = options.cacheMaxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
+  if (!Number.isFinite(cacheTtlMs) || cacheTtlMs < 0)
+    throw Errors.badRequest('passwordPolicy.breachedCacheTtlMs must be a non-negative number');
+  if (!Number.isInteger(cacheMaxEntries) || cacheMaxEntries < 0)
+    throw Errors.badRequest('passwordPolicy.breachedCacheMaxEntries must be a non-negative integer');
+  if (options.failureMode !== undefined && options.failureMode !== 'open' && options.failureMode !== 'closed')
+    throw Errors.badRequest('passwordPolicy.breachedFailureMode must be \'open\' or \'closed\'');
+
   // SHA-1 hash of the canonical password form.
   const encoded = new TextEncoder().encode(normalizePasswordInput(password));
   const hashBuffer = await crypto.subtle.digest('SHA-1', encoded);
@@ -71,55 +151,50 @@ export async function isPasswordBreached(
   const prefix = hashHex.slice(0, 5);
   const suffix = hashHex.slice(5);
 
-  // Check cache
-  const cached = hibpCache.get(prefix);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.data.includes(suffix);
+  // Enforce the active caller's bound before reading as well as writing. This
+  // makes `0` a real cache bypass and lets deployments safely lower a bound.
+  while (hibpCache.size > cacheMaxEntries) {
+    const oldest = hibpCache.keys().next().value as string | undefined;
+    if (oldest === undefined)
+      break;
+    hibpCache.delete(oldest);
   }
 
-  // Fetch from HIBP API via the shared outbound client (adds a timeout —
-  // native fetch has none). fetcher never throws on transport failure: a
-  // network error / timeout resolves to a Response with `ok === false`, so the
-  // single `!ok` branch fails open for both non-2xx and unreachable. The body
-  // is the plaintext k-anonymity suffix list, so it is read as text, never
-  // schema-parsed.
+  const cached = cacheMaxEntries > 0 ? hibpCache.get(prefix) : undefined;
+  if (cached && cached.expiresAt > Date.now()) {
+    // Touch the entry so Map insertion order remains LRU order.
+    hibpCache.delete(prefix);
+    hibpCache.set(prefix, cached);
+    return cached.data.includes(suffix);
+  }
+  if (cached)
+    hibpCache.delete(prefix);
+
+  let response: Response;
   try {
-    const response = await outboundClient.get(`https://api.pwnedpasswords.com/range/${prefix}`, {
+    response = await outboundClient.get(`https://api.pwnedpasswords.com/range/${prefix}`, {
       headers: { 'Add-Padding': 'true' },
       timeout: HIBP_TIMEOUT_MS,
     });
+  }
+  catch (error) {
+    return handleDegradedCheck(options, { error });
+  }
 
-    if (!response.ok) {
-      // Fail open on API errors / unreachable — don't block registration due to
-      // HIBP downtime. L-tier: log so operators notice the control is down.
-      // `status === 0` indicates a transport failure (timeout/network).
-      console.warn(
-        `[fortress/password-policy] HIBP range API unavailable (HTTP ${response.status}); failing open for this check.`,
-      );
-      return false;
-    }
+  if (!response.ok)
+    return handleDegradedCheck(options, { status: response.status });
 
+  try {
     const data = await response.text();
-
-    // Cache the response
-    hibpCache.set(prefix, { data, expiresAt: Date.now() + cacheTtlMs });
-
+    rememberRange(prefix, data, Date.now() + cacheTtlMs, cacheMaxEntries);
     return data.includes(suffix);
   }
-  catch (err) {
-    // Belt-and-suspenders: fetcher's contract makes transport rejections
-    // surface as `!ok` above, but a body-read failure could still throw. Fail
-    // open and log so operators notice the control is down.
-    console.warn(
-      `[fortress/password-policy] HIBP range API error (${(err as Error).message ?? err}); failing open for this check.`,
-    );
-    return false;
+  catch (error) {
+    return handleDegradedCheck(options, { error });
   }
 }
 
-/**
- * Clear the HIBP cache. Useful for testing.
- */
+/** Clear the HIBP cache. Useful for testing. */
 export function clearHibpCache(): void {
   hibpCache.clear();
 }

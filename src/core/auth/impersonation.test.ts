@@ -19,7 +19,7 @@ beforeEach(async () => {
   const admin = await fortress.auth.createUser({
     email: 'admin@example.com',
     name: 'Admin User',
-    password: 'admin-pass-123',
+    password: 'admin-pass-1234',
   });
   adminId = admin.id;
 
@@ -41,7 +41,7 @@ describe('impersonation', () => {
     const other = await fortress.auth.createUser({
       email: 'other-admin@example.com',
       name: 'Other Admin',
-      password: 'other-pass-123',
+      password: 'other-pass-1234',
     });
 
     await expect(fortress.auth.impersonate(other.id, targetId))
@@ -53,7 +53,7 @@ describe('impersonation', () => {
     const user = await fortress.auth.createUser({
       email: 'plain@example.com',
       name: 'Plain User',
-      password: 'plain-pass-123',
+      password: 'plain-pass-1234',
     });
     const token = await fortress.auth.signToken({
       sub: user.id,

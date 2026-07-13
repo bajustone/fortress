@@ -42,21 +42,21 @@ async function setup(adminOptions: AdminPluginOptions = { apiKeyRoutes: true }):
   const adminUser = await fortress.auth.createUser({
     email: 'admin@example.com',
     name: 'Admin',
-    password: 'password-123',
+    password: 'password-123456',
   });
   const target = await fortress.auth.createUser({
     email: 'target@example.com',
     name: 'Target',
-    password: 'password-123',
+    password: 'password-123456',
   });
   const plain = await fortress.auth.createUser({
     email: 'plain@example.com',
     name: 'Plain',
-    password: 'password-123',
+    password: 'password-123456',
   });
 
-  const adminLogin = await fortress.auth.login('admin@example.com', 'password-123');
-  const plainLogin = await fortress.auth.login('plain@example.com', 'password-123');
+  const adminLogin = await fortress.auth.login('admin@example.com', 'password-123456');
+  const plainLogin = await fortress.auth.login('plain@example.com', 'password-123456');
   if (adminLogin.status !== 'success' || plainLogin.status !== 'success')
     throw new Error('expected login success');
 
@@ -95,8 +95,8 @@ describe('admin plugin bootstrap hardening', () => {
       database: createTestAdapter(),
       plugins: [admin()],
     });
-    const user = await defaultFortress.auth.createUser({ email: 'boot@example.com', name: 'Boot', password: 'password-123' });
-    const login = await defaultFortress.auth.login('boot@example.com', 'password-123');
+    const user = await defaultFortress.auth.createUser({ email: 'boot@example.com', name: 'Boot', password: 'password-123456' });
+    const login = await defaultFortress.auth.login('boot@example.com', 'password-123456');
     if (login.status !== 'success')
       throw new Error('expected login success');
     const notMounted = await defaultFortress.handleRequest(new Request('http://localhost/iam/admin/bootstrap', {
@@ -111,8 +111,8 @@ describe('admin plugin bootstrap hardening', () => {
       database: createTestAdapter(),
       plugins: [admin({ bootstrap: { enabled: true, secret: BOOTSTRAP_SECRET } })],
     });
-    const enabledUser = await enabledFortress.auth.createUser({ email: 'boot2@example.com', name: 'Boot2', password: 'password-123' });
-    const enabledLogin = await enabledFortress.auth.login('boot2@example.com', 'password-123');
+    const enabledUser = await enabledFortress.auth.createUser({ email: 'boot2@example.com', name: 'Boot2', password: 'password-123456' });
+    const enabledLogin = await enabledFortress.auth.login('boot2@example.com', 'password-123456');
     if (enabledLogin.status !== 'success')
       throw new Error('expected login success');
     const badSecret = await enabledFortress.handleRequest(new Request('http://localhost/iam/admin/bootstrap', {
@@ -129,10 +129,10 @@ describe('admin plugin bootstrap hardening', () => {
       database: createTestAdapter(),
       plugins: [admin({ bootstrap: { enabled: true, secret: BOOTSTRAP_SECRET } })],
     });
-    await fortress.auth.createUser({ email: 'first@example.com', name: 'First', password: 'password-123' });
-    await fortress.auth.createUser({ email: 'second@example.com', name: 'Second', password: 'password-123' });
-    const firstLogin = await fortress.auth.login('first@example.com', 'password-123');
-    const secondLogin = await fortress.auth.login('second@example.com', 'password-123');
+    await fortress.auth.createUser({ email: 'first@example.com', name: 'First', password: 'password-123456' });
+    await fortress.auth.createUser({ email: 'second@example.com', name: 'Second', password: 'password-123456' });
+    const firstLogin = await fortress.auth.login('first@example.com', 'password-123456');
+    const secondLogin = await fortress.auth.login('second@example.com', 'password-123456');
     if (firstLogin.status !== 'success' || secondLogin.status !== 'success')
       throw new Error('expected login success');
 

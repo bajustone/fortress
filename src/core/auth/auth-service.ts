@@ -25,6 +25,7 @@ import type {
   TokenClaims,
 } from '../types';
 import type { JwtKeyMaterial } from './jwt';
+import type { PasswordPolicyObserver } from './password-policy';
 import { Errors, FortressError } from '../errors';
 import { evaluatePermissions } from '../iam/permission-evaluator';
 import { createInternalAdapter } from '../internal-adapter';
@@ -181,6 +182,22 @@ export function createAuthService(
     eventLabel: 'auth',
     logger: () => logger ?? SILENT_LOGGER,
   });
+
+  const passwordPolicyObserver: PasswordPolicyObserver = (event) => {
+    logger?.warn(
+      { failureMode: event.failureMode, status: event.status, error: event.error },
+      'password breach check degraded',
+    );
+    authEventListeners.emit({
+      eventType: 'PASSWORD_BREACH_CHECK_DEGRADED',
+      outcome: 'failure',
+      metadata: {
+        failureMode: event.failureMode,
+        ...(event.status !== undefined && { status: event.status }),
+        ...(event.error instanceof Error && { error: event.error.message }),
+      },
+    });
+  };
 
   async function runBeforeHooks<T extends Record<string, unknown>>(
     hookName: 'beforeLogin' | 'beforeRegister' | 'beforeTokenRefresh' | 'beforeLogout',
@@ -980,7 +997,7 @@ export function createAuthService(
         ? normalizePasswordInput(data.password)
         : undefined;
       if (normalizedPassword !== undefined) {
-        await validatePassword(normalizedPassword, config.passwordPolicy);
+        await validatePassword(normalizedPassword, config.passwordPolicy, passwordPolicyObserver);
       }
 
       const passwordHash = normalizedPassword !== undefined ? await hasher.hash(normalizedPassword) : null;
@@ -1298,7 +1315,7 @@ export function createAuthService(
         // weak password would surface as an unhandled rejection while the
         // hash was happily persisted (M1).
         const normalizedPassword = normalizePasswordInput(data.password);
-        await validatePassword(normalizedPassword, config.passwordPolicy);
+        await validatePassword(normalizedPassword, config.passwordPolicy, passwordPolicyObserver);
         updateData.passwordHash = await hasher.hash(normalizedPassword);
         credentialChanged = true;
       }

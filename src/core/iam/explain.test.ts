@@ -23,7 +23,7 @@ describe('explainPermission', () => {
     const user = await fortress.auth.createUser({
       email: 'noperm@example.com',
       name: 'Noperm',
-      password: 'noperm-password-1234',
+      password: 'noperm-password-1234564',
     });
     const result = await explainPermission(
       fortress.config.database,
@@ -43,7 +43,7 @@ describe('explainPermission', () => {
     const user = await fortress.auth.createUser({
       email: 'role@example.com',
       name: 'Role User',
-      password: 'role-password-1234',
+      password: 'role-password-1234564',
     });
     const role = await fortress.iam.createRole('editor', [
       { resource: 'article', action: 'create' },
@@ -72,7 +72,7 @@ describe('explainPermission', () => {
     const user = await fortress.auth.createUser({
       email: 'direct@example.com',
       name: 'Direct',
-      password: 'direct-password-1234',
+      password: 'direct-password-1234564',
     });
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'article', action: 'publish' });
 
@@ -93,7 +93,7 @@ describe('explainPermission', () => {
     const user = await fortress.auth.createUser({
       email: 'group@example.com',
       name: 'Group',
-      password: 'group-password-1234',
+      password: 'group-password-1234564',
     });
     const group = await fortress.iam.createGroup('eng', 'Engineering');
     await fortress.iam.addUserToGroup(group.id, user.id);
@@ -122,7 +122,7 @@ describe('explainPermission', () => {
     const user = await fortress.auth.createUser({
       email: 'deny@example.com',
       name: 'Deny',
-      password: 'deny-password-1234',
+      password: 'deny-password-1234564',
     });
     const allowRole = await fortress.iam.createRole('allow-articles', [
       { resource: 'article', action: 'delete' },

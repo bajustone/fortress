@@ -71,7 +71,7 @@ describe('inline permissions (direct binding)', () => {
     const user = await fortress.auth.createUser({
       email: 'idem-direct@test.com',
       name: 'Idem Direct',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
@@ -100,7 +100,7 @@ describe('inline permissions (direct binding)', () => {
     const user = await fortress.auth.createUser({
       email: 'alice@test.com',
       name: 'Alice',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
@@ -116,7 +116,7 @@ describe('inline permissions (direct binding)', () => {
     const user = await fortress.auth.createUser({
       email: 'bob@test.com',
       name: 'Bob',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const group = await fortress.iam.createGroup('editors');
@@ -131,7 +131,7 @@ describe('inline permissions (direct binding)', () => {
     const user = await fortress.auth.createUser({
       email: 'carol@test.com',
       name: 'Carol',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'post', action: 'read' });
@@ -148,7 +148,7 @@ describe('inline permissions (direct binding)', () => {
     const user = await fortress.auth.createUser({
       email: 'idem-role@test.com',
       name: 'Idem Role',
-      password: 'password-123',
+      password: 'password-123456',
     });
     const role = await fortress.iam.createRole('idem-viewer', [{ resource: 'post', action: 'read' }]);
 
@@ -171,7 +171,7 @@ describe('inline permissions (direct binding)', () => {
     const user = await fortress.auth.createUser({
       email: 'dave@test.com',
       name: 'Dave',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const role = await fortress.iam.createRole('viewer', [{ resource: 'post', action: 'read' }]);
@@ -198,7 +198,7 @@ describe('tenant-scoped IAM', () => {
     const user = await fortress.auth.createUser({
       email: 'alice@test.com',
       name: 'Alice',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const adminRole = await fortress.iam.createRole('admin', [
@@ -224,7 +224,7 @@ describe('tenant-scoped IAM', () => {
     const user = await fortress.auth.createUser({
       email: 'bob@test.com',
       name: 'Bob',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const globalRole = await fortress.iam.createRole('auditor', [
@@ -245,7 +245,7 @@ describe('tenant-scoped IAM', () => {
     const user = await fortress.auth.createUser({
       email: 'carol@test.com',
       name: 'Carol',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await fortress.iam.bindPermissionToUser(user.id, { resource: 'billing', action: 'manage' }, 'tenant-a');
@@ -258,7 +258,7 @@ describe('tenant-scoped IAM', () => {
     const user = await fortress.auth.createUser({
       email: 'dave@test.com',
       name: 'Dave',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const roleA = await fortress.iam.createRole('role-a', [{ resource: 'docs', action: 'write' }]);
@@ -369,7 +369,7 @@ describe('iam-service: admin CRUD', () => {
       const user = await fortress.auth.createUser({
         email: 'dev@test.com',
         name: 'Dev',
-        password: 'password-123',
+        password: 'password-123456',
       });
       await fortress.iam.addUserToGroup(group.id, user.id);
 
@@ -427,7 +427,7 @@ describe('iam-service: admin CRUD', () => {
       const user = await fortress.auth.createUser({
         email: 'member@test.com',
         name: 'Member',
-        password: 'password-123',
+        password: 'password-123456',
       });
       await fortress.iam.addUserToGroup(group.id, user.id);
 
@@ -551,7 +551,7 @@ describe('remediation regressions (P3.1, P3.3)', () => {
     const user = await fortress.auth.createUser({
       email: 'cache@test.com',
       name: 'Cache',
-      password: 'password-123',
+      password: 'password-123456',
     });
     const role = await fortress.iam.createRole('reporter', [{ resource: 'reports', action: 'read' }]);
     await fortress.iam.bindRoleToUser(user.id, role.id);
@@ -631,7 +631,7 @@ describe('remediation regressions (P3.1, P3.3)', () => {
     const user = await fortress.auth.createUser({
       email: 'race@test.com',
       name: 'Race',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     // Two concurrent binds referencing the same (resource, action, no-conditions)

@@ -56,7 +56,7 @@ describe('createOtelTelemetry', () => {
     await fortress.auth.createUser({
       email: 'otel@example.com',
       name: 'OTel User',
-      password: 'password-123',
+      password: 'password-123456',
     });
   });
 
@@ -66,7 +66,7 @@ describe('createOtelTelemetry', () => {
   });
 
   it('emits fortress.auth.events.total on successful login', async () => {
-    await fortress.auth.login('otel@example.com', 'password-123');
+    await fortress.auth.login('otel@example.com', 'password-123456');
     const all = await collectMetrics();
 
     const authEvents = findMetric(all, 'fortress.auth.events.total');
@@ -100,7 +100,7 @@ describe('createOtelTelemetry', () => {
     const user = await fortress.auth.createUser({
       email: 'perm-otel@example.com',
       name: 'Perm User',
-      password: 'password-123',
+      password: 'password-123456',
     });
     const role = await fortress.iam.createRole('reader', [
       { resource: 'post', action: 'read' },
@@ -134,7 +134,7 @@ describe('createOtelTelemetry', () => {
 
   it('emits the standard db.client.operation.duration histogram for Fortress DB calls', async () => {
     // Any DB operation will do — the register in beforeEach is enough.
-    await fortress.auth.login('otel@example.com', 'password-123');
+    await fortress.auth.login('otel@example.com', 'password-123456');
     const all = await collectMetrics();
 
     const dbDuration = findMetric(all, 'db.client.operation.duration');
@@ -151,7 +151,7 @@ describe('createOtelTelemetry', () => {
   });
 
   it('emits fortress.auth.token_verify.duration on verifyToken calls', async () => {
-    const login = await fortress.auth.login('otel@example.com', 'password-123');
+    const login = await fortress.auth.login('otel@example.com', 'password-123456');
     expect(login.accessToken).toBeTruthy();
     // Successful verify
     await fortress.auth.verifyToken(login.accessToken as string);

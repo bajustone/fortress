@@ -70,7 +70,7 @@ describe('handleRequest outer span', () => {
     await fortress.auth.createUser({
       email: 'spans@example.com',
       name: 'Span User',
-      password: 'password-123',
+      password: 'password-123456',
     });
   });
 
@@ -79,7 +79,7 @@ describe('handleRequest outer span', () => {
       new Request('http://local/auth/login', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ identifier: 'spans@example.com', password: 'password-123' }),
+        body: JSON.stringify({ identifier: 'spans@example.com', password: 'password-123456' }),
       }),
     );
     expect(res.status).toBe(200);
@@ -145,7 +145,7 @@ describe('db-instrumentation spans', () => {
     await fortress.auth.createUser({
       email: 'db-span@example.com',
       name: 'DB Span User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     // Any span with a db.operation.name attribute is a DB span.

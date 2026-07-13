@@ -198,7 +198,7 @@ export async function smokeTestAuth(
   options: AuthSmokeTestOptions = {},
 ): Promise<CheckResult> {
   const email = options.email ?? `smoke+${Date.now()}@fortress.test`;
-  const password = options.password ?? 'smoke-test-password-1234!';
+  const password = options.password ?? 'smoke-test-password-1234564!';
   const name = options.name ?? 'Smoke Test';
   const messages: string[] = [];
   try {

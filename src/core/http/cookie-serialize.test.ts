@@ -75,6 +75,20 @@ describe('resolveCookieConfig', () => {
     expect(c.secure).toBe(false);
     setEnv(originalNodeEnv);
   });
+
+  it('rejects SameSite=None without Secure', () => {
+    expect(() => resolveCookieConfig({ sameSite: 'none', secure: false }))
+      .toThrow('SameSite=None requires Secure');
+  });
+
+  it('rejects invalid caller-supplied cookie prefixes', () => {
+    expect(() => resolveCookieConfig({ accessName: '__Secure-access', secure: false }))
+      .toThrow('__Secure- prefix');
+    expect(() => resolveCookieConfig({ refreshName: '__Host-refresh', domain: 'example.com' }))
+      .toThrow('__Host- prefix');
+    expect(() => resolveCookieConfig({ refreshName: '__Host-refresh', path: '/auth' }))
+      .toThrow('__Host- prefix');
+  });
 });
 
 describe('serializeCookie', () => {

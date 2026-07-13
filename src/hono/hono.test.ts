@@ -58,7 +58,7 @@ beforeEach(async () => {
   await fortress.auth.createUser({
     email: 'test@example.com',
     name: 'Test User',
-    password: 'password-123',
+    password: 'password-123456',
   });
 });
 
@@ -66,7 +66,7 @@ async function loginAndGetToken(): Promise<string> {
   const res = await app.request('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123' }),
+    body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123456' }),
   });
   const data = await res.json() as any;
   return data.accessToken;
@@ -111,7 +111,7 @@ describe('hono authMiddleware', () => {
     const res = await app.request('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123' }),
+      body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123456' }),
     });
     expect(res.status).toBe(200);
   });
@@ -215,7 +215,7 @@ describe('hono authMiddleware — fortressDb and getScopedDb', () => {
     await dbFortress.auth.createUser({
       email: 'test@example.com',
       name: 'Test User',
-      password: 'password-123',
+      password: 'password-123456',
     });
   });
 
@@ -225,7 +225,7 @@ describe('hono authMiddleware — fortressDb and getScopedDb', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         identifier: 'test@example.com',
-        password: 'password-123',
+        password: 'password-123456',
       }),
     });
     const data = (await res.json()) as any;
@@ -313,7 +313,7 @@ describe('hono authMiddleware — data-isolation scopeRules', () => {
     await isolatedFortress.auth.createUser({
       email: 'test@example.com',
       name: 'Test User',
-      password: 'password-123',
+      password: 'password-123456',
     });
   });
 
@@ -323,7 +323,7 @@ describe('hono authMiddleware — data-isolation scopeRules', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         identifier: 'test@example.com',
-        password: 'password-123',
+        password: 'password-123456',
       }),
     });
     const data = (await res.json()) as any;

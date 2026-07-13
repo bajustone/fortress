@@ -22,9 +22,9 @@ Each item is "what to do" + "why" + "how to verify".
 
 ### Password policy
 
-- **Do:** Set `passwordPolicy.minLength >= 12` and enable `passwordPolicy.requireComplexity` if you can absorb the UX cost; otherwise lean on rate-limit + account-lockout.
-- **Why:** A 12-char password is the modern OWASP minimum.
-- **Verify:** Try registering with `"abc"` — should reject with `WEAK_PASSWORD`.
+- **Do:** Keep the default `passwordPolicy.minLength` of 15 and enable `checkBreached`; choose `breachedFailureMode: 'closed'` when assurance is more important than registration availability.
+- **Why:** Length plus breached-password screening provides useful resistance without brittle composition rules. Every HIBP outage emits `PASSWORD_BREACH_CHECK_DEGRADED` for alerting.
+- **Verify:** Try registering with `"abc"` — it should reject with `BAD_REQUEST`; simulate an HIBP outage and verify your chosen open/closed behavior.
 
 ### Refresh-token posture
 

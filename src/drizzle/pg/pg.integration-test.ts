@@ -591,14 +591,14 @@ describe('pg: auth lifecycle', () => {
     const user = await fortress.auth.createUser({
       email: 'alice@test.com',
       name: 'Alice',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     expect(user.id).toBeDefined();
     expect(user.email).toBe('alice@test.com');
     expect(user.createdAt).toBeInstanceOf(Date);
 
-    const result = await fortress.auth.login('alice@test.com', 'password-123');
+    const result = await fortress.auth.login('alice@test.com', 'password-123456');
     expect(result.accessToken).toBeTruthy();
     expect(result.refreshToken).toBeTruthy();
     expect(result.user.email).toBe('alice@test.com');
@@ -613,13 +613,13 @@ describe('pg: auth lifecycle', () => {
     await limited.auth.createUser({
       email: 'session-cap-race@test.com',
       name: 'Session Cap Race',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await Promise.all([
-      limited.auth.login('session-cap-race@test.com', 'password-123'),
-      limited.auth.login('session-cap-race@test.com', 'password-123'),
-      limited.auth.login('session-cap-race@test.com', 'password-123'),
+      limited.auth.login('session-cap-race@test.com', 'password-123456'),
+      limited.auth.login('session-cap-race@test.com', 'password-123456'),
+      limited.auth.login('session-cap-race@test.com', 'password-123456'),
     ]);
 
     expect(await database.count({
@@ -632,7 +632,7 @@ describe('pg: auth lifecycle', () => {
     await fortress.auth.createUser({
       email: 'bob@test.com',
       name: 'Bob',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await expect(
@@ -644,10 +644,10 @@ describe('pg: auth lifecycle', () => {
     await fortress.auth.createUser({
       email: 'refresh@test.com',
       name: 'Refresh',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('refresh@test.com', 'password-123');
+    const login = await fortress.auth.login('refresh@test.com', 'password-123456');
     // Wait 1s so the new JWT has a different iat/exp (JWT timestamps are in seconds)
     await new Promise(r => setTimeout(r, 1100));
     const refreshed = await fortress.auth.refresh(login.refreshToken as string);
@@ -662,10 +662,10 @@ describe('pg: auth lifecycle', () => {
     await fortress.auth.createUser({
       email: 'reuse@test.com',
       name: 'Reuse',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('reuse@test.com', 'password-123');
+    const login = await fortress.auth.login('reuse@test.com', 'password-123456');
     await fortress.auth.refresh(login.refreshToken as string);
 
     // Using the old refresh token again should fail
@@ -678,10 +678,10 @@ describe('pg: auth lifecycle', () => {
     await fortress.auth.createUser({
       email: 'logout@test.com',
       name: 'Logout',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('logout@test.com', 'password-123');
+    const login = await fortress.auth.login('logout@test.com', 'password-123456');
     await fortress.auth.logout(login.refreshToken as string);
 
     await expect(
@@ -693,10 +693,10 @@ describe('pg: auth lifecycle', () => {
     await fortress.auth.createUser({
       email: 'verify@test.com',
       name: 'Verify',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('verify@test.com', 'password-123');
+    const login = await fortress.auth.login('verify@test.com', 'password-123456');
     const claims = await fortress.auth.verifyToken(login.accessToken as string);
 
     expect(claims.sub).toBe(login.user.id);
@@ -707,11 +707,11 @@ describe('pg: auth lifecycle', () => {
     await fortress.auth.createUser({
       email: 'sessions@test.com',
       name: 'Sessions',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login1 = await fortress.auth.login('sessions@test.com', 'password-123');
-    await fortress.auth.login('sessions@test.com', 'password-123');
+    const login1 = await fortress.auth.login('sessions@test.com', 'password-123456');
+    await fortress.auth.login('sessions@test.com', 'password-123456');
 
     const sessions = await fortress.auth.listSessions(login1.user.id);
     expect(sessions.length).toBeGreaterThanOrEqual(2);
@@ -722,7 +722,7 @@ describe('pg: auth lifecycle', () => {
     await fortress.auth.createUser({
       email: 'dupe@test.com',
       name: 'Dupe',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await expect(
@@ -746,7 +746,7 @@ describe('pg: IAM', () => {
     user = await fortress.auth.createUser({
       email: 'iam@test.com',
       name: 'IAM User',
-      password: 'password-123',
+      password: 'password-123456',
     });
   });
 
@@ -794,7 +794,7 @@ describe('pg: plugins', () => {
     const user = await fortress.auth.createUser({
       email: 'apikey@test.com',
       name: 'ApiKey',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const methods = fortress.plugins['api-key'] as any;
@@ -831,7 +831,7 @@ describe('pg: plugins', () => {
     const user = await fortress.auth.createUser({
       email: 'verify@test.com',
       name: 'Verify',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const methods = fortress.plugins['email-verification'] as any;
@@ -853,10 +853,10 @@ describe('pg: plugins', () => {
     await fortress.auth.createUser({
       email: 'audit@test.com',
       name: 'Audit',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    await fortress.auth.login('audit@test.com', 'password-123');
+    await fortress.auth.login('audit@test.com', 'password-123456');
 
     const methods = fortress.plugins['audit-log'] as any;
     const entries = await methods.getAuditLog();
@@ -938,7 +938,7 @@ describe('pg: tenancy plugin', () => {
     const user = await fortress.auth.createUser({
       email: 'tenant@test.com',
       name: 'Tenant User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const tenant = await fortress.plugins.tenancy.createTenant({
@@ -969,7 +969,7 @@ describe('pg: tenancy plugin', () => {
     const user = await fortress.auth.createUser({
       email: 'claims@test.com',
       name: 'Claims User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const tenant = await fortress.plugins.tenancy.createTenant({
@@ -978,7 +978,7 @@ describe('pg: tenancy plugin', () => {
     });
     await fortress.plugins.tenancy.addUserToTenant(user.id, tenant.id);
 
-    const login = await fortress.auth.login('claims@test.com', 'password-123');
+    const login = await fortress.auth.login('claims@test.com', 'password-123456');
     const claims = await fortress.auth.verifyToken(login.accessToken as string);
 
     expect(claims.customClaims?.tenantId).toBe(tenant.id);
@@ -995,7 +995,7 @@ describe('pg: tenancy plugin', () => {
     const user = await fortress.auth.createUser({
       email: 'switch@test.com',
       name: 'Switch User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const t1 = await fortress.plugins.tenancy.createTenant({ name: 'T1', taxId: 't1' });
@@ -1005,7 +1005,7 @@ describe('pg: tenancy plugin', () => {
 
     await fortress.plugins.tenancy.switchTenant({ taxId: 't2', userId: user.id });
 
-    const login = await fortress.auth.login('switch@test.com', 'password-123');
+    const login = await fortress.auth.login('switch@test.com', 'password-123456');
     const claims = await fortress.auth.verifyToken(login.accessToken as string);
     expect(claims.customClaims?.tenantCode).toBe('t2');
   });
@@ -1099,7 +1099,7 @@ describe('pg: two-factor plugin', () => {
     const user = await fortress.auth.createUser({
       email: '2fa@test.com',
       name: '2FA User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const methods = fortress.plugins['two-factor'] as any;
@@ -1140,7 +1140,7 @@ describe('pg: magic-link plugin', () => {
     await fortress.auth.createUser({
       email: 'magic@test.com',
       name: 'Magic User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const methods = fortress.plugins['magic-link'] as any;
@@ -1167,7 +1167,7 @@ describe('pg: oauth plugin', () => {
     const user = await fortress.auth.createUser({
       email: 'oauth@test.com',
       name: 'OAuth User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const methods = fortress.plugins.oauth as any;
@@ -1304,7 +1304,7 @@ describe('pg: account-lockout plugin', () => {
     await fortress.auth.createUser({
       email: 'lockout@test.com',
       name: 'Lockout',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     // Trigger failed logins
@@ -1321,7 +1321,7 @@ describe('pg: account-lockout plugin', () => {
 
     // Login should be blocked
     await expect(
-      fortress.auth.login('lockout@test.com', 'password-123'),
+      fortress.auth.login('lockout@test.com', 'password-123456'),
     ).rejects.toThrow();
 
     // Reset lockout
@@ -1368,9 +1368,9 @@ describe('pg: webhook plugin', () => {
     await fortress.auth.createUser({
       email: 'wh@test.com',
       name: 'WH',
-      password: 'password-123',
+      password: 'password-123456',
     });
-    await fortress.auth.login('wh@test.com', 'password-123');
+    await fortress.auth.login('wh@test.com', 'password-123456');
 
     // Delivery is queued out-of-band; wait for it.
     for (let i = 0; i < 100 && delivered.length < 1; i++)

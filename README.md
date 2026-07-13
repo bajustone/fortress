@@ -202,10 +202,12 @@ const fortress = createFortress({
 
   passwordHasher: customHasher,       // default: WASM Argon2id
   passwordPolicy: {
-    minLength: 8,                     // default: 8 (NIST 800-63B)
+    minLength: 15,                    // default: 15 (new passwords only)
     maxLength: 128,                   // default: 128
     checkBreached: false,             // default: false (Have I Been Pwned k-anonymity)
     breachedCacheTtlMs: 86400000,     // default: 24h
+    breachedCacheMaxEntries: 1000,    // default: 1000; 0 disables caching
+    breachedFailureMode: 'open',      // default: 'open'; or 'closed'
   },
 
   plugins: [/* ... */],

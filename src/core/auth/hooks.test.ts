@@ -11,7 +11,7 @@ async function seedUser(): Promise<{ id: string }> {
   return fortress.auth.createUser({
     email: 'hook-user@example.com',
     name: 'Hook User',
-    password: 'password-123',
+    password: 'password-123456',
   });
 }
 
@@ -27,7 +27,7 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      const login = await fortress.auth.login('hook-user@example.com', 'password-123');
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
       await fortress.auth.logout(login.refreshToken as string);
 
       expect(beforeLogout).toHaveBeenCalledOnce();
@@ -50,7 +50,7 @@ describe('plugin hooks', () => {
       await fortress.auth.createUser({
         email: 'new-user@example.com',
         name: 'New User',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       expect(afterRegister).toHaveBeenCalledOnce();
@@ -75,7 +75,7 @@ describe('plugin hooks', () => {
       await fortress.auth.createUser({
         email: 'check-user@example.com',
         name: 'Check User',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       expect(receivedUser).toMatchObject({ email: 'check-user@example.com', name: 'Check User' });
@@ -93,7 +93,7 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      const login = await fortress.auth.login('hook-user@example.com', 'password-123');
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
       await fortress.auth.refresh(login.refreshToken as string);
 
       expect(beforeTokenRefresh).toHaveBeenCalledOnce();
@@ -117,7 +117,7 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      const login = await fortress.auth.login('hook-user@example.com', 'password-123');
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
       const result = await fortress.auth.refresh(login.refreshToken as string);
 
       expect((result as any).blocked).toBe(true);
@@ -140,7 +140,7 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      const login = await fortress.auth.login('hook-user@example.com', 'password-123');
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
       const result = await fortress.auth.refresh(login.refreshToken as string);
 
       expect(result.accessToken).toMatch(/^modified-/);
@@ -204,7 +204,7 @@ describe('plugin hooks', () => {
       });
 
       await seedUser();
-      await fortress.auth.login('hook-user@example.com', 'password-123');
+      await fortress.auth.login('hook-user@example.com', 'password-123456');
 
       expect(order).toEqual(['first', 'second']);
     });

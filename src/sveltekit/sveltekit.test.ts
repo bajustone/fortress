@@ -85,13 +85,13 @@ describe('createSvelteKitHandle: fortress paths', () => {
   });
 
   it('intercepts /auth/login and returns Response without calling resolve', async () => {
-    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
+    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
     const handle = createSvelteKitHandle(fortress);
     const event = fakeEvent({
       method: 'POST',
       url: 'http://localhost/auth/login',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ identifier: 'a@b.co', password: 'password123' }),
+      body: JSON.stringify({ identifier: 'a@b.co', password: 'password1234567' }),
     });
     let resolveCalled = false;
     const response = await handle({
@@ -111,13 +111,13 @@ describe('createSvelteKitHandle: fortress paths', () => {
   });
 
   it('strips basePath before delegating to core', async () => {
-    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
+    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
     const handle = createSvelteKitHandle(fortress, { basePath: '/api' });
     const event = fakeEvent({
       method: 'POST',
       url: 'http://localhost/api/auth/login',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ identifier: 'a@b.co', password: 'password123' }),
+      body: JSON.stringify({ identifier: 'a@b.co', password: 'password1234567' }),
     });
     const response = await handle({ event, resolve: async () => new Response() });
     expect(response.status).toBe(200);
@@ -142,8 +142,8 @@ describe('createSvelteKitHandle: user routes', () => {
 
   beforeEach(async () => {
     fortress = makeFortress();
-    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
-    const result = await fortress.auth.login('a@b.co', 'password123');
+    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
+    const result = await fortress.auth.login('a@b.co', 'password1234567');
     if (result.status !== 'success')
       throw new Error('expected success');
     accessToken = result.accessToken;
@@ -191,7 +191,7 @@ describe('createSvelteKitHandle: user routes', () => {
     // deliberately expired access token. This avoids the previous 1-second
     // expiry + sleep race: on slow CI, the freshly refreshed 1-second access
     // token could expire before the adapter verified it and populated locals.
-    const freshLogin = await fortress.auth.login('a@b.co', 'password123');
+    const freshLogin = await fortress.auth.login('a@b.co', 'password1234567');
     if (freshLogin.status !== 'success')
       throw new Error('expected success');
     const validRefresh = freshLogin.refreshToken;
@@ -224,7 +224,7 @@ describe('createSvelteKitHandle: user routes', () => {
     // A silent refresh rotates the refresh token, so it must not be triggered
     // by an unsafe (cross-site-reachable) request. SSR loads are GETs; an
     // expired-access POST should fall through with no subject and no rotation.
-    const freshLogin = await fortress.auth.login('a@b.co', 'password123');
+    const freshLogin = await fortress.auth.login('a@b.co', 'password1234567');
     if (freshLogin.status !== 'success')
       throw new Error('expected success');
     const validRefresh = freshLogin.refreshToken;
@@ -257,7 +257,7 @@ describe('createSvelteKitHandle: user routes', () => {
 describe('toSvelteKitHandler', () => {
   it('exports {GET, POST, PUT, DELETE, PATCH} that all delegate to handleRequest', async () => {
     const fortress = makeFortress();
-    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
+    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
     const handlers = toSvelteKitHandler(fortress);
     expect(typeof handlers.GET).toBe('function');
     expect(typeof handlers.POST).toBe('function');
@@ -269,7 +269,7 @@ describe('toSvelteKitHandler', () => {
       method: 'POST',
       url: 'http://localhost/auth/login',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ identifier: 'a@b.co', password: 'password123' }),
+      body: JSON.stringify({ identifier: 'a@b.co', password: 'password1234567' }),
     });
     const response = await handlers.POST(event);
     expect(response.status).toBe(200);
@@ -281,11 +281,11 @@ describe('toSvelteKitHandler', () => {
 describe('fortressActions.login', () => {
   it('sets cookies on success and returns { success: true }', async () => {
     const fortress = makeFortress();
-    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
+    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
     const action = fortressActions.login(fortress);
     const form = new FormData();
     form.set('identifier', 'a@b.co');
-    form.set('password', 'password123');
+    form.set('password', 'password1234567');
     const event = fakeEvent({ method: 'POST', body: form });
     const result = await action(event);
     expect(result).toEqual({ success: true });
@@ -308,11 +308,11 @@ describe('fortressActions.login', () => {
 
   it('throws a 303 Response when redirectTo is configured', async () => {
     const fortress = makeFortress();
-    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
+    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
     const action = fortressActions.login(fortress, { redirectTo: '/dashboard' });
     const form = new FormData();
     form.set('identifier', 'a@b.co');
-    form.set('password', 'password123');
+    form.set('password', 'password1234567');
     const event = fakeEvent({ method: 'POST', body: form });
 
     let thrown: Response | undefined;
@@ -332,8 +332,8 @@ describe('fortressActions.login', () => {
 describe('fortressActions.logout', () => {
   it('clears auth cookies', async () => {
     const fortress = makeFortress();
-    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
-    const login = await fortress.auth.login('a@b.co', 'password123');
+    await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
+    const login = await fortress.auth.login('a@b.co', 'password1234567');
     if (login.status !== 'success')
       throw new Error('expected success');
 
@@ -410,7 +410,7 @@ describe('createSvelteKitHandle: api-key on user routes', () => {
     const user = await fortress.auth.createUser({
       email: 'human@example.com',
       name: 'Human',
-      password: 'password-123',
+      password: 'password-123456',
     });
     const deployRole = await fortress.iam.createRole('deployer', [
       { resource: 'deploy', action: 'run' },
@@ -480,7 +480,7 @@ describe('createSvelteKitHandle: api-key on user routes', () => {
 
   it('still falls back to JWT bearer when no api-key header is present', async () => {
     const { fortress, user } = await setupWithApiKey();
-    const login = await fortress.auth.login('human@example.com', 'password-123');
+    const login = await fortress.auth.login('human@example.com', 'password-123456');
     if (login.status !== 'success')
       throw new Error('login should succeed');
     const handle = createSvelteKitHandle(fortress);
@@ -496,7 +496,7 @@ describe('createSvelteKitHandle: api-key on user routes', () => {
 
   it('plugin resolvers win over a present JWT (api-key takes priority)', async () => {
     const { fortress, sa, saKey } = await setupWithApiKey();
-    const login = await fortress.auth.login('human@example.com', 'password-123');
+    const login = await fortress.auth.login('human@example.com', 'password-123456');
     if (login.status !== 'success')
       throw new Error('login should succeed');
     const handle = createSvelteKitHandle(fortress);

@@ -56,12 +56,12 @@ describe('fortress.call', () => {
       await fortress.auth.createUser({
         email: 'call@example.com',
         name: 'Call Test',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       const result = await (fortress.call as any).login({
         identifier: 'call@example.com',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       expect(result).toBeDefined();
@@ -75,11 +75,11 @@ describe('fortress.call', () => {
       await fortress.auth.createUser({
         email: 'sessions@example.com',
         name: 'Sessions',
-        password: 'password-123',
+        password: 'password-123456',
       });
       const loginResult = await fortress.auth.login(
         'sessions@example.com',
-        'password-123',
+        'password-123456',
       );
       const accessToken = loginResult.accessToken;
       expect(typeof accessToken).toBe('string');
@@ -110,7 +110,7 @@ describe('fortress.call', () => {
       await fortress.auth.createUser({
         email: 'bad@example.com',
         name: 'Bad',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       await expect((fortress.call as any).login({
@@ -124,7 +124,7 @@ describe('fortress.call', () => {
       await fortress.auth.createUser({
         email: 'coded@example.com',
         name: 'Coded',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       try {

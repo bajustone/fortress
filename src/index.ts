@@ -36,6 +36,14 @@ export { authComponentSchemas, authEndpoints } from './core/auth/auth-endpoints'
 /** Auth lifecycle event + listener types, emitted via `fortress.auth.addAuthObserver`. */
 export type { AuthEvent, AuthEventListener } from './core/auth/auth-service';
 
+export type {
+  PasswordBreachCheckOptions,
+  PasswordBreachDegradedEvent,
+  PasswordBreachFailureMode,
+  PasswordPolicyConfig,
+  PasswordPolicyObserver,
+} from './core/auth/password-policy';
+
 /** Top-level fortress configuration and pluggable password-hasher contract. */
 export type { FortressConfig, PasswordHasher, SessionConfig } from './core/config';
 

@@ -35,7 +35,7 @@ async function seedUser(fortress: ReturnType<typeof createFortress>): Promise<vo
   await fortress.auth.createUser({
     email: 'gated@example.com',
     name: 'Gated User',
-    password: 'password-123',
+    password: 'password-123456',
   });
 }
 
@@ -63,7 +63,7 @@ describe('post-auth gate', () => {
     const events: AuthEvent[] = [];
     fortress.auth.addAuthObserver(event => void events.push(event));
 
-    const pending = await fortress.auth.login('gated@example.com', 'password-123');
+    const pending = await fortress.auth.login('gated@example.com', 'password-123456');
     expect(pending).toMatchObject({
       status: 'pending',
       accessToken: null,
@@ -129,7 +129,7 @@ describe('post-auth gate', () => {
     });
     await seedUser(fortress);
 
-    const first = await fortress.auth.login('gated@example.com', 'password-123');
+    const first = await fortress.auth.login('gated@example.com', 'password-123456');
     if (first.status !== 'pending' || !first.pending)
       throw new Error('Expected first pending auth challenge');
     expect(first.pending.reason).toBe('two-factor');
@@ -155,7 +155,7 @@ describe('post-auth gate', () => {
     });
     await seedUser(fortress);
 
-    const pending = await fortress.auth.login('gated@example.com', 'password-123');
+    const pending = await fortress.auth.login('gated@example.com', 'password-123456');
     if (pending.status !== 'pending' || !pending.pending)
       throw new Error('Expected pending auth challenge');
 

@@ -11,7 +11,7 @@ async function seedUserAndRole(): Promise<{ userId: string }> {
   const user = await fortress.auth.createUser({
     email: 'perm@example.com',
     name: 'Perm User',
-    password: 'password-123',
+    password: 'password-123456',
   });
   const role = await fortress.iam.createRole('editor', [
     { resource: 'post', action: 'read' },

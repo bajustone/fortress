@@ -25,7 +25,7 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'test@example.com',
         name: 'Test',
-        password: 'valid-password-123',
+        password: 'valid-password-123456',
       });
     });
 
@@ -88,7 +88,7 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'other@example.com',
         name: 'Other',
-        password: 'valid-password-123',
+        password: 'valid-password-123456',
       });
 
       const meta = { ipAddress: '5.5.5.5' };
@@ -113,12 +113,12 @@ describe('rate-limit plugin', () => {
 
       // 2 successful logins (at the per-account limit)
       for (let i = 0; i < 2; i++) {
-        await fortress.auth.login('test@example.com', 'valid-password-123', meta);
+        await fortress.auth.login('test@example.com', 'valid-password-123456', meta);
       }
 
       // 3rd attempt should be rate limited even though credentials are valid
       try {
-        await fortress.auth.login('test@example.com', 'valid-password-123', meta);
+        await fortress.auth.login('test@example.com', 'valid-password-123456', meta);
         expect.fail('Should have thrown');
       }
       catch (e: any) {
@@ -146,13 +146,13 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'user1@example.com',
         name: 'User 1',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       await fortress.auth.createUser({
         email: 'user2@example.com',
         name: 'User 2',
-        password: 'password-123',
+        password: 'password-123456',
       });
     });
 
@@ -162,13 +162,13 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'u1@test.com',
         name: 'U1',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       await fortress.auth.createUser({
         email: 'u2@test.com',
         name: 'U2',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       // 3rd registration should be rate limited
@@ -176,7 +176,7 @@ describe('rate-limit plugin', () => {
         await fortress.auth.createUser({
           email: 'u3@test.com',
           name: 'U3',
-          password: 'password-123',
+          password: 'password-123456',
         });
         expect.fail('Should have thrown');
       }
@@ -204,7 +204,7 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'test@example.com',
         name: 'Test',
-        password: 'valid-password-123',
+        password: 'valid-password-123456',
       });
     });
 
@@ -288,10 +288,10 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'test@example.com',
         name: 'Test',
-        password: 'valid-password-123',
+        password: 'valid-password-123456',
       });
 
-      await fortress.auth.login('test@example.com', 'valid-password-123');
+      await fortress.auth.login('test@example.com', 'valid-password-123456');
 
       // Should have called increment for IP and account keys
       expect(calls.some(k => k.startsWith('login:ip:'))).toBe(true);
@@ -314,10 +314,10 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'r@example.com',
         name: 'R',
-        password: 'valid-password-123',
+        password: 'valid-password-123456',
       });
       const meta = { ipAddress: '9.9.9.9' };
-      const { refreshToken } = await fortress.auth.login('r@example.com', 'valid-password-123', meta);
+      const { refreshToken } = await fortress.auth.login('r@example.com', 'valid-password-123456', meta);
       if (!refreshToken)
         throw new Error('expected refreshToken');
 
@@ -597,7 +597,7 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'default@example.com',
         name: 'Default',
-        password: 'valid-password-123',
+        password: 'valid-password-123456',
       });
 
       const meta = { ipAddress: '8.8.8.8' };
@@ -629,7 +629,7 @@ describe('rate-limit plugin', () => {
       await fortress.auth.createUser({
         email: 'off@example.com',
         name: 'Off',
-        password: 'valid-password-123',
+        password: 'valid-password-123456',
       });
 
       // Past the default per-IP limit of 10 — no RATE_LIMITED should fire.
@@ -655,12 +655,12 @@ describe('rate-limit plugin', () => {
 
       // Default `register.maxPerIp` is 3 per hour. createUser doesn't pass
       // meta so all hits share the 'unknown' IP key — fine for the test.
-      await fortress.auth.createUser({ email: 'a@t.com', name: 'A', password: 'password-123' });
-      await fortress.auth.createUser({ email: 'b@t.com', name: 'B', password: 'password-123' });
-      await fortress.auth.createUser({ email: 'c@t.com', name: 'C', password: 'password-123' });
+      await fortress.auth.createUser({ email: 'a@t.com', name: 'A', password: 'password-123456' });
+      await fortress.auth.createUser({ email: 'b@t.com', name: 'B', password: 'password-123456' });
+      await fortress.auth.createUser({ email: 'c@t.com', name: 'C', password: 'password-123456' });
 
       try {
-        await fortress.auth.createUser({ email: 'd@t.com', name: 'D', password: 'password-123' });
+        await fortress.auth.createUser({ email: 'd@t.com', name: 'D', password: 'password-123456' });
         expect.fail('Should have thrown RATE_LIMITED');
       }
       catch (e: any) {
@@ -682,7 +682,7 @@ describe('rate-limit plugin', () => {
         await fortress.auth.createUser({
           email: `reg-off-${i}@t.com`,
           name: `U${i}`,
-          password: 'password-123',
+          password: 'password-123456',
         });
       }
     }, 20000);

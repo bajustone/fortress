@@ -23,8 +23,8 @@ async function setup(csrf?: { enabled?: boolean }): Promise<{ fortress: Awaited<
     cookies: { secure: false },
     csrf,
   });
-  await fortress.auth.createUser({ email: 'csrf@test.com', name: 'C', password: 'pass-test-1234' });
-  const login = await fortress.auth.login('csrf@test.com', 'pass-test-1234');
+  await fortress.auth.createUser({ email: 'csrf@test.com', name: 'C', password: 'pass-test-12345' });
+  const login = await fortress.auth.login('csrf@test.com', 'pass-test-12345');
   return { fortress, login: { accessToken: login.accessToken!, refreshToken: login.refreshToken! } };
 }
 

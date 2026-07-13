@@ -32,7 +32,7 @@ describe('email-verification plugin', () => {
       await fortress.auth.createUser({
         email: 'alice@example.com',
         name: 'Alice',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       expect(onSend).toHaveBeenCalledOnce();
@@ -46,7 +46,7 @@ describe('email-verification plugin', () => {
       await fortress.auth.createUser({
         email: 'alice@example.com',
         name: 'Alice',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       const result = await (fortress.plugins['email-verification'].verify as (token: string) => Promise<{ userId: string; email: string }>)(capturedToken!);
@@ -59,7 +59,7 @@ describe('email-verification plugin', () => {
       await fortress.auth.createUser({
         email: 'bob@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       const verify = fortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
@@ -84,7 +84,7 @@ describe('email-verification plugin', () => {
       await shortFortress.auth.createUser({
         email: 'carol@example.com',
         name: 'Carol',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       const verify = shortFortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
@@ -97,10 +97,10 @@ describe('email-verification plugin', () => {
       await fortress.auth.createUser({
         email: 'dave@example.com',
         name: 'Dave',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      const result = await fortress.auth.login('dave@example.com', 'password-123');
+      const result = await fortress.auth.login('dave@example.com', 'password-123456');
       expect(result.status).toBe('pending');
       expect(result.pluginData?.requiresEmailVerification).toBe(true);
       expect(await fortress.config.database.count({ model: 'refresh_token' })).toBe(0);
@@ -120,7 +120,7 @@ describe('email-verification plugin', () => {
       await fortress.auth.createUser({
         email: 'eve@example.com',
         name: 'Eve',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       // Verify email first
@@ -128,7 +128,7 @@ describe('email-verification plugin', () => {
       await verify(capturedToken!);
 
       // Login should succeed
-      const result = await fortress.auth.login('eve@example.com', 'password-123');
+      const result = await fortress.auth.login('eve@example.com', 'password-123456');
       expect(result.accessToken).toBeTruthy();
       expect(result.user.email).toBe('eve@example.com');
     });
@@ -139,7 +139,7 @@ describe('email-verification plugin', () => {
       const user = await fortress.auth.createUser({
         email: 'frank@example.com',
         name: 'Frank',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       onSend.mockClear();
@@ -162,10 +162,10 @@ describe('email-verification plugin', () => {
       await noRequireFortress.auth.createUser({
         email: 'grace@example.com',
         name: 'Grace',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      const result = await noRequireFortress.auth.login('grace@example.com', 'password-123');
+      const result = await noRequireFortress.auth.login('grace@example.com', 'password-123456');
       expect(result.accessToken).toBeTruthy();
     });
   });

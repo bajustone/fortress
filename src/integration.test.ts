@@ -18,14 +18,14 @@ describe('auth integration', () => {
     const user = await fortress.auth.createUser({
       email: 'alice@example.com',
       name: 'Alice',
-      password: 'secure-password-123',
+      password: 'secure-password-123456',
     });
 
     expect(user.id).toBeDefined();
     expect(user.email).toBe('alice@example.com');
     expect(user.name).toBe('Alice');
 
-    const result = await fortress.auth.login('alice@example.com', 'secure-password-123');
+    const result = await fortress.auth.login('alice@example.com', 'secure-password-123456');
 
     expect(result.user.email).toBe('alice@example.com');
     expect(result.accessToken).toBeTruthy();
@@ -41,10 +41,10 @@ describe('auth integration', () => {
     const user = await localFortress.auth.createUser({
       email: 'session-metadata@example.com',
       name: 'Session Metadata',
-      password: 'secure-password-123',
+      password: 'secure-password-123456',
     });
 
-    await localFortress.auth.login('session-metadata@example.com', 'secure-password-123');
+    await localFortress.auth.login('session-metadata@example.com', 'secure-password-123456');
     const stored = await database.findOne<{
       familyCreatedAt: Date;
       lastActiveAt: Date;
@@ -84,7 +84,7 @@ describe('auth integration', () => {
     await fortress.auth.createUser({
       email: 'dupe@example.com',
       name: 'First',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await expect(
@@ -100,10 +100,10 @@ describe('auth integration', () => {
     await fortress.auth.createUser({
       email: 'carol@example.com',
       name: 'Carol',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('carol@example.com', 'password-123');
+    const login = await fortress.auth.login('carol@example.com', 'password-123456');
     const claims = await fortress.auth.verifyToken(login.accessToken as string);
 
     expect(claims.name).toBe('Carol');
@@ -115,10 +115,10 @@ describe('auth integration', () => {
     await fortress.auth.createUser({
       email: 'dave@example.com',
       name: 'Dave',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('dave@example.com', 'password-123');
+    const login = await fortress.auth.login('dave@example.com', 'password-123456');
     const refreshed = await fortress.auth.refresh(login.refreshToken as string);
 
     expect(refreshed.accessToken).toBeTruthy();
@@ -133,10 +133,10 @@ describe('auth integration', () => {
     await fortress.auth.createUser({
       email: 'concurrent-refresh@example.com',
       name: 'Concurrent',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('concurrent-refresh@example.com', 'password-123');
+    const login = await fortress.auth.login('concurrent-refresh@example.com', 'password-123456');
     const oldRefreshToken = login.refreshToken as string;
 
     const results = await Promise.allSettled([
@@ -169,9 +169,9 @@ describe('auth integration', () => {
     await graceful.auth.createUser({
       email: 'grace-refresh@example.com',
       name: 'Grace Refresh',
-      password: 'password-123',
+      password: 'password-123456',
     });
-    const login = await graceful.auth.login('grace-refresh@example.com', 'password-123');
+    const login = await graceful.auth.login('grace-refresh@example.com', 'password-123456');
     const events: string[] = [];
     graceful.auth.addAuthObserver(event => void events.push(event.eventType));
 
@@ -198,9 +198,9 @@ describe('auth integration', () => {
     await rotating.auth.createUser({
       email: 'rotating-grace@example.com',
       name: 'Rotating Grace',
-      password: 'password-123',
+      password: 'password-123456',
     });
-    const login = await rotating.auth.login('rotating-grace@example.com', 'password-123');
+    const login = await rotating.auth.login('rotating-grace@example.com', 'password-123456');
     const successor = await rotating.auth.refresh(login.refreshToken as string);
 
     keys.unshift('refresh-key-b-at-least-thirty-two-bytes');
@@ -222,11 +222,11 @@ describe('auth integration', () => {
       await configured.auth.createUser({
         email: `fingerprint-${String(mode)}@example.com`,
         name: 'Fingerprint',
-        password: 'password-123',
+        password: 'password-123456',
       });
       const login = await configured.auth.login(
         `fingerprint-${String(mode)}@example.com`,
-        'password-123',
+        'password-123456',
         { userAgent: 'browser-a' },
       );
       const successor = await configured.auth.refresh(login.refreshToken as string, { userAgent: 'browser-a' });
@@ -256,10 +256,10 @@ describe('auth integration', () => {
     const user = await capped.auth.createUser({
       email: 'session-caps@example.com',
       name: 'Session Caps',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const idleLogin = await capped.auth.login('session-caps@example.com', 'password-123');
+    const idleLogin = await capped.auth.login('session-caps@example.com', 'password-123456');
     await database.update({
       model: 'refresh_token',
       where: [{ field: 'userId', operator: '=', value: user.id }],
@@ -270,7 +270,7 @@ describe('auth integration', () => {
     });
     expect(events).toContain('SESSION_EXPIRED_IDLE');
 
-    const absoluteLogin = await capped.auth.login('session-caps@example.com', 'password-123');
+    const absoluteLogin = await capped.auth.login('session-caps@example.com', 'password-123456');
     await database.update({
       model: 'refresh_token',
       where: [
@@ -304,10 +304,10 @@ describe('auth integration', () => {
     const user = await capped.auth.createUser({
       email: 'grace-caps@example.com',
       name: 'Grace Caps',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const idleLogin = await capped.auth.login('grace-caps@example.com', 'password-123');
+    const idleLogin = await capped.auth.login('grace-caps@example.com', 'password-123456');
     await capped.auth.refresh(idleLogin.refreshToken as string);
     await database.update({
       model: 'refresh_token',
@@ -321,7 +321,7 @@ describe('auth integration', () => {
       code: 'SESSION_IDLE_TIMEOUT',
     });
 
-    const absoluteLogin = await capped.auth.login('grace-caps@example.com', 'password-123');
+    const absoluteLogin = await capped.auth.login('grace-caps@example.com', 'password-123456');
     await capped.auth.refresh(absoluteLogin.refreshToken as string);
     await database.update({
       model: 'refresh_token',
@@ -348,10 +348,10 @@ describe('auth integration', () => {
     await limited.auth.createUser({
       email: 'session-limit@example.com',
       name: 'Session Limit',
-      password: 'password-123',
+      password: 'password-123456',
     });
-    const first = await limited.auth.login('session-limit@example.com', 'password-123');
-    const second = await limited.auth.login('session-limit@example.com', 'password-123');
+    const first = await limited.auth.login('session-limit@example.com', 'password-123456');
+    const second = await limited.auth.login('session-limit@example.com', 'password-123456');
 
     await expect(limited.auth.refresh(first.refreshToken as string)).rejects.toMatchObject({ code: 'TOKEN_REUSE' });
     await expect(limited.auth.refresh(second.refreshToken as string)).resolves.toMatchObject({
@@ -371,13 +371,13 @@ describe('auth integration', () => {
     const user = await limited.auth.createUser({
       email: 'session-race@example.com',
       name: 'Session Race',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const concurrent = await Promise.all([
-      limited.auth.login('session-race@example.com', 'password-123'),
-      limited.auth.login('session-race@example.com', 'password-123'),
-      limited.auth.login('session-race@example.com', 'password-123'),
+      limited.auth.login('session-race@example.com', 'password-123456'),
+      limited.auth.login('session-race@example.com', 'password-123456'),
+      limited.auth.login('session-race@example.com', 'password-123456'),
     ]);
     expect(await database.count({
       model: 'refresh_token',
@@ -392,7 +392,7 @@ describe('auth integration', () => {
       data: { familyCreatedAt: new Date(Date.now() - 60_000) },
     });
     const rotatedOldest = await limited.auth.refresh(oldest.refreshToken as string);
-    const newest = await limited.auth.login('session-race@example.com', 'password-123');
+    const newest = await limited.auth.login('session-race@example.com', 'password-123456');
 
     await expect(limited.auth.refresh(rotatedOldest.refreshToken)).rejects.toMatchObject({ code: 'TOKEN_REUSE' });
     await expect(limited.auth.refresh(newest.refreshToken as string)).resolves.toBeDefined();
@@ -403,10 +403,10 @@ describe('auth integration', () => {
     await fortress.auth.createUser({
       email: 'eve@example.com',
       name: 'Eve',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('eve@example.com', 'password-123');
+    const login = await fortress.auth.login('eve@example.com', 'password-123456');
     const oldRefreshToken = login.refreshToken as string;
 
     // Use the refresh token (rotates it)
@@ -420,10 +420,10 @@ describe('auth integration', () => {
     await fortress.auth.createUser({
       email: 'frank@example.com',
       name: 'Frank',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const login = await fortress.auth.login('frank@example.com', 'password-123');
+    const login = await fortress.auth.login('frank@example.com', 'password-123456');
     await fortress.auth.logout(login.refreshToken as string);
 
     // Trying to refresh with logged out token should fail
@@ -434,7 +434,7 @@ describe('auth integration', () => {
     const created = await fortress.auth.createUser({
       email: 'grace@example.com',
       name: 'Grace',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const user = await fortress.auth.me(created.id);
@@ -449,7 +449,7 @@ describe('multi-key login', () => {
     const user = await fortress.auth.createUser({
       email: 'multi@example.com',
       name: 'Multi User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const identifiers = await fortress.auth.getLoginIdentifiers(user.id);
@@ -462,13 +462,13 @@ describe('multi-key login', () => {
     const user = await fortress.auth.createUser({
       email: 'phone-user@example.com',
       name: 'Phone User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await fortress.auth.addLoginIdentifier(user.id, 'phone', '+250788123456');
 
     // Login with phone
-    const result = await fortress.auth.login('+250788123456', 'password-123');
+    const result = await fortress.auth.login('+250788123456', 'password-123456');
     expect(result.user.name).toBe('Phone User');
     expect(result.accessToken).toBeTruthy();
   });
@@ -477,13 +477,13 @@ describe('multi-key login', () => {
     const user = await fortress.auth.createUser({
       email: 'username-user@example.com',
       name: 'Username User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await fortress.auth.addLoginIdentifier(user.id, 'username', 'alice');
 
     // Login with username
-    const result = await fortress.auth.login('alice', 'password-123');
+    const result = await fortress.auth.login('alice', 'password-123456');
     expect(result.user.name).toBe('Username User');
   });
 
@@ -491,10 +491,10 @@ describe('multi-key login', () => {
     await fortress.auth.createUser({
       email: 'email-login@example.com',
       name: 'Email User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const result = await fortress.auth.login('email-login@example.com', 'password-123');
+    const result = await fortress.auth.login('email-login@example.com', 'password-123456');
     expect(result.user.name).toBe('Email User');
   });
 
@@ -502,7 +502,7 @@ describe('multi-key login', () => {
     const user = await fortress.auth.createUser({
       email: 'remove-id@example.com',
       name: 'Remove ID',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     await fortress.auth.addLoginIdentifier(user.id, 'phone', '+250788999999');
@@ -510,7 +510,7 @@ describe('multi-key login', () => {
 
     // Phone login should fail now (falls back to email lookup, which won't match a phone)
     await expect(
-      fortress.auth.login('+250788999999', 'password-123'),
+      fortress.auth.login('+250788999999', 'password-123456'),
     ).rejects.toThrow('Invalid credentials');
   });
 
@@ -518,16 +518,16 @@ describe('multi-key login', () => {
     const user = await fortress.auth.createUser({
       email: 'shared@example.com',
       name: 'Shared Password',
-      password: 'same-password',
+      password: 'same-password-123',
     });
 
     await fortress.auth.addLoginIdentifier(user.id, 'phone', '+250781111111');
     await fortress.auth.addLoginIdentifier(user.id, 'username', 'shared_user');
 
     // All three work with the same password
-    const r1 = await fortress.auth.login('shared@example.com', 'same-password');
-    const r2 = await fortress.auth.login('+250781111111', 'same-password');
-    const r3 = await fortress.auth.login('shared_user', 'same-password');
+    const r1 = await fortress.auth.login('shared@example.com', 'same-password-123');
+    const r2 = await fortress.auth.login('+250781111111', 'same-password-123');
+    const r3 = await fortress.auth.login('shared_user', 'same-password-123');
 
     expect(r1.user.id).toBe(user.id);
     expect(r2.user.id).toBe(user.id);
@@ -540,7 +540,7 @@ describe('iAM integration', () => {
     const user = await fortress.auth.createUser({
       email: 'ian@example.com',
       name: 'Ian',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const group = await fortress.iam.createGroup('editors', 'Content editors');
@@ -554,7 +554,7 @@ describe('iAM integration', () => {
     const user = await fortress.auth.createUser({
       email: 'jane@example.com',
       name: 'Jane',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     // Create a role with permissions
@@ -581,7 +581,7 @@ describe('iAM integration', () => {
     const user = await fortress.auth.createUser({
       email: 'kate@example.com',
       name: 'Kate',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const group = await fortress.iam.createGroup('admins');
@@ -608,7 +608,7 @@ describe('iAM integration', () => {
     const user = await fortress.auth.createUser({
       email: 'larry@example.com',
       name: 'Larry',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const allowed = await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'anything', 'read');
@@ -639,10 +639,10 @@ describe('plugin integration', () => {
     await f.auth.createUser({
       email: 'plugin@example.com',
       name: 'Plugin Test',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const result = await f.auth.login('plugin@example.com', 'password-123');
+    const result = await f.auth.login('plugin@example.com', 'password-123456');
 
     expect(hookCalled).toBe(true);
     expect(result.pluginData?.customField).toBe('from-plugin');
@@ -667,10 +667,10 @@ describe('plugin integration', () => {
     await f.auth.createUser({
       email: 'blocked@example.com',
       name: 'Blocked',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
-    const result = await f.auth.login('blocked@example.com', 'password-123');
+    const result = await f.auth.login('blocked@example.com', 'password-123456');
     expect((result as any).blocked).toBe(true);
     expect((result as any).reason).toBe('maintenance');
   });

@@ -20,7 +20,7 @@ import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 
 const SECRET = 'login-timing-test-secret-32chars!!';
-const PASSWORD = 'password-123';
+const PASSWORD = 'password-123456';
 const EMAIL = 'timing@example.com';
 
 let fortress: Fortress;

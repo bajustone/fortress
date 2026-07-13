@@ -33,9 +33,9 @@ async function setup(): Promise<Ctx> {
   const admin = await fortress.auth.createUser({
     email: 'admin@example.com',
     name: 'Admin',
-    password: 'password-123',
+    password: 'password-123456',
   });
-  const login = await fortress.auth.login('admin@example.com', 'password-123');
+  const login = await fortress.auth.login('admin@example.com', 'password-123456');
   if (login.status !== 'success')
     throw new Error('expected admin login success');
 
@@ -136,9 +136,9 @@ describe('service-account HTTP endpoints — core dispatch', () => {
       const bob = await ctx.fortress.auth.createUser({
         email: 'bob@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
-      const bobLogin = await ctx.fortress.auth.login('bob@example.com', 'password-123');
+      const bobLogin = await ctx.fortress.auth.login('bob@example.com', 'password-123456');
       if (bobLogin.status !== 'success')
         throw new Error('expected bob login success');
       void bob;
@@ -478,7 +478,7 @@ describe('service-account HTTP endpoints — core dispatch', () => {
       const bob = await ctx.fortress.auth.createUser({
         email: 'bob@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
       await ctx.fortress.iam.bindPermissionToUser(bob.id, {
         resource: 'doc',
@@ -509,7 +509,7 @@ describe('service-account HTTP endpoints — core dispatch', () => {
       const carol = await ctx.fortress.auth.createUser({
         email: 'carol@example.com',
         name: 'Carol',
-        password: 'password-123',
+        password: 'password-123456',
       });
       await ctx.fortress.iam.bindPermissionToUser(carol.id, { resource: 'doc', action: 'list' });
 

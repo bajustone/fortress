@@ -25,7 +25,7 @@ async function makeFortressWithApiKey() {
   const user = await fortress.auth.createUser({
     email: 'u@example.com',
     name: 'User',
-    password: 'password-123',
+    password: 'password-123456',
   });
   const sa = await fortress.iam.createServiceAccount({ name: 'ci-bot' });
   const userKey = await fortress.plugins['api-key'].createKey({
@@ -192,7 +192,7 @@ describe('resolveRequestPrincipal', () => {
     userKey = setup.userKey;
     saKey = setup.saKey;
 
-    const login = await fortress.auth.login('u@example.com', 'password-123');
+    const login = await fortress.auth.login('u@example.com', 'password-123456');
     if (login.status !== 'success')
       throw new Error('login should succeed');
     validAccessToken = login.accessToken;

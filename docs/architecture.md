@@ -365,19 +365,22 @@ interface PasswordHasher {
 
 Enforced during `createUser()` when `config.passwordPolicy` is set.
 
-- **Min length:** 8 characters (NIST 800-63B default)
+- **Min length:** 15 characters for new passwords
 - **Max length:** 128 characters
 - **HIBP integration:** Optional k-anonymity check against the Have I Been Pwned API
   - Hash password with SHA-1, send first 5 chars as prefix
   - API returns all hashes with that prefix — check locally
-  - **Cache:** Module-level `Map<string, { count, expiresAt }>` with 24-hour TTL
-  - **Fail-open:** Network errors don't block registration (logs warning)
+  - **Cache:** Module-level bounded LRU of HIBP ranges with a 24-hour TTL
+  - **Degradation:** `'open'` (default) accepts writes during outages; `'closed'` rejects with 503. Both emit `PASSWORD_BREACH_CHECK_DEGRADED`
 - **Config:**
   ```typescript
   interface PasswordPolicyConfig {
-    minLength?: number;     // default: 8
-    maxLength?: number;     // default: 128
-    checkBreached?: boolean; // default: false — enables HIBP check
+    minLength?: number;                  // default: 15
+    maxLength?: number;                  // default: 128
+    checkBreached?: boolean;             // default: false — enables HIBP check
+    breachedCacheTtlMs?: number;         // default: 86400000
+    breachedCacheMaxEntries?: number;    // default: 1000; 0 disables
+    breachedFailureMode?: 'open' | 'closed'; // default: 'open'
   }
   ```
 

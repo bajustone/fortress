@@ -69,8 +69,8 @@ async function waitFor(predicate: () => boolean, tries = 100): Promise<void> {
 }
 
 async function seedLogin(fortress: Fortress, email: string): Promise<void> {
-  await fortress.auth.createUser({ email, name: 'Test', password: 'password-123' });
-  await fortress.auth.login(email, 'password-123');
+  await fortress.auth.createUser({ email, name: 'Test', password: 'password-123456' });
+  await fortress.auth.login(email, 'password-123456');
 }
 
 afterEach(async () => {

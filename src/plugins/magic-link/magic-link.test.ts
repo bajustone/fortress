@@ -46,7 +46,7 @@ describe('magic-link plugin', () => {
       await fortress.auth.createUser({
         email: 'bob@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       const send = fortress.plugins['magic-link'].sendMagicLink as (email: string) => Promise<{ sent: true }>;

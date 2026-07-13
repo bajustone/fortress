@@ -99,7 +99,7 @@ describe('webauthn plugin', () => {
     const user = await fortress.auth.createUser({
       email: 'alice@example.com',
       name: 'Alice',
-      password: 'password-123',
+      password: 'password-123456',
     });
     userId = user.id;
   });
@@ -270,7 +270,7 @@ describe('webauthn plugin', () => {
       const user = await gated.auth.createUser({
         email: 'passwordless-gated@example.com',
         name: 'Passwordless Gated',
-        password: 'password-123',
+        password: 'password-123456',
       });
       await gatedMethods.generateRegistrationOptions({}, httpCtx(user.id));
       await gatedMethods.verifyRegistration(
@@ -373,7 +373,7 @@ describe('webauthn plugin', () => {
       const user = await f.auth.createUser({
         email: 'bob@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       // Register a credential
@@ -384,7 +384,7 @@ describe('webauthn plugin', () => {
       );
 
       // Login should be intercepted
-      const result = await f.auth.login('bob@example.com', 'password-123');
+      const result = await f.auth.login('bob@example.com', 'password-123456');
       expect(result.accessToken).toBeNull();
       expect(result.pluginData?.requiresWebAuthn).toBe(true);
       expect(result.status === 'pending' ? result.pending?.reason : undefined).toBe('webauthn');
@@ -401,10 +401,10 @@ describe('webauthn plugin', () => {
       await f.auth.createUser({
         email: 'bob@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      const result = await f.auth.login('bob@example.com', 'password-123');
+      const result = await f.auth.login('bob@example.com', 'password-123456');
       expect(result.accessToken).toBeTruthy();
     });
   });
@@ -419,15 +419,15 @@ describe('webauthn plugin', () => {
       const alice = await fortress.auth.createUser({
         email: 'attacker@example.com',
         name: 'Alice',
-        password: 'password-123',
+        password: 'password-123456',
       });
       const bob = await fortress.auth.createUser({
         email: 'victim@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      const login = await fortress.auth.login('attacker@example.com', 'password-123');
+      const login = await fortress.auth.login('attacker@example.com', 'password-123456');
       if (login.status !== 'success')
         throw new Error('expected login success');
 

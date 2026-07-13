@@ -42,15 +42,15 @@ async function setup(config: ApiKeyConfig = { prefix: 'test', maxKeysPerSubject:
   const alice = await fortress.auth.createUser({
     email: 'alice@example.com',
     name: 'Alice',
-    password: 'password-123',
+    password: 'password-123456',
   });
   const bob = await fortress.auth.createUser({
     email: 'bob@example.com',
     name: 'Bob',
-    password: 'password-123',
+    password: 'password-123456',
   });
 
-  const login = await fortress.auth.login('alice@example.com', 'password-123');
+  const login = await fortress.auth.login('alice@example.com', 'password-123456');
   if (login.status !== 'success')
     throw new Error('expected login success');
 
@@ -255,7 +255,7 @@ describe('api-key plugin — programmatic methods', () => {
       const user = await fortress.auth.createUser({
         email: 'scoped@example.com',
         name: 'Scoped',
-        password: 'password-123',
+        password: 'password-123456',
       });
       const role = await fortress.iam.createRole('report-deleter', [{ resource: 'report', action: 'delete' }]);
       await fortress.iam.bindRoleToUser(user.id, role.id);

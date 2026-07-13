@@ -43,9 +43,9 @@ async function setup(): Promise<Ctx> {
   const user = await fortress.auth.createUser({
     email: 'human@example.com',
     name: 'Human',
-    password: 'password-123',
+    password: 'password-123456',
   });
-  const userLogin = await fortress.auth.login('human@example.com', 'password-123');
+  const userLogin = await fortress.auth.login('human@example.com', 'password-123456');
   if (userLogin.status !== 'success')
     throw new Error('login should succeed');
 

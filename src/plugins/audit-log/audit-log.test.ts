@@ -25,10 +25,10 @@ describe('audit-log plugin', () => {
       await fortress.auth.createUser({
         email: 'alice@example.com',
         name: 'Alice',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      await fortress.auth.login('alice@example.com', 'password-123');
+      await fortress.auth.login('alice@example.com', 'password-123456');
 
       const entries = await getAuditLog();
       const loginEntry = entries.find(e => e.eventType === 'LOGIN_SUCCESS');
@@ -44,7 +44,7 @@ describe('audit-log plugin', () => {
       await fortress.auth.createUser({
         email: 'bob@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       await expect(
@@ -69,7 +69,7 @@ describe('audit-log plugin', () => {
       const user = await fortress.auth.createUser({
         email: 'carol@example.com',
         name: 'Carol',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       const entries = await getAuditLog();
@@ -89,10 +89,10 @@ describe('audit-log plugin', () => {
       await fortress.auth.createUser({
         email: 'dave@example.com',
         name: 'Dave',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      const loginResult = await fortress.auth.login('dave@example.com', 'password-123');
+      const loginResult = await fortress.auth.login('dave@example.com', 'password-123456');
       await fortress.auth.logout(loginResult.refreshToken as string);
 
       const entries = await getAuditLog();
@@ -109,10 +109,10 @@ describe('audit-log plugin', () => {
       await fortress.auth.createUser({
         email: 'eve@example.com',
         name: 'Eve',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      const loginResult = await fortress.auth.login('eve@example.com', 'password-123');
+      const loginResult = await fortress.auth.login('eve@example.com', 'password-123456');
       await fortress.auth.refresh(loginResult.refreshToken as string);
 
       const entries = await getAuditLog();
@@ -129,13 +129,13 @@ describe('audit-log plugin', () => {
       const alice = await fortress.auth.createUser({
         email: 'alice2@example.com',
         name: 'Alice',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       await fortress.auth.createUser({
         email: 'bob2@example.com',
         name: 'Bob',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
       // Both users get REGISTER entries, filter by Alice's id
@@ -151,10 +151,10 @@ describe('audit-log plugin', () => {
       await fortress.auth.createUser({
         email: 'frank@example.com',
         name: 'Frank',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      await fortress.auth.login('frank@example.com', 'password-123');
+      await fortress.auth.login('frank@example.com', 'password-123456');
 
       const entries = await getAuditLog({ eventType: 'LOGIN_SUCCESS' });
 
@@ -178,10 +178,10 @@ describe('audit-log plugin', () => {
       await chainFortress.auth.createUser({
         email: 'grace@example.com',
         name: 'Grace',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      await chainFortress.auth.login('grace@example.com', 'password-123');
+      await chainFortress.auth.login('grace@example.com', 'password-123456');
 
       const entries = await chainGetAuditLog();
 
@@ -242,8 +242,8 @@ describe('audit-log plugin', () => {
       const verifyChain = chainFortress.plugins['audit-log'].verifyChain as () => Promise<ChainVerificationResult>;
       const logCustomEvent = chainFortress.plugins['audit-log'].logCustomEvent as (event: any) => Promise<void>;
 
-      await chainFortress.auth.createUser({ email: 'a@b.com', name: 'A', password: 'password-123' });
-      await chainFortress.auth.login('a@b.com', 'password-123');
+      await chainFortress.auth.createUser({ email: 'a@b.com', name: 'A', password: 'password-123456' });
+      await chainFortress.auth.login('a@b.com', 'password-123456');
       await logCustomEvent({ eventType: 'ROLE_CREATED', actorId: '1' });
 
       const result = await verifyChain();
@@ -289,7 +289,7 @@ describe('audit-log plugin', () => {
 
       const auditGetLog = auditFortress.plugins['audit-log'].getAuditLog as typeof getAuditLog;
 
-      const user = await auditFortress.auth.createUser({ email: 'x@y.com', name: 'X', password: 'password-123' });
+      const user = await auditFortress.auth.createUser({ email: 'x@y.com', name: 'X', password: 'password-123456' });
       const role = await auditFortress.iam.createRole('viewer', [{ resource: 'post', action: 'read' }]);
       await auditFortress.iam.bindRoleToUser(user.id, role.id);
 
@@ -322,8 +322,8 @@ describe('audit-log plugin', () => {
     it('exports entries as JSON by default', async () => {
       const methods = fortress.plugins['audit-log'] as AuditLogMethods;
 
-      await fortress.auth.createUser({ email: 'export@example.com', name: 'Export', password: 'password-123' });
-      await fortress.auth.login('export@example.com', 'password-123');
+      await fortress.auth.createUser({ email: 'export@example.com', name: 'Export', password: 'password-123456' });
+      await fortress.auth.login('export@example.com', 'password-123456');
 
       const json = await methods.exportEntries();
       const parsed = JSON.parse(json) as { eventType: string }[];
@@ -334,8 +334,8 @@ describe('audit-log plugin', () => {
     it('exports entries as CSV with a stable header row', async () => {
       const methods = fortress.plugins['audit-log'] as AuditLogMethods;
 
-      await fortress.auth.createUser({ email: 'csv@example.com', name: 'Csv', password: 'password-123' });
-      await fortress.auth.login('csv@example.com', 'password-123');
+      await fortress.auth.createUser({ email: 'csv@example.com', name: 'Csv', password: 'password-123456' });
+      await fortress.auth.login('csv@example.com', 'password-123456');
 
       const csv = await methods.exportEntries('csv');
       const lines = csv.split('\n');
@@ -361,8 +361,8 @@ describe('audit-log plugin', () => {
     it('honours query filters when exporting', async () => {
       const methods = fortress.plugins['audit-log'] as AuditLogMethods;
 
-      await fortress.auth.createUser({ email: 'filter@example.com', name: 'Filter', password: 'password-123' });
-      await fortress.auth.login('filter@example.com', 'password-123');
+      await fortress.auth.createUser({ email: 'filter@example.com', name: 'Filter', password: 'password-123456' });
+      await fortress.auth.login('filter@example.com', 'password-123456');
 
       const json = await methods.exportEntries('json', { eventType: 'REGISTER' });
       const parsed = JSON.parse(json) as { eventType: string }[];
@@ -384,10 +384,10 @@ describe('audit-log plugin', () => {
       await filteredFortress.auth.createUser({
         email: 'heidi@example.com',
         name: 'Heidi',
-        password: 'password-123',
+        password: 'password-123456',
       });
 
-      await filteredFortress.auth.login('heidi@example.com', 'password-123');
+      await filteredFortress.auth.login('heidi@example.com', 'password-123456');
 
       const entries = await filteredGetAuditLog();
 

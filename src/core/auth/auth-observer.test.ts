@@ -11,7 +11,7 @@ async function seed(): Promise<void> {
   await fortress.auth.createUser({
     email: 'auth-obs@example.com',
     name: 'Observer User',
-    password: 'password-123',
+    password: 'password-123456',
   });
 }
 
@@ -30,7 +30,7 @@ describe('addAuthObserver', () => {
     await fortress.auth.createUser({
       email: 'register@example.com',
       name: 'Reg User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const reg = events.find(e => e.eventType === 'REGISTER');
@@ -45,7 +45,7 @@ describe('addAuthObserver', () => {
     const events: AuthEvent[] = [];
     fortress.auth.addAuthObserver(e => void events.push(e));
 
-    await fortress.auth.login('auth-obs@example.com', 'password-123');
+    await fortress.auth.login('auth-obs@example.com', 'password-123456');
 
     const success = events.find(e => e.eventType === 'LOGIN_SUCCESS');
     expect(success).toBeDefined();
@@ -73,7 +73,7 @@ describe('addAuthObserver', () => {
 
   it('emits TOKEN_REFRESH on successful refresh', async () => {
     await seed();
-    const login = await fortress.auth.login('auth-obs@example.com', 'password-123');
+    const login = await fortress.auth.login('auth-obs@example.com', 'password-123456');
     const events: AuthEvent[] = [];
     fortress.auth.addAuthObserver(e => void events.push(e));
 
@@ -87,7 +87,7 @@ describe('addAuthObserver', () => {
 
   it('emits TOKEN_REUSE_DETECTED on reuse of a revoked refresh token', async () => {
     await seed();
-    const login = await fortress.auth.login('auth-obs@example.com', 'password-123');
+    const login = await fortress.auth.login('auth-obs@example.com', 'password-123456');
     await fortress.auth.refresh(login.refreshToken as string);
     const events: AuthEvent[] = [];
     fortress.auth.addAuthObserver(e => void events.push(e));
@@ -113,11 +113,11 @@ describe('addAuthObserver', () => {
     await hardened.auth.createUser({
       email: 'fingerprint-hard@example.com',
       name: 'Fingerprint Hard',
-      password: 'password-123',
+      password: 'password-123456',
     });
     const login = await hardened.auth.login(
       'fingerprint-hard@example.com',
-      'password-123',
+      'password-123456',
       { userAgent: 'browser-a' },
     );
     const events: AuthEvent[] = [];
@@ -134,7 +134,7 @@ describe('addAuthObserver', () => {
 
   it('emits LOGOUT with actorId', async () => {
     await seed();
-    const login = await fortress.auth.login('auth-obs@example.com', 'password-123');
+    const login = await fortress.auth.login('auth-obs@example.com', 'password-123456');
     const events: AuthEvent[] = [];
     fortress.auth.addAuthObserver(e => void events.push(e));
 
@@ -151,7 +151,7 @@ describe('addAuthObserver', () => {
     fortress.auth.addAuthObserver(() => void order.push('first'));
     fortress.auth.addAuthObserver(() => void order.push('second'));
 
-    await fortress.auth.login('auth-obs@example.com', 'password-123');
+    await fortress.auth.login('auth-obs@example.com', 'password-123456');
 
     // Each observer fires per event — we only care about relative order
     // of first vs second for the same event.
@@ -166,7 +166,7 @@ describe('addAuthObserver', () => {
     const off = fortress.auth.addAuthObserver(e => void events.push(e));
 
     off();
-    await fortress.auth.login('auth-obs@example.com', 'password-123');
+    await fortress.auth.login('auth-obs@example.com', 'password-123456');
 
     expect(events).toHaveLength(0);
   });
@@ -178,7 +178,7 @@ describe('addAuthObserver', () => {
     });
 
     // Login should still succeed — the error is caught inside the listener list.
-    const result = await fortress.auth.login('auth-obs@example.com', 'password-123');
+    const result = await fortress.auth.login('auth-obs@example.com', 'password-123456');
     expect(result.status).toBe('success');
     expect(result.accessToken).toBeTruthy();
   });

@@ -31,7 +31,7 @@ describe('fortress.handleRequest', () => {
       const res = await fortress.handleRequest(new Request('http://localhost/auth/register', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: 'a@b.co', name: 'Alice', password: 'password123' }),
+        body: JSON.stringify({ email: 'a@b.co', name: 'Alice', password: 'password1234567' }),
       }));
       expect(res.status).toBe(201);
       const body = await res.json() as { id: string; email: string };
@@ -40,12 +40,12 @@ describe('fortress.handleRequest', () => {
 
     it('returns tokens AND sets cookies on successful POST /auth/login', async () => {
       // create user via service to skip the http-layer registration above
-      await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
+      await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
 
       const res = await fortress.handleRequest(new Request('http://localhost/auth/login', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ identifier: 'a@b.co', password: 'password123' }),
+        body: JSON.stringify({ identifier: 'a@b.co', password: 'password1234567' }),
       }));
       expect(res.status).toBe(200);
       const body = await res.json() as AuthBody;
@@ -81,8 +81,8 @@ describe('fortress.handleRequest', () => {
     let accessToken: string;
 
     beforeEach(async () => {
-      await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
-      const result = await fortress.auth.login('a@b.co', 'password123');
+      await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
+      const result = await fortress.auth.login('a@b.co', 'password1234567');
       if (result.status !== 'success')
         throw new Error('expected success');
       accessToken = result.accessToken;
@@ -112,8 +112,8 @@ describe('fortress.handleRequest', () => {
 
   describe('refresh flow', () => {
     it('issues new tokens AND sets new cookies on POST /auth/refresh', async () => {
-      await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password123' });
-      const login = await fortress.auth.login('a@b.co', 'password123');
+      await fortress.auth.createUser({ email: 'a@b.co', name: 'Alice', password: 'password1234567' });
+      const login = await fortress.auth.login('a@b.co', 'password1234567');
       if (login.status !== 'success')
         throw new Error('expected success');
 
@@ -139,8 +139,8 @@ describe('fortress.handleRequest', () => {
     beforeEach(async () => {
       // (Skipping syncResources here — without resources synced, checkPermission
       // returns false, which is exactly what we want to assert default-deny.)
-      await fortress.auth.createUser({ email: 'admin@x.co', name: 'Admin', password: 'password123' });
-      const result = await fortress.auth.login('admin@x.co', 'password123');
+      await fortress.auth.createUser({ email: 'admin@x.co', name: 'Admin', password: 'password1234567' });
+      const result = await fortress.auth.login('admin@x.co', 'password1234567');
       if (result.status !== 'success')
         throw new Error('expected success');
       accessToken = result.accessToken;
@@ -222,9 +222,9 @@ describe('fortress.handleRequest', () => {
       const user = await spyFortress.auth.createUser({
         email: 'spy@b.co',
         name: 'Spy',
-        password: 'password123',
+        password: 'password1234567',
       });
-      const login = await spyFortress.auth.login('spy@b.co', 'password123');
+      const login = await spyFortress.auth.login('spy@b.co', 'password1234567');
       if (login.status !== 'success')
         throw new Error('expected success');
 
@@ -335,8 +335,8 @@ describe('fortress.handleRequest', () => {
     it('accepts /oauth/host-app/jwt-route with a valid JWT and populates ctx.userId', async () => {
       const { plugin, received } = makeOauthBearerPlugin();
       const f = createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins: [plugin] });
-      const user = await f.auth.createUser({ email: 'jwt@b.co', name: 'J', password: 'password123' });
-      const login = await f.auth.login('jwt@b.co', 'password123');
+      const user = await f.auth.createUser({ email: 'jwt@b.co', name: 'J', password: 'password1234567' });
+      const login = await f.auth.login('jwt@b.co', 'password1234567');
       if (login.status !== 'success')
         throw new Error('expected success');
 

@@ -45,13 +45,13 @@ async function seedAndLogin(fortress: Fortress, app: Hono<FortressEnv>): Promise
   const user = await fortress.auth.createUser({
     email: 'test@example.com',
     name: 'Test User',
-    password: 'password-123',
+    password: 'password-123456',
   });
 
   const res = await app.request('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123' }),
+    body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123456' }),
   });
   const data = await res.json() as any;
   return { token: data.accessToken, userId: user.id };
@@ -328,7 +328,7 @@ describe('rbac middleware', () => {
     const loginRes = await mapApp.request('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123' }),
+      body: JSON.stringify({ identifier: 'test@example.com', password: 'password-123456' }),
     });
     const newToken = ((await loginRes.json()) as any).accessToken;
 
@@ -684,7 +684,7 @@ describe('plugin route mounting: OAuth', () => {
     const user = await fortress.auth.createUser({
       email: 'oauth-user@test.com',
       name: 'OAuth User',
-      password: 'password-123',
+      password: 'password-123456',
     });
 
     const methods = fortress.plugins.oauth as any;
@@ -799,7 +799,7 @@ describe('full auth flow via Hono', () => {
     const regRes = await app.request('/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'flow@test.com', name: 'Flow', password: 'password-123' }),
+      body: JSON.stringify({ email: 'flow@test.com', name: 'Flow', password: 'password-123456' }),
     });
     expect(regRes.status).toBe(200);
 
@@ -807,7 +807,7 @@ describe('full auth flow via Hono', () => {
     const loginRes = await app.request('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'flow@test.com', password: 'password-123' }),
+      body: JSON.stringify({ identifier: 'flow@test.com', password: 'password-123456' }),
     });
     expect(loginRes.status).toBe(200);
     const loginData = await loginRes.json() as any;

@@ -54,7 +54,7 @@ describe('tenancy plugin', () => {
     const user = await fortress.auth.createUser({
       email: 'alice@example.com',
       name: 'Alice',
-      password: 'password-123',
+      password: 'password-123456',
     });
     userId = user.id;
   });

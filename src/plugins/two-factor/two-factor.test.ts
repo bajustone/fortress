@@ -30,7 +30,7 @@ describe('two-factor plugin', () => {
     const user = await fortress.auth.createUser({
       email: 'alice@example.com',
       name: 'Alice',
-      password: 'password-123',
+      password: 'password-123456',
     });
     userId = user.id;
   });
@@ -120,7 +120,7 @@ describe('two-factor plugin', () => {
       await methods.confirmSetup(userId, code);
 
       // Login should be intercepted
-      const result = await fortress.auth.login('alice@example.com', 'password-123');
+      const result = await fortress.auth.login('alice@example.com', 'password-123456');
       expect(result.accessToken).toBeNull();
       expect(result.refreshToken).toBeNull();
       expect(result.pluginData?.requires2FA).toBe(true);
@@ -134,7 +134,7 @@ describe('two-factor plugin', () => {
     });
 
     it('allows normal login when 2FA not enabled', async () => {
-      const result = await fortress.auth.login('alice@example.com', 'password-123');
+      const result = await fortress.auth.login('alice@example.com', 'password-123456');
       expect(result.accessToken).toBeTruthy();
       expect(result.refreshToken).toBeTruthy();
     });
@@ -148,7 +148,7 @@ describe('two-factor plugin', () => {
       await methods.confirmSetup(userId, code, { userAgent });
 
       // Login with same userAgent should bypass 2FA
-      const result = await fortress.auth.login('alice@example.com', 'password-123', { userAgent });
+      const result = await fortress.auth.login('alice@example.com', 'password-123456', { userAgent });
       expect(result.accessToken).toBeTruthy();
     });
   });

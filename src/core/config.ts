@@ -165,14 +165,29 @@ export function resolveCookieConfig(config?: CookieConfig): ResolvedCookieConfig
   const canHostPrefix = secure && !config?.domain && (config?.path ?? '/') === '/';
   const defaultAccess = canHostPrefix ? '__Host-fortress_access' : 'fortress_access';
   const defaultRefresh = canHostPrefix ? '__Host-fortress_refresh' : 'fortress_refresh';
+  const accessName = config?.accessName ?? defaultAccess;
+  const refreshName = config?.refreshName ?? defaultRefresh;
+  const sameSite = config?.sameSite ?? 'lax';
+  const path = config?.path ?? '/';
+
+  if (sameSite === 'none' && !secure)
+    throw new Error('Cookie SameSite=None requires Secure');
+
+  for (const name of [accessName, refreshName]) {
+    if (name.startsWith('__Secure-') && !secure)
+      throw new Error(`Cookie ${name} uses the __Secure- prefix but Secure is disabled`);
+    if (name.startsWith('__Host-') && (!secure || config?.domain !== undefined || path !== '/')) {
+      throw new Error(`Cookie ${name} uses the __Host- prefix but requires Secure, Path=/, and no Domain`);
+    }
+  }
 
   return {
-    accessName: config?.accessName ?? defaultAccess,
-    refreshName: config?.refreshName ?? defaultRefresh,
-    sameSite: config?.sameSite ?? 'lax',
+    accessName,
+    refreshName,
+    sameSite,
     secure,
     domain: config?.domain,
-    path: config?.path ?? '/',
+    path,
   };
 }
 

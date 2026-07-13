@@ -71,16 +71,18 @@ Configured via `passwordPolicy` in config. Defaults follow NIST 800-63B:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `minLength` | 8 | Minimum password length |
+| `minLength` | 15 | Minimum length for new passwords |
 | `maxLength` | 128 | Maximum password length |
 | `checkBreached` | `false` | Check against HIBP breached passwords |
 | `breachedCacheTtlMs` | 86400000 | Cache TTL for HIBP results (24 hours) |
+| `breachedCacheMaxEntries` | 1000 | Maximum cached HIBP ranges; `0` disables caching |
+| `breachedFailureMode` | `'open'` | Accept (`'open'`) or reject (`'closed'`) password writes during HIBP outages |
 
 ### Breach Checking (HIBP)
 
 When `checkBreached: true`, Fortress checks passwords against the Have I Been Pwned API using k-anonymity. Only the first 5 characters of the SHA-1 hash are sent to the API -- the full password never leaves the server.
 
-Breach checking **fails open** on network errors: if the HIBP API is unreachable, the password is accepted. This prevents authentication outages from a third-party dependency.
+Breach checking defaults to **fail open** on network errors: if the HIBP API is unreachable, the password is accepted. Set `breachedFailureMode: 'closed'` when assurance is more important than availability. Both modes log and emit `PASSWORD_BREACH_CHECK_DEGRADED` so operators can alert on a disabled control.
 
 ## Rate Limiting
 

@@ -65,9 +65,9 @@ describe('express adapter', () => {
     const user = await fortress.auth.createUser({
       email: 'test@test.com',
       name: 'Test',
-      password: 'password-123',
+      password: 'password-123456',
     });
-    const loginResult = await fortress.auth.login('test@test.com', 'password-123');
+    const loginResult = await fortress.auth.login('test@test.com', 'password-123456');
 
     const middleware = createAuthMiddleware(fortress);
     const req: ExpressRequest = {

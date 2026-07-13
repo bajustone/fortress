@@ -11,7 +11,7 @@ describe('password-policy', () => {
 
   describe('validatePassword', () => {
     it('accepts a valid password with default config', async () => {
-      await expect(validatePassword('secureP@ss123')).resolves.toBeUndefined();
+      await expect(validatePassword('secureP@ss12345')).resolves.toBeUndefined();
     });
 
     it('rejects passwords shorter than minLength', async () => {
@@ -36,8 +36,8 @@ describe('password-policy', () => {
       await expect(validatePassword(exactMax, { maxLength: 128 })).resolves.toBeUndefined();
     });
 
-    it('uses default min 8 and max 128 when not configured', async () => {
-      await expect(validatePassword('1234567')).rejects.toThrow('at least 8');
+    it('uses default min 15 and max 128 when not configured', async () => {
+      await expect(validatePassword('12345678901234')).rejects.toThrow('at least 15');
       await expect(validatePassword('a'.repeat(129))).rejects.toThrow('at most 128');
     });
 
@@ -102,6 +102,44 @@ describe('password-policy', () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
+
+    it('evicts the least-recently-used range rather than the oldest inserted range', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+        new Response('00000000000000000000000000000000000:1', { status: 200 }));
+      const options = { cacheMaxEntries: 2 };
+
+      await isPasswordBreached('first-unique-password', options);
+      await isPasswordBreached('second-unique-password', options);
+      await isPasswordBreached('first-unique-password', options); // touch first
+      await isPasswordBreached('third-unique-password', options); // evicts second
+      await isPasswordBreached('first-unique-password', options); // still cached
+      await isPasswordBreached('second-unique-password', options); // fetch again
+
+      expect(fetchSpy).toHaveBeenCalledTimes(4);
+    });
+
+    it('bypasses existing cache entries when caching is disabled', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+        new Response('1E4C9B93F3F0682250B6CF8331B7EE68FD8:1', { status: 200 }));
+
+      await expect(isPasswordBreached('password')).resolves.toBe(true);
+      await expect(isPasswordBreached('password', { cacheMaxEntries: 0 })).resolves.toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('fails closed and notifies its observer when HIBP is unavailable', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response('Service Unavailable', { status: 503 }),
+      );
+      const observer = vi.fn();
+
+      await expect(isPasswordBreached('password', {
+        failureMode: 'closed',
+        observer,
+      })).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+      expect(observer).toHaveBeenCalledOnce();
+      expect(observer).toHaveBeenCalledWith({ failureMode: 'closed', status: 503 });
+    });
   });
 
   describe('validatePassword with breach checking', () => {
@@ -111,7 +149,7 @@ describe('password-policy', () => {
       );
 
       await expect(
-        validatePassword('password', { checkBreached: true }),
+        validatePassword('password', { checkBreached: true, minLength: 8 }),
       ).rejects.toThrow('data breach');
     });
 
@@ -119,7 +157,7 @@ describe('password-policy', () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
       await expect(
-        validatePassword('password', { checkBreached: false }),
+        validatePassword('password', { checkBreached: false, minLength: 8 }),
       ).resolves.toBeUndefined();
 
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -137,6 +175,26 @@ describe('password-policy', () => {
       await expect(
         fortress.auth.createUser({ email: 'a@b.com', name: 'Test', password: 'short' }),
       ).rejects.toThrow('at least 10');
+    });
+
+    it('emits a degraded event and honors fail-closed mode during user creation', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response('Service Unavailable', { status: 503 }),
+      );
+      const fortress = createFortress({
+        jwt: { key: 'test-secret-at-least-32-characters!!' },
+        database: createTestAdapter(),
+        passwordPolicy: { checkBreached: true, breachedFailureMode: 'closed' },
+      });
+      const events: string[] = [];
+      fortress.auth.addAuthObserver(event => void events.push(event.eventType));
+
+      await expect(fortress.auth.createUser({
+        email: 'degraded@b.com',
+        name: 'Test',
+        password: 'valid-password-123456',
+      })).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+      expect(events.filter(event => event === 'PASSWORD_BREACH_CHECK_DEGRADED')).toHaveLength(1);
     });
 
     it('allows valid passwords during user creation', async () => {
@@ -180,9 +238,9 @@ describe('password-policy', () => {
       const user = await fortress.auth.createUser({
         email: 'nfkc@test.com',
         name: 'NFKC',
-        password: 'Ｐａｓｓｗｏｒｄ１２３！',
+        password: 'Ｐａｓｓｗｏｒｄ１２３４５６！',
       });
-      await expect(fortress.auth.login('nfkc@test.com', 'Password123!')).resolves.toMatchObject({
+      await expect(fortress.auth.login('nfkc@test.com', 'Password123456!')).resolves.toMatchObject({
         status: 'success',
       });
 

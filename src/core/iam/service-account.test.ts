@@ -199,7 +199,7 @@ describe('iam-service: service account permissions (regression)', () => {
     const user = await fortress.auth.createUser({
       email: 'in-group@test.com',
       name: 'In Group',
-      password: 'password-123',
+      password: 'password-123456',
     });
     const group = await fortress.iam.createGroup('editors-sa-test');
     await fortress.iam.addUserToGroup(group.id, user.id);
