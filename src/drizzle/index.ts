@@ -1,7 +1,7 @@
 /**
  * Drizzle ORM adapter for fortress.
  *
- * Works with any Drizzle database instance — PostgreSQL, MySQL, or SQLite.
+ * Works with any Drizzle database instance — PostgreSQL or SQLite.
  * Use the SQLite-flavoured `fortressSchema` aggregate for SQLite, or import
  * `@bajustone/fortress/drizzle/pg` for the PostgreSQL flavour. Tables are
  * exported via the aggregate (typed as `Record<string, AnySQLiteTable>`) so
@@ -23,7 +23,7 @@
 
 export { createDrizzleAdapter } from './adapter';
 export type { DrizzleAdapterOptions, DrizzleDialect } from './adapter';
-export { findSqlstate, rethrowPgError } from './pg-error-map';
+export { findSqlstate, rethrowDbError } from './pg-error-map';
 // Re-export only the schema objects — individual table exports cause JSR "slow types"
 // errors because sqliteTable()/pgTable() return types are too complex for JSR to infer.
 // Consumers access tables via: fortressSchema.users, fortressPgSchema.roles, etc.

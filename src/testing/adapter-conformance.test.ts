@@ -224,6 +224,44 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
       expect(users).toHaveLength(2);
     });
   });
+
+  describe('empty where clause is rejected on mutations', () => {
+    // A frozen contract guarantee: update/delete/findOne with an empty where
+    // must throw rather than silently match every row (a full-table wipe
+    // footgun). Unfiltered reads (findMany/count) remain legal.
+    it('update throws on an empty where', async () => {
+      await expect(
+        db.update({ model: 'user', where: [], data: { name: 'x' } }),
+      ).rejects.toThrow();
+    });
+
+    it('delete throws on an empty where', async () => {
+      await expect(
+        db.delete({ model: 'user', where: [] }),
+      ).rejects.toThrow();
+    });
+
+    it('findOne throws on an empty where', async () => {
+      await expect(
+        db.findOne({ model: 'user', where: [] }),
+      ).rejects.toThrow();
+    });
+
+    it('findMany still allows an unfiltered read', async () => {
+      await db.create({ model: 'user', data: { email: 'a@test.com', name: 'A', passwordHash: 'h', isActive: true } });
+      const users = await db.findMany({ model: 'user', where: [] });
+      expect(users).toHaveLength(1);
+    });
+  });
+
+  describe('constraint violations map to typed errors', () => {
+    it('maps a unique violation to a 409 CONFLICT', async () => {
+      await db.create({ model: 'user', data: { email: 'dupe@test.com', name: 'A', passwordHash: 'h', isActive: true } });
+      await expect(
+        db.create({ model: 'user', data: { email: 'dupe@test.com', name: 'B', passwordHash: 'h', isActive: true } }),
+      ).rejects.toMatchObject({ code: 'CONFLICT', statusCode: 409 });
+    });
+  });
 }
 
 // Run conformance tests against the built-in test adapter

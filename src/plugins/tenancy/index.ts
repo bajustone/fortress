@@ -280,7 +280,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
         throw Errors.forbidden('Invalid tenant claim');
 
       const isPg = adapter.dialect === 'pg' && !!adapter.rawQuery;
-      // For SQLite/MySQL there is no schema-per-tenant model; pass through.
+      // For SQLite there is no schema-per-tenant model; pass through.
       if (!isPg)
         return adapter;
 

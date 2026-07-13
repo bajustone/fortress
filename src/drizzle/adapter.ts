@@ -5,11 +5,11 @@ import type { WhereClause } from '../adapters/database/types';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { and, eq, getTableColumns, gt, gte, inArray, isNull, like, lt, lte, ne, sql } from 'drizzle-orm';
 import { Errors } from '../core/errors';
-import { rethrowPgError } from './pg-error-map';
+import { rethrowDbError } from './pg-error-map';
 import { fortressPgSchema } from './pg/schema';
 import { fortressSchema } from './schema';
 
-export type DrizzleDialect = 'sqlite' | 'pg' | 'mysql';
+export type DrizzleDialect = 'sqlite' | 'pg';
 
 export interface DrizzleAdapterOptions {
   /** Override default fortress table definitions with your own Drizzle tables */
@@ -77,6 +77,13 @@ function getColumn(table: Table, field: string): Column {
 }
 
 function buildWhereCondition(table: Table, where: WhereClause[]): SQL | undefined {
+  // A missing/empty where would compile to `.where(undefined)`, which matches
+  // EVERY row — a silent full-table update/delete footgun. findMany/count
+  // guard the empty case before calling (an unfiltered read is legal); the
+  // mutating paths (update/delete) and findOne pass their required where here
+  // directly, so rejecting empty here fails those closed.
+  if (where.length === 0)
+    throw Errors.badRequest('A non-empty where clause is required (empty where would match all rows)');
   const conditions = where.map((clause) => {
     const column = getColumn(table, clause.field);
 
@@ -229,7 +236,7 @@ interface DrizzleDB { insert: Function; select: Function; update: Function; dele
 
 /**
  * Create a DatabaseAdapter backed by any Drizzle instance.
- * Works with PostgreSQL, MySQL, and SQLite (bun:sqlite, better-sqlite3).
+ * Works with PostgreSQL and SQLite (bun:sqlite, better-sqlite3).
  *
  * @param db - Any Drizzle database instance
  * @param options - Optional table overrides and dialect configuration
@@ -248,7 +255,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
   let sqliteTxChain: Promise<unknown> = Promise.resolve();
   const sqliteTxContext = new AsyncLocalStorage<boolean>();
 
-  /** Execute a query expecting a single row (or undefined). SQLite uses .get(), PG/MySQL awaits the query. */
+  /** Execute a query expecting a single row (or undefined). SQLite uses .get(), PG awaits the query. */
   async function execOne<T>(query: any): Promise<T | undefined> {
     const row = isSqlite
       ? (query.get() as T | undefined)
@@ -256,7 +263,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
     return row === undefined ? undefined : stringifyIds(row);
   }
 
-  /** Execute a query expecting an array of rows. SQLite uses .all(), PG/MySQL awaits the query. */
+  /** Execute a query expecting an array of rows. SQLite uses .all(), PG awaits the query. */
   async function execMany<T>(query: any): Promise<T[]> {
     const rows = isSqlite
       ? (query.all() as T[])
@@ -264,7 +271,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
     return rows.map(stringifyIds);
   }
 
-  /** Execute a query where the result is discarded. SQLite uses .run(), PG/MySQL awaits the query. */
+  /** Execute a query where the result is discarded. SQLite uses .run(), PG awaits the query. */
   async function execRun(query: any): Promise<void> {
     if (isSqlite) {
       query.run();
@@ -293,11 +300,11 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
           return result as T;
         }
         catch (err) {
-          // Translate Postgres SQLSTATEs (23505, 23503, ...) into the matching
-          // FortressError so unique-violation / FK-violation / etc. surface as
-          // CONFLICT / UNPROCESSABLE_ENTITY without every host writing the
-          // same try/catch. No-op for non-pg dialects.
-          rethrowPgError(err, dialect);
+          // Translate driver constraint errors (pg SQLSTATEs, sqlite
+          // SQLITE_CONSTRAINT_*) into the matching FortressError so
+          // unique-violation / FK-violation / etc. surface as CONFLICT /
+          // UNPROCESSABLE_ENTITY without every host writing the same try/catch.
+          rethrowDbError(err, dialect);
         }
       },
 
@@ -358,7 +365,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
           return (result as T) ?? null;
         }
         catch (err) {
-          rethrowPgError(err, dialect);
+          rethrowDbError(err, dialect);
         }
       },
 
@@ -369,9 +376,9 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
           await execRun((drizzle as any).delete(table).where(condition));
         }
         catch (err) {
-          // FK violation (23503) on delete is the common case here — surfaces
-          // as UNPROCESSABLE_ENTITY rather than a raw driver error.
-          rethrowPgError(err, dialect);
+          // FK violation on delete is the common case here — surfaces as
+          // UNPROCESSABLE_ENTITY rather than a raw driver error.
+          rethrowDbError(err, dialect);
         }
       },
 
@@ -435,7 +442,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
           return result;
         }
 
-        // PostgreSQL/MySQL: use Drizzle's native async transaction
+        // PostgreSQL: use Drizzle's native async transaction
         return (drizzle as any).transaction(async (tx: DrizzleDB) => {
           const txAdapter = buildAdapter(tx);
           return fn(txAdapter);

@@ -6,7 +6,7 @@ import type { Histogram, Span, TelemetryProvider } from './types';
  * into the standard OpenTelemetry semantic-convention histogram
  * `db.client.operation.duration`, **and** emits a matching span for the
  * operation. Attributes follow the stable database spec:
- * - `db.system.name`  — adapter dialect (`sqlite` / `pg` / `mysql` / `unknown`)
+ * - `db.system.name`  — adapter dialect (`sqlite` / `pg` / `unknown`)
  * - `db.operation.name` — verb (`create` / `findOne` / `findMany` / `update` / `delete` / `count` / `rawQuery` / `transaction`)
  * - `db.collection.name` — model name (only when known)
  *

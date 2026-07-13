@@ -66,7 +66,7 @@ src/
 
   drizzle/
     index.ts                            # createDrizzleAdapter() export
-    adapter.ts                          # DatabaseAdapter implementation (PostgreSQL, MySQL, SQLite)
+    adapter.ts                          # DatabaseAdapter implementation (PostgreSQL, SQLite)
     schema.ts                           # SQLite reference table definitions (24 tables)
     pg/
       index.ts                          # PostgreSQL-specific export
@@ -206,7 +206,7 @@ Users who only need JWT or password hashing shouldn't pull in the full system. E
 
 ### 7. Database-Agnostic Core
 
-The Drizzle adapter works with PostgreSQL, MySQL, and SQLite. Only the tenancy plugin (schema-per-tenant via a transaction-pinned `search_path`) is PostgreSQL-specific. For database-agnostic multi-tenancy, use the data isolation plugin with row-level filtering.
+The Drizzle adapter works with PostgreSQL and SQLite. Only the tenancy plugin (schema-per-tenant via a transaction-pinned `search_path`) is PostgreSQL-specific. For database-agnostic multi-tenancy, use the data isolation plugin with row-level filtering.
 
 ### 8. Transport-Agnostic Permissions (Resource + Action)
 
@@ -632,11 +632,11 @@ interface DatabaseAdapter {
   /** Optional: raw SQL for performance-critical multi-table operations.
    *  Adapters that implement this get optimized IAM queries (single JOIN
    *  instead of 4 sequential findMany calls).
-   *  Placeholders: ? for SQLite/MySQL, $1 for PostgreSQL. */
+   *  Placeholders: ? for SQLite, $1 for PostgreSQL. */
   rawQuery?<T>(sql: string, params?: unknown[]): Promise<T[]>;
 
   /** Database dialect hint for rawQuery SQL generation */
-  readonly dialect?: 'sqlite' | 'pg' | 'mysql';
+  readonly dialect?: 'sqlite' | 'pg';
 }
 ```
 
@@ -695,15 +695,15 @@ Key methods:
 
 **File:** `src/drizzle/adapter.ts`
 
-Reference `DatabaseAdapter` implementation supporting SQLite, PostgreSQL, and MySQL via Drizzle ORM.
+Reference `DatabaseAdapter` implementation supporting SQLite and PostgreSQL via Drizzle ORM.
 
 **Dialect handling:**
 - SQLite: Synchronous `.get()`, `.all()`, `.run()` — results returned immediately
-- PostgreSQL/MySQL: Async — results awaited
+- PostgreSQL: Async — results awaited
 
 **Transaction handling:**
 - SQLite: Manual `BEGIN`/`COMMIT`/`ROLLBACK` (Drizzle SQLite transactions aren't truly async-compatible)
-- PostgreSQL/MySQL: Native `db.transaction()` support
+- PostgreSQL: Native `db.transaction()` support
 
 **Field conversion:** Automatic `snake_case` ↔ `camelCase` mapping between JS objects and DB columns.
 

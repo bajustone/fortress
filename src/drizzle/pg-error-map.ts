@@ -1,21 +1,22 @@
 /**
- * Postgres SQLSTATE → {@link FortressError} translation for the Drizzle
- * adapter.
+ * Database constraint-error → {@link FortressError} translation for the
+ * Drizzle adapter.
  *
- * Drizzle wraps driver-level errors (`postgres`, `pg`) before re-throwing,
- * so a Postgres constraint violation typically surfaces as a generic
- * `DrizzleQueryError` with the real driver error tucked under
- * `error.cause`. {@link findSqlstate} walks the cause chain up to a small
- * fixed depth looking for any object whose own `code` field matches the
- * 5-character SQLSTATE pattern.
+ * Drizzle wraps driver-level errors before re-throwing, so a constraint
+ * violation typically surfaces as a generic `DrizzleQueryError` with the
+ * real driver error tucked under `error.cause`. Both matchers walk the
+ * cause chain up to a small fixed depth: {@link findSqlstate} looks for a
+ * Postgres 5-character SQLSTATE `code`, and the SQLite matcher looks for a
+ * `SQLITE_CONSTRAINT_*` code or the driver's constraint message.
  *
- * The mapping table covers the constraint/concurrency states that almost
+ * The mapping tables cover the constraint/concurrency states that almost
  * every CRUD endpoint cares about. Anything not in the table is re-thrown
  * unchanged so callers can still observe the raw driver error.
  *
- * This module is **PG-only**. Other dialects pass through unchanged via
- * the `dialect` guard in {@link rethrowPgError}; SQLite/MySQL constraint
- * mapping is intentionally out of scope until there's a real consumer.
+ * {@link rethrowDbError} routes on the adapter `dialect`: Postgres via
+ * SQLSTATE, SQLite via constraint code/message. Unique violations map to
+ * `CONFLICT` (409) on both dialects so a mixed-dialect call site gets a
+ * stable wire response without branching.
  */
 
 import type { FortressError } from '../core/errors';
@@ -56,7 +57,53 @@ const PG_SQLSTATE_MAP: Record<string, (cause: unknown) => FortressError> = {
 
 interface MaybeCoded {
   code?: unknown;
+  message?: unknown;
   cause?: unknown;
+}
+
+/**
+ * SQLite constraint matchers. better-sqlite3 and bun:sqlite both surface a
+ * `SQLITE_CONSTRAINT_*` `code`; older builds only set the message, so each
+ * entry matches either. Tested against `${code} ${message}` at every level
+ * of the cause chain.
+ */
+const SQLITE_CONSTRAINT_MAP: { match: RegExp; factory: (cause: unknown) => FortressError }[] = [
+  {
+    match: /SQLITE_CONSTRAINT_(?:UNIQUE|PRIMARYKEY)|UNIQUE constraint failed/i,
+    factory: cause => Errors.conflict('Resource already exists', { cause }),
+  },
+  {
+    match: /SQLITE_CONSTRAINT_FOREIGNKEY|FOREIGN KEY constraint failed/i,
+    factory: cause => Errors.unprocessable('Referenced resource does not exist', { cause }),
+  },
+  {
+    match: /SQLITE_CONSTRAINT_NOTNULL|NOT NULL constraint failed/i,
+    factory: _cause => Errors.badRequest('Required field is missing'),
+  },
+];
+
+/**
+ * Walk the `cause` chain looking for a SQLite constraint violation, testing
+ * each level's `code`/`message` against {@link SQLITE_CONSTRAINT_MAP}.
+ * Returns the matching {@link FortressError} or `null` when none is found
+ * within {@link MAX_CAUSE_DEPTH} hops.
+ */
+function mapSqliteConstraint(err: unknown): FortressError | null {
+  let current: unknown = err;
+  for (let i = 0; i < MAX_CAUSE_DEPTH; i++) {
+    if (current === null || typeof current !== 'object')
+      return null;
+    const coded = current as MaybeCoded;
+    const code = typeof coded.code === 'string' ? coded.code : '';
+    const message = typeof coded.message === 'string' ? coded.message : '';
+    const haystack = `${code} ${message}`;
+    for (const { match, factory } of SQLITE_CONSTRAINT_MAP) {
+      if (match.test(haystack))
+        return factory(err);
+    }
+    current = coded.cause;
+  }
+  return null;
 }
 
 /**
@@ -79,19 +126,26 @@ export function findSqlstate(err: unknown): string | null {
 }
 
 /**
- * If `err` originated from Postgres and carries a SQLSTATE in
- * {@link PG_SQLSTATE_MAP}, throw the matching {@link FortressError};
- * otherwise re-throw `err` unchanged.
- *
- * No-op for non-`pg` dialects so a mixed-dialect call site can route
- * through this helper without branching.
+ * Translate a driver constraint error into a {@link FortressError} for the
+ * given `dialect`, then throw it. Postgres routes through
+ * {@link PG_SQLSTATE_MAP} by SQLSTATE; SQLite through
+ * {@link SQLITE_CONSTRAINT_MAP} by constraint code/message. Errors that
+ * don't match a known constraint are re-thrown unchanged so callers can
+ * still observe the raw driver error.
  */
-export function rethrowPgError(err: unknown, dialect: DrizzleDialect): never {
-  if (dialect !== 'pg')
+export function rethrowDbError(err: unknown, dialect: DrizzleDialect): never {
+  if (dialect === 'pg') {
+    const sqlstate = findSqlstate(err);
+    const factory = sqlstate ? PG_SQLSTATE_MAP[sqlstate] : undefined;
+    if (factory)
+      throw factory(err);
     throw err;
-  const sqlstate = findSqlstate(err);
-  const factory = sqlstate ? PG_SQLSTATE_MAP[sqlstate] : undefined;
-  if (factory)
-    throw factory(err);
+  }
+  if (dialect === 'sqlite') {
+    const mapped = mapSqliteConstraint(err);
+    if (mapped)
+      throw mapped;
+    throw err;
+  }
   throw err;
 }

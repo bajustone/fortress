@@ -45,7 +45,6 @@ import is required.
 | PostgreSQL via `drizzle-orm/node-postgres` | same | `pg@^8` |
 | SQLite via `drizzle-orm/bun-sqlite` | same (`dialect: 'sqlite'`) | bundled with Bun |
 | SQLite via `drizzle-orm/better-sqlite3` | same | `better-sqlite3@^11` |
-| MySQL via `drizzle-orm/mysql2` | same (`dialect: 'mysql'`) | smoke-tested |
 
 Drizzle minimum: `drizzle-orm@^0.45`. Earlier versions are missing
 features Fortress relies on (`$dynamic()`, `getTableColumns`,
@@ -91,7 +90,9 @@ template that gates *your* deploys on Fortress's drift checkers
 
 > Deno and Cloudflare Workers remain smoke-tested locally rather than in
 > the public matrix (no first-class GitHub runner for the workerd DB
-> story). MySQL is smoke-tested only.
+> story). MySQL is not currently supported — `DrizzleDialect` is
+> `'sqlite' | 'pg'`; it may be re-added once there is a real consumer and
+> a CI lane to keep it honest.
 
 ## What's intentionally out of scope
 

@@ -1292,7 +1292,7 @@ See the per-release notes
 
 ### Drizzle Adapter
 
-The Drizzle adapter supports PostgreSQL, MySQL, and SQLite.
+The Drizzle adapter supports PostgreSQL and SQLite.
 
 #### SQLite
 
@@ -1329,10 +1329,11 @@ const db = createDrizzleAdapter(drizzleDb, { dialect: 'pg' });
 > with full column inference, declare your own typed Drizzle tables matching
 > the same names and pass them via `createDrizzleAdapter(db, { tables })`.
 
-**Postgres SQLSTATE → `FortressError` mapping.** On `pg`, the adapter
-translates the common Postgres constraint and concurrency states into the
-matching `FortressError`, so `protect()` serializes them as the right HTTP
-status without every host writing a try/catch around inserts and updates:
+**Constraint-error → `FortressError` mapping.** The adapter translates the
+common driver constraint and concurrency states into the matching
+`FortressError`, so `protect()` serializes them as the right HTTP status
+without every host writing a try/catch around inserts and updates. On `pg`
+this routes by SQLSTATE:
 
 | SQLSTATE | Postgres meaning | Fortress error | HTTP |
 | -------- | ---------------- | -------------- | ---- |
@@ -1344,28 +1345,21 @@ status without every host writing a try/catch around inserts and updates:
 | `40P01` | deadlock_detected | `CONFLICT` | 409 |
 | `57014` | query_canceled | `SERVICE_UNAVAILABLE` | 503 |
 
-Unrecognized SQLSTATEs and errors from other dialects pass through unchanged.
-The mapper is also exported for host routes that use raw Drizzle directly:
+On `sqlite`, the adapter maps the driver's constraint errors the same way:
+`UNIQUE`/`PRIMARYKEY` → `CONFLICT/409`, `FOREIGN KEY` →
+`UNPROCESSABLE_ENTITY/422`, `NOT NULL` → `BAD_REQUEST/400`. Unrecognized
+errors pass through unchanged. The mapper is also exported for host routes
+that use raw Drizzle directly:
 
 ```typescript
-import { rethrowPgError } from '@bajustone/fortress/drizzle';
+import { rethrowDbError } from '@bajustone/fortress/drizzle';
 
 try {
   await db.insert(schools).values(input).returning();
 }
 catch (err) {
-  rethrowPgError(err, 'pg');
+  rethrowDbError(err, 'pg'); // or 'sqlite'
 }
-```
-
-#### MySQL
-
-```typescript
-import { drizzle } from 'drizzle-orm/mysql2';
-import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
-
-const drizzleDb = drizzle(connection);
-const db = createDrizzleAdapter(drizzleDb, { dialect: 'mysql' });
 ```
 
 #### Custom Table Overrides
