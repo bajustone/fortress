@@ -34,7 +34,7 @@ import { signAccessToken, verifyAccessToken } from './jwt';
 import { createDefaultHasher, normalizePasswordInput } from './password';
 import { validatePassword } from './password-policy';
 import { consumeAuthContinuation, runPostAuthGates, verifyAuthContinuation } from './post-auth-gate';
-import { generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
+import { deriveRefreshTokenSuccessor, generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
 
 /**
  * Lifecycle event emitted by the auth service. Mirrors the IAM observer
@@ -258,14 +258,13 @@ export function createAuthService(
     return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  async function issueTokens(
+  async function issueAccessToken(
     user: FortressUser,
-    meta?: RequestMeta,
-  ): Promise<{ accessToken: string; refreshToken: string }> {
-    const groups = await getUserGroups(user.id);
+    resolveGroups: (userId: string) => Promise<string[]>,
+  ): Promise<string> {
+    const groups = await resolveGroups(user.id);
     const customClaims = await enrichClaims(user.id);
-
-    const accessToken = await signAccessToken(
+    return signAccessToken(
       {
         sub: user.id,
         subjectType: 'USER',
@@ -277,7 +276,13 @@ export function createAuthService(
       resolved.key,
       resolved.accessTokenExpiry,
     );
+  }
 
+  async function issueTokens(
+    user: FortressUser,
+    meta?: RequestMeta,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const accessToken = await issueAccessToken(user, getUserGroups);
     const { raw, hash } = await generateRefreshToken();
     const family = generateTokenFamily();
     const issuedAt = new Date();
@@ -286,24 +291,67 @@ export function createAuthService(
       ? await computeFingerprintHash(meta.userAgent)
       : null;
 
-    await db.create({
-      model: 'refresh_token',
-      data: {
-        userId: user.id,
-        tokenHash: hash,
-        tokenFamily: family,
-        familyCreatedAt: issuedAt,
-        successorTokenHash: null,
-        rotatedAt: null,
-        isRevoked: false,
-        expiresAt: new Date(issuedAt.getTime() + resolved.refreshTokenExpiry * 1000),
-        ipAddress: meta?.ipAddress ?? null,
-        userAgent: meta?.userAgent ?? null,
-        deviceName: meta?.deviceName ?? null,
-        lastActiveAt: issuedAt,
-        fingerprintHash,
-      },
-    });
+    const maxSessions = config.jwt.session?.maxSessionsPerUser;
+    const persistSession = async (target: DatabaseAdapter): Promise<void> => {
+      if (maxSessions != null && maxSessions > 0) {
+        // PostgreSQL needs a per-user lock; transaction isolation alone lets
+        // concurrent logins both observe spare capacity. A no-op update takes
+        // that row lock without bypassing DatabaseAdapter model/table mapping.
+        // SQLite's BEGIN IMMEDIATE transaction already serializes writers.
+        if (target.dialect === 'pg') {
+          const locked = await target.update({
+            model: 'user',
+            where: [{ field: 'id', operator: '=', value: user.id }],
+            // Reassign the immutable primary key to itself: this acquires the
+            // row lock without risking stale mutable-field writeback.
+            data: { id: user.id },
+          });
+          if (!locked)
+            throw Errors.notFound('User not found');
+        }
+
+        const active = (await target.findMany<StoredRefreshToken>({
+          model: 'refresh_token',
+          where: [
+            { field: 'userId', operator: '=', value: user.id },
+            { field: 'isRevoked', operator: '=', value: false },
+          ],
+          sortBy: { field: 'familyCreatedAt', direction: 'asc' },
+        })).filter(token => token.expiresAt > issuedAt);
+        const overflow = active.length - maxSessions + 1;
+        for (const token of active.slice(0, Math.max(0, overflow))) {
+          await target.update({
+            model: 'refresh_token',
+            where: [{ field: 'tokenFamily', operator: '=', value: token.tokenFamily }],
+            data: { isRevoked: true },
+          });
+        }
+      }
+
+      await target.create({
+        model: 'refresh_token',
+        data: {
+          userId: user.id,
+          tokenHash: hash,
+          tokenFamily: family,
+          familyCreatedAt: issuedAt,
+          successorTokenHash: null,
+          rotatedAt: null,
+          isRevoked: false,
+          expiresAt: new Date(issuedAt.getTime() + resolved.refreshTokenExpiry * 1000),
+          ipAddress: meta?.ipAddress ?? null,
+          userAgent: meta?.userAgent ?? null,
+          deviceName: meta?.deviceName ?? null,
+          lastActiveAt: issuedAt,
+          fingerprintHash,
+        },
+      });
+    };
+
+    if (maxSessions != null)
+      await db.transaction(persistSession);
+    else
+      await persistSession(db);
 
     return { accessToken, refreshToken: raw };
   }
@@ -541,25 +589,150 @@ export function createAuthService(
 
         if (!stored) {
           const reused = await txAdapter.findRefreshTokenByHash(tokenHash);
-          if (reused) {
-            await tx.update({
-              model: 'refresh_token',
-              where: [{ field: 'tokenFamily', operator: '=', value: reused.tokenFamily }],
-              data: { isRevoked: true },
-            });
-            // Do not throw inside the transaction: throwing would roll back
-            // the family revocation. Return a sentinel, commit, then throw.
-            return {
-              replayDetected: true as const,
-              userId: reused.userId,
-              tokenFamily: reused.tokenFamily,
-            };
+          if (!reused)
+            throw Errors.unauthorized('Invalid refresh token');
+
+          const graceSeconds = config.jwt.session?.refreshGraceSeconds;
+          const now = new Date();
+          const withinGrace = graceSeconds != null
+            && graceSeconds > 0
+            && reused.rotatedAt != null
+            && now.getTime() - reused.rotatedAt.getTime() <= graceSeconds * 1000;
+          if (withinGrace && reused.successorTokenHash) {
+            const currentFingerprint = reused.fingerprintHash && meta?.userAgent
+              ? await computeFingerprintHash(meta.userAgent)
+              : null;
+            const fingerprintMismatch = reused.fingerprintHash != null
+              && currentFingerprint !== reused.fingerprintHash;
+            const fingerprintAllowsGrace = !fingerprintMismatch
+              || config.jwt.validateRefreshFingerprint !== true;
+            if (fingerprintMismatch && config.jwt.validateRefreshFingerprint === 'warn') {
+              logger?.warn(
+                { tokenFamily: reused.tokenFamily },
+                'refresh token fingerprint mismatch during grace recovery',
+              );
+              authEventListeners.emit({
+                eventType: 'TOKEN_FINGERPRINT_MISMATCH',
+                actorId: reused.userId,
+                ipAddress: meta?.ipAddress,
+                userAgent: meta?.userAgent,
+                metadata: { tokenFamily: reused.tokenFamily, action: 'grace-recovery' },
+              });
+            }
+            if (fingerprintAllowsGrace) {
+              const secrets = Array.isArray(resolved.key) ? resolved.key : [resolved.key];
+              let successorToken: Awaited<ReturnType<typeof deriveRefreshTokenSuccessor>> | null = null;
+              for (const secret of secrets) {
+                const candidate = await deriveRefreshTokenSuccessor(refreshToken, secret);
+                if (candidate.hash === reused.successorTokenHash) {
+                  successorToken = candidate;
+                  break;
+                }
+              }
+              const successor = successorToken
+                ? await tx.findOne<StoredRefreshToken>({
+                    model: 'refresh_token',
+                    where: [
+                      { field: 'tokenHash', operator: '=', value: successorToken.hash },
+                      { field: 'isRevoked', operator: '=', value: false },
+                      { field: 'expiresAt', operator: 'gt', value: now },
+                    ],
+                  })
+                : null;
+              if (successor) {
+                const absoluteTimeout = config.jwt.session?.absoluteTimeoutSeconds;
+                if (absoluteTimeout != null && now.getTime() - successor.familyCreatedAt.getTime() > absoluteTimeout * 1000) {
+                  await tx.update({
+                    model: 'refresh_token',
+                    where: [{ field: 'tokenFamily', operator: '=', value: successor.tokenFamily }],
+                    data: { isRevoked: true },
+                  });
+                  return {
+                    sessionExpired: 'absolute' as const,
+                    userId: successor.userId,
+                    tokenFamily: successor.tokenFamily,
+                  };
+                }
+
+                const idleTimeout = config.jwt.session?.idleTimeoutSeconds;
+                const lastActivity = successor.lastActiveAt ?? successor.familyCreatedAt;
+                if (idleTimeout != null && now.getTime() - lastActivity.getTime() > idleTimeout * 1000) {
+                  await tx.update({
+                    model: 'refresh_token',
+                    where: [{ field: 'tokenFamily', operator: '=', value: successor.tokenFamily }],
+                    data: { isRevoked: true },
+                  });
+                  return {
+                    sessionExpired: 'idle' as const,
+                    userId: successor.userId,
+                    tokenFamily: successor.tokenFamily,
+                  };
+                }
+
+                const user = await tx.findOne<FortressUser>({
+                  model: 'user',
+                  where: [{ field: 'id', operator: '=', value: successor.userId }],
+                });
+                if (user?.isActive) {
+                  return {
+                    graced: true as const,
+                    userId: user.id,
+                    tokenFamily: reused.tokenFamily,
+                    tokens: {
+                      accessToken: await issueAccessToken(user, txAdapter.getUserGroups),
+                      refreshToken: successorToken!.raw,
+                    } satisfies AuthTokenPair,
+                  };
+                }
+              }
+            }
           }
-          throw Errors.unauthorized('Invalid refresh token');
+
+          await tx.update({
+            model: 'refresh_token',
+            where: [{ field: 'tokenFamily', operator: '=', value: reused.tokenFamily }],
+            data: { isRevoked: true },
+          });
+          // Do not throw inside the transaction: throwing would roll back
+          // the family revocation. Return a sentinel, commit, then throw.
+          return {
+            replayDetected: true as const,
+            userId: reused.userId,
+            tokenFamily: reused.tokenFamily,
+          };
         }
 
-        if (stored.expiresAt < new Date()) {
+        const now = new Date();
+        if (stored.expiresAt < now)
           throw Errors.unauthorized('Refresh token expired');
+
+        const absoluteTimeout = config.jwt.session?.absoluteTimeoutSeconds;
+        if (absoluteTimeout != null && absoluteTimeout > 0 && now.getTime() - stored.familyCreatedAt.getTime() > absoluteTimeout * 1000) {
+          await tx.update({
+            model: 'refresh_token',
+            where: [{ field: 'tokenFamily', operator: '=', value: stored.tokenFamily }],
+            data: { isRevoked: true },
+          });
+          return {
+            sessionExpired: 'absolute' as const,
+            userId: stored.userId,
+            tokenFamily: stored.tokenFamily,
+          };
+        }
+
+        const idleTimeout = config.jwt.session?.idleTimeoutSeconds;
+        const lastActivity = stored.lastActiveAt ?? stored.familyCreatedAt;
+        if (idleTimeout != null && idleTimeout > 0 && now.getTime() - lastActivity.getTime() > idleTimeout * 1000) {
+          await tx.update({
+            model: 'refresh_token',
+            where: [{ field: 'tokenFamily', operator: '=', value: stored.tokenFamily }],
+            data: { isRevoked: true },
+          });
+          return {
+            sessionExpired: 'idle' as const,
+            userId: stored.userId,
+            tokenFamily: stored.tokenFamily,
+          };
         }
 
         // Token fingerprint validation
@@ -607,28 +780,28 @@ export function createAuthService(
           throw Errors.unauthorized('User not found or disabled');
         }
 
-        // Issue new tokens with same family
-        const groups = await txAdapter.getUserGroups(user.id);
-        const customClaims = await enrichClaims(user.id);
-
-        const accessToken = await signAccessToken(
-          {
-            sub: user.id,
-            subjectType: 'USER',
-            name: user.name,
-            groups,
-            iss: resolved.issuer,
-            customClaims: Object.keys(customClaims).length > 0 ? customClaims : undefined,
-          },
-          resolved.key,
-          resolved.accessTokenExpiry,
-        );
-
-        const newToken = await generateRefreshToken();
+        // Issue new tokens with same family. Grace-enabled rotations derive
+        // the successor so a benign retry can recompute the raw token while
+        // the database stores only its hash.
+        const accessToken = await issueAccessToken(user, txAdapter.getUserGroups);
+        const graceSeconds = config.jwt.session?.refreshGraceSeconds;
+        const newToken = graceSeconds != null && graceSeconds > 0
+          ? await deriveRefreshTokenSuccessor(
+              refreshToken,
+              Array.isArray(resolved.key) ? resolved.key[0] : resolved.key,
+            )
+          : await generateRefreshToken();
 
         const newFingerprintHash = meta?.userAgent
           ? await computeFingerprintHash(meta.userAgent)
           : stored.fingerprintHash;
+
+        const rotatedAt = new Date();
+        await tx.update({
+          model: 'refresh_token',
+          where: [{ field: 'id', operator: '=', value: stored.id }],
+          data: { successorTokenHash: newToken.hash, rotatedAt },
+        });
 
         await tx.create({
           model: 'refresh_token',
@@ -640,11 +813,11 @@ export function createAuthService(
             successorTokenHash: null,
             rotatedAt: null,
             isRevoked: false,
-            expiresAt: new Date(Date.now() + resolved.refreshTokenExpiry * 1000),
+            expiresAt: new Date(rotatedAt.getTime() + resolved.refreshTokenExpiry * 1000),
             ipAddress: meta?.ipAddress ?? stored.ipAddress,
             userAgent: meta?.userAgent ?? stored.userAgent,
             deviceName: meta?.deviceName ?? stored.deviceName,
-            lastActiveAt: new Date(),
+            lastActiveAt: rotatedAt,
             fingerprintHash: newFingerprintHash,
           },
         });
@@ -658,6 +831,23 @@ export function createAuthService(
         };
       });
 
+      if ('sessionExpired' in txResult) {
+        const eventType = txResult.sessionExpired === 'idle'
+          ? 'SESSION_EXPIRED_IDLE' as const
+          : 'SESSION_EXPIRED_ABSOLUTE' as const;
+        authEventListeners.emit({
+          eventType,
+          actorId: txResult.userId,
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          outcome: 'failure',
+          metadata: { tokenFamily: txResult.tokenFamily },
+        });
+        throw txResult.sessionExpired === 'idle'
+          ? Errors.sessionIdleTimeout()
+          : Errors.sessionAbsoluteTimeout();
+      }
+
       if ('replayDetected' in txResult) {
         if (authEventListeners.size() > 0) {
           authEventListeners.emit({
@@ -669,6 +859,17 @@ export function createAuthService(
           });
         }
         throw Errors.tokenReuse();
+      }
+
+      if ('graced' in txResult) {
+        authEventListeners.emit({
+          eventType: 'TOKEN_REUSE_GRACED',
+          actorId: txResult.userId,
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          outcome: 'success',
+          metadata: { tokenFamily: txResult.tokenFamily },
+        });
       }
 
       let result: AuthTokenPair = txResult.tokens;

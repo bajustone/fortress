@@ -37,7 +37,7 @@ export { authComponentSchemas, authEndpoints } from './core/auth/auth-endpoints'
 export type { AuthEvent, AuthEventListener } from './core/auth/auth-service';
 
 /** Top-level fortress configuration and pluggable password-hasher contract. */
-export type { FortressConfig, PasswordHasher } from './core/config';
+export type { FortressConfig, PasswordHasher, SessionConfig } from './core/config';
 
 /**
  * Endpoint definition primitives — declarative `EndpointDefinition` objects

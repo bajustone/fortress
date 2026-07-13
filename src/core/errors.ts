@@ -2,6 +2,8 @@
 export type FortressErrorCode
   = | 'UNAUTHORIZED'
     | 'TOKEN_REUSE'
+    | 'SESSION_IDLE_TIMEOUT'
+    | 'SESSION_ABSOLUTE_TIMEOUT'
     | 'FORBIDDEN'
     | 'BAD_REQUEST'
     | 'NOT_FOUND'
@@ -83,6 +85,10 @@ export const Errors = {
     new FortressError('UNAUTHORIZED', message, 401),
   tokenReuse: (): FortressError =>
     new FortressError('TOKEN_REUSE', 'Token reuse detected', 401),
+  sessionIdleTimeout: (): FortressError =>
+    new FortressError('SESSION_IDLE_TIMEOUT', 'Session idle timeout exceeded', 401),
+  sessionAbsoluteTimeout: (): FortressError =>
+    new FortressError('SESSION_ABSOLUTE_TIMEOUT', 'Session absolute timeout exceeded', 401),
   forbidden: (message = 'Forbidden'): FortressError =>
     new FortressError('FORBIDDEN', message, 403),
   badRequest: (message = 'Bad request'): FortressError =>
@@ -158,6 +164,8 @@ function isFortressErrorCode(code: string): code is FortressErrorCode {
   return (
     code === 'UNAUTHORIZED'
     || code === 'TOKEN_REUSE'
+    || code === 'SESSION_IDLE_TIMEOUT'
+    || code === 'SESSION_ABSOLUTE_TIMEOUT'
     || code === 'FORBIDDEN'
     || code === 'BAD_REQUEST'
     || code === 'NOT_FOUND'

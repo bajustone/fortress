@@ -604,6 +604,30 @@ describe('pg: auth lifecycle', () => {
     expect(result.user.email).toBe('alice@test.com');
   });
 
+  it('serializes concurrent max-session enforcement per user', async () => {
+    const database = createPgAdapter();
+    const limited = createFortress({
+      jwt: { key: SECRET, session: { maxSessionsPerUser: 1 } },
+      database,
+    });
+    await limited.auth.createUser({
+      email: 'session-cap-race@test.com',
+      name: 'Session Cap Race',
+      password: 'password-123',
+    });
+
+    await Promise.all([
+      limited.auth.login('session-cap-race@test.com', 'password-123'),
+      limited.auth.login('session-cap-race@test.com', 'password-123'),
+      limited.auth.login('session-cap-race@test.com', 'password-123'),
+    ]);
+
+    expect(await database.count({
+      model: 'refresh_token',
+      where: [{ field: 'isRevoked', operator: '=', value: false }],
+    })).toBe(1);
+  });
+
   it('rejects invalid credentials', async () => {
     await fortress.auth.createUser({
       email: 'bob@test.com',
@@ -1087,7 +1111,7 @@ describe('pg: two-factor plugin', () => {
 
     // Verify with a real TOTP code
     const code = await generateTOTP(setup.secret, 30, 6);
-    const result = await methods.verify(user.id, code);
+    const result = await methods.confirmSetup(user.id, code);
     expect(result.verified).toBe(true);
 
     // Disable 2FA
@@ -1124,8 +1148,8 @@ describe('pg: magic-link plugin', () => {
     expect(sendResult.sent).toBe(true);
     expect(capturedToken).toBeTruthy();
 
-    const verifyResult = await methods.verifyMagicLink(capturedToken);
-    expect(verifyResult.email).toBe('magic@test.com');
+    const verifyResult = await methods.verify(capturedToken);
+    expect(verifyResult.user.email).toBe('magic@test.com');
     expect(verifyResult.accessToken).toBeTruthy();
   });
 });

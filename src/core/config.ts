@@ -37,6 +37,18 @@ export interface CookieConfig {
   path?: string;
 }
 
+/** Opt-in refresh-session controls. Omitted fields preserve existing behavior. */
+export interface SessionConfig {
+  /** Accept the immediately previous refresh token for this many seconds. */
+  refreshGraceSeconds?: number;
+  /** Reject a session after this many seconds without refresh activity. */
+  idleTimeoutSeconds?: number;
+  /** Reject a refresh family after this many seconds, regardless of activity. */
+  absoluteTimeoutSeconds?: number;
+  /** Maximum active refresh families per user; oldest sessions are revoked first. */
+  maxSessionsPerUser?: number;
+}
+
 /** Top-level fortress configuration accepted by {@link createFortress}. */
 export interface FortressConfig {
   jwt: {
@@ -51,6 +63,8 @@ export interface FortressConfig {
     accessTokenExpirySeconds?: number;
     refreshTokenExpirySeconds?: number;
     validateRefreshFingerprint?: boolean | 'warn';
+    /** Optional session rotation/cap controls. No caps or grace apply when omitted. */
+    session?: SessionConfig;
   };
   rbac?: {
     evaluationMode?: 'allow-only' | 'deny-overrides';

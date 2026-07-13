@@ -16,6 +16,32 @@ export async function generateRefreshToken(): Promise<{ raw: string; hash: strin
 }
 
 /**
+ * Derive a rotation successor without persisting its raw value. The active
+ * JWT secret keys the derivation, so possession of an old refresh token alone
+ * cannot reveal later tokens. A grace-window retry can recompute the exact
+ * successor and confirm it against `successorTokenHash`.
+ */
+export async function deriveRefreshTokenSuccessor(
+  rawToken: string,
+  secret: string,
+): Promise<{ raw: string; hash: string }> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const digest = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`fortress-refresh-successor\0${rawToken}`),
+  );
+  const raw = base64UrlEncode(new Uint8Array(digest));
+  return { raw, hash: await hashToken(raw) };
+}
+
+/**
  * Generate a random token family ID for rotation tracking.
  */
 export function generateTokenFamily(): string {

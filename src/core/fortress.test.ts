@@ -107,6 +107,16 @@ describe('createFortress', () => {
     })).toThrow('JWT key must be at least 32 bytes');
   });
 
+  it('rejects non-positive session controls', () => {
+    expect(() => createFortress({
+      jwt: {
+        key: 'fortress-test-secret-at-least-32!',
+        session: { refreshGraceSeconds: 0 },
+      },
+      database: mockDb,
+    })).toThrow('jwt.session.refreshGraceSeconds must be a positive integer');
+  });
+
   it('rejects short secrets in rotation arrays', () => {
     expect(() => createFortress({
       jwt: { key: ['valid-secret-that-is-32-bytes!!!', 'short'] },

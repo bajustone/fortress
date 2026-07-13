@@ -25,6 +25,7 @@ export interface StoredRefreshToken {
   deviceName: string | null;
   lastActiveAt: Date | null;
   fingerprintHash: string | null;
+  createdAt: Date;
 }
 
 /** Hashed, short-lived state for completing a pending authentication flow. */

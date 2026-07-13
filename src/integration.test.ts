@@ -1,5 +1,6 @@
 import type { Fortress } from './core/fortress';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { hashToken } from './core/auth/refresh-token';
 import { createFortress } from './core/fortress';
 import { createTestAdapter } from './testing';
 
@@ -154,6 +155,248 @@ describe('auth integration', () => {
     // freshly issued refresh token. This favours theft detection over a
     // concurrency grace window.
     await expect(fortress.auth.refresh(fulfilled[0].value.refreshToken)).rejects.toThrow('Token reuse detected');
+  });
+
+  it('graces a concurrent double-refresh and returns the same successor', async () => {
+    const database = createTestAdapter();
+    const graceful = createFortress({
+      jwt: {
+        key: 'integration-test-secret-32chars!!',
+        session: { refreshGraceSeconds: 30 },
+      },
+      database,
+    });
+    await graceful.auth.createUser({
+      email: 'grace-refresh@example.com',
+      name: 'Grace Refresh',
+      password: 'password-123',
+    });
+    const login = await graceful.auth.login('grace-refresh@example.com', 'password-123');
+    const events: string[] = [];
+    graceful.auth.addAuthObserver(event => void events.push(event.eventType));
+
+    const [first, second] = await Promise.all([
+      graceful.auth.refresh(login.refreshToken as string),
+      graceful.auth.refresh(login.refreshToken as string),
+    ]);
+
+    expect(first.refreshToken).toBe(second.refreshToken);
+    expect(events).toContain('TOKEN_REUSE_GRACED');
+    await expect(graceful.auth.refresh(first.refreshToken)).resolves.toMatchObject({
+      refreshToken: expect.any(String),
+    });
+  });
+
+  it('recovers grace retries across JWT signing-key rotation', async () => {
+    const keys = [
+      'refresh-key-a-at-least-thirty-two-bytes',
+    ];
+    const rotating = createFortress({
+      jwt: { key: keys, session: { refreshGraceSeconds: 30 } },
+      database: createTestAdapter(),
+    });
+    await rotating.auth.createUser({
+      email: 'rotating-grace@example.com',
+      name: 'Rotating Grace',
+      password: 'password-123',
+    });
+    const login = await rotating.auth.login('rotating-grace@example.com', 'password-123');
+    const successor = await rotating.auth.refresh(login.refreshToken as string);
+
+    keys.unshift('refresh-key-b-at-least-thirty-two-bytes');
+    const retry = await rotating.auth.refresh(login.refreshToken as string);
+    expect(retry.refreshToken).toBe(successor.refreshToken);
+  });
+
+  it('honors disabled, warn, and hard fingerprint modes during grace recovery', async () => {
+    for (const mode of [undefined, 'warn', true] as const) {
+      const database = createTestAdapter();
+      const configured = createFortress({
+        jwt: {
+          key: 'integration-test-secret-32chars!!',
+          session: { refreshGraceSeconds: 30 },
+          ...(mode === undefined ? {} : { validateRefreshFingerprint: mode }),
+        },
+        database,
+      });
+      await configured.auth.createUser({
+        email: `fingerprint-${String(mode)}@example.com`,
+        name: 'Fingerprint',
+        password: 'password-123',
+      });
+      const login = await configured.auth.login(
+        `fingerprint-${String(mode)}@example.com`,
+        'password-123',
+        { userAgent: 'browser-a' },
+      );
+      const successor = await configured.auth.refresh(login.refreshToken as string, { userAgent: 'browser-a' });
+      const retry = configured.auth.refresh(login.refreshToken as string, { userAgent: 'browser-b' });
+
+      if (mode === true) {
+        await expect(retry).rejects.toMatchObject({ code: 'TOKEN_REUSE' });
+        await expect(configured.auth.refresh(successor.refreshToken)).rejects.toMatchObject({ code: 'TOKEN_REUSE' });
+      }
+      else {
+        await expect(retry).resolves.toMatchObject({ refreshToken: successor.refreshToken });
+      }
+    }
+  });
+
+  it('enforces idle and absolute session caps with distinct errors', async () => {
+    const database = createTestAdapter();
+    const capped = createFortress({
+      jwt: {
+        key: 'integration-test-secret-32chars!!',
+        session: { idleTimeoutSeconds: 60, absoluteTimeoutSeconds: 120 },
+      },
+      database,
+    });
+    const events: string[] = [];
+    capped.auth.addAuthObserver(event => void events.push(event.eventType));
+    const user = await capped.auth.createUser({
+      email: 'session-caps@example.com',
+      name: 'Session Caps',
+      password: 'password-123',
+    });
+
+    const idleLogin = await capped.auth.login('session-caps@example.com', 'password-123');
+    await database.update({
+      model: 'refresh_token',
+      where: [{ field: 'userId', operator: '=', value: user.id }],
+      data: { lastActiveAt: new Date(Date.now() - 61_000) },
+    });
+    await expect(capped.auth.refresh(idleLogin.refreshToken as string)).rejects.toMatchObject({
+      code: 'SESSION_IDLE_TIMEOUT',
+    });
+    expect(events).toContain('SESSION_EXPIRED_IDLE');
+
+    const absoluteLogin = await capped.auth.login('session-caps@example.com', 'password-123');
+    await database.update({
+      model: 'refresh_token',
+      where: [
+        { field: 'userId', operator: '=', value: user.id },
+        { field: 'isRevoked', operator: '=', value: false },
+      ],
+      data: {
+        familyCreatedAt: new Date(Date.now() - 121_000),
+        lastActiveAt: new Date(),
+      },
+    });
+    await expect(capped.auth.refresh(absoluteLogin.refreshToken as string)).rejects.toMatchObject({
+      code: 'SESSION_ABSOLUTE_TIMEOUT',
+    });
+    expect(events).toContain('SESSION_EXPIRED_ABSOLUTE');
+  });
+
+  it('enforces session caps on grace-window retries', async () => {
+    const database = createTestAdapter();
+    const capped = createFortress({
+      jwt: {
+        key: 'integration-test-secret-32chars!!',
+        session: {
+          refreshGraceSeconds: 30,
+          idleTimeoutSeconds: 60,
+          absoluteTimeoutSeconds: 120,
+        },
+      },
+      database,
+    });
+    const user = await capped.auth.createUser({
+      email: 'grace-caps@example.com',
+      name: 'Grace Caps',
+      password: 'password-123',
+    });
+
+    const idleLogin = await capped.auth.login('grace-caps@example.com', 'password-123');
+    await capped.auth.refresh(idleLogin.refreshToken as string);
+    await database.update({
+      model: 'refresh_token',
+      where: [
+        { field: 'userId', operator: '=', value: user.id },
+        { field: 'isRevoked', operator: '=', value: false },
+      ],
+      data: { lastActiveAt: new Date(Date.now() - 61_000) },
+    });
+    await expect(capped.auth.refresh(idleLogin.refreshToken as string)).rejects.toMatchObject({
+      code: 'SESSION_IDLE_TIMEOUT',
+    });
+
+    const absoluteLogin = await capped.auth.login('grace-caps@example.com', 'password-123');
+    await capped.auth.refresh(absoluteLogin.refreshToken as string);
+    await database.update({
+      model: 'refresh_token',
+      where: [
+        { field: 'userId', operator: '=', value: user.id },
+        { field: 'isRevoked', operator: '=', value: false },
+      ],
+      data: { familyCreatedAt: new Date(Date.now() - 121_000) },
+    });
+    await expect(capped.auth.refresh(absoluteLogin.refreshToken as string)).rejects.toMatchObject({
+      code: 'SESSION_ABSOLUTE_TIMEOUT',
+    });
+  });
+
+  it('revokes the oldest session when maxSessionsPerUser is reached', async () => {
+    const database = createTestAdapter();
+    const limited = createFortress({
+      jwt: {
+        key: 'integration-test-secret-32chars!!',
+        session: { maxSessionsPerUser: 1 },
+      },
+      database,
+    });
+    await limited.auth.createUser({
+      email: 'session-limit@example.com',
+      name: 'Session Limit',
+      password: 'password-123',
+    });
+    const first = await limited.auth.login('session-limit@example.com', 'password-123');
+    const second = await limited.auth.login('session-limit@example.com', 'password-123');
+
+    await expect(limited.auth.refresh(first.refreshToken as string)).rejects.toMatchObject({ code: 'TOKEN_REUSE' });
+    await expect(limited.auth.refresh(second.refreshToken as string)).resolves.toMatchObject({
+      refreshToken: expect.any(String),
+    });
+  });
+
+  it('enforces maxSessionsPerUser under concurrent login and by family age', async () => {
+    const database = createTestAdapter();
+    const limited = createFortress({
+      jwt: {
+        key: 'integration-test-secret-32chars!!',
+        session: { maxSessionsPerUser: 2 },
+      },
+      database,
+    });
+    const user = await limited.auth.createUser({
+      email: 'session-race@example.com',
+      name: 'Session Race',
+      password: 'password-123',
+    });
+
+    const concurrent = await Promise.all([
+      limited.auth.login('session-race@example.com', 'password-123'),
+      limited.auth.login('session-race@example.com', 'password-123'),
+      limited.auth.login('session-race@example.com', 'password-123'),
+    ]);
+    expect(await database.count({
+      model: 'refresh_token',
+      where: [{ field: 'isRevoked', operator: '=', value: false }],
+    })).toBe(2);
+
+    const oldest = concurrent[1];
+    const oldestHash = await hashToken(oldest.refreshToken as string);
+    await database.update({
+      model: 'refresh_token',
+      where: [{ field: 'tokenHash', operator: '=', value: oldestHash }],
+      data: { familyCreatedAt: new Date(Date.now() - 60_000) },
+    });
+    const rotatedOldest = await limited.auth.refresh(oldest.refreshToken as string);
+    const newest = await limited.auth.login('session-race@example.com', 'password-123');
+
+    await expect(limited.auth.refresh(rotatedOldest.refreshToken)).rejects.toMatchObject({ code: 'TOKEN_REUSE' });
+    await expect(limited.auth.refresh(newest.refreshToken as string)).resolves.toBeDefined();
+    expect(user.id).toBeTruthy();
   });
 
   it('detects refresh token reuse', async () => {

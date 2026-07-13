@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
+import { deriveRefreshTokenSuccessor, generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
 
 describe('refresh-token', () => {
   describe('generateRefreshToken', () => {
@@ -46,6 +46,18 @@ describe('refresh-token', () => {
       const { raw, hash } = await generateRefreshToken();
       const recomputed = await hashToken(raw);
       expect(recomputed).toBe(hash);
+    });
+  });
+
+  describe('deriveRefreshTokenSuccessor', () => {
+    it('recomputes the same successor without storing its raw value', async () => {
+      const first = await deriveRefreshTokenSuccessor('old-token', 'secret-a');
+      const retry = await deriveRefreshTokenSuccessor('old-token', 'secret-a');
+      const otherKey = await deriveRefreshTokenSuccessor('old-token', 'secret-b');
+
+      expect(retry).toEqual(first);
+      expect(otherKey.raw).not.toBe(first.raw);
+      expect(await hashToken(first.raw)).toBe(first.hash);
     });
   });
 

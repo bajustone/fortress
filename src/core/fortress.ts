@@ -275,6 +275,15 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     }
   }
 
+  const session = config.jwt.session;
+  if (session) {
+    for (const [name, value] of Object.entries(session)) {
+      if (value != null && (!Number.isInteger(value) || value <= 0)) {
+        throw Errors.badRequest(`jwt.session.${name} must be a positive integer`);
+      }
+    }
+  }
+
   // Synthesize a virtual plugin from any top-level `routes` field so host
   // apps don't have to hand-roll a one-field plugin just to register their
   // own endpoints. Prepended to the plugin list so its routes appear before
