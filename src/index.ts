@@ -227,8 +227,8 @@ export {
   uuid,
 } from './core/schema-builder';
 
-/** Input type accepted by `endpoint(...).input()` and friends. */
-export type { NumberOptions, SchemaInput, StringOptions } from './core/schema-builder';
+/** Public types used by the schema builder and inferred endpoint responses. */
+export type { ErrorEnvelopeBody, NumberOptions, SchemaInput, StringOptions } from './core/schema-builder';
 /** Standard Schema v1 interop type — fortress schemas implement this. */
 export type { StandardSchemaV1 } from './core/standard-schema';
 

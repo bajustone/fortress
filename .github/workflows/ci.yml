@@ -20,6 +20,8 @@ jobs:
       - name: Exports parity (jsr.json ⇄ package.json ⇄ tsup)
         run: bun run check:exports
       - run: bun run build
+      - name: Consumer declaration-emit smoke test
+        run: bun run check:declarations
       - name: Pure Node ESM testing-subpath smoke test
         run: bun run check:testing-esm
 

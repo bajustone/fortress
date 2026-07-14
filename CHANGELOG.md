@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Export `ErrorEnvelopeBody` from the package root so consumer declaration emit can name endpoint types inferred through `.errorResponse()`.
+
 ## [1.0.1] - 2026-07-14
 
 ### Fixed
