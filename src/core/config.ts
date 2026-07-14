@@ -65,8 +65,9 @@ export interface FortressConfig {
     accessTokenExpirySeconds?: number;
     refreshTokenExpirySeconds?: number;
     /**
-     * Compare a hash of the User-Agent across refreshes. This is an anomaly
-     * signal, not cryptographic token binding; User-Agent is client-controlled.
+     * Compare a domain-separated keyed fingerprint of User-Agent + source IP
+     * across refreshes. This is an anomaly signal, not proof of device identity;
+     * enable hard rejection only where client IP stability is acceptable.
      */
     validateRefreshFingerprint?: boolean | 'warn';
     /** Optional session rotation/cap controls. No caps or grace apply when omitted. */

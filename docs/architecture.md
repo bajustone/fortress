@@ -190,7 +190,7 @@ See `src/core/auth/password.ts`.
 
 The core exposes a single web-standard entry point: `fortress.handleRequest(request: Request): Promise<Response>`. It runs the full pipeline — plugin `before-auth` middleware → token verification (cookie-first, `Authorization: Bearer` fallback) → plugin `after-auth` → fortress-managed default-deny RBAC → plugin `after-rbac` → Standard Schema validation → endpoint dispatch → cookie attachment for auth-issuing endpoints.
 
-Login / refresh / impersonate responses get `Set-Cookie` headers automatically using `FortressConfig.cookies` (defaults: `__Host-` prefixed `httpOnly` `Secure` `SameSite=Lax` in production, relaxed in dev so localhost over HTTP works).
+Login / refresh / impersonate responses get `Set-Cookie` headers automatically using `FortressConfig.cookies`. Defaults are environment-independent and secure: `__Host-` prefixed, `httpOnly`, `Secure`, and `SameSite=Lax`. Plain-HTTP localhost development must explicitly set `cookies: { secure: false }`, which also selects non-`__Host-` default names.
 
 Adapters (`hono/`, `express/`, `sveltekit/`) detect Fortress-managed paths and delegate. New adapters are ~10-line wrappers — translate the framework's request to a `Request`, call `fortress.handleRequest`, send the `Response` back.
 
@@ -613,7 +613,7 @@ ROLE_CREATED, ROLE_DELETED, ROLE_BOUND, ROLE_UNBOUND,
 PERMISSION_CHANGED, PERMISSION_CREATED, PERMISSION_DELETED, GROUP_CREATED, GROUP_UPDATED, GROUP_DELETED, GROUP_MEMBER_ADDED, GROUP_MEMBER_REMOVED
 ```
 
-Events are consumed by the audit-log plugin (if registered) for tamper-evident logging.
+Events are consumed by the audit-log plugin (if registered) for hash-chain integrity checking; an external or keyed anchor is required for evidence against a full database-write attacker.
 
 ---
 

@@ -221,7 +221,7 @@ The `audit-log` plugin records auth events as append-only entries:
 
 ### Hash Chain
 
-When enabled, each audit entry includes a SHA-256 hash of the previous entry, creating a tamper-evident chain. If any entry is modified or deleted, the chain breaks and the tampering is detectable.
+When enabled, each audit entry includes a SHA-256 hash of the previous entry, providing integrity checks against accidental corruption and attackers who cannot rewrite the full log plus anchor. A database-write attacker who can recompute every row and reset the in-database anchor can forge a consistent chain; use external attestation or a keyed/external anchor when that actor is in scope.
 
 ### Compliance
 

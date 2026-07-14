@@ -16,8 +16,8 @@ export async function generateRefreshToken(): Promise<{ raw: string; hash: strin
 }
 
 /**
- * Derive a rotation successor without persisting its raw value. The active
- * A domain-separated HKDF subkey derived from the configured root secret keys
+ * Derive a rotation successor without persisting its raw value. A
+ * domain-separated HKDF subkey derived from the configured root secret keys
  * the rotation HMAC, so the JWT signing key is never used directly for a
  * second primitive. A grace-window retry can recompute the exact successor
  * and confirm it against `successorTokenHash`.
@@ -27,25 +27,7 @@ export async function deriveRefreshTokenSuccessor(
   secret: string,
 ): Promise<{ raw: string; hash: string }> {
   const encoder = new TextEncoder();
-  const rootKey = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    'HKDF',
-    false,
-    ['deriveKey'],
-  );
-  const key = await crypto.subtle.deriveKey(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: encoder.encode('fortress-refresh-token-kdf-v1'),
-      info: encoder.encode('rotation-successor-hmac'),
-    },
-    rootKey,
-    { name: 'HMAC', hash: 'SHA-256', length: 256 },
-    false,
-    ['sign'],
-  );
+  const key = await deriveRefreshHmacKey(secret, 'rotation-successor-hmac');
   const digest = await crypto.subtle.sign(
     'HMAC',
     key,
@@ -53,6 +35,43 @@ export async function deriveRefreshTokenSuccessor(
   );
   const raw = base64UrlEncode(new Uint8Array(digest));
   return { raw, hash: await hashToken(raw) };
+}
+
+/**
+ * Keyed refresh-client consistency signal. It binds both User-Agent and the
+ * observed source IP without storing a reversible fingerprint in the DB.
+ * This remains optional defense-in-depth rather than proof of device identity.
+ */
+export async function hashRefreshFingerprint(
+  userAgent: string,
+  ipAddress: string | undefined,
+  secret: string,
+): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await deriveRefreshHmacKey(secret, 'client-fingerprint-hmac');
+  const digest = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    encoder.encode(`${userAgent}\0${ipAddress ?? ''}`),
+  );
+  return hexEncode(new Uint8Array(digest));
+}
+
+async function deriveRefreshHmacKey(secret: string, info: string): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const rootKey = await crypto.subtle.importKey('raw', encoder.encode(secret), 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: encoder.encode('fortress-refresh-token-kdf-v1'),
+      info: encoder.encode(info),
+    },
+    rootKey,
+    { name: 'HMAC', hash: 'SHA-256', length: 256 },
+    false,
+    ['sign'],
+  );
 }
 
 /**

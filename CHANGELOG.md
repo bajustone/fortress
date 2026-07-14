@@ -1,19 +1,6 @@
 # Changelog
 
-## [0.2.8] - 2026-06-10
-
-### Fixed
-- fix(release): keep jsr.json version in sync with package.json
-
-## [0.2.7] - 2026-06-10
-
-### Fixed
-- fix
-
-## [0.2.6] - 2026-06-10
-
-### Fixed
-- fix
+## [Unreleased]
 
 ## [1.0.0-rc.1] - 2026-07-14
 
@@ -34,6 +21,7 @@
 - **OpenAPI: Zod-free schema converters + a spec-drift CI gate.** `@bajustone/fortress/hono` now exports `identitySchemaConverter`, `fetcherSchemaConverter`, and `toJSONSchemaConverter` so you can `mountFortressOpenAPI` / `convertRoutes` using fortress's or fetcher's builder **without installing Zod** (existing Zod callers unaffected). A new gate (`src/core/openapi-drift.test.ts`) runs `@bajustone/fetcher/spec-tools`' `lintSpec` over the emitted spec and fails on any unenforced request-schema keyword beyond the intentional `format`/`additionalProperties`. The `/auth/register` body's `email` field now uses the **enforced** `email()` builder (ReDoS-safe pattern) instead of annotation-only `strFormat('email')`, so malformed emails are rejected at registration.
 
 ### Fixed
+- **Refresh fingerprints are now keyed and network-bound.** The optional consistency check uses a domain-separated HMAC over User-Agent plus observed source IP instead of a reversible bare User-Agent SHA-256. Existing fingerprinted sessions must authenticate again after upgrading; hard mode should be enabled only where source IP stability is acceptable.
 - **OAuth signing keys now have an operational rotation lifecycle.** `rotateSigningKey()` atomically retires the active RS256 key, creates a replacement, publishes retired keys for `signingKeyGraceSeconds`, and prunes expired keys. JWKS filtering prevents stale verification keys from remaining public indefinitely.
 - **PostgreSQL append-only identifiers are bigint-safe.** Migration `0010_bigint_append_only_ids` widens token, audit, webhook-delivery, and WebAuthn-challenge identifiers and backing sequences before int4 exhaustion; fresh schemas use `BIGSERIAL`. A real two-process SQLite regression now exercises the database migration lock rather than relying on same-process serialization.
 - **TOTP seeds are encrypted at rest.** `twoFactor()` now requires a 32-byte application-held `secretEncryptionKey` and stores only AES-256-GCM envelopes bound to the user id. Migration `0009_encrypt_totp_secrets` securely invalidates legacy plaintext enrolments and their recovery/trusted-device state, requiring affected users to re-enrol.
@@ -107,6 +95,21 @@
 
 ### Changed (breaking)
 - **`FortressConfig.jwt.secret` renamed to `FortressConfig.jwt.key`.** The field now accepts the new exported `JwtKeyMaterial` type (currently `string | string[]`, intentionally narrow so the runtime helpers don't lie about supported inputs). The alias exists so the public signature stays stable when fortress expands to asymmetric algorithms (RS256 / EdDSA) and JWKS-backed verification — the doc comment on `JwtKeyMaterial` in `core/auth/jwt.ts` shows the planned widening (`CryptoKey | KeyObject | JWK | Uint8Array | …` plus a `JwtVerifyKeyMaterial` variant for `JWTVerifyGetKey`). `signAccessToken` / `verifyAccessToken` parameter renamed `secret` → `key` to match. Codemod: `jwt: { secret: ... }` → `jwt: { key: ... }`.
+
+## [0.2.8] - 2026-06-10
+
+### Fixed
+- fix(release): keep jsr.json version in sync with package.json
+
+## [0.2.7] - 2026-06-10
+
+### Fixed
+- fix
+
+## [0.2.6] - 2026-06-10
+
+### Fixed
+- fix
 
 ## [0.2.5] - 2026-06-10
 

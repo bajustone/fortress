@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveRefreshTokenSuccessor, generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
+import { deriveRefreshTokenSuccessor, generateRefreshToken, generateTokenFamily, hashRefreshFingerprint, hashToken } from './refresh-token';
 
 describe('refresh-token', () => {
   describe('generateRefreshToken', () => {
@@ -58,6 +58,16 @@ describe('refresh-token', () => {
       expect(retry).toEqual(first);
       expect(otherKey.raw).not.toBe(first.raw);
       expect(await hashToken(first.raw)).toBe(first.hash);
+    });
+  });
+
+  describe('hashRefreshFingerprint', () => {
+    it('is keyed and binds both User-Agent and source IP', async () => {
+      const first = await hashRefreshFingerprint('Browser/1', '203.0.113.1', 'secret-a');
+      expect(await hashRefreshFingerprint('Browser/1', '203.0.113.1', 'secret-a')).toBe(first);
+      expect(await hashRefreshFingerprint('Browser/1', '203.0.113.2', 'secret-a')).not.toBe(first);
+      expect(await hashRefreshFingerprint('Browser/1', '203.0.113.1', 'secret-b')).not.toBe(first);
+      expect(first).not.toBe(await hashToken('Browser/1'));
     });
   });
 

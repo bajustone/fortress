@@ -51,6 +51,7 @@ describe('two-factor plugin', () => {
       expect(setup.otpauthUrl).toContain('otpauth://totp/');
       expect(setup.otpauthUrl).toContain('TestApp');
       expect(setup.backupCodes).toHaveLength(5);
+      expect(setup.backupCodes.every(code => /^[0-9a-f]{32}$/.test(code))).toBe(true);
       const stored = await fortress.config.database.findOne<{ secret: string }>({
         model: 'two_factor_secret',
         where: [{ field: 'userId', operator: '=', value: userId }],

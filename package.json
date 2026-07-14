@@ -1,6 +1,6 @@
 {
   "name": "@bajustone/fortress",
-  "version": "0.2.8",
+  "version": "1.0.0-rc.1",
   "description": "Framework-agnostic, adapter-based authentication and authorization library for TypeScript. Core auth (JWT, refresh tokens, password hashing) plus IAM (resource+action permissions, groups, roles) with a plugin system for OAuth, 2FA, tenancy, WebAuthn, magic links, audit logging, rate limiting, and more.",
   "type": "module",
   "module": "src/index.ts",
@@ -326,6 +326,7 @@
     "typecheck:examples": "tsc -p tsconfig.examples.json --noEmit",
     "build": "tsup",
     "version": "bun scripts/changelog.ts",
+    "changelog:dry-run": "bun scripts/changelog.ts --dry-run",
     "check:version": "bun scripts/check-version-sync.ts",
     "check:exports": "bun scripts/check-exports-parity.ts",
     "check:testing-esm": "node scripts/check-testing-esm.mjs",

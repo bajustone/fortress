@@ -198,8 +198,9 @@ explain.sources[0]
 // }
 ```
 
-Precedence: any matching `DENY` source flips `allowed` to `false`,
-regardless of how many `ALLOW` sources exist. Wildcard permissions
+With `rbac.evaluationMode: 'deny-overrides'`, any matching `DENY` source
+flips `allowed` to `false` regardless of matching `ALLOW` sources. In the
+default `allow-only` mode, DENY entries are intentionally ignored. Wildcard permissions
 (`resource: '*'`, `action: '*'`) match every check; you'll see them
 listed as sources when they apply.
 

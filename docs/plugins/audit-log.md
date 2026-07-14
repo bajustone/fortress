@@ -2,7 +2,7 @@
 
 ## Overview
 
-The audit-log plugin provides a tamper-evident audit trail for all authentication events. Every login, logout, registration, token refresh, and failed login attempt is recorded with actor, timestamp, IP address, and user-agent metadata.
+The audit-log plugin provides a hash-chain integrity trail for authentication events. Every login, logout, registration, token refresh, and failed login attempt is recorded with actor, timestamp, IP address, and user-agent metadata.
 
 An optional SHA-256 hash chain links each entry to its predecessor, making retroactive tampering detectable. This is designed for organizations that need to demonstrate compliance with SOC 2, HIPAA, PCI-DSS, or similar frameworks that require immutable, verifiable logs of access events.
 
@@ -134,7 +134,7 @@ Results are returned in reverse chronological order (`timestamp DESC`).
 
 ### Hash Chain for Tamper Detection
 
-When `hashChain: true` is set, each audit entry includes a `previousHash` field containing the SHA-256 hash of the preceding entry. The digest uses an unambiguous serialization of all 13 stored fields, including the predecessor's own `previousHash`, so the chain is cryptographically linked and changes to actor, target, request, outcome, metadata, or timestamp fields break verification.
+When `hashChain: true` is set, each audit entry includes a `previousHash` field containing the SHA-256 hash of the preceding entry. The digest uses an unambiguous serialization of all 13 stored fields, including the predecessor's own `previousHash`, so changes to actor, target, request, outcome, metadata, or timestamp fields break verification. This is an unkeyed integrity check, not proof against an attacker who can rewrite the complete database: such an attacker can recompute the chain and reset its in-database anchor. Use external attestation or a keyed/external anchor when database-write attackers are in scope.
 
 The first entry has `previousHash: null`. Every subsequent entry references the one before it. A permanent singleton `fortress_audit_chain_state` anchor starts at `{ lastHash: null, entryCount: 0 }` and stores the expected terminal hash/count after each append, making deletion or mutation of the final row—or deletion of the entire chain—detectable as well. Each append reads this anchor, inserts the new row using `anchor.lastHash`, and advances the anchor in the same serialized transaction, so append work remains constant as the log grows. A zero anchor performs one bounded (`LIMIT 1`) existence probe to reject an untransformed legacy log safely; no history is hashed or traversed. SQLite transactions are queued per adapter instance to accommodate synchronous drivers; PostgreSQL uses a transaction-scoped advisory lock across application instances and is not placed on an in-process/global queue. `verifyChain()` performs the separate full historical scan.
 

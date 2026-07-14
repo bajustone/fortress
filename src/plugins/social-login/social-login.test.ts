@@ -284,6 +284,54 @@ describe('social-login plugin', () => {
       ).rejects.toThrow('Invalid ID token');
     });
 
+    it('rejects alg:none ID tokens before provider profile resolution', async () => {
+      const encode = (value: unknown): string => btoa(JSON.stringify(value))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/g, '');
+      const unsigned = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
+        iss: 'https://issuer-none.example.com',
+        aud: 'oidc-client',
+        sub: 'attacker',
+        nonce: 'stored-nonce',
+        exp: Math.floor(Date.now() / 1000) + 300,
+      })}.`;
+
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const request = input instanceof Request ? input : undefined;
+        const href = request ? request.url : String(input);
+        if (href.endsWith('/.well-known/openid-configuration')) {
+          return Response.json({
+            issuer: 'https://issuer-none.example.com',
+            authorization_endpoint: 'https://issuer-none.example.com/authorize',
+            token_endpoint: 'https://issuer-none.example.com/token',
+            userinfo_endpoint: 'https://issuer-none.example.com/userinfo',
+            jwks_uri: 'https://issuer-none.example.com/jwks',
+          });
+        }
+        if (href.endsWith('/token'))
+          return Response.json({ access_token: 'provider-access', id_token: unsigned });
+        if (href.endsWith('/jwks'))
+          return Response.json({ keys: [] });
+        throw new Error(`unexpected fetch ${href}`);
+      }));
+
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-none', clientId: 'oidc-client', clientSecret: 'secret', issuer: 'https://issuer-none.example.com' }],
+      });
+      const methods = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      await expect(methods.handleCallback(
+        'oidc-none',
+        'code',
+        'https://app.com/callback',
+        'verifier',
+        'state',
+        'state',
+        'stored-nonce',
+      )).rejects.toThrow('Invalid ID token');
+    });
+
     it('decrypts persisted provider tokens through getProviderTokens', async () => {
       const { publicKey, privateKey } = await generateKeyPair('RS256');
       const jwk = await exportJWK(publicKey);

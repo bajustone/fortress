@@ -36,7 +36,7 @@ import { signAccessToken, verifyAccessToken } from './jwt';
 import { createDefaultHasher, normalizePasswordInput } from './password';
 import { validatePassword } from './password-policy';
 import { consumeAuthContinuation, runPostAuthGates, verifyAuthContinuation } from './post-auth-gate';
-import { deriveRefreshTokenSuccessor, generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
+import { deriveRefreshTokenSuccessor, generateRefreshToken, generateTokenFamily, hashRefreshFingerprint, hashToken } from './refresh-token';
 
 const NUMERIC_SUBJECT_ID_RE = /^\d+$/;
 
@@ -283,9 +283,20 @@ export function createAuthService(
 
   const getUserGroups = adapter.getUserGroups;
 
-  async function computeFingerprintHash(userAgent: string): Promise<string> {
-    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userAgent));
-    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  const jwtSecrets = Array.isArray(resolved.key) ? resolved.key : [resolved.key];
+  async function computeFingerprintHash(meta: RequestMeta, secret = jwtSecrets[0]!): Promise<string | null> {
+    return meta.userAgent
+      ? hashRefreshFingerprint(meta.userAgent, meta.ipAddress, secret)
+      : null;
+  }
+  async function fingerprintMatches(stored: string, meta: RequestMeta): Promise<boolean> {
+    if (!meta.userAgent)
+      return false;
+    for (const secret of jwtSecrets) {
+      if (await hashRefreshFingerprint(meta.userAgent, meta.ipAddress, secret) === stored)
+        return true;
+    }
+    return false;
   }
 
   async function issueAccessToken(
@@ -318,9 +329,7 @@ export function createAuthService(
     const family = generateTokenFamily();
     const issuedAt = new Date();
 
-    const fingerprintHash = meta?.userAgent
-      ? await computeFingerprintHash(meta.userAgent)
-      : null;
+    const fingerprintHash = meta ? await computeFingerprintHash(meta) : null;
 
     const maxSessions = config.jwt.session?.maxSessionsPerUser;
     const persistSession = async (target: DatabaseAdapter): Promise<void> => {
@@ -631,11 +640,8 @@ export function createAuthService(
             && reused.rotatedAt != null
             && now.getTime() - reused.rotatedAt.getTime() <= graceSeconds * 1000;
           if (withinGrace && reused.successorTokenHash) {
-            const currentFingerprint = reused.fingerprintHash && meta?.userAgent
-              ? await computeFingerprintHash(meta.userAgent)
-              : null;
             const fingerprintMismatch = reused.fingerprintHash != null
-              && currentFingerprint !== reused.fingerprintHash;
+              && (!meta || !(await fingerprintMatches(reused.fingerprintHash, meta)));
             const fingerprintAllowsGrace = !fingerprintMismatch
               || config.jwt.validateRefreshFingerprint !== true;
             if (fingerprintMismatch && config.jwt.validateRefreshFingerprint === 'warn') {
@@ -769,11 +775,11 @@ export function createAuthService(
 
         // Token fingerprint validation
         if (config.jwt.validateRefreshFingerprint && stored.fingerprintHash) {
-          const currentFingerprint = meta?.userAgent
-            ? await computeFingerprintHash(meta.userAgent)
-            : null;
+          const currentFingerprintMatches = meta
+            ? await fingerprintMatches(stored.fingerprintHash, meta)
+            : false;
 
-          if (currentFingerprint !== stored.fingerprintHash) {
+          if (!currentFingerprintMatches) {
             if (config.jwt.validateRefreshFingerprint === true) {
               // Do not throw inside the transaction: the family revocation
               // must commit before the caller receives the rejection.
@@ -829,8 +835,8 @@ export function createAuthService(
             )
           : await generateRefreshToken();
 
-        const newFingerprintHash = meta?.userAgent
-          ? await computeFingerprintHash(meta.userAgent)
+        const newFingerprintHash = meta
+          ? (await computeFingerprintHash(meta) ?? stored.fingerprintHash)
           : stored.fingerprintHash;
 
         const rotatedAt = new Date();

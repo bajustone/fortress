@@ -1,7 +1,9 @@
 import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { promoteUnreleased } from '../src/internal/changelog';
 
+const dryRun = process.argv.includes('--dry-run');
 const root = join(import.meta.dirname, '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
 const version = pkg.version;
@@ -18,9 +20,11 @@ const jsrSynced = jsrRaw.replace(
   `$1"${version}"`,
 );
 if (jsrSynced !== jsrRaw) {
-  writeFileSync(jsrPath, jsrSynced);
-  execSync('git add jsr.json', { cwd: root });
-  console.log(`Synced jsr.json version to ${version}`);
+  if (!dryRun) {
+    writeFileSync(jsrPath, jsrSynced);
+    execSync('git add jsr.json', { cwd: root });
+  }
+  console.log(`${dryRun ? 'Would sync' : 'Synced'} jsr.json version to ${version}`);
 }
 
 // Find the previous tag
@@ -90,22 +94,15 @@ if (fixed.length > 0) {
 
 const changelogPath = join(root, 'CHANGELOG.md');
 const existing = readFileSync(changelogPath, 'utf-8');
-const unreleased = /^## \[Unreleased\]$/m;
-const match = unreleased.exec(existing);
-if (!match)
-  throw new Error('CHANGELOG.md must contain a top [Unreleased] section');
+const updated = promoteUnreleased(existing, version, today, section);
 
-const releaseHeading = `## [${version}] - ${today}`;
-const headingEnd = match.index + match[0].length;
-const updated
-  = existing.slice(0, match.index)
-    + releaseHeading
-    + section
-    + existing.slice(headingEnd);
-
-writeFileSync(changelogPath, updated);
-
-// Stage the file so it's included in the version commit
-execSync('git add CHANGELOG.md', { cwd: root });
-
-console.log(`Updated CHANGELOG.md for v${version}`);
+if (dryRun) {
+  process.stdout.write(updated);
+  console.error(`\nDry run: no files changed for v${version}`);
+}
+else {
+  writeFileSync(changelogPath, updated);
+  // Stage the file so it's included in the version commit.
+  execSync('git add CHANGELOG.md', { cwd: root });
+  console.log(`Updated CHANGELOG.md for v${version}`);
+}

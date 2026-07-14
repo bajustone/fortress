@@ -233,7 +233,10 @@ describe('createSvelteKitHandle: user routes', () => {
       password: 'password-123456',
     });
     const userAgent = 'SSR Browser/1.0';
-    const login = await local.auth.login('single-flight@example.com', 'password-123456', { userAgent });
+    const login = await local.auth.login('single-flight@example.com', 'password-123456', {
+      userAgent,
+      ipAddress: '192.0.2.42',
+    });
     if (login.status !== 'success')
       throw new Error('expected success');
     const expiredAccess = await signAccessToken({
@@ -304,7 +307,10 @@ describe('createSvelteKitHandle: user routes', () => {
     expect((second.locals as FortressLocals).fortress.userId).toBe(user.id);
 
     // The shared successor remains usable; no losing refresh revoked it.
-    await expect(originalRefresh(firstSuccessor, { userAgent })).resolves.toBeDefined();
+    await expect(originalRefresh(firstSuccessor, {
+      userAgent,
+      ipAddress: '192.0.2.42',
+    })).resolves.toBeDefined();
   });
 
   it('does not let mismatched fingerprint metadata join a refresh flight', async () => {
