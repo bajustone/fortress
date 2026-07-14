@@ -89,17 +89,17 @@ the bundled migration DDL, so the check works for any adapter — not just
 Drizzle. Wire `hasMigrationDrift()` into your deploy preflight and your CI
 smoke tests.
 
-## Current baseline (v0.1.x)
+## Current migration catalog
 
-Two migrations ship today:
+Seven migrations ship today:
 
-- **`0001_schema_version`** — installs the `fortress_schema_version`
-  checkpoint table.
-- **`0002_initial_schema`** — creates every Fortress-owned table, index,
-  and constraint. This is plain SQL run through the adapter's `rawQuery`,
-  so `migrateUp` provisions a brand-new database (SQLite **or**
-  PostgreSQL) with no external tooling and no Drizzle dependency at
-  runtime.
+- **`0001_schema_version`** — installs the schema checkpoint.
+- **`0002_initial_schema`** — creates the original Fortress schema.
+- **`0003_auth_continuation`** — adds pending-auth/session metadata.
+- **`0004_tenant_default_unique`** — enforces one default tenant membership.
+- **`0005_hot_indexes_timestamptz`** — adds hot indexes and UTC-safe PostgreSQL timestamps.
+- **`0006_canonical_email`** — performs runtime Unicode email cleanup and installs case-insensitive uniqueness.
+- **`0007_audit_chain_anchor`** — installs the permanent zero-entry sentinel and persists the terminal audit hash/count so tail or full-chain deletion is detectable.
 
 The migrations are the SQL-first source of truth: `src/testing/index.ts`
 derives the test adapter's schema from them, and the column-drift checker

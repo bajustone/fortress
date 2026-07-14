@@ -7,6 +7,7 @@ import { createTestAdapter } from '../../testing';
 import { auditLog } from './index';
 
 const SECRET = 'audit-log-test-secret-32chars!!x';
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 
 describe('audit-log plugin', () => {
   let fortress: Fortress<any>;
@@ -223,7 +224,33 @@ describe('audit-log plugin', () => {
       expect(entries).toHaveLength(20);
       expect(entries.filter(entry => entry.previousHash == null)).toHaveLength(1);
       expect(new Set(entries.flatMap(entry => entry.previousHash ?? [])).size).toBe(19);
+      const anchor = await chainFortress.config.database.findOne<{ entryCount: number; lastHash: string }>({
+        model: 'audit_chain_state',
+        where: [{ field: 'id', operator: '=', value: '1' }],
+      });
+      expect(anchor).toMatchObject({ entryCount: 20 });
+      expect(anchor?.lastHash).toMatch(SHA256_HEX_RE);
       await expect(methods.verifyChain()).resolves.toMatchObject({ valid: true, totalEntries: 20 });
+    });
+
+    it('verifies from the same locked snapshot while appends are in flight', async () => {
+      const chainFortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [auditLog({ hashChain: true })],
+      });
+      const methods = chainFortress.plugins['audit-log'] as AuditLogMethods;
+      const operations: Array<Promise<ChainVerificationResult | void>> = [];
+      for (let index = 0; index < 12; index++) {
+        operations.push(methods.logCustomEvent({ eventType: 'ROLE_CREATED', targetId: String(index) }));
+        operations.push(methods.verifyChain());
+      }
+
+      const results = await Promise.all(operations);
+      const verifications = results.filter((result): result is ChainVerificationResult => result != null);
+      expect(verifications).toHaveLength(12);
+      expect(verifications.every(result => result.valid)).toBe(true);
+      await expect(methods.verifyChain()).resolves.toMatchObject({ valid: true, totalEntries: 12 });
     });
 
     it('detects tampering in fields omitted by the old digest and refuses to append', async () => {
@@ -248,6 +275,59 @@ describe('audit-log plugin', () => {
         methods.logCustomEvent({ eventType: 'ROLE_DELETED' }),
       ).rejects.toThrow('Cannot append to an invalid audit hash chain');
       expect(await db.count({ model: 'audit_log' })).toBe(2);
+    });
+
+    it('detects deletion of the terminal entry through the persisted anchor', async () => {
+      const db = createTestAdapter();
+      const chainFortress = createFortress({
+        jwt: { key: SECRET },
+        database: db,
+        plugins: [auditLog({ hashChain: true })],
+      });
+      const methods = chainFortress.plugins['audit-log'] as AuditLogMethods;
+      for (let index = 0; index < 3; index++)
+        await methods.logCustomEvent({ eventType: 'ROLE_CREATED', targetId: String(index) });
+      const entries = await methods.getAuditLog();
+      const tail = entries.reduce((latest, entry) => Number(entry.id) > Number(latest.id) ? entry : latest);
+
+      await db.delete({
+        model: 'audit_log',
+        where: [{ field: 'id', operator: '=', value: tail.id }],
+      });
+
+      const verification = await methods.verifyChain();
+      expect(verification).toMatchObject({ valid: false, totalEntries: 2 });
+      expect(verification.brokenLinks.some(link => link.expected === 'anchor entry count 3')).toBe(true);
+      await expect(
+        methods.logCustomEvent({ eventType: 'ROLE_DELETED' }),
+      ).rejects.toThrow('Cannot append to an invalid audit hash chain');
+      expect(await db.count({ model: 'audit_log' })).toBe(2);
+    });
+
+    it('does not treat deletion of both the chain and anchor as fresh bootstrap', async () => {
+      const db = createTestAdapter();
+      const chainFortress = createFortress({
+        jwt: { key: SECRET },
+        database: db,
+        plugins: [auditLog({ hashChain: true })],
+      });
+      const methods = chainFortress.plugins['audit-log'] as AuditLogMethods;
+      await methods.logCustomEvent({ eventType: 'ROLE_CREATED' });
+      await methods.logCustomEvent({ eventType: 'ROLE_UPDATED' });
+      await db.rawQuery!('DELETE FROM fortress_audit_log');
+      await db.rawQuery!('DELETE FROM fortress_audit_chain_state');
+
+      const verification = await methods.verifyChain();
+      expect(verification).toMatchObject({ valid: false, totalEntries: 0 });
+      expect(verification.brokenLinks).toContainEqual({
+        entryId: 'anchor',
+        expected: 'persistent zero-entry audit-chain anchor',
+        actual: null,
+      });
+      await expect(
+        methods.logCustomEvent({ eventType: 'ROLE_DELETED' }),
+      ).rejects.toThrow('Cannot append to an invalid audit hash chain');
+      expect(await db.count({ model: 'audit_log' })).toBe(0);
     });
   });
 

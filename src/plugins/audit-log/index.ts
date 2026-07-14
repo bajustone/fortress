@@ -83,6 +83,20 @@ async function sha256Hex(input: string): Promise<string> {
 // transaction/advisory lock remains authoritative across processes.
 let auditWriteChain: Promise<void> = Promise.resolve();
 
+function withAuditChainLock<T>(
+  db: import('../../adapters/database').DatabaseAdapter,
+  fn: (tx: import('../../adapters/database').DatabaseAdapter) => Promise<T>,
+): Promise<T> {
+  const run = (): Promise<T> => db.transaction(async (tx) => {
+    if (tx.dialect === 'pg' && tx.rawQuery)
+      await tx.rawQuery('SELECT pg_advisory_xact_lock(117993, 1)');
+    return fn(tx);
+  });
+  const result = auditWriteChain.then(run, run);
+  auditWriteChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 export interface CustomAuditEvent {
   eventType: string;
   actorId?: string | null;
@@ -162,14 +176,40 @@ async function computeEntryHash(entry: AuditLogEntry): Promise<string> {
   return sha256Hex(JSON.stringify(values));
 }
 
+interface AuditChainAnchor {
+  id: string;
+  lastHash: string | null;
+  entryCount: number;
+  updatedAt: Date;
+}
+
 interface ChainState {
   tail: AuditLogEntry | null;
   brokenLinks: ChainVerificationResult['brokenLinks'];
 }
 
-async function inspectChain(entries: AuditLogEntry[]): Promise<ChainState> {
-  if (entries.length === 0)
-    return { tail: null, brokenLinks: [] };
+async function inspectChain(
+  entries: AuditLogEntry[],
+  anchor: AuditChainAnchor | null,
+): Promise<ChainState> {
+  if (entries.length === 0) {
+    const brokenLinks: ChainVerificationResult['brokenLinks'] = [];
+    if (!anchor) {
+      brokenLinks.push({
+        entryId: 'anchor',
+        expected: 'persistent zero-entry audit-chain anchor',
+        actual: null,
+      });
+    }
+    else if (anchor.entryCount !== 0 || anchor.lastHash !== null) {
+      brokenLinks.push({
+        entryId: 'anchor',
+        expected: 'entry_count=0 and last_hash=null',
+        actual: `${anchor.entryCount}:${anchor.lastHash ?? 'null'}`,
+      });
+    }
+    return { tail: null, brokenLinks };
+  }
 
   const hashes = new Map<string, AuditLogEntry>();
   const duplicateHashes = new Set<string>();
@@ -253,6 +293,33 @@ async function inspectChain(entries: AuditLogEntry[]): Promise<ChainState> {
     }
   }
 
+  if (!anchor) {
+    brokenLinks.push({
+      entryId: tail?.id ?? entries[0].id,
+      expected: 'persisted terminal audit-chain anchor',
+      actual: null,
+    });
+  }
+  else {
+    if (anchor.entryCount !== entries.length) {
+      brokenLinks.push({
+        entryId: tail?.id ?? entries[0].id,
+        expected: `anchor entry count ${anchor.entryCount}`,
+        actual: String(entries.length),
+      });
+    }
+    if (tail) {
+      const tailHash = await computeEntryHash(tail);
+      if (anchor.lastHash !== tailHash) {
+        brokenLinks.push({
+          entryId: tail.id,
+          expected: anchor.lastHash ?? 'non-null terminal hash',
+          actual: tailHash,
+        });
+      }
+    }
+  }
+
   return { tail, brokenLinks };
 }
 
@@ -294,6 +361,15 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
     return allowedEvents.includes(eventType);
   }
 
+  async function readChainAnchor(
+    db: import('../../adapters/database').DatabaseAdapter,
+  ): Promise<AuditChainAnchor | null> {
+    return db.findOne<AuditChainAnchor>({
+      model: 'audit_chain_state',
+      where: [{ field: 'id', operator: '=', value: '1' }],
+    });
+  }
+
   async function writeEntry(
     db: import('../../adapters/database').DatabaseAdapter,
     entry: Omit<AuditLogEntry, 'id' | 'createdAt' | 'previousHash'>,
@@ -303,19 +379,24 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
       return;
     }
 
-    const run = (): Promise<void> => db.transaction(async (tx) => {
-      if (tx.dialect === 'pg' && tx.rawQuery)
-        await tx.rawQuery('SELECT pg_advisory_xact_lock(117993, 1)');
+    await withAuditChainLock(db, async (tx) => {
       const entries = await tx.findMany<AuditLogEntry>({ model: 'audit_log' });
-      const state = await inspectChain(entries);
-      if (state.brokenLinks.length > 0)
+      const anchor = await readChainAnchor(tx);
+      const state = await inspectChain(entries, anchor);
+      if (!anchor || state.brokenLinks.length > 0)
         throw new Error('Cannot append to an invalid audit hash chain');
       const previousHash = state.tail ? await computeEntryHash(state.tail) : null;
-      await tx.create({ model: 'audit_log', data: { ...entry, previousHash } });
+      const created = await tx.create<AuditLogEntry>({
+        model: 'audit_log',
+        data: { ...entry, previousHash },
+      });
+      const lastHash = await computeEntryHash(created);
+      await tx.update({
+        model: 'audit_chain_state',
+        where: [{ field: 'id', operator: '=', value: anchor.id }],
+        data: { lastHash, entryCount: entries.length + 1, updatedAt: new Date() },
+      });
     });
-    const write = auditWriteChain.then(run, run);
-    auditWriteChain = write.then(() => undefined, () => undefined);
-    await write;
   }
 
   return {
@@ -337,6 +418,14 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         metadata: { type: 'string' },
         previousHash: { type: 'string' },
         createdAt: { type: 'date', required: true },
+      },
+    }, {
+      name: 'audit_chain_state',
+      fields: {
+        id: { type: 'string', required: true },
+        lastHash: { type: 'string' },
+        entryCount: { type: 'number', required: true },
+        updatedAt: { type: 'date', required: true },
       },
     }],
 
@@ -471,13 +560,16 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
       },
 
       async verifyChain(): Promise<ChainVerificationResult> {
-        const entries = await ctx.db.findMany<AuditLogEntry>({ model: 'audit_log' });
-        const { brokenLinks } = await inspectChain(entries);
-        return {
-          valid: brokenLinks.length === 0,
-          totalEntries: entries.length,
-          brokenLinks,
-        };
+        return withAuditChainLock(ctx.db, async (tx) => {
+          const entries = await tx.findMany<AuditLogEntry>({ model: 'audit_log' });
+          const anchor = await readChainAnchor(tx);
+          const { brokenLinks } = await inspectChain(entries, anchor);
+          return {
+            valid: brokenLinks.length === 0,
+            totalEntries: entries.length,
+            brokenLinks,
+          };
+        });
       },
     }),
   };

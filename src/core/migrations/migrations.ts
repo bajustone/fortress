@@ -1429,6 +1429,34 @@ DROP INDEX IF EXISTS login_identifier_email_ci_unique;
 DROP INDEX IF EXISTS user_email_ci_unique;
 `.trim();
 
+// --- 0007: persistent audit-chain terminal anchor ---
+
+const SQLITE_0007_UP = `
+CREATE TABLE fortress_audit_chain_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  last_hash TEXT,
+  entry_count INTEGER NOT NULL CHECK (entry_count >= 0),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  CHECK ((entry_count = 0 AND last_hash IS NULL) OR (entry_count > 0 AND last_hash IS NOT NULL))
+);
+INSERT INTO fortress_audit_chain_state (id, last_hash, entry_count) VALUES (1, NULL, 0);
+`.trim();
+
+const SQLITE_0007_DOWN = 'DROP TABLE IF EXISTS fortress_audit_chain_state;';
+
+const PG_0007_UP = `
+CREATE TABLE fortress_audit_chain_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  last_hash VARCHAR(64),
+  entry_count INTEGER NOT NULL CHECK (entry_count >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((entry_count = 0 AND last_hash IS NULL) OR (entry_count > 0 AND last_hash IS NOT NULL))
+);
+INSERT INTO fortress_audit_chain_state (id, last_hash, entry_count) VALUES (1, NULL, 0);
+`.trim();
+
+const PG_0007_DOWN = 'DROP TABLE IF EXISTS fortress_audit_chain_state;';
+
 export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> = {
   sqlite: [
     { version: 1, name: 'schema_version', dialect: 'sqlite', up: SQLITE_0001_UP, down: SQLITE_0001_DOWN },
@@ -1437,6 +1465,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 4, name: 'tenant_default_unique', dialect: 'sqlite', up: SQLITE_0004_UP, down: SQLITE_0004_DOWN },
     { version: 5, name: 'hot_indexes_timestamptz', dialect: 'sqlite', up: SQLITE_0005_UP, down: SQLITE_0005_DOWN },
     { version: 6, name: 'canonical_email', dialect: 'sqlite', up: SQLITE_0006_UP, down: SQLITE_0006_DOWN, freshUp: SQLITE_0006_FRESH_UP, dataStep: 'normalize-email-v2', beforeUp: normalizeExistingUserEmails },
+    { version: 7, name: 'audit_chain_anchor', dialect: 'sqlite', up: SQLITE_0007_UP, down: SQLITE_0007_DOWN },
   ],
   pg: [
     { version: 1, name: 'schema_version', dialect: 'pg', up: PG_0001_UP, down: PG_0001_DOWN },
@@ -1445,6 +1474,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 4, name: 'tenant_default_unique', dialect: 'pg', up: PG_0004_UP, down: PG_0004_DOWN },
     { version: 5, name: 'hot_indexes_timestamptz', dialect: 'pg', up: PG_0005_UP, down: PG_0005_DOWN },
     { version: 6, name: 'canonical_email', dialect: 'pg', up: PG_0006_UP, down: PG_0006_DOWN, freshUp: PG_0006_FRESH_UP, dataStep: 'normalize-email-v2', beforeUp: normalizeExistingUserEmails },
+    { version: 7, name: 'audit_chain_anchor', dialect: 'pg', up: PG_0007_UP, down: PG_0007_DOWN },
   ],
 };
 
@@ -1510,6 +1540,7 @@ export const FORTRESS_TABLES: readonly string[] = [
   'fortress_user_scope_assignment',
   'fortress_account_lockout',
   'fortress_audit_log',
+  'fortress_audit_chain_state',
   'fortress_webhook_endpoint',
   'fortress_webhook_delivery',
   'fortress_webauthn_credential',

@@ -417,6 +417,13 @@ const auditLogs = pgTable('fortress_audit_log', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, table => [index('audit_log_timestamp_idx').on(table.timestamp)]);
 
+const auditChainState = pgTable('fortress_audit_chain_state', {
+  id: integer('id').primaryKey(),
+  lastHash: varchar('last_hash', { length: 64 }),
+  entryCount: integer('entry_count').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // --- Plugins: Webhook ---
 
 const webhookEndpoints = pgTable('fortress_webhook_endpoint', {
@@ -516,6 +523,7 @@ export const fortressPgSchema: Record<string, AnyPgTable> = {
   userScopeAssignments,
   accountLockouts,
   auditLogs,
+  auditChainState,
   webhookEndpoints,
   webhookDeliveries,
   webauthnCredentials,

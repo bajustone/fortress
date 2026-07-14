@@ -312,6 +312,16 @@ const CREATE_TABLES_SQL = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
+  CREATE TABLE IF NOT EXISTS fortress_audit_chain_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_hash VARCHAR(64),
+    entry_count INTEGER NOT NULL CHECK (entry_count >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((entry_count = 0 AND last_hash IS NULL) OR (entry_count > 0 AND last_hash IS NOT NULL))
+  );
+  INSERT INTO fortress_audit_chain_state (id, last_hash, entry_count)
+  VALUES (1, NULL, 0) ON CONFLICT (id) DO NOTHING;
+
   CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
     id SERIAL PRIMARY KEY,
     url TEXT NOT NULL,
@@ -361,6 +371,7 @@ const TRUNCATE_SQL = `
   TRUNCATE
     fortress_webhook_delivery,
     fortress_webhook_endpoint,
+    fortress_audit_chain_state,
     fortress_audit_log,
     fortress_account_lockout,
     fortress_user_scope_assignment,
@@ -392,6 +403,8 @@ const TRUNCATE_SQL = `
     fortress_login_identifier,
     fortress_user
   CASCADE;
+  INSERT INTO fortress_audit_chain_state (id, last_hash, entry_count)
+  VALUES (1, NULL, 0);
 `;
 
 let container: StartedTestContainer;

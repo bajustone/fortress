@@ -136,7 +136,7 @@ Results are returned in reverse chronological order (`timestamp DESC`).
 
 When `hashChain: true` is set, each audit entry includes a `previousHash` field containing the SHA-256 hash of the preceding entry. The digest uses an unambiguous serialization of all 13 stored fields, including the predecessor's own `previousHash`, so the chain is cryptographically linked and changes to actor, target, request, outcome, metadata, or timestamp fields break verification.
 
-The first entry has `previousHash: null`. Every subsequent entry references the one before it. Writes are serialized transactionally; PostgreSQL also uses a transaction-scoped advisory lock, preventing concurrent application instances from forking the chain. Appends fail closed when the existing chain is invalid.
+The first entry has `previousHash: null`. Every subsequent entry references the one before it. A permanent singleton `fortress_audit_chain_state` anchor starts at `{ lastHash: null, entryCount: 0 }` and stores the expected terminal hash/count after each append, making deletion or mutation of the final row—or deletion of the entire chain—detectable as well. Writes and anchor updates are serialized in one transaction; verification acquires the same lock and reads both tables from that transaction, preventing false corruption during an in-flight append. PostgreSQL also uses a transaction-scoped advisory lock, preventing concurrent application instances from forking the chain. Appends fail closed when the existing chain or anchor is invalid.
 
 ```ts
 const fortress = createFortress({
@@ -154,7 +154,7 @@ if (!verification.valid)
   throw new Error(`Broken audit chain: ${JSON.stringify(verification.brokenLinks)}`);
 ```
 
-If a row is deleted or altered, the hash chain breaks. Auditors can walk the chain to confirm log integrity without trusting the application layer.
+If a row is deleted or altered, either an internal link or the persisted terminal anchor breaks. Auditors can verify both the chain graph and its expected terminal state through `verifyChain()`.
 
 **Upgrade note:** Chains created by releases using the former four-field, unlinked digest cannot be safely re-certified as cryptographic history. Archive and externally attest those rows before enabling the corrected chain. The plugin fails closed rather than appending to a legacy or otherwise invalid chain.
 
@@ -240,7 +240,7 @@ The plugin uses Fortress's hook system to intercept auth lifecycle events withou
 | `afterRegister` | `REGISTER` |
 | `afterTokenRefresh` | `TOKEN_REFRESH` |
 
-Each hook writes a row to the `audit_log` model via the database adapter. When hash chaining is enabled, Fortress transactionally validates the existing graph, hashes all 13 fields of its unique tail, and stores that digest as `previousHash` on the new entry. Graph traversal avoids assuming that string identifiers are numerically ordered.
+Each hook writes a row to the `audit_log` model via the database adapter. When hash chaining is enabled, Fortress transactionally validates the existing graph and terminal anchor, hashes all 13 fields of its unique tail, stores that digest as `previousHash` on the new entry, and advances the anchor to the new terminal hash/count. Graph traversal avoids assuming that string identifiers are numerically ordered.
 
 The `getAuditLog` method builds `WhereClause` filters from the query options and delegates to `db.findMany`, keeping the plugin fully database-agnostic.
 

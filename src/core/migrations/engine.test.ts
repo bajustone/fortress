@@ -43,21 +43,21 @@ describe('migration engine', () => {
 
     const before = await getMigrationStatus(db, dialect);
     expect(before.currentVersion).toBe(0);
-    expect(before.latestVersion).toBe(6);
-    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(before.latestVersion).toBe(7);
+    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
 
     const up = await migrateUp(db, dialect);
-    expect(up).toMatchObject({ fromVersion: 0, toVersion: 6 });
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email']);
+    expect(up).toMatchObject({ fromVersion: 0, toVersion: 7 });
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor']);
 
     const after = await getMigrationStatus(db, dialect);
-    expect(after.currentVersion).toBe(6);
+    expect(after.currentVersion).toBe(7);
     expect(after.upToDate).toBe(true);
     expect(hasMigrationDrift(await detectMigrationDrift(db, dialect))).toBe(false);
 
     const down = await migrateDown(db, dialect);
-    expect(down).toMatchObject({ fromVersion: 6, toVersion: 0 });
-    expect(down.rolledBack.map(migration => migration.name)).toEqual(['canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
+    expect(down).toMatchObject({ fromVersion: 7, toVersion: 0 });
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
 
     const final = await getMigrationStatus(db, dialect);
     expect(final.hasVersionTable).toBe(false);
@@ -79,13 +79,13 @@ describe('migration engine', () => {
         migrateUp(first.db, dialect),
         migrateUp(second.db, dialect),
       ]);
-      expect(results.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 6]);
-      expect(results.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 6]);
-      expect((await getMigrationStatus(second.db, dialect)).currentVersion).toBe(6);
+      expect(results.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 7]);
+      expect(results.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 7]);
+      expect((await getMigrationStatus(second.db, dialect)).currentVersion).toBe(7);
       const journal = await second.db.rawQuery!<{ version: number }>(
         'SELECT version FROM fortress_migration_journal ORDER BY version',
       );
-      expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
     }
     finally {
       first.close();
@@ -122,7 +122,7 @@ describe('migration engine', () => {
     const journal = await db.rawQuery!<{ version: number; name: string; checksum: string }>(
       'SELECT version, name, checksum FROM fortress_migration_journal ORDER BY version',
     );
-    expect(journal).toHaveLength(6);
+    expect(journal).toHaveLength(7);
     expect(journal.map(row => row.name)).toEqual([
       'schema_version',
       'initial_schema',
@@ -130,6 +130,7 @@ describe('migration engine', () => {
       'tenant_default_unique',
       'hot_indexes_timestamptz',
       'canonical_email',
+      'audit_chain_anchor',
     ]);
     expect(journal.every(row => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
 
@@ -148,7 +149,7 @@ describe('migration engine', () => {
       ['0'.repeat(64)],
     );
     await expect(migrateUp(db, dialect)).rejects.toThrow(/integrity check failed/);
-    expect((await getMigrationStatus(db, dialect)).currentVersion).toBe(6);
+    expect((await getMigrationStatus(db, dialect)).currentVersion).toBe(7);
 
     await db.rawQuery!('UPDATE fortress_migration_journal SET checksum = (SELECT checksum FROM fortress_migration_journal WHERE version = 2) WHERE version = 3');
     // The copied checksum is still invalid for v3; replace via a fresh legacy
@@ -171,7 +172,7 @@ describe('migration engine', () => {
     const journal = await db.rawQuery!<{ version: number }>(
       'SELECT version FROM fortress_migration_journal ORDER BY version',
     );
-    expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 
   it('fails closed when a data migration is applied as SQL without its runtime step', async () => {

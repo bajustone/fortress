@@ -52,6 +52,7 @@ function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema):
     user_scope_assignment: schema.userScopeAssignments,
     account_lockout: schema.accountLockouts,
     audit_log: schema.auditLogs,
+    audit_chain_state: schema.auditChainState,
     webhook_endpoint: schema.webhookEndpoints,
     webhook_delivery: schema.webhookDeliveries,
     webauthn_credential: schema.webauthnCredentials,

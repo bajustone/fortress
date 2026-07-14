@@ -422,6 +422,13 @@ const auditLogs = sqliteTable('fortress_audit_log', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, table => [index('audit_log_timestamp_idx').on(table.timestamp)]);
 
+const auditChainState = sqliteTable('fortress_audit_chain_state', {
+  id: integer('id').primaryKey(),
+  lastHash: text('last_hash'),
+  entryCount: integer('entry_count').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
 // --- Plugins: Webhook ---
 
 const webhookEndpoints = sqliteTable('fortress_webhook_endpoint', {
@@ -521,6 +528,7 @@ export const fortressSchema: Record<string, AnySQLiteTable> = {
   userScopeAssignments,
   accountLockouts,
   auditLogs,
+  auditChainState,
   webhookEndpoints,
   webhookDeliveries,
   webauthnCredentials,

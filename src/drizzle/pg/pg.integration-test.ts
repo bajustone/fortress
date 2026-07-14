@@ -342,6 +342,16 @@ const CREATE_TABLES_SQL = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
+  CREATE TABLE IF NOT EXISTS fortress_audit_chain_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_hash VARCHAR(64),
+    entry_count INTEGER NOT NULL CHECK (entry_count >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((entry_count = 0 AND last_hash IS NULL) OR (entry_count > 0 AND last_hash IS NOT NULL))
+  );
+  INSERT INTO fortress_audit_chain_state (id, last_hash, entry_count)
+  VALUES (1, NULL, 0) ON CONFLICT (id) DO NOTHING;
+
   CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
     id SERIAL PRIMARY KEY,
     url TEXT NOT NULL,
@@ -392,6 +402,7 @@ const TRUNCATE_SQL = `
   TRUNCATE
     fortress_webhook_delivery,
     fortress_webhook_endpoint,
+    fortress_audit_chain_state,
     fortress_audit_log,
     fortress_account_lockout,
     fortress_user_scope_assignment,
@@ -424,6 +435,8 @@ const TRUNCATE_SQL = `
     fortress_login_identifier,
     fortress_user
   CASCADE;
+  INSERT INTO fortress_audit_chain_state (id, last_hash, entry_count)
+  VALUES (1, NULL, 0);
 `;
 
 const SECRET = 'pg-integration-test-secret-at-least-32!!';
@@ -918,10 +931,16 @@ describe('pg: plugins', () => {
     });
     const methods = fortress.plugins['audit-log'] as AuditLogMethods;
 
-    await Promise.all(Array.from({ length: 12 }, (_, index) => methods.logCustomEvent({
-      eventType: 'ROLE_CREATED',
-      targetId: String(index),
-    })));
+    const concurrentVerifications = await Promise.all(Array.from({ length: 12 }, async (_, index) => {
+      const append = methods.logCustomEvent({
+        eventType: 'ROLE_CREATED',
+        targetId: String(index),
+      });
+      const verification = methods.verifyChain();
+      await append;
+      return verification;
+    }));
+    expect(concurrentVerifications.every(result => result.valid)).toBe(true);
     const entries = await methods.getAuditLog();
 
     expect(entries).toHaveLength(12);
