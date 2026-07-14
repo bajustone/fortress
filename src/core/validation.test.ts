@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FortressError } from './errors';
+import { iamEndpoints } from './iam/iam-endpoints';
 import { int, num, obj, str } from './schema-builder';
 import { coerceBySchema, validateRequest } from './validation';
 
@@ -26,6 +27,16 @@ describe('validateRequest', () => {
 
   it('no-op when no schemas are set', async () => {
     await expect(validateRequest({ body: { type: 'object' } }, {})).resolves.toBeUndefined();
+  });
+
+  it('enforces component refs through a real IAM endpoint body', async () => {
+    const input = iamEndpoints.createRole.input;
+    await expect(validateRequest(input, {
+      body: { name: 'editor', permissions: [{ resource: 'posts', action: 'read' }] },
+    })).resolves.toBeUndefined();
+    await expect(validateRequest(input, {
+      body: { name: 'editor', permissions: [{ resource: 'posts' }] },
+    })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', statusCode: 422 });
   });
 
   it('validates body via bodySchema', async () => {

@@ -1,7 +1,7 @@
-import type { Infer } from './json-schema';
+import type { FortressSchema, Infer } from './json-schema';
 import type { StandardSchemaV1 } from './standard-schema';
 import { describe, expect, it } from 'vitest';
-import { anyOf, arr, bool, date, datetime, discriminatedUnion, email, endpoint, enums, ErrorEnvelope, extractJsonSchema, id, int, intersect, isFortressSchema, isStandardSchema, literal, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat, strict, time, url, uuid } from './schema-builder';
+import { anyOf, arr, bool, date, datetime, defineComponents, discriminatedUnion, email, endpoint, enums, ErrorEnvelope, extractJsonSchema, id, int, intersect, isFortressSchema, isStandardSchema, literal, nullable, nullType, num, obj, oneOf, record, recordOf, ref, str, strFormat, strict, time, url, uuid } from './schema-builder';
 
 /** Assert validation fails and return issues. */
 function expectIssues(result: StandardSchemaV1.Result<any>): void {
@@ -68,6 +68,127 @@ describe('schema builders', () => {
 
   it('ref() returns $ref', () => {
     expect(ref('User').$ref).toBe('#/components/schemas/User');
+  });
+
+  it('defineComponents refs enforce the referenced component shape', () => {
+    const User = strict(obj({ email: email(), age: int({ min: 18 }) }, 'email', 'age'));
+    const { ref: componentRef } = defineComponents({ User });
+    const schema = componentRef('User');
+
+    expect((schema['~standard'].validate({ email: 'user@example.com', age: 21 }) as any).issues).toBeUndefined();
+    expectIssues(schema['~standard'].validate({ email: 'invalid', age: 21 }) as StandardSchemaV1.Result<any>);
+    expectIssues(schema['~standard'].validate({ email: 'user@example.com', age: 17 }) as StandardSchemaV1.Result<any>);
+    expectIssues(schema['~standard'].validate({ email: 'user@example.com' }) as StandardSchemaV1.Result<any>);
+    expectIssues(schema['~standard'].validate({ email: 'user@example.com', age: 21, admin: true }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('enforces bound refs nested inside an inline request schema', () => {
+    const User = obj({ name: str({ min: 2 }) }, 'name');
+    const { ref: componentRef } = defineComponents({ User });
+    const schema = obj({ user: componentRef('User') }, 'user');
+
+    expect((schema['~standard'].validate({ user: { name: 'Ada' } }) as any).issues).toBeUndefined();
+    expectIssues(schema['~standard'].validate({ user: { name: 'A' } }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('resolves transitive and recursive component refs', () => {
+    const Address = obj({ city: str({ min: 2 }) }, 'city');
+    const User = obj({ address: ref('Address') }, 'address');
+    const Node = obj({ name: str(), children: arr(ref('Node')) }, 'name');
+    const { ref: componentRef } = defineComponents({ Address, User, Node });
+
+    const user = componentRef('User');
+    expect((user['~standard'].validate({ address: { city: 'Oslo' } }) as any).issues).toBeUndefined();
+    expectIssues(user['~standard'].validate({ address: { city: 'X' } }) as StandardSchemaV1.Result<any>);
+
+    const node = componentRef('Node');
+    expect((node['~standard'].validate({ name: 'root', children: [{ name: 'leaf' }] }) as any).issues).toBeUndefined();
+    expectIssues(node['~standard'].validate({ name: 'root', children: [{}] }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('isolates same-named components across independent registries', () => {
+    const AUser = obj({ kind: literal('a') }, 'kind');
+    const BUser = obj({ kind: literal('b') }, 'kind');
+    const aRef = defineComponents({ User: AUser }).ref('User');
+    const bRef = defineComponents({ User: BUser }).ref('User');
+
+    // Compile lazily only after both registries exist: neither may overwrite
+    // the other by global component name.
+    expect((aRef['~standard'].validate({ kind: 'a' }) as any).issues).toBeUndefined();
+    expectIssues(aRef['~standard'].validate({ kind: 'b' }) as StandardSchemaV1.Result<any>);
+    expect((bRef['~standard'].validate({ kind: 'b' }) as any).issues).toBeUndefined();
+    expectIssues(bRef['~standard'].validate({ kind: 'a' }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('typed refs enforce their supplied schema while bare refs stay permissive', () => {
+    const typed = ref('Token', obj({ value: str({ min: 3 }) }, 'value'));
+    expect((typed['~standard'].validate({ value: 'abc' }) as any).issues).toBeUndefined();
+    expectIssues(typed['~standard'].validate({ value: 'x' }) as StandardSchemaV1.Result<any>);
+
+    const bare = ref('Unknown');
+    defineComponents({ Unknown: obj({ required: str() }, 'required') });
+    // A later registry declaration must not retroactively bind a bare ref.
+    expect((bare['~standard'].validate({ arbitrary: true }) as any).issues).toBeUndefined();
+  });
+
+  it('resolves same-named bare and bound refs to one global component', () => {
+    const bare = ref('SharedUser');
+    const bound = defineComponents({
+      SharedUser: obj({ name: str({ min: 2 }) }, 'name'),
+    }).ref('SharedUser');
+    const schema = obj({ bare, bound }, 'bare', 'bound');
+
+    expect((schema['~standard'].validate({
+      bare: { name: 'Ada' },
+      bound: { name: 'Lin' },
+    }) as any).issues).toBeUndefined();
+    expectIssues(schema['~standard'].validate({
+      bare: { arbitrary: true },
+      bound: { name: 'Lin' },
+    }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('nullable bound refs accept null and still enforce non-null values', () => {
+    const User = obj({ name: str({ min: 2 }) }, 'name');
+    const schema = nullable(defineComponents({ User }).ref('User'));
+
+    expect((schema['~standard'].validate(null) as any).issues).toBeUndefined();
+    expect((schema['~standard'].validate({ name: 'Ada' }) as any).issues).toBeUndefined();
+    expectIssues(schema['~standard'].validate({ name: 'A' }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('rejects component names that cannot be represented safely in OpenAPI refs', () => {
+    expect(() => ref('Admin/User')).toThrow(/Invalid OpenAPI component name/);
+    expect(() => defineComponents({ 'Admin/User': obj({ id: str() }) })).toThrow(/Invalid OpenAPI component name/);
+  });
+
+  it('snapshots component bindings before lazy validation', () => {
+    const original = obj({ kind: literal('original') }, 'kind');
+    const replacement = obj({ kind: literal('replacement') }, 'kind');
+    const registry: Record<string, FortressSchema<any>> = { User: original };
+    const bound = defineComponents(registry).ref('User');
+    registry.User = replacement;
+
+    expect((bound['~standard'].validate({ kind: 'original' }) as any).issues).toBeUndefined();
+    expectIssues(bound['~standard'].validate({ kind: 'replacement' }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('resolves mutually recursive component refs', () => {
+    const A = obj({ name: str(), b: ref('B') }, 'name');
+    const B = obj({ name: str(), a: ref('A') }, 'name');
+    const schema = defineComponents({ A, B }).ref('A');
+
+    expect((schema['~standard'].validate({ name: 'a', b: { name: 'b' } }) as any).issues).toBeUndefined();
+    expectIssues(schema['~standard'].validate({ name: 'a', b: { a: {} } }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('fails closed when one schema mixes conflicting same-named registries', () => {
+    const a = defineComponents({ User: obj({ kind: literal('a') }, 'kind') }).ref('User');
+    const b = defineComponents({ User: obj({ kind: literal('b') }, 'kind') }).ref('User');
+    const mixed = obj({ a, b }, 'a', 'b');
+
+    expect(() => mixed['~standard'].validate({ a: { kind: 'a' }, b: { kind: 'b' } }))
+      .toThrow(/Conflicting component definitions/);
   });
 
   it('enums() returns enum schema', () => {

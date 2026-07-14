@@ -64,17 +64,97 @@ function collectRefNames(schema: JSONSchema | undefined, acc: Set<string>): Set<
 }
 
 /**
+ * Component definitions bound to a particular `$ref` schema. A WeakMap keeps
+ * this runtime-only context out of emitted JSON Schema and, unlike a global
+ * name registry, prevents two independent component maps that both contain a
+ * `User` schema from overwriting each other before lazy validation runs.
+ */
+const refDefinitionContexts = new WeakMap<object, Record<string, JSONSchema>>();
+
+function refName(refPath: string): string {
+  const i = refPath.lastIndexOf('/');
+  return i >= 0 ? refPath.slice(i + 1) : refPath;
+}
+
+// OpenAPI 3.x component-map keys are restricted to this grammar. Rejecting
+// unsupported names is safer than emitting an ambiguous JSON Pointer that
+// silently resolves to a different final path segment.
+const COMPONENT_NAME_RE = /^[\w.-]+$/;
+
+function assertComponentName(name: string): void {
+  if (!COMPONENT_NAME_RE.test(name))
+    throw new Error(`Invalid OpenAPI component name '${name}'`);
+}
+
+/**
+ * Build the definitions map fed to `fromJSONSchema`, resolving each `$ref`
+ * against the context bound by {@link defineComponents} / typed {@link ref}.
+ * Context is inherited while traversing a referenced component, which supports
+ * transitive and recursive refs. Bare refs without any same-name definition
+ * in the composed schema remain permissive (`{}`); when composed with a bound
+ * ref of the same OpenAPI component name, both correctly resolve to that one
+ * global component definition.
+ */
+function resolveRefDefs(schema: JSONSchema): Record<string, JSONSchema> | undefined {
+  if (collectRefNames(schema, new Set<string>()).size === 0)
+    return undefined;
+
+  const defs = Object.create(null) as Record<string, JSONSchema>;
+  const unresolved = new Set<string>();
+  const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
+
+  const visit = (node: JSONSchema | undefined, inherited?: Record<string, JSONSchema>): void => {
+    if (!node || typeof node !== 'object')
+      return;
+    const context = refDefinitionContexts.get(node) ?? inherited;
+    if (typeof node.$ref === 'string') {
+      const name = refName(node.$ref);
+      const component = context && hasOwn(context, name) ? context[name] : undefined;
+      if (component) {
+        if (hasOwn(defs, name) && !unresolved.has(name) && defs[name] !== component) {
+          throw new Error(`Conflicting component definitions for $ref '${name}'`);
+        }
+        const firstResolution = !hasOwn(defs, name) || unresolved.delete(name);
+        defs[name] = component;
+        if (firstResolution)
+          visit(component, context);
+      }
+      else if (!hasOwn(defs, name)) {
+        defs[name] = {};
+        unresolved.add(name);
+      }
+    }
+    if (node.properties) {
+      for (const child of Object.values(node.properties))
+        visit(child, context);
+    }
+    visit(node.items, context);
+    for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
+      for (const child of node[key] ?? [])
+        visit(child, context);
+    }
+    if (node.additionalProperties && typeof node.additionalProperties === 'object')
+      visit(node.additionalProperties, context);
+  };
+
+  visit(schema);
+  return defs;
+}
+
+/**
  * Build the `~standard` props for a fortress schema. Runtime validation is
  * delegated to `@bajustone/fetcher`'s `fromJSONSchema`, which compiles the
  * JSON Schema object into a Standard Schema V1 validator (lazily, on first
  * use, then memoized). fortress schemas keep `vendor: 'fortress'` and remain
  * plain JSON Schema objects — only the validation engine is fetcher's.
  *
- * `$ref` nodes are resolved permissively (to `unknown`): a schema is compiled
- * in isolation without its OpenAPI components map, so a referenced component's
- * shape isn't available to enforce. This preserves fortress's prior behavior,
- * where `$ref` request fields were present-but-unconstrained; the surrounding
- * inline fields are still validated strictly.
+ * `$ref` nodes are resolved against context bound by {@link defineComponents}
+ * / typed {@link ref}: the referenced component's JSON
+ * Schema (and any components it transitively references) is threaded into the
+ * compiled validator so ref'd request bodies are enforced. A `$ref` whose
+ * component is unavailable anywhere in the composed schema stays permissive
+ * (compiled against `{}`), and surrounding inline fields are always validated
+ * strictly.
  */
 function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~standard'] {
   type ValidateFn = (value: unknown) => StandardSchemaV1.Result<T> | Promise<StandardSchemaV1.Result<T>>;
@@ -84,10 +164,7 @@ function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~st
     vendor: 'fortress',
     validate(value: unknown): StandardSchemaV1.Result<T> | Promise<StandardSchemaV1.Result<T>> {
       if (!validateFn) {
-        const refNames = collectRefNames(schema, new Set<string>());
-        const defs = refNames.size > 0
-          ? Object.fromEntries(Array.from(refNames, name => [name, {}]))
-          : undefined;
+        const defs = resolveRefDefs(schema);
         validateFn = fromJSONSchema<T>(schema, defs)['~standard'].validate as ValidateFn;
       }
       return validateFn(value);
@@ -95,7 +172,12 @@ function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~st
   } as StandardSchemaV1<T, T>['~standard'];
 }
 
-function toFortressSchema<T>(schema: JSONSchema): FortressSchema<T> {
+function toFortressSchema<T>(
+  schema: JSONSchema,
+  refDefinitions?: Record<string, JSONSchema>,
+): FortressSchema<T> {
+  if (refDefinitions)
+    refDefinitionContexts.set(schema, refDefinitions);
   return Object.assign(schema, {
     '~standard': createStandardProps<T>(schema),
   }) as FortressSchema<T>;
@@ -216,8 +298,13 @@ export function obj<
 
 /** Wrap a schema so it also accepts `null`. */
 export function nullable<T>(schema: FortressSchema<T>): FortressSchema<T | null> {
+  // Fetcher's JSON-Schema bridge resolves `$ref` before OpenAPI's legacy
+  // `nullable` sibling. Use a real union for refs so null is enforced
+  // correctly; keep the established compact shape for inline schemas.
+  if (typeof schema.$ref === 'string')
+    return toFortressSchema<T | null>({ oneOf: [schema, { type: 'null' }] });
   const s: JSONSchema = { ...schema, nullable: true };
-  return toFortressSchema<T | null>(s);
+  return toFortressSchema<T | null>(s, refDefinitionContexts.get(schema));
 }
 
 /** Build a discriminated-union schema (exactly one variant must match). */
@@ -241,18 +328,23 @@ export function anyOf<S extends FortressSchema<any>[]>(
  * - `ref(name)` — untyped `$ref`, returns `FortressSchema<unknown>`. Use when
  *   the referenced component hasn't been declared yet (e.g. self-references
  *   inside a components literal).
- * - `ref(name, schema)` — typed `$ref`. The `schema` argument is never read at
- *   runtime; it's there purely so TypeScript can copy its inferred type onto
- *   the returned ref. Use when you already have a reference to the component
- *   schema and want downstream response types to flow through.
+ * - `ref(name, schema)` — typed and runtime-bound `$ref`. The supplied schema
+ *   provides both the inferred TypeScript type and the component definition
+ *   used for runtime validation. Use when you already have the component
+ *   schema and want downstream types and validation to flow through.
  *
  * For the common case (typed refs against a known components map), prefer
  * {@link defineComponents} — it returns a bound `ref` that only needs a name.
  */
 export function ref<T>(name: string, schema: FortressSchema<T>): FortressSchema<T>;
 export function ref(name: string): FortressSchema<unknown>;
-export function ref<T>(name: string, _schema?: FortressSchema<T>): FortressSchema<T> {
-  return toFortressSchema<T>({ $ref: `#/components/schemas/${name}` });
+export function ref<T>(name: string, schema?: FortressSchema<T>): FortressSchema<T> {
+  assertComponentName(name);
+  // Typed refs bind the real component schema. Bare `ref(name)` has no local
+  // definition context; it stays permissive unless the composed schema binds
+  // the same global OpenAPI component name elsewhere.
+  const definitions = schema ? { [name]: schema } : undefined;
+  return toFortressSchema<T>({ $ref: `#/components/schemas/${name}` }, definitions);
 }
 
 /**
@@ -281,10 +373,23 @@ export function defineComponents<T extends Record<string, FortressSchema<any>>>(
   components: T;
   ref: <K extends keyof T & string>(name: K) => FortressSchema<Infer<T[K]>>;
 } {
+  for (const name of Object.keys(components))
+    assertComponentName(name);
+  // Snapshot the name→schema bindings now. Validators compile lazily, so
+  // retaining the caller's mutable registry would otherwise make replacement
+  // before first validation behave differently from replacement afterward.
+  const definitions = Object.assign(
+    Object.create(null) as Record<string, JSONSchema>,
+    components,
+  );
   return {
     components,
     ref: <K extends keyof T & string>(name: K): FortressSchema<Infer<T[K]>> => {
-      return toFortressSchema<Infer<T[K]>>({ $ref: `#/components/schemas/${String(name)}` });
+      assertComponentName(name);
+      return toFortressSchema<Infer<T[K]>>(
+        { $ref: `#/components/schemas/${String(name)}` },
+        definitions,
+      );
     },
   };
 }
@@ -352,7 +457,10 @@ export function intersect<S extends FortressSchema<any>[]>(
  * request bodies against over-posting (mass assignment).
  */
 export function strict<T>(schema: FortressSchema<T>): FortressSchema<T> {
-  return toFortressSchema<T>({ ...schema, additionalProperties: false });
+  return toFortressSchema<T>(
+    { ...schema, additionalProperties: false },
+    refDefinitionContexts.get(schema),
+  );
 }
 
 /**
