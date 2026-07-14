@@ -374,7 +374,7 @@
     }
   },
   "dependencies": {
-    "@bajustone/fetcher": "^1.0.0",
+    "@bajustone/fetcher": "1.0.0",
     "@simplewebauthn/server": "^13.1.1",
     "hash-wasm": "^4.12.0",
     "jose": "^6.2.2"

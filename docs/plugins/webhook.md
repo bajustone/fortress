@@ -96,7 +96,7 @@ All fields on `WebhookConfig` are optional:
 | `delivery.permanentStatuses` | `number[]` | `[404, 410, 421]` | Statuses that permanently deactivate an endpoint. |
 | `delivery.maxConsecutiveFailures` | `number` | `15` | Circuit breaker — deactivate after this many consecutive failures. |
 | `delivery.onDeliveryFailed` | `(d: WebhookDelivery) => void \| Promise<void>` | — | Terminal-failure hook (the DLQ/alert seam). |
-| `delivery.onEndpointDeactivated` | `(e: WebhookEndpoint, reason: string) => void \| Promise<void>` | — | Fired on auto-deactivation. |
+| `delivery.onEndpointDeactivated` | `(e: WebhookEndpoint, reason: WebhookDeactivatedReason) => void \| Promise<void>` | — | Fired on auto-deactivation. |
 | `delivery.fetch` | `FetchFn` | `ssrfSafeFetch()` | Override the transport (custom transport or tests). **Bypasses the SSRF guard** — only override when you control the targets. |
 
 ### Retry modes
@@ -167,13 +167,16 @@ Pass `emit(name, payload, { idempotencyKey })` to make a logical event safe to e
 ## Types
 
 ```ts
+type WebhookDeactivatedReason = `permanent_${number}` | 'too_many_failures';
+type WebhookErrorKind = 'http' | 'network';
+
 interface WebhookEndpoint {
   id: string;
   url: string;
   events: string;              // JSON array of event names
   secret: string;              // redacted in listEndpoints()/updateEndpoint()
   isActive: boolean;
-  deactivatedReason: string | null;
+  deactivatedReason: WebhookDeactivatedReason | null;
   consecutiveFailures: number;
   createdAt: Date;
 }
@@ -190,7 +193,7 @@ interface WebhookDelivery {
   nextRetryAt: Date | null;
   responseStatus: number | null;
   responseBody: string | null; // first ~2 KB, for debugging
-  errorKind: string | null;
+  errorKind: WebhookErrorKind | null;
   createdAt: Date;
 }
 ```

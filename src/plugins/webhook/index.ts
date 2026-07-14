@@ -25,6 +25,7 @@ import type {
   RegisterEndpointOptions,
   UpdateEndpointPatch,
   WebhookConfig,
+  WebhookDeactivatedReason,
   WebhookDelivery,
   WebhookEndpoint,
 } from './types';
@@ -48,10 +49,12 @@ export type {
   RegisterEndpointOptions,
   UpdateEndpointPatch,
   WebhookConfig,
+  WebhookDeactivatedReason,
   WebhookDelivery,
   WebhookDeliveryConfig,
   WebhookEmitErrorCode,
   WebhookEndpoint,
+  WebhookErrorKind,
   WebhookEventDeclaration,
 } from './types';
 export { WebhookEmitError } from './types';
@@ -121,7 +124,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
     return 'retry'; // network / timeout
   }
 
-  async function deactivateEndpoint(db: DatabaseAdapter, endpoint: WebhookEndpoint, reason: string): Promise<void> {
+  async function deactivateEndpoint(db: DatabaseAdapter, endpoint: WebhookEndpoint, reason: WebhookDeactivatedReason): Promise<void> {
     if (!endpoint.isActive)
       return;
     await db.update({ model: 'webhook_endpoint', where: idWhere(endpoint.id), data: { isActive: false, deactivatedReason: reason } });
@@ -187,7 +190,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
     // Permanent status → fail + deactivate.
     if (action === 'deactivate') {
       await markFailed();
-      await deactivateEndpoint(db, endpoint, `permanent_${responseStatus}`);
+      await deactivateEndpoint(db, endpoint, `permanent_${responseStatus}` as WebhookDeactivatedReason);
       return;
     }
 

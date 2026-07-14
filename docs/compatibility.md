@@ -10,7 +10,7 @@ without an explicit test guarantee.
 | Runtime | Minimum | Tested |
 |---|---|---|
 | **Bun** | 1.0 | latest |
-| **Node.js** | 18 (LTS) | 20, 22 |
+| **Node.js** | 20.19 | 20, 22, 24 |
 | **Deno** | 1.40 | latest |
 | **Cloudflare Workers (workerd)** | wrangler 3 | latest |
 | Browsers | n/a | server-only |
@@ -18,10 +18,7 @@ without an explicit test guarantee.
 Bun is the maintainer's primary runtime (test adapter prefers
 `bun:sqlite`; the `bin/fortress.ts` CLI shebang targets Bun). The
 package ships a Node-compatible CJS build via `tsup` so the same module
-works under Node 18+ unchanged. Deno + workerd work because Fortress
-avoids Node-only globals on every code path that isn't gated by a
-runtime check (the only such gate is the `bin:sqlite` vs
-`better-sqlite3` selection in the test adapter).
+works under Node 20.19+ unchanged. Deno + workerd can import and use the runtime-neutral core because Node filesystem/path modules are dynamically loaded only when file-oriented policy/resource helpers are invoked. The Bun-targeted CLI and file helpers require a Node-compatible filesystem runtime.
 
 ## Frameworks
 

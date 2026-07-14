@@ -29,6 +29,12 @@ export interface WebhookEventDeclaration<S extends StandardSchemaV1 = StandardSc
   source?: BuiltinEventSource;
 }
 
+/** Stable delivery failure taxonomy persisted in `webhook_delivery.error_kind`. */
+export type WebhookErrorKind = 'http' | 'network';
+
+/** Stable endpoint deactivation reason taxonomy. */
+export type WebhookDeactivatedReason = `permanent_${number}` | 'too_many_failures';
+
 /** A registered delivery endpoint. `secret` is redacted from `listEndpoints()`. */
 export interface WebhookEndpoint {
   id: string;
@@ -36,7 +42,7 @@ export interface WebhookEndpoint {
   events: string; // JSON array of event names
   secret: string;
   isActive: boolean;
-  deactivatedReason: string | null;
+  deactivatedReason: WebhookDeactivatedReason | null;
   consecutiveFailures: number;
   createdAt: Date;
 }
@@ -54,7 +60,7 @@ export interface WebhookDelivery {
   nextRetryAt: Date | null;
   responseStatus: number | null;
   responseBody: string | null;
-  errorKind: string | null;
+  errorKind: WebhookErrorKind | null;
   createdAt: Date;
 }
 
@@ -71,7 +77,7 @@ export interface WebhookDeliveryConfig {
   /** Called on a terminal `failed` delivery — the DLQ/alert seam. */
   onDeliveryFailed?: (delivery: WebhookDelivery) => void | Promise<void>;
   /** Called when an endpoint is auto-deactivated (permanent status or circuit breaker). */
-  onEndpointDeactivated?: (endpoint: WebhookEndpoint, reason: string) => void | Promise<void>;
+  onEndpointDeactivated?: (endpoint: WebhookEndpoint, reason: WebhookDeactivatedReason) => void | Promise<void>;
   /**
    * Override the delivery transport (a fetcher `FetchFn`). Defaults to the
    * SSRF-guarded `ssrfSafeFetch()`. Use for custom transports or to intercept

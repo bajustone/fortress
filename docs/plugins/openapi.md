@@ -127,6 +127,35 @@ openapi({
 
 The most powerful feature of the OpenAPI plugin is the ability to merge your application's own routes into the same spec as Fortress endpoints. This produces a single unified API reference.
 
+### Zod-free frozen converters
+
+`@bajustone/fortress/hono` exports three supported converter contracts:
+
+- `identitySchemaConverter` — returns raw JSON Schema unchanged for tooling that consumes JSON Schema directly.
+- `fetcherSchemaConverter` — compiles JSON Schema to a validating Standard Schema V1 using the pinned `@bajustone/fetcher` runtime; use with `hono-openapi` / `@hono/standard-validator` without Zod.
+- `toJSONSchemaConverter` — extracts JSON Schema from Fortress or fetcher builder schemas when importing app routes with `convertRoutes`.
+
+```ts
+import {
+  convertRoutes,
+  fetcherSchemaConverter,
+  mountFortressOpenAPI,
+  toJSONSchemaConverter,
+} from '@bajustone/fortress/hono';
+
+mountFortressOpenAPI(app, fortress, {
+  createRoute, // from your Hono OpenAPI integration
+  schemaConverter: fetcherSchemaConverter,
+});
+
+const appEndpoints = convertRoutes(appRoutes, {
+  prefix: '/api/v1',
+  schemaConverter: toJSONSchemaConverter,
+});
+```
+
+These export names and signatures are part of the frozen Hono/OpenAPI public surface.
+
 ### Using `convertRoutes`
 
 The `convertRoutes` utility (exported from `@bajustone/fortress/hono` or `@bajustone/fortress/express`) converts `createRoute`-style route objects into Fortress `EndpointDefinition[]`. It is schema-library agnostic -- you provide a converter function that turns your schema objects into JSON Schema.

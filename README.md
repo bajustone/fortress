@@ -754,7 +754,7 @@ const result = schema['~standard'].validate({ name: 'Alice', email: 'a@b.com' })
 // { value: { name: 'Alice', email: 'a@b.com' } }
 
 const invalid = schema['~standard'].validate({ name: 123 });
-// { issues: [{ message: 'Expected string, got number', path: [{ key: 'name' }] }] }
+// { issues: [{ message: 'Expected string, got number', path: ['name'] }] }
 ```
 
 The `endpoint().body()`, `.query()`, and `.params()` methods also accept external Standard Schema from Zod, Valibot, or ArkType:

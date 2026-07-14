@@ -199,6 +199,20 @@ describe('webhook plugin — custom events + emit()', () => {
     await expect(wh.emit('big.event', { blob: 'x'.repeat(500) })).rejects.toMatchObject({ code: 'payload_too_large' });
   });
 
+  it('skips malformed persisted endpoint event JSON without aborting emit', async () => {
+    const { fortress, wh, calls } = setup({ events: [{ name: 'test.event' }] });
+    const endpoint = await wh.registerEndpoint('https://example.com/hook', ['test.event']);
+    await fortress.config.database.update({
+      model: 'webhook_endpoint',
+      where: [{ field: 'id', operator: '=', value: endpoint.id }],
+      data: { events: '{malformed' },
+    });
+
+    await expect(wh.emit('test.event', { ok: true })).resolves.toBeUndefined();
+    expect(calls).toHaveLength(0);
+    await expect(fortress.config.database.count({ model: 'webhook_delivery' })).resolves.toBe(0);
+  });
+
   it('emit() is idempotent per (endpoint, idempotencyKey)', async () => {
     const { wh, calls } = setup({ events: [...builtinEvents(), { name: 'order.paid' }] });
     await wh.registerEndpoint('https://example.com/hook', ['order.paid']);
