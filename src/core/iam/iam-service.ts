@@ -370,9 +370,12 @@ export function createIamService(
       // subject types are exposed under `user.subjectType`/`user.subjectId`.
       const enrichedContext: PermissionContext = {
         ...context,
-        user: subject.type === 'USER'
-          ? { ...context?.user, id: subject.id, subjectType: 'USER', subjectId: subject.id }
-          : { ...context?.user, subjectType: subject.type, subjectId: subject.id },
+        user: {
+          ...context?.user,
+          id: subject.id,
+          subjectType: subject.type,
+          subjectId: subject.id,
+        },
       };
 
       const allowed = withinCredentialScope(context?.credentialScopes, resource, action)
@@ -888,7 +891,18 @@ export function createIamService(
       // unlink). Uses the same uniqueness key as `addPermissionToRole`
       // (resource+action+effect+conditions) so the lookup matches the row
       // that was previously linked.
-      const perm = await adapter.findOrCreatePermission(permission);
+      const perm = await adapter.findPermission(permission);
+      if (!perm)
+        return;
+      const existingLink = await db.findOne<{ id: string }>({
+        model: 'role_permission',
+        where: [
+          { field: 'roleId', operator: '=', value: roleId },
+          { field: 'permissionId', operator: '=', value: perm.id },
+        ],
+      });
+      if (!existingLink)
+        return;
       await db.delete({
         model: 'role_permission',
         where: [

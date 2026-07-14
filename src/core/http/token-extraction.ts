@@ -9,8 +9,6 @@
 import type { ResolvedCookieConfig } from '../config';
 import { parseCookieHeader } from './cookie-serialize';
 
-const BEARER_PREFIX = 'Bearer ';
-
 /**
  * Extract the access token from a request, preferring the
  * `Authorization: Bearer <token>` header and falling back to the cookie
@@ -29,10 +27,13 @@ export function extractAccessToken(
   cookies: ResolvedCookieConfig,
 ): string | null {
   const auth = request.headers.get('authorization');
-  if (auth?.startsWith(BEARER_PREFIX)) {
-    const fromHeader = auth.slice(BEARER_PREFIX.length);
-    if (fromHeader)
-      return fromHeader;
+  if (auth) {
+    const separator = auth.indexOf(' ');
+    if (separator > 0 && auth.slice(0, separator).toLowerCase() === 'bearer') {
+      const fromHeader = auth.slice(separator + 1).trim();
+      if (fromHeader)
+        return fromHeader;
+    }
   }
 
   const jar = parseCookieHeader(request.headers.get('cookie'));

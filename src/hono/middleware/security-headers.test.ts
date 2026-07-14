@@ -18,6 +18,19 @@ describe('security headers middleware', () => {
     expect(res.headers.get('X-Permitted-Cross-Domain-Policies')).toBe('none');
   });
 
+  it('sets security headers on error responses', async () => {
+    const app = new Hono();
+    app.use('*', createSecurityHeadersMiddleware());
+    app.get('/error', () => {
+      throw new Error('boom');
+    });
+
+    const res = await app.request('/error');
+    expect(res.status).toBe(500);
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(res.headers.get('X-Frame-Options')).toBe('DENY');
+  });
+
   it('allows custom CSP', async () => {
     const app = new Hono();
     app.use('*', createSecurityHeadersMiddleware({

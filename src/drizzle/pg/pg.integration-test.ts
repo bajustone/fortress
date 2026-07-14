@@ -906,12 +906,15 @@ describe('pg: plugins', () => {
   });
 
   it('email-verification plugin works with PG dates', async () => {
+    let deliveredToken = '';
     const fortress = createFortress({
       jwt: { key: SECRET },
       database: createPgAdapter(),
       plugins: [emailVerification({
         requireVerification: false,
-        onSendVerification: async () => {},
+        onSendVerification: async (_email, token) => {
+          deliveredToken = token;
+        },
       })],
     });
 
@@ -922,10 +925,10 @@ describe('pg: plugins', () => {
     });
 
     const methods = fortress.plugins['email-verification'] as any;
-    const { token } = await methods.sendVerification(user.id);
-    expect(token).toBeTruthy();
+    await methods.sendVerification(user.id);
+    expect(deliveredToken).toBeTruthy();
 
-    const result = await methods.verify(token);
+    const result = await methods.verify(deliveredToken);
     expect(result.userId).toBe(user.id);
     expect(result.email).toBe('verify@test.com');
   });

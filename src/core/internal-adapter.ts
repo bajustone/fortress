@@ -63,6 +63,8 @@ export interface InternalAdapter {
    * credential resolution).
    */
   getSubjectPermissions: (subject: Subject, tenantId?: string) => Promise<Permission[]>;
+  /** Find an existing permission without creating it. */
+  findPermission: (input: PermissionInput) => Promise<Permission | null>;
   /** Find an existing permission or create it if missing */
   findOrCreatePermission: (input: PermissionInput) => Promise<Permission>;
   /** Internal mutation variant that reports whether this call inserted the row. */
@@ -384,6 +386,22 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         where: [{ field: 'id', operator: 'in', value: allPermissionIds }],
       });
       return permissions.map(normalizePermission);
+    },
+
+    async findPermission(input: PermissionInput): Promise<Permission | null> {
+      const conditions = serializePermissionConditions(db, input.conditions);
+      const permission = await db.findOne<Permission>({
+        model: 'permission',
+        where: [
+          { field: 'resource', operator: '=', value: input.resource },
+          { field: 'action', operator: '=', value: input.action },
+          { field: 'effect', operator: '=', value: input.effect ?? 'ALLOW' },
+          conditions == null
+            ? { field: 'conditions', operator: 'isNull', value: null }
+            : { field: 'conditions', operator: '=', value: conditions },
+        ],
+      });
+      return permission ? normalizePermission(permission) : null;
     },
 
     async findOrCreatePermission(input: PermissionInput): Promise<Permission> {

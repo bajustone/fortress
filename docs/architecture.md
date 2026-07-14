@@ -571,7 +571,11 @@ Two evaluation modes (configured via `config.rbac.evaluationMode`):
 
 **File:** `src/core/iam/permission-cache.ts`
 
-LRU cache for permission query results:
+LRU cache for permission query results. It is strictly process-local: mutation
+invalidation does not propagate to other replicas. Multi-replica deployments
+must either leave the cache disabled (default), use a sufficiently short TTL,
+or broadcast invalidations in host infrastructure. Authorization revocations
+may remain stale on another replica until its TTL expires.
 
 - **Key:** `userId` (string)
 - **Value:** Permission array with `expiresAt` timestamp
@@ -1861,7 +1865,7 @@ const Errors = {
 |--------|----------|
 | `@bajustone/fortress` | `createFortress()`, all types, errors, `DatabaseAdapter` interface, `FortressPlugin` interface |
 | `@bajustone/fortress/crypto` | `PasswordHasher` interface, default WASM hasher |
-| `@bajustone/fortress/jwt` | `signToken()`, `verifyToken()` standalone utilities |
+| `@bajustone/fortress/jwt` | `signAccessToken()`, `verifyAccessToken()` standalone utilities |
 | `@bajustone/fortress/testing` | `createTestAdapter()` — in-memory SQLite |
 | `@bajustone/fortress/drizzle` | `createDrizzleAdapter()`, SQLite reference schema |
 | `@bajustone/fortress/drizzle/pg` | PostgreSQL reference schema |

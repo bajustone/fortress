@@ -728,9 +728,17 @@ describe('oauth plugin', () => {
   });
 
   describe('handleRevokeRequest', () => {
-    it('revokes token and always succeeds', async () => {
-      // RFC 7009: revocation endpoint always returns 200
-      await expect(methods.handleRevokeRequest({ token: 'nonexistent' })).resolves.toBeUndefined();
+    it('authenticates the client and always succeeds for an unknown token', async () => {
+      const client = await methods.createClient({
+        name: 'Revoker',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+      // RFC 7009: authenticated revocation of an unknown token returns 200.
+      await expect(methods.handleRevokeRequest(
+        { token: 'nonexistent' },
+        { clientId: client.clientId, clientSecret: client.clientSecret! },
+      )).resolves.toBeUndefined();
     });
   });
 

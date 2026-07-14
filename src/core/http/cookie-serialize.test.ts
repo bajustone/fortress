@@ -54,6 +54,12 @@ describe('resolveCookieConfig', () => {
     setEnv(originalNodeEnv);
   });
 
+  it('normalizes an empty domain to host-only cookies', () => {
+    const c = resolveCookieConfig({ domain: '' });
+    expect(c.domain).toBeUndefined();
+    expect(c.accessName).toBe('__Host-fortress_access');
+  });
+
   it('drops __Host- prefix when path is not /', () => {
     setEnv('production');
     const c = resolveCookieConfig({ path: '/api' });

@@ -145,11 +145,34 @@ describe('email-verification plugin', () => {
       });
 
       onSend.mockClear();
-      const sendVerification = fortress.plugins['email-verification'].sendVerification as (userId: string) => Promise<{ token: string }>;
+      const sendVerification = fortress.plugins['email-verification'].sendVerification as (userId: string) => Promise<{ sent: true }>;
       const result = await sendVerification(user.id);
 
-      expect(result.token).toBeTruthy();
+      expect(result).toEqual({ sent: true });
       expect(onSend).toHaveBeenCalledOnce();
+    });
+
+    it('adopts a changed email only after its token is verified', async () => {
+      const user = await fortress.auth.createUser({
+        email: 'old@example.com',
+        name: 'Changed',
+        password: 'password-123456',
+      });
+      onSend.mockClear();
+      const methods = fortress.plugins['email-verification'];
+      await methods.sendVerification(user.id, 'new@example.com');
+      const token = onSend.mock.calls[0]![1];
+
+      const findUser = () => fortress.config.database.findOne<{ email: string; emailVerified: boolean }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: user.id }],
+      });
+      expect((await findUser())?.email).toBe('old@example.com');
+      await methods.verify(token);
+      expect(await findUser()).toMatchObject({
+        email: 'new@example.com',
+        emailVerified: true,
+      });
     });
   });
 

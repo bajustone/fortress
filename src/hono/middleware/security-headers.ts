@@ -45,19 +45,24 @@ export function createSecurityHeadersMiddleware(config: SecurityHeadersConfig = 
   }
 
   return async (c, next) => {
-    await next();
-
-    if (hstsValue)
-      c.header('Strict-Transport-Security', hstsValue);
-    if (frameOptions)
-      c.header('X-Frame-Options', frameOptions);
-    if (noSniff)
-      c.header('X-Content-Type-Options', 'nosniff');
-    if (csp)
-      c.header('Content-Security-Policy', csp);
-    if (referrerPolicy)
-      c.header('Referrer-Policy', referrerPolicy);
-    if (crossDomain)
-      c.header('X-Permitted-Cross-Domain-Policies', crossDomain);
+    try {
+      await next();
+    }
+    finally {
+      // Apply to success and error responses alike. Security headers should
+      // not disappear on the responses most likely to contain diagnostics.
+      if (hstsValue)
+        c.header('Strict-Transport-Security', hstsValue);
+      if (frameOptions)
+        c.header('X-Frame-Options', frameOptions);
+      if (noSniff)
+        c.header('X-Content-Type-Options', 'nosniff');
+      if (csp)
+        c.header('Content-Security-Policy', csp);
+      if (referrerPolicy)
+        c.header('Referrer-Policy', referrerPolicy);
+      if (crossDomain)
+        c.header('X-Permitted-Cross-Domain-Policies', crossDomain);
+    }
   };
 }

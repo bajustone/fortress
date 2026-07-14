@@ -1,4 +1,4 @@
-import { SignJWT } from 'jose';
+import { generateKeyPair, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import { signAccessToken, verifyAccessToken } from './jwt';
@@ -133,6 +133,20 @@ describe('jwt', () => {
       await expect(
         verifyAccessToken(token, secret, { issuer: 'someone-else' }),
       ).rejects.toThrow();
+    });
+
+    it('rejects unsigned and asymmetric-algorithm confusion tokens', async () => {
+      const encoded = (value: unknown): string => btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+      const unsigned = `${encoded({ alg: 'none' })}.${encoded({ ...claims, iat: 1, exp: 4_102_444_800 })}.`;
+      await expect(verifyAccessToken(unsigned, secret)).rejects.toThrow('Invalid or expired token');
+
+      const { privateKey } = await generateKeyPair('RS256');
+      const asymmetric = await new SignJWT({ ...claims, sub: claims.sub })
+        .setProtectedHeader({ alg: 'RS256' })
+        .setIssuedAt()
+        .setExpirationTime('900s')
+        .sign(privateKey);
+      await expect(verifyAccessToken(asymmetric, secret)).rejects.toThrow('Invalid or expired token');
     });
 
     it('rejects tokens missing Fortress-required claims instead of fabricating defaults', async () => {

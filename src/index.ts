@@ -43,6 +43,9 @@ export { authComponentSchemas, authEndpoints } from './core/auth/auth-endpoints'
 /** Auth lifecycle event + listener types, emitted via `fortress.auth.addAuthObserver`. */
 export type { AuthEvent, AuthEventListener } from './core/auth/auth-service';
 
+/** Public JWT key-material type used by FortressConfig. */
+export type { JwtKeyMaterial } from './core/auth/jwt';
+
 export type {
   PasswordBreachCheckOptions,
   PasswordBreachDegradedEvent,
@@ -50,7 +53,6 @@ export type {
   PasswordPolicyConfig,
   PasswordPolicyObserver,
 } from './core/auth/password-policy';
-
 /** Top-level fortress configuration and pluggable password-hasher contract. */
 export type { FortressConfig, PasswordHasher, SessionConfig } from './core/config';
 /**
@@ -79,8 +81,7 @@ export type {
 } from './core/endpoint';
 /** Single error class plus the typed factory used throughout fortress. */
 export { Errors, FortressError } from './core/errors';
-
-/** Discriminated string union of every error code fortress can throw. */
+/** Discriminated string unions for Fortress and OAuth errors. */
 export type { FortressErrorCode, OAuthErrorCode } from './core/errors';
 
 /** Factory that builds a configured fortress instance and the helper for type-safe plugin method access. */

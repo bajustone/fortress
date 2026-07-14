@@ -359,6 +359,8 @@ export function createExpressPluginMiddleware(
           body = req.body;
         else if (req.body instanceof ArrayBuffer || ArrayBuffer.isView(req.body))
           body = req.body as BodyInit;
+        else if (headers.get('content-type')?.toLowerCase().startsWith('application/x-www-form-urlencoded'))
+          body = new URLSearchParams(Object.entries(req.body as Record<string, unknown>).map(([key, value]) => [key, String(value)]));
         else
           body = JSON.stringify(req.body);
       }

@@ -21,6 +21,7 @@ import { Errors } from './errors';
 import { buildCall } from './http/call';
 import { serializeAuthCookies as serializeAuthCookiesFn } from './http/cookie-serialize';
 import { buildHandleRequest } from './http/handle-request';
+import { canonicalizePath } from './http/match';
 import { runPluginMiddleware as runPluginMiddlewareFn } from './http/plugin-middleware';
 import { resolveRequestPrincipal as resolveRequestPrincipalFn } from './http/principal';
 import { extractAccessToken as extractAccessTokenFn } from './http/token-extraction';
@@ -405,13 +406,13 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     ...Object.values(iamEndpoints) as EndpointDefinition[],
   ];
   for (const ep of coreEndpoints) {
-    const routeKey = `${ep.method} ${ep.path}`;
+    const routeKey = `${ep.method.toUpperCase()} ${canonicalizePath(ep.path)}`;
     endpointMap.set(routeKey, ep);
     endpointOwners.set(routeKey, 'core');
   }
   for (const plugin of plugins) {
     for (const ep of Object.values(plugin.routes ?? {}) as EndpointDefinition[]) {
-      const routeKey = `${ep.method} ${ep.path}`;
+      const routeKey = `${ep.method.toUpperCase()} ${canonicalizePath(ep.path)}`;
       const owner = endpointOwners.get(routeKey);
       if (owner && owner !== 'core') {
         throw Errors.badRequest(

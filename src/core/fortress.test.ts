@@ -240,6 +240,21 @@ describe('createFortress', () => {
       })).toThrow(/Duplicate endpoint GET \/duplicate.*first-plugin.*second-plugin/);
     });
 
+    it('rejects slash variants that canonicalize to the same route', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const first = endpoint('GET', '/duplicate/path').summary('first').security('none').handler('first').build();
+      const second = endpoint('GET', '//duplicate//path/').summary('second').security('none').handler('second').build();
+
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [
+          { name: 'first-plugin', routes: { first } },
+          { name: 'second-plugin', routes: { second } },
+        ],
+      })).toThrow(/Duplicate endpoint GET \/duplicate\/path/);
+    });
+
     it('preserves intentional plugin overrides of core route and call keys', async () => {
       const { endpoint } = await import('./schema-builder');
       const me = endpoint('GET', '/auth/me')

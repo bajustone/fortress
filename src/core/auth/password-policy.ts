@@ -28,11 +28,15 @@ export interface PasswordPolicyConfig {
   breachedFailureMode?: PasswordBreachFailureMode;
 }
 
+type HibpCache = Map<string, { data: string; expiresAt: number }>;
+
 export interface PasswordBreachCheckOptions {
   cacheTtlMs?: number;
   cacheMaxEntries?: number;
   failureMode?: PasswordBreachFailureMode;
   observer?: PasswordPolicyObserver;
+  /** Internal per-Fortress-instance cache supplied by validatePassword. */
+  cache?: HibpCache;
 }
 
 const DEFAULT_MIN_LENGTH = 15;
@@ -44,9 +48,22 @@ const DEFAULT_CACHE_MAX_ENTRIES = 1_000;
 const HIBP_TIMEOUT_MS = 6_000;
 const hibpOutboundClient = createOutboundClient(HIBP_TIMEOUT_MS);
 
-// Module-level LRU cache for HIBP range responses (keyed by 5-char prefix).
-// Map insertion order is used as recency order.
-const hibpCache = new Map<string, { data: string; expiresAt: number }>();
+// Direct isPasswordBreached callers share this convenience cache. Fortress
+// instances use a cache keyed by their own PasswordPolicyConfig object so one
+// tenant's bound/eviction policy cannot mutate a co-resident instance's cache.
+const directHibpCache: HibpCache = new Map();
+const policyCaches = new WeakMap<PasswordPolicyConfig, HibpCache>();
+const knownCaches = new Set<HibpCache>([directHibpCache]);
+
+function cacheForPolicy(config: PasswordPolicyConfig): HibpCache {
+  let cache = policyCaches.get(config);
+  if (!cache) {
+    cache = new Map();
+    policyCaches.set(config, cache);
+    knownCaches.add(cache);
+  }
+  return cache;
+}
 
 /**
  * Validate a password against the configured policy.
@@ -81,6 +98,7 @@ export async function validatePassword(
       cacheMaxEntries: config.breachedCacheMaxEntries,
       failureMode: config.breachedFailureMode,
       observer,
+      cache: cacheForPolicy(config),
     });
     if (breached) {
       throw Errors.badRequest('This password has appeared in a data breach and cannot be used');
@@ -88,18 +106,18 @@ export async function validatePassword(
   }
 }
 
-function rememberRange(prefix: string, data: string, expiresAt: number, maxEntries: number): void {
+function rememberRange(cache: HibpCache, prefix: string, data: string, expiresAt: number, maxEntries: number): void {
   if (maxEntries <= 0)
     return;
 
-  hibpCache.delete(prefix);
-  while (hibpCache.size >= maxEntries) {
-    const oldest = hibpCache.keys().next().value as string | undefined;
+  cache.delete(prefix);
+  while (cache.size >= maxEntries) {
+    const oldest = cache.keys().next().value as string | undefined;
     if (oldest === undefined)
       break;
-    hibpCache.delete(oldest);
+    cache.delete(oldest);
   }
-  hibpCache.set(prefix, { data, expiresAt });
+  cache.set(prefix, { data, expiresAt });
 }
 
 function handleDegradedCheck(
@@ -134,6 +152,7 @@ export async function isPasswordBreached(
 ): Promise<boolean> {
   const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   const cacheMaxEntries = options.cacheMaxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
+  const hibpCache = options.cache ?? directHibpCache;
   if (!Number.isFinite(cacheTtlMs) || cacheTtlMs < 0)
     throw Errors.badRequest('passwordPolicy.breachedCacheTtlMs must be a non-negative number');
   if (!Number.isInteger(cacheMaxEntries) || cacheMaxEntries < 0)
@@ -186,7 +205,7 @@ export async function isPasswordBreached(
 
   try {
     const data = await response.text();
-    rememberRange(prefix, data, Date.now() + cacheTtlMs, cacheMaxEntries);
+    rememberRange(hibpCache, prefix, data, Date.now() + cacheTtlMs, cacheMaxEntries);
     return data.includes(suffix);
   }
   catch (error) {
@@ -196,5 +215,6 @@ export async function isPasswordBreached(
 
 /** Clear the HIBP cache. Useful for testing. */
 export function clearHibpCache(): void {
-  hibpCache.clear();
+  for (const cache of knownCaches)
+    cache.clear();
 }

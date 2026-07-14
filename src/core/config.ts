@@ -64,6 +64,10 @@ export interface FortressConfig {
     audience?: string | string[];
     accessTokenExpirySeconds?: number;
     refreshTokenExpirySeconds?: number;
+    /**
+     * Compare a hash of the User-Agent across refreshes. This is an anomaly
+     * signal, not cryptographic token binding; User-Agent is client-controlled.
+     */
     validateRefreshFingerprint?: boolean | 'warn';
     /** Optional session rotation/cap controls. No caps or grace apply when omitted. */
     session?: SessionConfig;
@@ -162,8 +166,9 @@ export function resolveCookieConfig(config?: CookieConfig): ResolvedCookieConfig
   // cookies unprotected. Local HTTP development must now opt out
   // explicitly via `cookies: { secure: false }`.
   const secure = config?.secure ?? true;
+  const domain = config?.domain?.trim() || undefined;
   // __Host- prefix requires Secure + Path=/ + no Domain (RFC 6265bis).
-  const canHostPrefix = secure && !config?.domain && (config?.path ?? '/') === '/';
+  const canHostPrefix = secure && !domain && (config?.path ?? '/') === '/';
   const defaultAccess = canHostPrefix ? '__Host-fortress_access' : 'fortress_access';
   const defaultRefresh = canHostPrefix ? '__Host-fortress_refresh' : 'fortress_refresh';
   const accessName = config?.accessName ?? defaultAccess;
@@ -177,7 +182,7 @@ export function resolveCookieConfig(config?: CookieConfig): ResolvedCookieConfig
   for (const name of [accessName, refreshName]) {
     if (name.startsWith('__Secure-') && !secure)
       throw new Error(`Cookie ${name} uses the __Secure- prefix but Secure is disabled`);
-    if (name.startsWith('__Host-') && (!secure || config?.domain !== undefined || path !== '/')) {
+    if (name.startsWith('__Host-') && (!secure || domain !== undefined || path !== '/')) {
       throw new Error(`Cookie ${name} uses the __Host- prefix but requires Secure, Path=/, and no Domain`);
     }
   }
@@ -187,7 +192,7 @@ export function resolveCookieConfig(config?: CookieConfig): ResolvedCookieConfig
     refreshName,
     sameSite,
     secure,
-    domain: config?.domain,
+    domain,
     path,
   };
 }

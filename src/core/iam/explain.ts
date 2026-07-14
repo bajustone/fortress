@@ -16,6 +16,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { Permission, PermissionContext, Role, Subject } from '../types';
 import type { IamService } from './iam-service';
+import { evaluateConditions } from './permission-evaluator';
 
 export interface PermissionExplanationSource {
   /** Where the grant came from. */
@@ -217,11 +218,36 @@ export async function explainPermission(
   for (const source of allDirectSources) permissionIds.add(source.binding.permissionId);
   const permsById = await loadPermissionsByIds(db, [...permissionIds]);
 
+  const tenantMatches = (tenantId: string | null): boolean => context?.tenantId
+    ? tenantId === null || tenantId === context.tenantId
+    : tenantId === null;
+  const conditionContext: PermissionContext = {
+    ...context,
+    user: {
+      ...context?.user,
+      id: subject.id,
+      subjectType: subject.type,
+      subjectId: subject.id,
+    },
+  };
+  const conditionsMatch = (permission: Permission): boolean => {
+    const raw = permission.conditions;
+    const conditions = typeof raw === 'string' ? JSON.parse(raw) as Permission['conditions'] : raw;
+    return !conditions?.length || evaluateConditions(conditions, conditionContext);
+  };
+  const subjectIsActive = subject.type !== 'SERVICE_ACCOUNT' || (await db.findOne<{ isActive: boolean }>({
+    model: 'service_account',
+    where: [{ field: 'id', operator: '=', value: subject.id }],
+  }))?.isActive === true;
+
   // ── Direct grants ──────────────────────────────────────────────────
   for (const { binding, viaGroup } of allDirectSources) {
     const perm = permsById.get(binding.permissionId);
-    if (!perm || !permissionMatches(perm, resource, action))
+    if (!subjectIsActive || !tenantMatches(binding.tenantId)
+      || !perm || !permissionMatches(perm, resource, action)
+      || !conditionsMatch(perm)) {
       continue;
+    }
     sources.push({
       via: viaGroup
         ? 'direct-group'
@@ -236,13 +262,15 @@ export async function explainPermission(
   // ── Role-based grants ──────────────────────────────────────────────
   for (const { binding, viaGroup } of allRoleSources) {
     const role = rolesById.get(binding.roleId);
-    if (!role)
+    if (!subjectIsActive || !tenantMatches(binding.tenantId) || !role)
       continue;
     const permIds = rolePermIds.get(binding.roleId) ?? [];
     for (const permId of permIds) {
       const perm = permsById.get(permId);
-      if (!perm || !permissionMatches(perm, resource, action))
+      if (!perm || !permissionMatches(perm, resource, action)
+        || !conditionsMatch(perm)) {
         continue;
+      }
       sources.push({
         via: 'role',
         role: role.name,
@@ -258,6 +286,7 @@ export async function explainPermission(
 
   // Flatten role bindings for the result.
   const roleBindings = allRoleSources
+    .filter(source => subjectIsActive && tenantMatches(source.binding.tenantId))
     .map(s => ({ role: rolesById.get(s.binding.roleId)?.name ?? `role#${s.binding.roleId}`, tenantId: s.binding.tenantId }))
     .filter((entry, idx, arr) => arr.findIndex(e => e.role === entry.role && e.tenantId === entry.tenantId) === idx);
 

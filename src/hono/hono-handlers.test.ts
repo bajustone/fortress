@@ -654,7 +654,10 @@ describe('plugin route mounting: OAuth', () => {
     // Revoke
     const revokeRes = await app.request('/oauth/revoke', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
       body: `token=${access_token}`,
     });
     expect(revokeRes.status).toBe(200);

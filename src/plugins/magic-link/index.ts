@@ -108,6 +108,18 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin & { read
           }) as FortressUser;
         }
 
+        // Possession of the single-use link proves control of this address.
+        // Mark both JIT-created and existing matching accounts verified before
+        // running post-auth gates, otherwise email-verification blocks the
+        // very login that established ownership.
+        if (!user.emailVerified) {
+          await ctx.db.update({
+            model: 'user',
+            where: [{ field: 'id', operator: '=', value: user.id }],
+            data: { emailVerified: true },
+          });
+        }
+
         if (!ctx.auth)
           throw Errors.badRequest('Auth service is unavailable');
         return ctx.auth.completePluginAuth(user.id, 'magic-link', meta);

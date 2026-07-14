@@ -33,7 +33,7 @@ interface VerificationTokenRecord {
 }
 
 export interface EmailVerificationMethods {
-  sendVerification: (userId: string, email?: string) => Promise<{ token: string }>;
+  sendVerification: (userId: string, email?: string) => Promise<{ sent: true }>;
   verify: (rawToken: string) => Promise<{ userId: string; email: string }>;
   completeVerification: (
     continuationToken: string,
@@ -73,7 +73,7 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
     await db.update({
       model: 'user',
       where: [{ field: 'id', operator: '=', value: record.userId }],
-      data: { emailVerified: true },
+      data: { email: record.email, emailVerified: true },
     });
     return record;
   }
@@ -138,7 +138,7 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
     },
 
     methods: ctx => ({
-      async sendVerification(userId: string, email?: string): Promise<{ token: string }> {
+      async sendVerification(userId: string, email?: string): Promise<{ sent: true }> {
         const user = await ctx.db.findOne<FortressUser>({
           model: 'user',
           where: [{ field: 'id', operator: '=', value: userId }],
@@ -166,7 +166,9 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
           await config.onSendVerification(targetEmail, raw, userId);
         }
 
-        return { token: raw };
+        // Raw verification credentials are delivered only through the callback;
+        // returning them to the caller defeats out-of-band verification.
+        return { sent: true };
       },
 
       async verify(rawToken: string): Promise<{ userId: string; email: string }> {

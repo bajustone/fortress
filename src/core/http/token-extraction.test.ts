@@ -19,6 +19,11 @@ describe('extractAccessToken', () => {
     expect(extractAccessToken(r, cookies)).toBe('header-token');
   });
 
+  it('accepts the case-insensitive Bearer authentication scheme', () => {
+    const r = req({ authorization: 'bearer lowercase-token' });
+    expect(extractAccessToken(r, cookies)).toBe('lowercase-token');
+  });
+
   it('prefers Authorization header over cookie (P3.7 — cookie-shadow fix)', () => {
     const r = req({
       cookie: 'fortress_access=cookie-token',

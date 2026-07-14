@@ -347,7 +347,7 @@ Admin impersonation issues a short-lived access-only token with an RFC 8693 `act
 ```typescript
 const result = await fortress.auth.impersonate(adminUserId, targetUserId, {
   reason: 'Debugging user report #1234',
-  expirySeconds: 300,  // default: short-lived
+  expirySeconds: 300,  // requested TTL; default and server-side maximum are 3600s
 });
 // result.accessToken contains { sub: targetUserId, act: { sub: adminUserId } }
 ```

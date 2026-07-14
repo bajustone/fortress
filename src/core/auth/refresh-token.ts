@@ -17,25 +17,39 @@ export async function generateRefreshToken(): Promise<{ raw: string; hash: strin
 
 /**
  * Derive a rotation successor without persisting its raw value. The active
- * JWT secret keys the derivation, so possession of an old refresh token alone
- * cannot reveal later tokens. A grace-window retry can recompute the exact
- * successor and confirm it against `successorTokenHash`.
+ * A domain-separated HKDF subkey derived from the configured root secret keys
+ * the rotation HMAC, so the JWT signing key is never used directly for a
+ * second primitive. A grace-window retry can recompute the exact successor
+ * and confirm it against `successorTokenHash`.
  */
 export async function deriveRefreshTokenSuccessor(
   rawToken: string,
   secret: string,
 ): Promise<{ raw: string; hash: string }> {
-  const key = await crypto.subtle.importKey(
+  const encoder = new TextEncoder();
+  const rootKey = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
+    encoder.encode(secret),
+    'HKDF',
+    false,
+    ['deriveKey'],
+  );
+  const key = await crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: encoder.encode('fortress-refresh-token-kdf-v1'),
+      info: encoder.encode('rotation-successor-hmac'),
+    },
+    rootKey,
+    { name: 'HMAC', hash: 'SHA-256', length: 256 },
     false,
     ['sign'],
   );
   const digest = await crypto.subtle.sign(
     'HMAC',
     key,
-    new TextEncoder().encode(`fortress-refresh-successor\0${rawToken}`),
+    encoder.encode(`fortress-refresh-successor\0${rawToken}`),
   );
   const raw = base64UrlEncode(new Uint8Array(digest));
   return { raw, hash: await hashToken(raw) };

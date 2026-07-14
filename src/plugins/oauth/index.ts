@@ -278,7 +278,7 @@ export interface OAuthMethods {
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
   handleTokenRequest: (body: TokenRequestBody, clientAuth?: ClientAuth) => Promise<Record<string, unknown>>;
   handleIntrospectRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<Record<string, unknown>>;
-  handleRevokeRequest: (body: { token: string }) => Promise<void>;
+  handleRevokeRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<void>;
   /**
    * OIDC Core 1.0 §5.3 userinfo endpoint. Returns the standard claims set
    * (`sub`, `email`, `email_verified`, `name`, `preferred_username`,
@@ -1616,7 +1616,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
 
         const result = await this.introspectToken(body.token);
 
-        if (!result.active)
+        if (!result.active || result.clientId !== clientAuth.clientId)
           return { active: false };
 
         return {
@@ -1631,8 +1631,43 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       /**
        * Handle POST /oauth/revoke (RFC 7009). Always returns success.
        */
-      async handleRevokeRequest(body: { token: string }): Promise<void> {
-        await this.revokeToken(body.token);
+      async handleRevokeRequest(body: { token: string }, clientAuth: ClientAuth): Promise<void> {
+        const client = await ctx.db.findOne<OAuthClientRecord>({
+          model: 'oauth_client',
+          where: [{ field: 'clientId', operator: '=', value: clientAuth.clientId }],
+        });
+        if (!client || !timingSafeEqualHex(await hashToken(clientAuth.clientSecret), client.clientSecretHash))
+          throw Errors.oauth('invalid_client', 'Invalid client credentials');
+
+        const tokenHash = await hashToken(body.token);
+        // RFC 7009 prevents one authenticated client from revoking another
+        // client's credentials, while still returning success for unknown
+        // tokens to avoid an oracle.
+        await ctx.db.delete({
+          model: 'oauth_access_token',
+          where: [
+            { field: 'token', operator: '=', value: tokenHash },
+            { field: 'clientId', operator: '=', value: clientAuth.clientId },
+          ],
+        });
+        if (refreshEnabled) {
+          const refreshRecord = await ctx.db.findOne<RefreshTokenRecord>({
+            model: 'oauth_refresh_token',
+            where: [
+              { field: 'token', operator: '=', value: tokenHash },
+              { field: 'clientId', operator: '=', value: clientAuth.clientId },
+            ],
+          });
+          if (refreshRecord) {
+            await ctx.db.delete({
+              model: 'oauth_refresh_token',
+              where: [
+                { field: 'familyId', operator: '=', value: refreshRecord.familyId },
+                { field: 'clientId', operator: '=', value: clientAuth.clientId },
+              ],
+            });
+          }
+        }
       },
 
       /**
@@ -1647,10 +1682,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        * Standard claim coverage (OIDC Core §5.1) gated by access-token
        * scope (§5.4):
        * - `sub` always (stringified `user.id`)
-       * - `email`, `email_verified` when scope contains `email` or no
-       *   `openid` scope was issued (legacy non-OIDC compatibility)
-       * - `name`, `preferred_username` when scope contains `profile` or
-       *   no `openid` scope was issued
+       * - `email`, `email_verified` only when scope contains `email`
+       * - `name`, `preferred_username` only when scope contains `profile`
        * - `updated_at` always (Unix seconds, per §5.1)
        *
        * Extra claims can be added per-deployment via
@@ -1923,7 +1956,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         method: 'POST',
         path: '/oauth/revoke',
         handler: 'handleRevokeRequest',
-        meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
+        meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: { 200: { description: 'Token revoked' } },
       },

@@ -207,6 +207,7 @@ export async function computeMigrationChecksum(migration: FortressMigration): Pr
     migration.down,
     migration.freshUp ?? null,
     migration.dataStep ?? null,
+    migration.beforeUp?.toString() ?? null,
   ]);
   const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');

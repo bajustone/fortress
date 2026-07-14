@@ -59,6 +59,18 @@ describe('pipeline CSRF check (H5)', () => {
     expect(res.status).toBe(200);
   });
 
+  it('rejects cross-site pre-authentication state changes without a cookie', async () => {
+    const res = await fortress.handleRequest(new Request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'sec-fetch-site': 'cross-site',
+      },
+      body: JSON.stringify({ identifier: 'csrf@example.com', password: 'password-123456' }),
+    }));
+    expect(res.status).toBe(403);
+  });
+
   it('cookie POST without CSRF header is rejected (403)', async () => {
     const res = await fortress.handleRequest(new Request('http://localhost/auth/logout', {
       method: 'POST',

@@ -140,7 +140,7 @@ describe('explainPermission', () => {
       'edit',
       { resource: { ownerId: 'someone-else' } },
     );
-    expect(explanation.sources).toHaveLength(1);
+    expect(explanation.sources).toHaveLength(0);
     expect(explanation.allowed).toBe(false);
   });
 

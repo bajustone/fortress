@@ -52,7 +52,7 @@ The plugin uses two lifecycle hooks:
 
 | Method | Signature | Returns |
 |---|---|---|
-| `sendVerification` | `(userId: string, email?: string)` | `Promise<{ token: string }>` |
+| `sendVerification` | `(userId: string, email?: string)` | `Promise<{ sent: true }>` |
 | `verify` | `(rawToken: string)` | `Promise<{ userId: string; email: string }>` |
 
 ### sendVerification
@@ -61,13 +61,13 @@ Generates and sends a new verification token. Use this to resend verification em
 
 ```ts
 // Resend to the user's current email
-const { token } = await fortress.plugins['email-verification'].sendVerification(userId);
+await fortress.plugins['email-verification'].sendVerification(userId);
 
-// Send to a different email (e.g., email change flow)
-const { token } = await fortress.plugins['email-verification'].sendVerification(userId, 'newemail@example.com');
+// Send to a different email (email is adopted only after verification)
+await fortress.plugins['email-verification'].sendVerification(userId, 'newemail@example.com');
 ```
 
-The raw token is returned for cases where you need programmatic access. In production, the `onSendVerification` callback delivers it to the user via email.
+The raw token is delivered only through `onSendVerification`; it is never returned to the caller. Verifying a changed-email token atomically adopts that address and marks it verified.
 
 Throws `NotFound` if the user does not exist.
 

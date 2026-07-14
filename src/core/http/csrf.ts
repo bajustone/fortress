@@ -129,14 +129,39 @@ export function enforceCsrf(
   if (matchesSkipPath(pathname, csrf.skipPaths))
     return;
 
-  // Bearer / API-key flows have no ambient credential. We detect "cookie
-  // auth" by inspecting the cookie jar directly rather than the resolved
-  // principal so the check works the same way regardless of which plugin
-  // resolved the request.
-  if (!isCookieAuthenticated(request, cookies))
-    return;
-
   const fetchSite = request.headers.get('sec-fetch-site');
+  const cookieAuthenticated = isCookieAuthenticated(request, cookies);
+
+  // Pre-authentication endpoints still need login-CSRF protection: a hostile
+  // site can otherwise submit its own credentials and bind the victim's
+  // browser to the attacker's account. Browser cross-site signals are checked
+  // even before an auth cookie exists; non-browser bearer/API-key clients do
+  // not send these ambient-browser headers and remain unaffected.
+  if (!cookieAuthenticated) {
+    // Explicit credentials are not ambient browser authority and therefore
+    // are not vulnerable to CSRF, even when sent cross-origin intentionally.
+    if (request.headers.has('authorization') || request.headers.has('x-api-key'))
+      return;
+    if (fetchSite === 'cross-site')
+      throw Errors.forbidden('CSRF: cross-site request rejected');
+    const origin = request.headers.get('origin');
+    if (origin) {
+      try {
+        if (new URL(origin).origin !== new URL(request.url).origin)
+          throw Errors.forbidden('CSRF: cross-origin request rejected');
+      }
+      catch (error) {
+        if (error instanceof Error && 'code' in error)
+          throw error;
+        throw Errors.forbidden('CSRF: invalid Origin header');
+      }
+    }
+    return;
+  }
+
+  // Cookie-authenticated browser requests additionally require the custom
+  // header, which forces a CORS preflight for cross-origin JavaScript.
+
   if (fetchSite === 'cross-site')
     throw Errors.forbidden('CSRF: cross-site request rejected');
   if (csrf.rejectSameSite && fetchSite === 'same-site')

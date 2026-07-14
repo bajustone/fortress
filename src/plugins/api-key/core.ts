@@ -64,7 +64,9 @@ export async function generateApiKey(
   const random = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
   const raw = `${prefix}_sk_${random}`;
   const hash = await hashToken(raw);
-  const keyPrefix = raw.slice(0, 12);
+  // Include random material even when the configured textual prefix is long
+  // (the default `fortress_sk_` alone already occupies 12 characters).
+  const keyPrefix = `${prefix}_sk_${random.slice(0, 8)}`;
   return { raw, hash, keyPrefix };
 }
 
@@ -98,44 +100,53 @@ export async function createKeyForSubject(
   options: CreateKeyOptions,
   knobs: ApiKeyKnobs,
 ): Promise<{ key: string; id: string }> {
-  const activeCount = await db.count({
-    model: 'api_key',
-    where: [
-      ...subjectWhere(subject),
-      { field: 'isRevoked', operator: '=', value: false },
-    ],
+  return db.transaction(async (tx) => {
+    // SQLite transactions take the writer lock; PostgreSQL needs an explicit
+    // subject-scoped advisory lock so count+insert is one atomic quota check
+    // across processes.
+    if (tx.dialect === 'pg' && tx.rawQuery) {
+      await tx.rawQuery('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?))', [subject.type, subject.id]);
+    }
+
+    const activeCount = await tx.count({
+      model: 'api_key',
+      where: [
+        ...subjectWhere(subject),
+        { field: 'isRevoked', operator: '=', value: false },
+      ],
+    });
+
+    if (activeCount >= knobs.maxKeysPerSubject) {
+      throw Errors.badRequest(`Maximum of ${knobs.maxKeysPerSubject} active API keys per subject`);
+    }
+
+    const { raw, hash, keyPrefix } = await generateApiKey(knobs.prefix);
+
+    let expiresAt: Date | null = null;
+    if (options.expiresAt) {
+      expiresAt = options.expiresAt;
+    }
+    else if (knobs.defaultExpirySeconds) {
+      expiresAt = new Date(Date.now() + knobs.defaultExpirySeconds * 1000);
+    }
+
+    const record = await tx.create<ApiKeyRecord>({
+      model: 'api_key',
+      data: {
+        subjectType: subject.type,
+        subjectId: subject.id,
+        name: options.name,
+        keyHash: hash,
+        keyPrefix,
+        scopes: options.scopes ? JSON.stringify(options.scopes) : null,
+        expiresAt,
+        lastUsedAt: null,
+        isRevoked: false,
+      },
+    });
+
+    return { key: raw, id: record.id };
   });
-
-  if (activeCount >= knobs.maxKeysPerSubject) {
-    throw Errors.badRequest(`Maximum of ${knobs.maxKeysPerSubject} active API keys per subject`);
-  }
-
-  const { raw, hash, keyPrefix } = await generateApiKey(knobs.prefix);
-
-  let expiresAt: Date | null = null;
-  if (options.expiresAt) {
-    expiresAt = options.expiresAt;
-  }
-  else if (knobs.defaultExpirySeconds) {
-    expiresAt = new Date(Date.now() + knobs.defaultExpirySeconds * 1000);
-  }
-
-  const record = await db.create<ApiKeyRecord>({
-    model: 'api_key',
-    data: {
-      subjectType: subject.type,
-      subjectId: subject.id,
-      name: options.name,
-      keyHash: hash,
-      keyPrefix,
-      scopes: options.scopes ? JSON.stringify(options.scopes) : null,
-      expiresAt,
-      lastUsedAt: null,
-      isRevoked: false,
-    },
-  });
-
-  return { key: raw, id: record.id };
 }
 
 /** List non-revoked keys owned by a subject. Caller-neutral. */

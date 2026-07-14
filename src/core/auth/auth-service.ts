@@ -673,7 +673,7 @@ export function createAuthService(
                 : null;
               if (successor) {
                 const absoluteTimeout = config.jwt.session?.absoluteTimeoutSeconds;
-                if (absoluteTimeout != null && now.getTime() - successor.familyCreatedAt.getTime() > absoluteTimeout * 1000) {
+                if (absoluteTimeout != null && absoluteTimeout > 0 && now.getTime() - successor.familyCreatedAt.getTime() > absoluteTimeout * 1000) {
                   await tx.update({
                     model: 'refresh_token',
                     where: [{ field: 'tokenFamily', operator: '=', value: successor.tokenFamily }],
@@ -688,7 +688,7 @@ export function createAuthService(
 
                 const idleTimeout = config.jwt.session?.idleTimeoutSeconds;
                 const lastActivity = successor.lastActiveAt ?? successor.familyCreatedAt;
-                if (idleTimeout != null && now.getTime() - lastActivity.getTime() > idleTimeout * 1000) {
+                if (idleTimeout != null && idleTimeout > 0 && now.getTime() - lastActivity.getTime() > idleTimeout * 1000) {
                   await tx.update({
                     model: 'refresh_token',
                     where: [{ field: 'tokenFamily', operator: '=', value: successor.tokenFamily }],

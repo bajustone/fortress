@@ -977,121 +977,128 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
           throw Errors.unauthorized('User not authenticated');
         const db = ctx.db;
 
-        // Verify user exists
-        const user = await db.findOne<{ id: string }>({
-          model: 'user',
-          where: [{ field: 'id', operator: '=', value: userId }],
-        });
-        if (!user) {
-          throw Errors.notFound('User not found');
-        }
+        return db.transaction(async (tx) => {
+          // Serialize the one-time gate across processes. SQLite transaction
+          // adapters acquire a writer lock; PostgreSQL uses an advisory lock.
+          if (tx.dialect === 'pg' && tx.rawQuery)
+            await tx.rawQuery('SELECT pg_advisory_xact_lock(hashtext(?))', ['fortress-admin-bootstrap']);
 
-        // One-time bootstrap: any existing fortress-admin binding closes
-        // the bootstrap path permanently. A plain authenticated caller can
-        // never self-grant without the secret, and nobody can re-bootstrap.
-        const existingRole = await db.findOne<Role>({
-          model: 'role',
-          where: [{ field: 'name', operator: '=', value: 'fortress-admin' }],
-        });
-        if (existingRole) {
-          const existingAdmins = await db.count({
-            model: 'role_binding',
-            where: [{ field: 'roleId', operator: '=', value: existingRole.id }],
+          // Verify user exists
+          const user = await tx.findOne<{ id: string }>({
+            model: 'user',
+            where: [{ field: 'id', operator: '=', value: userId }],
           });
-          if (existingAdmins > 0)
-            throw Errors.forbidden('Admin already bootstrapped');
-        }
-
-        // Auto-discover all permissions from endpoint definitions
-        const plugins = ctx.config.plugins ?? [];
-        const pluginEndpoints: EndpointDefinition[] = [];
-        for (const plugin of plugins) {
-          if (plugin.routes)
-            pluginEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
-        }
-        const allEndpoints: EndpointDefinition[] = [
-          ...Object.values(authEndpoints) as EndpointDefinition[],
-          ...Object.values(iamEndpoints) as EndpointDefinition[],
-          ...pluginEndpoints,
-        ];
-        const declaredPermissions = collectPermissions(allEndpoints);
-
-        // Ensure each resource exists
-        const resources = new Set(declaredPermissions.map(p => p.resource));
-        for (const resource of resources) {
-          const existing = await db.findOne<{ name: string }>({
-            model: 'resource',
-            where: [{ field: 'name', operator: '=', value: resource }],
-          });
-          if (!existing) {
-            await db.create({ model: 'resource', data: { name: resource, description: `Auto-registered by admin plugin` } });
+          if (!user) {
+            throw Errors.notFound('User not found');
           }
-        }
 
-        // Find or create each permission
-        const permissionIds: string[] = [];
-        for (const perm of declaredPermissions) {
-          let existing = await db.findOne<{ id: string }>({
-            model: 'permission',
-            where: [
-              { field: 'resource', operator: '=', value: perm.resource },
-              { field: 'action', operator: '=', value: perm.action },
-            ],
+          // One-time bootstrap: any existing fortress-admin binding closes
+          // the bootstrap path permanently. A plain authenticated caller can
+          // never self-grant without the secret, and nobody can re-bootstrap.
+          const existingRole = await tx.findOne<Role>({
+            model: 'role',
+            where: [{ field: 'name', operator: '=', value: 'fortress-admin' }],
           });
-          if (!existing) {
-            existing = await db.create<{ id: string }>({
+          if (existingRole) {
+            const existingAdmins = await tx.count({
+              model: 'role_binding',
+              where: [{ field: 'roleId', operator: '=', value: existingRole.id }],
+            });
+            if (existingAdmins > 0)
+              throw Errors.forbidden('Admin already bootstrapped');
+          }
+
+          // Auto-discover all permissions from endpoint definitions
+          const plugins = ctx.config.plugins ?? [];
+          const pluginEndpoints: EndpointDefinition[] = [];
+          for (const plugin of plugins) {
+            if (plugin.routes)
+              pluginEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
+          }
+          const allEndpoints: EndpointDefinition[] = [
+            ...Object.values(authEndpoints) as EndpointDefinition[],
+            ...Object.values(iamEndpoints) as EndpointDefinition[],
+            ...pluginEndpoints,
+          ];
+          const declaredPermissions = collectPermissions(allEndpoints);
+
+          // Ensure each resource exists
+          const resources = new Set(declaredPermissions.map(p => p.resource));
+          for (const resource of resources) {
+            const existing = await tx.findOne<{ name: string }>({
+              model: 'resource',
+              where: [{ field: 'name', operator: '=', value: resource }],
+            });
+            if (!existing) {
+              await tx.create({ model: 'resource', data: { name: resource, description: `Auto-registered by admin plugin` } });
+            }
+          }
+
+          // Find or create each permission
+          const permissionIds: string[] = [];
+          for (const perm of declaredPermissions) {
+            let existing = await tx.findOne<{ id: string }>({
               model: 'permission',
-              data: {
-                resource: perm.resource,
-                action: perm.action,
-                effect: 'ALLOW',
-                description: `${perm.action} ${perm.resource}`,
-              },
+              where: [
+                { field: 'resource', operator: '=', value: perm.resource },
+                { field: 'action', operator: '=', value: perm.action },
+              ],
+            });
+            if (!existing) {
+              existing = await tx.create<{ id: string }>({
+                model: 'permission',
+                data: {
+                  resource: perm.resource,
+                  action: perm.action,
+                  effect: 'ALLOW',
+                  description: `${perm.action} ${perm.resource}`,
+                },
+              });
+            }
+            permissionIds.push(existing.id);
+          }
+
+          // Create or find the fortress-admin role
+          let adminRole = existingRole;
+          if (!adminRole) {
+            adminRole = await tx.create<Role>({
+              model: 'role',
+              data: { name: 'fortress-admin', description: 'Full fortress administration', isSystem: true },
             });
           }
-          permissionIds.push(existing.id);
-        }
 
-        // Create or find the fortress-admin role
-        let adminRole = existingRole;
-        if (!adminRole) {
-          adminRole = await db.create<Role>({
-            model: 'role',
-            data: { name: 'fortress-admin', description: 'Full fortress administration', isSystem: true },
-          });
-        }
+          // Link all permissions to the role
+          for (const permId of permissionIds) {
+            const existingLink = await tx.findOne<{ id: string }>({
+              model: 'role_permission',
+              where: [
+                { field: 'roleId', operator: '=', value: adminRole.id },
+                { field: 'permissionId', operator: '=', value: permId },
+              ],
+            });
+            if (!existingLink) {
+              await tx.create({ model: 'role_permission', data: { roleId: adminRole.id, permissionId: permId } });
+            }
+          }
 
-        // Link all permissions to the role
-        for (const permId of permissionIds) {
-          const existingLink = await db.findOne<{ id: string }>({
-            model: 'role_permission',
+          // Bind the role to the user
+          const existingBinding = await tx.findOne<{ id: string }>({
+            model: 'role_binding',
             where: [
               { field: 'roleId', operator: '=', value: adminRole.id },
-              { field: 'permissionId', operator: '=', value: permId },
+              { field: 'subjectType', operator: '=', value: 'USER' },
+              { field: 'subjectId', operator: '=', value: userId },
             ],
           });
-          if (!existingLink) {
-            await db.create({ model: 'role_permission', data: { roleId: adminRole.id, permissionId: permId } });
+          if (!existingBinding) {
+            await tx.create({
+              model: 'role_binding',
+              data: { roleId: adminRole.id, subjectType: 'USER', subjectId: userId, tenantId: null },
+            });
           }
-        }
 
-        // Bind the role to the user
-        const existingBinding = await db.findOne<{ id: string }>({
-          model: 'role_binding',
-          where: [
-            { field: 'roleId', operator: '=', value: adminRole.id },
-            { field: 'subjectType', operator: '=', value: 'USER' },
-            { field: 'subjectId', operator: '=', value: userId },
-          ],
+          return { ok: true, role: adminRole };
         });
-        if (!existingBinding) {
-          await db.create({
-            model: 'role_binding',
-            data: { roleId: adminRole.id, subjectType: 'USER', subjectId: userId, tenantId: null },
-          });
-        }
-
-        return { ok: true, role: adminRole };
       },
 
       // ── Auth admin — delegates to core auth service ──────────

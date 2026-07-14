@@ -248,7 +248,14 @@ async function dispatchOAuth(
     }
     case 'handleRevokeRequest': {
       const body = await parseFormBody(request);
-      await m.handleRevokeRequest({ token: body.token });
+      const clientAuth = parseBasicAuth(authHeader);
+      if (!clientAuth) {
+        return jsonResponse(
+          { error: 'invalid_client', error_description: 'Client authentication required' },
+          401,
+        );
+      }
+      await m.handleRevokeRequest({ token: body.token }, clientAuth);
       return jsonResponse({}, 200);
     }
     case 'handleUserInfoRequest': {

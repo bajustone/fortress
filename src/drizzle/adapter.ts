@@ -317,7 +317,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
         return serializeSqlite<T | null>(async () => {
           const table = getTable(params.model);
           const condition = buildWhereCondition(table, params.where);
-          const result = await execOne<T>((drizzle as any).select().from(table).where(condition));
+          const result = await execOne<T>((drizzle as any).select().from(table).where(condition).limit(1));
           return (result as T) ?? null;
         });
       },
