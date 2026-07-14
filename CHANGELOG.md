@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.0.0-rc.2] - 2026-07-14
+
+### Fixed
+- Declare the MIT license and repository metadata in `package.json` so npm displays the package license and project links.
+
 ## [1.0.0-rc.1] - 2026-07-14
 
 ### Added

@@ -1,7 +1,16 @@
 {
   "name": "@bajustone/fortress",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "description": "Framework-agnostic, adapter-based authentication and authorization library for TypeScript. Core auth (JWT, refresh tokens, password hashing) plus IAM (resource+action permissions, groups, roles) with a plugin system for OAuth, 2FA, tenancy, WebAuthn, magic links, audit logging, rate limiting, and more.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bajustone/fortress.git"
+  },
+  "homepage": "https://github.com/bajustone/fortress#readme",
+  "bugs": {
+    "url": "https://github.com/bajustone/fortress/issues"
+  },
   "type": "module",
   "module": "src/index.ts",
   "main": "./dist/index.cjs",
