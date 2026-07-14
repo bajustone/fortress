@@ -242,6 +242,21 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
   let sqliteTxChain: Promise<unknown> = Promise.resolve();
   const sqliteTxContext = new AsyncLocalStorage<boolean>();
 
+  // Finding #16: a standalone (non-transaction) op touches the single SQLite
+  // connection immediately, so a plain write issued while a transaction is
+  // mid-BEGIN…COMMIT would interleave into that open transaction and be caught
+  // by its ROLLBACK. Route every standalone op through the SAME chain that
+  // serializes transactions. Ops already running inside a transaction callback
+  // bypass the queue — they must run directly on the open transaction rather
+  // than deadlock behind the tx that owns the chain.
+  function serializeSqlite<T>(op: () => Promise<T>): Promise<T> {
+    if (!isSqlite || sqliteTxContext.getStore())
+      return op();
+    const result = sqliteTxChain.then(op, op);
+    sqliteTxChain = result.catch(() => undefined);
+    return result;
+  }
+
   /** Execute a query expecting a single row (or undefined). SQLite uses .get(), PG awaits the query. */
   async function execOne<T>(query: any): Promise<T | undefined> {
     const row = isSqlite
@@ -281,25 +296,29 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
       get dialect() { return dialect; },
 
       async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
-        const table = getTable(params.model);
-        try {
-          const result = await execOne<T>((drizzle as any).insert(table).values(sanitizeData(params.data) as any).returning());
-          return result as T;
-        }
-        catch (err) {
-          // Translate driver constraint errors (pg SQLSTATEs, sqlite
-          // SQLITE_CONSTRAINT_*) into the matching FortressError so
-          // unique-violation / FK-violation / etc. surface as CONFLICT /
-          // UNPROCESSABLE_ENTITY without every host writing the same try/catch.
-          rethrowDbError(err, dialect);
-        }
+        return serializeSqlite<T>(async () => {
+          const table = getTable(params.model);
+          try {
+            const result = await execOne<T>((drizzle as any).insert(table).values(sanitizeData(params.data) as any).returning());
+            return result as T;
+          }
+          catch (err) {
+            // Translate driver constraint errors (pg SQLSTATEs, sqlite
+            // SQLITE_CONSTRAINT_*) into the matching FortressError so
+            // unique-violation / FK-violation / etc. surface as CONFLICT /
+            // UNPROCESSABLE_ENTITY without every host writing the same try/catch.
+            rethrowDbError(err, dialect);
+          }
+        });
       },
 
       async findOne<T>(params: { model: string; where: WhereClause[] }): Promise<T | null> {
-        const table = getTable(params.model);
-        const condition = buildWhereCondition(table, params.where);
-        const result = await execOne<T>((drizzle as any).select().from(table).where(condition));
-        return (result as T) ?? null;
+        return serializeSqlite<T | null>(async () => {
+          const table = getTable(params.model);
+          const condition = buildWhereCondition(table, params.where);
+          const result = await execOne<T>((drizzle as any).select().from(table).where(condition));
+          return (result as T) ?? null;
+        });
       },
 
       async findMany<T>(params: {
@@ -309,95 +328,105 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
         offset?: number;
         sortBy?: { field: string; direction: 'asc' | 'desc' };
       }): Promise<T[]> {
-        const table = getTable(params.model);
-        let query = (drizzle as any).select().from(table).$dynamic();
+        return serializeSqlite<T[]>(async () => {
+          const table = getTable(params.model);
+          let query = (drizzle as any).select().from(table).$dynamic();
 
-        if (params.where && params.where.length > 0) {
-          const condition = buildWhereCondition(table, params.where);
-          query = query.where(condition);
-        }
+          if (params.where && params.where.length > 0) {
+            const condition = buildWhereCondition(table, params.where);
+            query = query.where(condition);
+          }
 
-        if (params.sortBy) {
-          const column = getColumn(table, params.sortBy.field);
-          query = query.orderBy(
-            params.sortBy.direction === 'desc' ? sql`${column} desc` : sql`${column} asc`,
-          );
-        }
+          if (params.sortBy) {
+            const column = getColumn(table, params.sortBy.field);
+            query = query.orderBy(
+              params.sortBy.direction === 'desc' ? sql`${column} desc` : sql`${column} asc`,
+            );
+          }
 
-        if (params.limit) {
-          query = query.limit(params.limit);
-        }
+          if (params.limit) {
+            query = query.limit(params.limit);
+          }
 
-        if (params.offset) {
-          query = query.offset(params.offset);
-        }
+          if (params.offset) {
+            query = query.offset(params.offset);
+          }
 
-        return execMany<T>(query);
+          return execMany<T>(query);
+        });
       },
 
       async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T | null> {
-        const table = getTable(params.model);
-        const condition = buildWhereCondition(table, params.where);
-        const query = (drizzle as any).update(table).set(sanitizeData(params.data) as any).where(condition).returning();
-        try {
-          // SQLite drivers only step the statement for rows that are read from
-          // RETURNING. Use .all() so UPDATEs that match multiple rows actually
-          // apply to every row (family/session revocation depends on this),
-          // while preserving the adapter contract of returning one row/null.
-          if (isSqlite) {
-            const rows = (query.all() as T[]).map(stringifyIds);
-            return rows[0] ?? null;
+        return serializeSqlite<T | null>(async () => {
+          const table = getTable(params.model);
+          const condition = buildWhereCondition(table, params.where);
+          const query = (drizzle as any).update(table).set(sanitizeData(params.data) as any).where(condition).returning();
+          try {
+            // SQLite drivers only step the statement for rows that are read from
+            // RETURNING. Use .all() so UPDATEs that match multiple rows actually
+            // apply to every row (family/session revocation depends on this),
+            // while preserving the adapter contract of returning one row/null.
+            if (isSqlite) {
+              const rows = (query.all() as T[]).map(stringifyIds);
+              return rows[0] ?? null;
+            }
+            const result = await execOne<T>(query);
+            return (result as T) ?? null;
           }
-          const result = await execOne<T>(query);
-          return (result as T) ?? null;
-        }
-        catch (err) {
-          rethrowDbError(err, dialect);
-        }
+          catch (err) {
+            rethrowDbError(err, dialect);
+          }
+        });
       },
 
       async delete(params: { model: string; where: WhereClause[] }): Promise<void> {
-        const table = getTable(params.model);
-        const condition = buildWhereCondition(table, params.where);
-        try {
-          await execRun((drizzle as any).delete(table).where(condition));
-        }
-        catch (err) {
-          // FK violation on delete is the common case here — surfaces as
-          // UNPROCESSABLE_ENTITY rather than a raw driver error.
-          rethrowDbError(err, dialect);
-        }
+        return serializeSqlite<void>(async () => {
+          const table = getTable(params.model);
+          const condition = buildWhereCondition(table, params.where);
+          try {
+            await execRun((drizzle as any).delete(table).where(condition));
+          }
+          catch (err) {
+            // FK violation on delete is the common case here — surfaces as
+            // UNPROCESSABLE_ENTITY rather than a raw driver error.
+            rethrowDbError(err, dialect);
+          }
+        });
       },
 
       async count(params: { model: string; where?: WhereClause[] }): Promise<number> {
-        const table = getTable(params.model);
-        let query = (drizzle as any).select({ count: sql<number>`count(*)` }).from(table).$dynamic();
+        return serializeSqlite<number>(async () => {
+          const table = getTable(params.model);
+          let query = (drizzle as any).select({ count: sql<number>`count(*)` }).from(table).$dynamic();
 
-        if (params.where && params.where.length > 0) {
-          const condition = buildWhereCondition(table, params.where);
-          query = query.where(condition);
-        }
+          if (params.where && params.where.length > 0) {
+            const condition = buildWhereCondition(table, params.where);
+            query = query.where(condition);
+          }
 
-        const result = await execOne<{ count: number | string }>(query);
-        return Number(result?.count) || 0;
+          const result = await execOne<{ count: number | string }>(query);
+          return Number(result?.count) || 0;
+        });
       },
 
       async rawQuery<T>(sqlText: string, params?: unknown[]): Promise<T[]> {
-        const query = buildRawSql(sqlText, params ?? []);
-        if (isSqlite) {
-          if (typeof (drizzle as any).all === 'function' && sqliteStatementReturnsRows(sqlText))
-            return normalizeRawRows<T>((drizzle as any).all(query)).map(stringifyIds);
-          if (typeof (drizzle as any).run === 'function') {
-            (drizzle as any).run(query);
-            return [];
+        return serializeSqlite<T[]>(async () => {
+          const query = buildRawSql(sqlText, params ?? []);
+          if (isSqlite) {
+            if (typeof (drizzle as any).all === 'function' && sqliteStatementReturnsRows(sqlText))
+              return normalizeRawRows<T>((drizzle as any).all(query)).map(stringifyIds);
+            if (typeof (drizzle as any).run === 'function') {
+              (drizzle as any).run(query);
+              return [];
+            }
+            if (typeof (drizzle as any).execute === 'function')
+              return normalizeRawRows<T>(await (drizzle as any).execute(query)).map(stringifyIds);
+            throw Errors.badRequest('rawQuery is not supported by this SQLite Drizzle driver');
           }
-          if (typeof (drizzle as any).execute === 'function')
-            return normalizeRawRows<T>(await (drizzle as any).execute(query)).map(stringifyIds);
-          throw Errors.badRequest('rawQuery is not supported by this SQLite Drizzle driver');
-        }
-        if (typeof (drizzle as any).execute !== 'function')
-          throw Errors.badRequest('rawQuery is not supported by this Drizzle driver');
-        return normalizeRawRows<T>(await (drizzle as any).execute(query)).map(stringifyIds);
+          if (typeof (drizzle as any).execute !== 'function')
+            throw Errors.badRequest('rawQuery is not supported by this Drizzle driver');
+          return normalizeRawRows<T>(await (drizzle as any).execute(query)).map(stringifyIds);
+        });
       },
 
       async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {
