@@ -153,7 +153,7 @@ export async function checkMigrationDrift(
   const drift = await detectMigrationDrift(db, dialect);
   const messages: string[] = [];
   if (drift.missingVersionTable)
-    messages.push('Schema version table is missing — run fortress.migrateUp()');
+    messages.push('Schema version table is missing — run fortress.migrate()');
   if (drift.pendingVersions.length > 0)
     messages.push(`Pending migrations: ${drift.pendingVersions.join(', ')}`);
   if (drift.unknownFutureVersion)
@@ -185,14 +185,14 @@ export interface AuthSmokeTestOptions {
 }
 
 /**
- * End-to-end auth smoke test: register → login → me → refresh → logout.
+ * End-to-end auth smoke test: create user → login → verify access token → refresh → logout.
  * Designed to run against a fortress instance backed by
  * {@link createTestAdapter} or any disposable DB. Returns a
  * {@link CheckResult} so it composes with the other checks for a single
  * CI gate.
  *
- * Calls the in-process `fortress.call.*` proxy so the full request
- * pipeline (validation, plugin middleware, RBAC, cookies) runs without
+ * Calls the direct `fortress.auth.*` service methods so auth persistence,
+ * hashing, token verification, refresh rotation, and revocation run without
  * a network roundtrip.
  */
 export async function smokeTestAuth(

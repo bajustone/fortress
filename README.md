@@ -1532,17 +1532,17 @@ await fortress.plugins.admin.deleteUser({ id: '42' });
 const roles = await fortress.plugins.admin.getRoles();
 const role = await fortress.plugins.admin.getRole({ id: '1' });      // includes permissions
 const newRole = await fortress.plugins.admin.createRole({ name: 'editor', permissions: [] });
-await fortress.plugins.admin.bindRoleToUser({ id: '1', userId: 42 });
-await fortress.plugins.admin.unbindRole({ id: '1', subjectType: 'USER', subjectId: 42 });
+await fortress.plugins.admin.bindRoleToUser({ id: '1', userId: '42' });
+await fortress.plugins.admin.unbindRole({ id: '1', subjectType: 'USER', subjectId: '42' });
 
 // Group management
 const { groups } = await fortress.plugins.admin.listGroups({ limit: '20' });
 const group = await fortress.plugins.admin.createGroup({ name: 'devs' });
-await fortress.plugins.admin.addUserToGroup({ id: '5', userId: 42 });
+await fortress.plugins.admin.addUserToGroup({ id: '5', userId: '42' });
 
 // Permission checks
 const { allowed } = await fortress.plugins.admin.checkPermission({
-  userId: 42, resource: 'post', action: 'publish',
+  userId: '42', resource: 'post', action: 'publish',
 });
 ```
 
@@ -2063,7 +2063,7 @@ Events are logged automatically via hooks. Available event types:
 ```typescript
 // Query the audit log
 const entries = await fortress.plugins['audit-log'].getAuditLog({
-  userId: 42,
+  userId: '42',
   eventType: 'LOGIN_SUCCESS',
   from: new Date('2025-01-01'),
   to: new Date('2025-12-31'),
@@ -2088,7 +2088,7 @@ const result = await fortress.plugins['audit-log'].verifyChain();
 // Export for compliance/retention — JSON (default) or RFC 4180 CSV,
 // using the same filters as getAuditLog
 const csv = await fortress.plugins['audit-log'].exportEntries('csv', {
-  userId: 42,
+  userId: '42',
   from: new Date('2026-01-01'),
 });
 ```
@@ -2598,7 +2598,12 @@ bun add @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http
 
 ## Testing
 
-Use the built-in test adapter for unit and integration tests. It creates an in-memory SQLite database with all Fortress tables pre-created.
+Use the built-in test adapter for unit and integration tests. It creates an in-memory SQLite database with all Fortress tables pre-created. Bun uses its built-in `bun:sqlite`; Node users must install the optional testing peer dependency:
+
+```bash
+npm install --save-dev better-sqlite3
+```
+
 
 ```typescript
 import { createTestAdapter } from '@bajustone/fortress/testing';
@@ -2627,12 +2632,17 @@ describe('auth', () => {
     const role = await fortress.iam.createRole('viewer', [
       { resource: 'post', action: 'read' },
     ]);
-    await fortress.iam.bindRoleToUser(1, role.id);
+    const user = await fortress.auth.createUser({
+      email: 'permissions@example.com',
+      name: 'Permissions',
+      password: 'password123456',
+    });
+    await fortress.iam.bindRoleToUser(user.id, role.id);
 
-    const allowed = await fortress.iam.checkPermission(1, 'post', 'read');
+    const allowed = await fortress.iam.checkPermission(user.id, 'post', 'read');
     expect(allowed).toBe(true);
 
-    const denied = await fortress.iam.checkPermission(1, 'post', 'delete');
+    const denied = await fortress.iam.checkPermission(user.id, 'post', 'delete');
     expect(denied).toBe(false);
   });
 });

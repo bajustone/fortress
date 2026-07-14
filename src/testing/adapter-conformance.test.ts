@@ -2,6 +2,11 @@ import type { DatabaseAdapter } from '../adapters/database';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from './index';
 
+function assertStringId(record: { id: unknown }): asserts record is { id: string } {
+  if (typeof record.id !== 'string')
+    throw new TypeError(`DatabaseAdapter.create() returned a non-string id (${typeof record.id})`);
+}
+
 /**
  * Adapter conformance test suite.
  * Run this against any DatabaseAdapter implementation to verify the contract.
@@ -24,6 +29,7 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
       });
 
       expect(user.id).toBeDefined();
+      assertStringId(user);
       expect(user.email).toBe('alice@test.com');
       expect(user.name).toBe('Alice');
     });
@@ -90,17 +96,18 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
   });
 
   describe('update', () => {
-    it('updates matching records', async () => {
+    it('updates matching records and returns the updated row', async () => {
       const user = await db.create<{ id: string }>({
         model: 'user',
         data: { email: 'alice@test.com', name: 'Alice', passwordHash: 'hash', isActive: true },
       });
 
-      await db.update({
+      const updated = await db.update<{ id: string; name: string }>({
         model: 'user',
         where: [{ field: 'id', operator: '=', value: user.id }],
         data: { name: 'Alice Updated' },
       });
+      expect(updated).toMatchObject({ id: user.id, name: 'Alice Updated' });
 
       const found = await db.findOne<{ name: string }>({
         model: 'user',
@@ -108,6 +115,47 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
       });
 
       expect(found!.name).toBe('Alice Updated');
+    });
+
+    it('returns null when no row matches', async () => {
+      await expect(db.update({
+        model: 'user',
+        where: [{ field: 'email', operator: '=', value: 'missing@test.com' }],
+        data: { name: 'Nobody' },
+      })).resolves.toBeNull();
+    });
+
+    it('updates every matching row while returning one updated row', async () => {
+      await db.create({ model: 'user', data: { email: 'multi-a@test.com', name: 'A', passwordHash: 'shared', isActive: true } });
+      await db.create({ model: 'user', data: { email: 'multi-b@test.com', name: 'B', passwordHash: 'shared', isActive: true } });
+      const updated = await db.update<{ isActive: boolean }>({
+        model: 'user',
+        where: [{ field: 'passwordHash', operator: '=', value: 'shared' }],
+        data: { isActive: false },
+      });
+      expect(updated?.isActive).toBe(false);
+      expect(await db.count({
+        model: 'user',
+        where: [{ field: 'isActive', operator: '=', value: false }],
+      })).toBe(2);
+    });
+
+    it('round-trips boolean values on create, update, and read', async () => {
+      const user = await db.create<{ id: string; isActive: boolean }>({
+        model: 'user',
+        data: { email: 'boolean@test.com', name: 'Boolean', passwordHash: 'h', isActive: false },
+      });
+      expect(user.isActive).toBe(false);
+      const updated = await db.update<{ isActive: boolean }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: user.id }],
+        data: { isActive: true },
+      });
+      expect(updated?.isActive).toBe(true);
+      await expect(db.findOne<{ isActive: boolean }>({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: user.id }],
+      })).resolves.toMatchObject({ isActive: true });
     });
   });
 
@@ -129,6 +177,16 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
       });
 
       expect(found).toBeNull();
+    });
+
+    it('removes every matching row', async () => {
+      await db.create({ model: 'user', data: { email: 'delete-a@test.com', name: 'A', passwordHash: 'delete-shared', isActive: true } });
+      await db.create({ model: 'user', data: { email: 'delete-b@test.com', name: 'B', passwordHash: 'delete-shared', isActive: true } });
+      await db.delete({
+        model: 'user',
+        where: [{ field: 'passwordHash', operator: '=', value: 'delete-shared' }],
+      });
+      expect(await db.count({ model: 'user' })).toBe(0);
     });
 
     it('is a no-op when no match', async () => {
@@ -232,6 +290,71 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
 
       expect(users).toHaveLength(2);
     });
+
+    it('supports gt, lt, gte, and lte operators', async () => {
+      const dates = [
+        new Date('2020-01-01T00:00:00.000Z'),
+        new Date('2021-01-01T00:00:00.000Z'),
+        new Date('2022-01-01T00:00:00.000Z'),
+      ];
+      for (const [index, createdAt] of dates.entries()) {
+        await db.create({
+          model: 'user',
+          data: { email: `date-${index}@test.com`, name: String(index), passwordHash: 'h', isActive: true, createdAt, updatedAt: createdAt },
+        });
+      }
+      const cases = [
+        ['gt', dates[1], 1],
+        ['lt', dates[1], 1],
+        ['gte', dates[1], 2],
+        ['lte', dates[1], 2],
+      ] as const;
+      for (const [operator, value, expected] of cases) {
+        const rows = await db.findMany({
+          model: 'user',
+          where: [{ field: 'createdAt', operator, value }],
+        });
+        expect(rows, operator).toHaveLength(expected);
+      }
+    });
+
+    it('supports isNull independently of the supplied value', async () => {
+      await db.create({ model: 'user', data: { email: 'null@test.com', name: 'Null', passwordHash: null, isActive: true } });
+      await db.create({ model: 'user', data: { email: 'not-null@test.com', name: 'Not null', passwordHash: 'h', isActive: true } });
+      const rows = await db.findMany<{ email: string }>({
+        model: 'user',
+        where: [{ field: 'passwordHash', operator: 'isNull', value: false }],
+      });
+      expect(rows.map(row => row.email)).toEqual(['null@test.com']);
+    });
+
+    it('throws for an unknown operator', async () => {
+      await expect(db.findMany({
+        model: 'user',
+        where: [{ field: 'email', operator: 'definitely-unsupported', value: 'x' }],
+      })).rejects.toThrow();
+    });
+  });
+
+  describe('sortBy', () => {
+    it('sorts ascending and descending by the requested field', async () => {
+      for (const name of ['Charlie', 'Alice', 'Bob']) {
+        await db.create({
+          model: 'user',
+          data: { email: `${name.toLowerCase()}@test.com`, name, passwordHash: 'h', isActive: true },
+        });
+      }
+      const ascending = await db.findMany<{ name: string }>({
+        model: 'user',
+        sortBy: { field: 'name', direction: 'asc' },
+      });
+      const descending = await db.findMany<{ name: string }>({
+        model: 'user',
+        sortBy: { field: 'name', direction: 'desc' },
+      });
+      expect(ascending.map(row => row.name)).toEqual(['Alice', 'Bob', 'Charlie']);
+      expect(descending.map(row => row.name)).toEqual(['Charlie', 'Bob', 'Alice']);
+    });
   });
 
   describe('empty where clause is rejected on mutations', () => {
@@ -272,6 +395,12 @@ export function runAdapterTests(createAdapter: () => DatabaseAdapter): void {
     });
   });
 }
+
+describe('conformance regression guards', () => {
+  it('rejects a deliberately broken numeric-id adapter result', () => {
+    expect(() => assertStringId({ id: 123 })).toThrow(/non-string id \(number\)/);
+  });
+});
 
 // Run conformance tests against the built-in test adapter
 describe('adapter conformance: createTestAdapter', () => {

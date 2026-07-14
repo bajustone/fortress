@@ -730,8 +730,8 @@ const adapter = createDrizzleAdapter(db, {
 
 In-memory SQLite adapter for unit tests:
 
-- **Runtime detection:** Tries `bun:sqlite` first (dynamic import), falls back to `better-sqlite3`
-- **Auto-creates** all 24 fortress tables on initialization
+- **Runtime detection:** Bun uses `bun:sqlite`; Node ESM/CJS lazily loads the optional `better-sqlite3` peer through a format-safe `createRequire` bridge
+- **Auto-creates** the current bundled Fortress schema on initialization
 - **Enables:** Foreign key constraints, WAL journal mode
 - **Returns:** A fully functional `DatabaseAdapter` wrapping Drizzle over the in-memory SQLite
 
@@ -740,7 +740,9 @@ import { createTestAdapter } from '@bajustone/fortress/testing';
 const adapter = createTestAdapter(); // zero-setup, in-memory
 ```
 
-**Conformance suite:** `src/testing/adapter-conformance.test.ts` exports `runAdapterTests()` — a shared test suite that any adapter implementation can run to verify it meets the `DatabaseAdapter` contract.
+Node consumers install `better-sqlite3` as a development dependency; Bun needs no additional SQLite driver.
+
+**Conformance suite:** `src/testing/adapter-conformance.test.ts` exports `runAdapterTests()` — a shared test suite that verifies all core operators, sorting, multi-row writes, update return values, string IDs, boolean round-trips, transaction rollback, placeholder portability, unsupported-operator rejection, and typed constraint errors.
 
 ---
 

@@ -124,13 +124,13 @@ await fortress.plugins.admin.deleteRole({ id: '1' });
 await fortress.plugins.admin.addPermissionToRole({ id: '1', resource: 'post', action: 'publish' });
 
 // Bind a role to a user
-await fortress.plugins.admin.bindRoleToUser({ id: '1', userId: 42 });
+await fortress.plugins.admin.bindRoleToUser({ id: '1', userId: '42' });
 
 // Bind a role to a group
-await fortress.plugins.admin.bindRoleToGroup({ id: '1', groupId: 5 });
+await fortress.plugins.admin.bindRoleToGroup({ id: '1', groupId: '5' });
 
 // Unbind a role
-await fortress.plugins.admin.unbindRole({ id: '1', subjectType: 'USER', subjectId: 42 });
+await fortress.plugins.admin.unbindRole({ id: '1', subjectType: 'USER', subjectId: '42' });
 ```
 
 System roles (like `fortress-admin`) cannot be updated or deleted through the admin endpoints.
@@ -158,8 +158,8 @@ await fortress.plugins.admin.deleteGroup({ id: '5' });
 const members = await fortress.plugins.admin.getGroupUsers({ id: '5' });
 
 // Add/remove users from groups
-await fortress.plugins.admin.addUserToGroup({ id: '5', userId: 42 });
-await fortress.plugins.admin.removeUserFromGroup({ id: '5', userId: 42 });
+await fortress.plugins.admin.addUserToGroup({ id: '5', userId: '42' });
+await fortress.plugins.admin.removeUserFromGroup({ id: '5', userId: '42' });
 ```
 
 ### Permission management
@@ -184,14 +184,14 @@ const userPerms = await fortress.plugins.admin.getUserPermissions({ id: '42' });
 
 // Check a specific permission
 const { allowed } = await fortress.plugins.admin.checkPermission({
-  userId: 42, resource: 'post', action: 'publish',
+  userId: '42', resource: 'post', action: 'publish',
 });
 
 // Bind/unbind permissions directly to users or groups
-await fortress.plugins.admin.bindPermissionToUser({ userId: 42, permission: { resource: 'post', action: 'publish' } });
-await fortress.plugins.admin.bindPermissionToGroup({ groupId: 5, permission: { resource: 'post', action: 'publish' } });
-await fortress.plugins.admin.unbindPermissionFromUser({ userId: 42, permissionId: 99 });
-await fortress.plugins.admin.unbindPermissionFromGroup({ groupId: 5, permissionId: 99 });
+await fortress.plugins.admin.bindPermissionToUser({ userId: '42', permission: { resource: 'post', action: 'publish' } });
+await fortress.plugins.admin.bindPermissionToGroup({ groupId: '5', permission: { resource: 'post', action: 'publish' } });
+await fortress.plugins.admin.unbindPermissionFromUser({ userId: '42', permissionId: '99' });
+await fortress.plugins.admin.unbindPermissionFromGroup({ groupId: '5', permissionId: '99' });
 ```
 
 ### Resource sync

@@ -101,11 +101,12 @@ describe('smokeTestAuth', () => {
 });
 
 describe('runFortressChecks aggregator', () => {
-  it('runs every check and aggregates ok/messages', async () => {
+  it('passes with its default configuration', async () => {
     const fortress = makeFortress();
-    const result = await runFortressChecks({ fortress, skipMigrations: true });
+    const result = await runFortressChecks({ fortress });
     expect(result.manifest.ok).toBe(true);
     expect(result.publicRoutes.ok).toBe(true);
+    expect(result.migrations?.ok).toBe(true);
     expect(result.authSmokeTest?.ok).toBe(true);
     expect(result.ok).toBe(true);
   });

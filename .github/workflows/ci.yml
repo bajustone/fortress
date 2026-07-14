@@ -16,8 +16,12 @@ jobs:
       - run: bun install
       - run: bun run lint
       - run: bun run typecheck
+      - run: bun run typecheck:examples
       - name: Exports parity (jsr.json ⇄ package.json ⇄ tsup)
         run: bun run check:exports
+      - run: bun run build
+      - name: Pure Node ESM testing-subpath smoke test
+        run: bun run check:testing-esm
 
   # Unit suite (SQLite test adapter) across every supported runtime. Bun is the
   # primary runtime; the Node jobs run the same vitest suite under Node's
@@ -50,11 +54,10 @@ jobs:
 
   # PostgreSQL integration suite via testcontainers. Covers the pg dialect, the
   # tenancy connection-pinning/search_path isolation, and the framework
-  # adapters end-to-end. Heavier, so it runs on PRs, pushes to main, and the
-  # nightly schedule rather than every branch push.
+  # adapters end-to-end. This is release-critical and therefore runs on every
+  # push, pull request, and nightly schedule accepted by this workflow.
   integration:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

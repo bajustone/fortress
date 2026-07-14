@@ -83,19 +83,19 @@ function buildMeta(event: SvelteKitRequestEvent): { ipAddress?: string; userAgen
 /** Type of the {@link fortressActions} namespace — explicit so JSR's slow-type check is happy. */
 export interface FortressActions {
   login: (
-    fortress: Fortress,
+    fortress: Fortress<any, any>,
     opts?: FortressActionOptions,
   ) => SvelteKitAction<FortressActionFailure | FortressActionSuccess>;
   register: (
-    fortress: Fortress,
+    fortress: Fortress<any, any>,
     opts?: FortressActionOptions,
   ) => SvelteKitAction<FortressActionFailure | FortressActionSuccess>;
   logout: (
-    fortress: Fortress,
+    fortress: Fortress<any, any>,
     opts?: FortressActionOptions,
   ) => SvelteKitAction<FortressActionSuccess>;
   refresh: (
-    fortress: Fortress,
+    fortress: Fortress<any, any>,
   ) => SvelteKitAction<FortressActionFailure | FortressActionSuccess>;
 }
 
@@ -106,7 +106,7 @@ export const fortressActions: FortressActions = {
    * refresh cookies on success. Optionally redirects.
    */
   login(
-    fortress: Fortress,
+    fortress: Fortress<any, any>,
     opts: FortressActionOptions = {},
   ): SvelteKitAction<FortressActionFailure | FortressActionSuccess> {
     return async (event) => {
@@ -142,7 +142,7 @@ export const fortressActions: FortressActions = {
    * redirects. Mirrors the typical sign-up UX.
    */
   register(
-    fortress: Fortress,
+    fortress: Fortress<any, any>,
     opts: FortressActionOptions = {},
   ): SvelteKitAction<FortressActionFailure | FortressActionSuccess> {
     return async (event) => {
@@ -181,7 +181,7 @@ export const fortressActions: FortressActions = {
    * cookies. Optionally redirects.
    */
   logout(
-    fortress: Fortress,
+    fortress: Fortress<any, any>,
     opts: FortressActionOptions = {},
   ): SvelteKitAction<FortressActionSuccess> {
     return async (event) => {
@@ -207,7 +207,7 @@ export const fortressActions: FortressActions = {
    * session without a full reload.
    */
   refresh(
-    fortress: Fortress,
+    fortress: Fortress<any, any>,
   ): SvelteKitAction<FortressActionFailure | FortressActionSuccess> {
     return async (event) => {
       const refreshToken = event.cookies.get(fortress.cookies.refreshName);

@@ -25,7 +25,7 @@ export type SvelteKitRouteHandler = (event: SvelteKitRequestEvent) => Promise<Re
  * delegate to `fortress.handleRequest`. Suitable for `export const { ... } =
  * toSvelteKitHandler(fortress)` in a catch-all `+server.ts`.
  */
-export function toSvelteKitHandler(fortress: Fortress): {
+export function toSvelteKitHandler(fortress: Fortress<any, any>): {
   GET: SvelteKitRouteHandler;
   POST: SvelteKitRouteHandler;
   PUT: SvelteKitRouteHandler;

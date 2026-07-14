@@ -13,12 +13,12 @@
  * import { createFortress } from '@bajustone/fortress';
  * import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
  *
- * const fortress = await createFortress({
- *   db: createDrizzleAdapter(db, { dialect: 'pg' }),
+ * const fortress = createFortress({
+ *   database: createDrizzleAdapter(db, { dialect: 'pg' }),
  *   jwt: { key: process.env.JWT_SECRET! },
  * });
  *
- * const result = await fortress.signIn({ email: 'a@b.co', password: 'secret' });
+ * const result = await fortress.auth.login('a@b.co', 'secret');
  * ```
  *
  * @module

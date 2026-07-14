@@ -133,9 +133,11 @@ const fortress = createFortress({
     // ── Observability plugins (log last) ──
     auditLog({ hashChain: true }),
     webhook({
-      deliver: async (url, payload, headers) => {
-        console.warn(`[webhook] → ${url}`, JSON.parse(payload), headers);
-        return true;
+      delivery: {
+        fetch: async (request) => {
+          console.warn(`[webhook] → ${request.url}`, await request.text());
+          return new Response(null, { status: 200 });
+        },
       },
     }),
 
@@ -381,7 +383,7 @@ app.get('/auth/sessions', async (req, res, next) => {
 app.delete('/auth/sessions/:id', async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const tokenId = Number((req as any).params.id);
+    const tokenId = String((req as any).params.id);
     await fortress.auth.revokeSession(userId, tokenId);
     res.json({ data: { revoked: true } });
   }
@@ -447,7 +449,7 @@ app.get('/auth/api-keys', async (req, res, next) => {
 app.delete('/auth/api-keys/:id', async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const keyId = Number((req as any).params.id);
+    const keyId = String((req as any).params.id);
     await fortress.plugins['api-key'].revokeKey({ subject: { type: 'USER', id: userId }, id: keyId });
     res.json({ data: { revoked: true } });
   }
@@ -488,7 +490,7 @@ app.post('/api/groups', async (req, res, next) => {
 
 app.post('/api/groups/:id/members', async (req, res, next) => {
   try {
-    const groupId = Number((req as any).params.id);
+    const groupId = String((req as any).params.id);
     const { userId } = (req as any).body;
     await fortress.iam.addUserToGroup(groupId, userId);
     res.json({ data: { added: true } });
@@ -505,7 +507,7 @@ app.use('/admin', rbacMiddleware);
 app.use('/api/audit-log', authMiddleware);
 app.use('/api/audit-log', rbacMiddleware);
 
-app.get('/api/audit-log', async (req, res, next) => {
+app.get('/api/audit-log', async (_req, res, next) => {
   try {
     const entries = await fortress.plugins['audit-log'].getAuditLog({});
     res.json({ data: entries });
@@ -589,8 +591,8 @@ async function seed(): Promise<void> {
     { resource: 'user', action: 'read' },
   ], 'Read-only access');
 
-  await fortress.iam.bindRole('user', admin.id, adminRole.id);
-  await fortress.iam.bindRole('user', user.id, viewerRole.id);
+  await fortress.iam.bindRole('USER', admin.id, adminRole.id);
+  await fortress.iam.bindRole('USER', user.id, viewerRole.id);
 
   const engineering = await fortress.iam.createGroup('engineering', 'Engineering team');
   await fortress.iam.addUserToGroup(engineering.id, admin.id);

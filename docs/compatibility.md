@@ -41,11 +41,13 @@ peer directly for its strict public `Handle`/`Action` types and runtime
 | PostgreSQL via `drizzle-orm/postgres-js` | `@bajustone/fortress/drizzle` (`dialect: 'pg'`) | `postgres@^3.4` |
 | PostgreSQL via `drizzle-orm/node-postgres` | same | `pg@^8` |
 | SQLite via `drizzle-orm/bun-sqlite` | same (`dialect: 'sqlite'`) | bundled with Bun |
-| SQLite via `drizzle-orm/better-sqlite3` | same | `better-sqlite3@^11` |
+| SQLite via `drizzle-orm/better-sqlite3` | same | `better-sqlite3@^12.8` |
 
 Drizzle minimum: `drizzle-orm@^0.45`. Earlier versions are missing
 features Fortress relies on (`$dynamic()`, `getTableColumns`,
 `getSetCookie` polyfill).
+
+The `@bajustone/fortress/testing` subpath uses `bun:sqlite` under Bun and the optional `better-sqlite3@^12.8` peer under Node. Install that peer in Node test projects.
 
 Custom adapters: implement the `DatabaseAdapter` interface in
 `src/adapters/database/index.ts` to back Fortress with any datastore.

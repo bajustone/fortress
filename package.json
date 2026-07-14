@@ -323,12 +323,16 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:examples": "tsc -p tsconfig.examples.json --noEmit",
+    "build": "tsup",
     "version": "bun scripts/changelog.ts",
     "check:version": "bun scripts/check-version-sync.ts",
     "check:exports": "bun scripts/check-exports-parity.ts",
-    "publish": "bun run check:version && bun run check:exports && npx jsr publish",
-    "publish:dry": "bun run check:version && bun run check:exports && npx jsr publish --dry-run --allow-dirty",
-    "prepublishOnly": "tsup",
+    "check:testing-esm": "node scripts/check-testing-esm.mjs",
+    "check:release": "bun run check:version && bun run check:exports && bun run lint && bun run typecheck && bun run typecheck:examples && bun run test && bun run test:integration && bun run build && bun run check:testing-esm",
+    "publish": "bun run check:release && npx jsr publish",
+    "publish:dry": "bun run check:release && npx jsr publish --dry-run --allow-dirty",
+    "prepublishOnly": "bun run build && bun run check:exports && bun run check:testing-esm",
     "prepare": "husky"
   },
   "devDependencies": {
@@ -355,6 +359,7 @@
   "peerDependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@sveltejs/kit": "^2.0.0",
+    "better-sqlite3": "^12.8.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.10",
     "typescript": "^5.0.0"
@@ -364,6 +369,9 @@
       "optional": true
     },
     "@sveltejs/kit": {
+      "optional": true
+    },
+    "better-sqlite3": {
       "optional": true
     },
     "drizzle-orm": {

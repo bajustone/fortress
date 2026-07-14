@@ -13,11 +13,13 @@ you can gate deploys on them.
 | Route-manifest drift | `checkRouteManifestDrift(fortress)` | `fortress manifest:check` / `fortress check:routes` | Mounted routes not in the manifest, manifest routes not mounted, RBAC permission/OpenAPI mismatches |
 | Public-route allow-list | `checkPublicRoutes(fortress, { allow })` | `fortress check:public-routes` | A new route marked `.security('none')` or `bearerKind:'oauth'` that wasn't reviewed |
 | Migration drift | `checkMigrationDrift(adapter)` | `fortress migrate:check` / `fortress check:migrations` | Missing version table, pending migrations, missing Fortress tables, DB ahead of bundled catalog |
-| Auth smoke test | `smokeTestAuth(fortress)` | _(run from a test file)_ | Register/login/refresh/logout regression |
+| Auth smoke test | `smokeTestAuth(fortress)` | _(run from a test file)_ | User creation/login/access-token verification/refresh/logout regression |
 | Aggregator | `runFortressChecks({ fortress })` | _(run from a test file)_ | All of the above with a single ok/messages roll-up |
 
 `runFortressChecks` is the convenience entry point — wire it into a
-single vitest test or a deploy preflight script.
+single vitest test or a deploy preflight script. Under Node, install
+`better-sqlite3` as a development dependency for `createTestAdapter()`;
+Bun uses `bun:sqlite` without an extra driver.
 
 ## In a vitest test
 
@@ -45,7 +47,7 @@ This single test catches:
 - A new plugin route that's accidentally `.security('none')`.
 - A migration that was added without bumping `fortress_schema_version`.
 - A manifest entry that no longer corresponds to a mounted route.
-- A regression in the auth pipeline (register/login/refresh/logout).
+- A regression in the auth pipeline (create user/login/token verification/refresh/logout).
 
 ## As a CLI
 
@@ -68,12 +70,14 @@ A drop-in workflow is committed at
 
 1. `bun run lint`
 2. `bun run typecheck`
-3. `bunx fortress manifest:check`
-4. `bunx fortress check:public-routes`
-5. `bunx fortress migrate:check`
-6. `bun run test` (which should include `runFortressChecks(...)` from
+3. `bun run typecheck:examples`
+4. `bunx fortress manifest:check`
+5. `bunx fortress check:public-routes`
+6. `bunx fortress migrate:check`
+7. `bun run test` (which should include `runFortressChecks(...)` from
    the snippet above)
-7. `bunx tsup` (optional — verifies the package builds cleanly)
+8. `bun run test:integration` for PostgreSQL-backed projects
+9. `bun run build` (verifies distributable output)
 
 Adjust `oven-sh/setup-bun` to your preferred Node/PNPM/NPM setup; every
 step is plain shell.

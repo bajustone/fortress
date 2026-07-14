@@ -11,13 +11,15 @@
  * import { createTestAdapter } from '@bajustone/fortress/testing';
  *
  * const db = createTestAdapter();
- * const fortress = await createFortress({ db, jwt: { key: 'test' } });
+ * const fortress = createFortress({ database: db, jwt: { key: 'test' } });
  * ```
  *
  * @module
  */
 
 import type { DatabaseAdapter } from '../adapters/database';
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
 import { getLatestMigrationVersion, getMigrationUpSql } from '../core/migrations/migrations';
 import { createDrizzleAdapter } from '../drizzle/adapter';
 
@@ -53,6 +55,8 @@ const STAMP_SCHEMA_VERSION_SQL = `
 `;
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';
+const runtimeRequire = (globalThis as typeof globalThis & { require?: NodeRequire }).require
+  ?? createRequire(resolve(process.argv[1] ?? '__fortress_testing__.mjs'));
 
 /**
  * Create a test DatabaseAdapter using in-memory SQLite.
@@ -73,10 +77,8 @@ export function createTestAdapter(): DatabaseAdapter {
 
 function createBunAdapter(): DatabaseAdapter {
   // Dynamic import to avoid loading bun:sqlite in Node
-  // eslint-disable-next-line ts/no-require-imports
-  const { Database } = require('bun:sqlite');
-  // eslint-disable-next-line ts/no-require-imports
-  const { drizzle } = require('drizzle-orm/bun-sqlite');
+  const { Database } = runtimeRequire('bun:sqlite');
+  const { drizzle } = runtimeRequire('drizzle-orm/bun-sqlite');
 
   const sqlite = new Database(':memory:');
   sqlite.exec('PRAGMA journal_mode = WAL;');
@@ -89,11 +91,10 @@ function createBunAdapter(): DatabaseAdapter {
 }
 
 function createNodeAdapter(): DatabaseAdapter {
-  // Dynamic import to avoid loading better-sqlite3 in Bun
-  // eslint-disable-next-line ts/no-require-imports
-  const BetterSqlite3 = require('better-sqlite3');
-  // eslint-disable-next-line ts/no-require-imports
-  const { drizzle } = require('drizzle-orm/better-sqlite3');
+  // runtimeRequire works in both package formats while keeping the native
+  // dependency lazy and out of Bun's runtime branch.
+  const BetterSqlite3 = runtimeRequire('better-sqlite3');
+  const { drizzle } = runtimeRequire('drizzle-orm/better-sqlite3');
 
   const sqlite = new BetterSqlite3(':memory:');
   sqlite.pragma('journal_mode = WAL');

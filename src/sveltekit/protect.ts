@@ -40,19 +40,19 @@ export function protectedRoute<
   E extends EndpointDefinition<any, any, any, any>,
   TResult = unknown,
 >(
-  fortress: Fortress,
+  fortress: Fortress<any, any>,
   target: E,
   handler: SvelteKitProtectedRouteHandler<E, TResult>,
   options?: ProtectOptions,
 ): (event: SvelteKitRequestEvent) => Promise<Response>;
 export function protectedRoute<TResult = unknown>(
-  fortress: Fortress,
+  fortress: Fortress<any, any>,
   target: string,
   handler: SvelteKitProtectedRouteHandler<EndpointDefinition, TResult>,
   options?: ProtectOptions,
 ): (event: SvelteKitRequestEvent) => Promise<Response>;
 export function protectedRoute(
-  fortress: Fortress,
+  fortress: Fortress<any, any>,
   target: ProtectedRouteTarget,
 
   handler: SvelteKitProtectedRouteHandler<any, unknown>,

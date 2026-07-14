@@ -59,12 +59,13 @@ export const demoSeedPromise: Promise<{ clientId: string; clientSecret: string }
 
   // Demo OAuth client. clientId/clientSecret are returned only here, so we
   // log them so the README/CLI can use them.
-  const oauthMethods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>).oauth;
-  const client = (await oauthMethods.createClient({
+  const client = await fortress.plugins.oauth.createClient({
     name: 'Example OAuth Client',
     redirectUris: ['http://localhost:5173/oauth/callback-demo'],
     grantTypes: ['authorization_code'],
-  })) as { clientId: string; clientSecret: string };
+  });
+  if (!client.clientSecret)
+    throw new Error('Demo OAuth client must be confidential');
 
   console.warn(
     `\n[fortress example] OAuth client seeded:\n  client_id=${client.clientId}\n  client_secret=${client.clientSecret}\n  redirect_uri=http://localhost:5173/oauth/callback-demo\n  Try: http://localhost:5173/api/oauth/authorize?client_id=${client.clientId}&redirect_uri=${encodeURIComponent('http://localhost:5173/oauth/callback-demo')}&response_type=code&state=xyz&scope=read:posts\n`,

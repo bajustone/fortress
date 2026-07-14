@@ -21,7 +21,7 @@ import { parseCookieHeader } from '../core/http/cookie-serialize';
  */
 export function setAuthCookies(
   event: SvelteKitRequestEvent,
-  fortress: Fortress,
+  fortress: Fortress<any, any>,
   payload: AuthCookiePayload,
 ): void {
   const cookies = fortress.cookies;
@@ -35,7 +35,7 @@ export function setAuthCookies(
 }
 
 /** Clear both fortress auth cookies (logout). */
-export function clearAuthCookies(event: SvelteKitRequestEvent, fortress: Fortress): void {
+export function clearAuthCookies(event: SvelteKitRequestEvent, fortress: Fortress<any, any>): void {
   const cookies = fortress.cookies;
   event.cookies.delete(cookies.accessName, optsFor(cookies));
   event.cookies.delete(cookies.refreshName, optsFor(cookies));

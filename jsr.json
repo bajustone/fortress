@@ -19,6 +19,7 @@
       "vitest.integration.config.ts",
       "tsup.config.ts",
       "tsconfig.json",
+      "tsconfig.examples.json",
       ".github",
       "scripts",
       "bin",

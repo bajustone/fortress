@@ -58,7 +58,7 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /** Build the SvelteKit `handle` hook for a Fortress instance. */
 export function createSvelteKitHandle(
-  fortress: Fortress,
+  fortress: Fortress<any, any>,
   options: SvelteKitAdapterOptions = {},
 ): SvelteKitHandle {
   const basePath = options.basePath ?? '';
@@ -265,7 +265,7 @@ function requestMeta(request: Request): RequestMeta {
  */
 function populateLocals(
   event: SvelteKitRequestEvent<FortressLocals>,
-  fortress: Fortress,
+  fortress: Fortress<any, any>,
   subject: Subject,
   claims: TokenClaims | undefined,
   scopes: string[] | null | undefined,

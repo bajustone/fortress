@@ -16,8 +16,26 @@ jobs:
       - run: bun install
       - run: bun run check:version
 
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run check:exports
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run typecheck:examples
+      - run: bun run test
+      - run: bun run test:integration
+      - run: bun run build
+      - run: bun run check:testing-esm
+
   publish-jsr:
-    needs: verify-version
+    needs: [verify-version, quality]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,7 +51,7 @@ jobs:
       - run: npx jsr publish --allow-dirty
 
   publish-npm:
-    needs: verify-version
+    needs: [verify-version, quality]
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -335,7 +335,7 @@ app.get('/health', c => c.json({ status: 'ok' }));
 // `email()` enforces the email format at runtime (ReDoS-safe pattern); `strict()`
 // rejects unknown body keys (no over-posting). Both come from the fetcher-backed
 // schema builder re-exported at `@bajustone/fortress/fetcher`.
-const RegisterBody = strict(obj({ email: email(), password: str({ min: 8 }), name: str() }, 'email', 'password'));
+const RegisterBody = strict(obj({ email: email(), password: str({ min: 8 }), name: str() }, 'email', 'password', 'name'));
 const LoginBody = obj({ identifier: str(), password: str() }, 'identifier', 'password');
 
 // curl -X POST http://localhost:3000/auth/register -H 'Content-Type: application/json' \
@@ -465,7 +465,7 @@ app.get('/auth/sessions', async (c) => {
 // curl -X DELETE http://localhost:3000/auth/sessions/1 -H 'Authorization: Bearer <token>'
 app.delete('/auth/sessions/:id', async (c) => {
   const userId = getUserId(c);
-  const tokenId = Number(c.req.param('id'));
+  const tokenId = c.req.param('id');
   await fortress.auth.revokeSession(userId, tokenId);
   return c.json({ data: { revoked: true } });
 });
@@ -549,7 +549,7 @@ app.get('/auth/api-keys', async (c) => {
 // curl -X DELETE http://localhost:3000/auth/api-keys/1 -H 'Authorization: Bearer <token>'
 app.delete('/auth/api-keys/:id', async (c) => {
   const userId = getUserId(c);
-  const keyId = Number(c.req.param('id'));
+  const keyId = c.req.param('id');
   await fortress.plugins['api-key'].revokeKey({ subject: { type: 'USER', id: userId }, id: keyId });
   return c.json({ data: { revoked: true } });
 });
@@ -557,7 +557,7 @@ app.delete('/auth/api-keys/:id', async (c) => {
 // curl -X POST http://localhost:3000/auth/api-keys/1/rotate -H 'Authorization: Bearer <token>'
 app.post('/auth/api-keys/:id/rotate', async (c) => {
   const userId = getUserId(c);
-  const keyId = Number(c.req.param('id'));
+  const keyId = c.req.param('id');
   const result = await fortress.plugins['api-key'].rotateKey({ subject: { type: 'USER', id: userId }, id: keyId });
   return c.json({ data: result });
 });
@@ -586,9 +586,9 @@ app.post('/admin/service-accounts', async (c) => {
 //   -H 'Authorization: Bearer <admin-token>' -H 'Content-Type: application/json' \
 //   -d '{"roleId":42}'
 app.post('/admin/service-accounts/:id/roles', async (c) => {
-  const saId = Number(c.req.param('id'));
+  const saId = c.req.param('id');
   const { roleId, tenantId } = await c.req.json();
-  await fortress.iam.bindRoleToServiceAccount(saId, Number(roleId), tenantId);
+  await fortress.iam.bindRoleToServiceAccount(saId, String(roleId), tenantId);
   return c.json({ data: { bound: true } });
 });
 
@@ -598,7 +598,7 @@ app.post('/admin/service-accounts/:id/roles', async (c) => {
 //   -H 'Authorization: Bearer <admin-token>' -H 'Content-Type: application/json' \
 //   -d '{"name":"ci-deploy-github-actions"}'
 app.post('/admin/service-accounts/:id/keys', async (c) => {
-  const saId = Number(c.req.param('id'));
+  const saId = c.req.param('id');
   const { name, scopes, expiresAt } = await c.req.json();
   const result = await fortress.plugins['api-key'].createKey({
     subject: { type: 'SERVICE_ACCOUNT', id: saId },
@@ -614,7 +614,7 @@ app.post('/admin/service-accounts/:id/keys', async (c) => {
 //   -H 'Authorization: Bearer <admin-token>' -H 'Content-Type: application/json' \
 //   -d '{"isActive":false}'
 app.patch('/admin/service-accounts/:id', async (c) => {
-  const saId = Number(c.req.param('id'));
+  const saId = c.req.param('id');
   const patch = await c.req.json();
   const updated = await fortress.iam.updateServiceAccount(saId, patch);
   return c.json({ data: updated });
@@ -624,7 +624,7 @@ app.patch('/admin/service-accounts/:id', async (c) => {
 // curl -X DELETE http://localhost:3000/admin/service-accounts/1 \
 //   -H 'Authorization: Bearer <admin-token>'
 app.delete('/admin/service-accounts/:id', async (c) => {
-  const saId = Number(c.req.param('id'));
+  const saId = c.req.param('id');
   await fortress.iam.deleteServiceAccount(saId);
   return c.json({ data: { deleted: true } });
 });
@@ -698,7 +698,7 @@ app.post('/api/tenants/switch', async (c) => {
 // curl -X POST http://localhost:3000/api/tenants/1/members -H 'Authorization: Bearer <token>' \
 //   -H 'Content-Type: application/json' -d '{"userId":2}'
 app.post('/api/tenants/:id/members', async (c) => {
-  const tenantId = Number(c.req.param('id'));
+  const tenantId = c.req.param('id');
   const { userId } = await c.req.json();
   await fortress.plugins.tenancy.addUserToTenant(userId, tenantId);
   return c.json({ data: { added: true } });
@@ -760,7 +760,7 @@ app.post('/api/groups', async (c) => {
 // curl -X POST http://localhost:3000/api/groups/1/members -H 'Authorization: Bearer <token>' \
 //   -H 'Content-Type: application/json' -H 'X-Fortress-CSRF: 1' -d '{"userId":2}'
 app.post('/api/groups/:id/members', async (c) => {
-  const groupId = Number(c.req.param('id'));
+  const groupId = c.req.param('id');
   const { userId } = await c.req.json();
   await fortress.iam.addUserToGroup(groupId, userId);
   return c.json({ data: { added: true } });
@@ -768,8 +768,8 @@ app.post('/api/groups/:id/members', async (c) => {
 
 // curl -X DELETE http://localhost:3000/api/groups/1/members/2 -H 'Authorization: Bearer <token>'
 app.delete('/api/groups/:id/members/:userId', async (c) => {
-  const groupId = Number(c.req.param('id'));
-  const userId = Number(c.req.param('userId'));
+  const groupId = c.req.param('id');
+  const userId = c.req.param('userId');
   await fortress.iam.removeUserFromGroup(groupId, userId);
   return c.json({ data: { removed: true } });
 });
@@ -949,8 +949,8 @@ async function seed(): Promise<void> {
   ], 'Read-only access');
 
   // Bind roles
-  await fortress.iam.bindRole('user', admin.id, adminRole.id);
-  await fortress.iam.bindRole('user', user.id, viewerRole.id);
+  await fortress.iam.bindRole('USER', admin.id, adminRole.id);
+  await fortress.iam.bindRole('USER', user.id, viewerRole.id);
 
   // Create a group and add admin
   const engineering = await fortress.iam.createGroup('engineering', 'Engineering team');
