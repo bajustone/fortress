@@ -98,6 +98,15 @@ export function evaluateConditions(
 function evaluateCondition(condition: PermissionCondition, context: PermissionContext): boolean {
   const actualValue = resolveFieldValue(condition.field, context);
   const expectedValue = resolveExpectedValue(condition.value, context);
+  // Missing fields/references are never comparable. In particular, `neq`
+  // must not turn an unresolved value into an accidental grant.
+  if (
+    actualValue === undefined
+    || expectedValue === undefined
+    || (Array.isArray(expectedValue) && expectedValue.includes(undefined))
+  ) {
+    return false;
+  }
 
   switch (condition.operator) {
     case 'eq':

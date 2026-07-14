@@ -16,13 +16,20 @@ export function subjectCacheKey(subject: Subject): string {
 
 export interface PermissionCache {
   get: (key: string) => Permission[] | undefined;
-  set: (key: string, permissions: Permission[]) => void;
+  generation: (key: string) => string;
+  /** Returns false when invalidation occurred after the caller's read began. */
+  set: (key: string, permissions: Permission[], expectedGeneration?: string) => boolean;
   invalidate: (key: string) => void;
   invalidateAll: () => void;
 }
 
 export function createPermissionCache(ttlMs: number, maxEntries: number): PermissionCache {
   const store = new Map<string, CacheEntry>();
+  let generationCounter = 0;
+  // A single monotonic generation avoids unbounded per-subject metadata.
+  // Per-key invalidation may conservatively reject unrelated in-flight writes,
+  // while leaving their already-cached entries intact.
+  const generation = (_key: string): string => String(generationCounter);
 
   return {
     get(key: string): Permission[] | undefined {
@@ -36,7 +43,11 @@ export function createPermissionCache(ttlMs: number, maxEntries: number): Permis
       return entry.permissions;
     },
 
-    set(key: string, permissions: Permission[]): void {
+    generation,
+
+    set(key: string, permissions: Permission[], expectedGeneration?: string): boolean {
+      if (expectedGeneration !== undefined && expectedGeneration !== generation(key))
+        return false;
       // Evict oldest entry if at capacity
       if (store.size >= maxEntries && !store.has(key)) {
         const oldest = store.keys().next().value;
@@ -44,14 +55,17 @@ export function createPermissionCache(ttlMs: number, maxEntries: number): Permis
           store.delete(oldest);
       }
       store.set(key, { permissions, expiresAt: Date.now() + ttlMs });
+      return true;
     },
 
     invalidate(key: string): void {
       store.delete(key);
+      generationCounter++;
     },
 
     invalidateAll(): void {
       store.clear();
+      generationCounter++;
     },
   };
 }

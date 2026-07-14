@@ -9,10 +9,11 @@ import { explainPermission } from './explain';
 
 const SECRET = 'explain-test-secret-at-least-32-bytes!';
 
-function setup() {
+function setup(evaluationMode: 'allow-only' | 'deny-overrides' = 'allow-only') {
   const fortress = createFortress({
     jwt: { key: SECRET },
     database: createTestAdapter(),
+    rbac: { evaluationMode },
   });
   return { fortress };
 }
@@ -117,8 +118,34 @@ describe('explainPermission', () => {
     expect(explain.groupMemberships).toEqual([{ id: group.id, name: 'eng' }]);
   });
 
-  it('applies DENY > ALLOW precedence', async () => {
+  it('uses the same condition context as checkPermission', async () => {
     const { fortress } = setup();
+    const user = await fortress.auth.createUser({
+      email: 'condition@example.com',
+      name: 'Condition',
+      password: 'condition-password-1234564',
+    });
+    const role = await fortress.iam.createRole('owner', [{
+      resource: 'article',
+      action: 'edit',
+      conditions: [{ field: 'resource.ownerId', operator: 'eq', value: { ref: 'user.id' } }],
+    }]);
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+
+    const explanation = await explainPermission(
+      fortress.config.database,
+      fortress.iam,
+      { type: 'USER', id: user.id },
+      'article',
+      'edit',
+      { resource: { ownerId: 'someone-else' } },
+    );
+    expect(explanation.sources).toHaveLength(1);
+    expect(explanation.allowed).toBe(false);
+  });
+
+  it('uses the configured deny-overrides evaluator', async () => {
+    const { fortress } = setup('deny-overrides');
     const user = await fortress.auth.createUser({
       email: 'deny@example.com',
       name: 'Deny',

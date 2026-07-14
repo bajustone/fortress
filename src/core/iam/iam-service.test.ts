@@ -655,6 +655,26 @@ describe('remediation regressions (P3.1, P3.3)', () => {
     expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'reports', 'read')).toBe(false);
   });
 
+  it('generic bindRole invalidates cached decisions', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      rbac: { evaluationMode: 'deny-overrides', cache: { ttlSeconds: 300 } },
+    });
+    const user = await fortress.auth.createUser({
+      email: 'generic-bind-cache@test.com',
+      name: 'Generic Bind Cache',
+      password: 'password-123456',
+    });
+    const allow = await fortress.iam.createRole('allow-report', [{ resource: 'report', action: 'read' }]);
+    await fortress.iam.bindRoleToUser(user.id, allow.id);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'report', 'read')).toBe(true);
+
+    const deny = await fortress.iam.createRole('deny-report', [{ resource: 'report', action: 'read', effect: 'DENY' }]);
+    await fortress.iam.bindRole('USER', user.id, deny.id);
+    expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'report', 'read')).toBe(false);
+  });
+
   it('permission identity includes effect (ALLOW and DENY are distinct rows)', async () => {
     const fortress = createFortress({
       jwt: { key: SECRET },
@@ -711,6 +731,37 @@ describe('remediation regressions (P3.1, P3.3)', () => {
     const serialized = rows.map(row => row.conditions).sort();
     expect(serialized[0]).toContain('eu');
     expect(serialized[1]).toContain('us');
+  });
+
+  it('pins authoritative subject identity over caller-supplied condition context', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+    });
+    const user = await fortress.auth.createUser({
+      email: 'identity-context@test.com',
+      name: 'Identity Context',
+      password: 'password-123456',
+    });
+    const role = await fortress.iam.createRole('owner', [{
+      resource: 'document',
+      action: 'read',
+      conditions: [{ field: 'resource.ownerId', operator: 'eq', value: { ref: 'user.id' } }],
+    }]);
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+
+    expect(await fortress.iam.checkPermission(
+      { type: 'USER', id: user.id },
+      'document',
+      'read',
+      { resource: { ownerId: 'attacker' }, user: { id: 'attacker' } },
+    )).toBe(false);
+    expect(await fortress.iam.checkPermission(
+      { type: 'USER', id: user.id },
+      'document',
+      'read',
+      { resource: { ownerId: user.id }, user: { id: 'attacker' } },
+    )).toBe(true);
   });
 
   it('findOrCreatePermission resolves concurrent creates to one row (P3.3/M8)', async () => {

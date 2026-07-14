@@ -14,7 +14,7 @@
  */
 
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { Permission, Role, Subject } from '../types';
+import type { Permission, PermissionContext, Role, Subject } from '../types';
 import type { IamService } from './iam-service';
 
 export interface PermissionExplanationSource {
@@ -32,7 +32,7 @@ export interface PermissionExplanation {
   subject: Subject;
   resource: string;
   action: string;
-  /** Final allow/deny decision applying DENY > ALLOW > nothing. */
+  /** Final verdict from the configured IAM evaluation mode and condition context. */
   allowed: boolean;
   /** Every grant source that matched, including DENYs. */
   sources: PermissionExplanationSource[];
@@ -162,16 +162,17 @@ async function loadRoles(db: DatabaseAdapter, ids: string[]): Promise<Map<string
  * unexpected allow/deny results.
  *
  * @param db - Database adapter (typically `fortress.config.database`).
- * @param _iam - {@link IamService} reference, currently unused but
- *   accepted so the helper has the right signature to be re-exported as
- *   an admin-plugin method without a breaking change later.
+ * @param iam - IAM service used for the authoritative verdict, including
+ *   configured evaluation mode, conditions, cache semantics, and inactive
+ *   service-account handling.
  */
 export async function explainPermission(
   db: DatabaseAdapter,
-  _iam: IamService,
+  iam: IamService,
   subject: Subject,
   resource: string,
   action: string,
+  context?: PermissionContext,
 ): Promise<PermissionExplanation> {
   const sources: PermissionExplanationSource[] = [];
 
@@ -251,10 +252,9 @@ export async function explainPermission(
     }
   }
 
-  // ── DENY > ALLOW > nothing ─────────────────────────────────────────
-  const hasDeny = sources.some(s => s.permission.effect === 'DENY');
-  const hasAllow = sources.some(s => (s.permission.effect ?? 'ALLOW') === 'ALLOW');
-  const allowed = !hasDeny && hasAllow;
+  // Reuse the authoritative evaluator so explanation verdicts cannot drift
+  // from checkPermission's configured mode, conditions, or subject gates.
+  const allowed = await iam.checkPermission(subject, resource, action, context);
 
   // Flatten role bindings for the result.
   const roleBindings = allRoleSources

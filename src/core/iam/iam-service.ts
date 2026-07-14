@@ -332,8 +332,9 @@ export function createIamService(
           cached = true;
         }
         else {
+          const generation = cache?.generation(cacheKey);
           permissions = await adapter.getSubjectPermissions(subject);
-          cache?.set(cacheKey, permissions);
+          cache?.set(cacheKey, permissions, generation);
         }
       }
 
@@ -343,8 +344,8 @@ export function createIamService(
       const enrichedContext: PermissionContext = {
         ...context,
         user: subject.type === 'USER'
-          ? { id: subject.id, ...context?.user }
-          : { subjectType: subject.type, subjectId: subject.id, ...context?.user },
+          ? { ...context?.user, id: subject.id, subjectType: 'USER', subjectId: subject.id }
+          : { ...context?.user, subjectType: subject.type, subjectId: subject.id },
       };
 
       const allowed = withinCredentialScope(context?.credentialScopes, resource, action)
@@ -431,6 +432,12 @@ export function createIamService(
         : await createRoleBindingIfMissing(db, subjectType, subjectId, roleId, tenantId);
       if (!inserted)
         return;
+      if (subjectType === 'USER')
+        cache?.invalidate(subjectCacheKey({ type: 'USER', id: subjectId }));
+      else if (subjectType === 'SERVICE_ACCOUNT')
+        cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: subjectId }));
+      else
+        cache?.invalidateAll();
       emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType, subjectId, tenantId } });
     },
 

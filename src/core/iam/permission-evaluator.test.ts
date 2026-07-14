@@ -225,6 +225,16 @@ describe('evaluatePermissions', () => {
 });
 
 describe('evaluateConditions', () => {
+  it.each(['eq', 'neq', 'in', 'startsWith'] as const)(
+    'fails closed for unresolved values with %s',
+    (operator) => {
+      expect(evaluateConditions(
+        [{ field: 'resource.missing', operator, value: { ref: 'user.missing' } }],
+        { resource: {}, user: {} },
+      )).toBe(false);
+    },
+  );
+
   it('supports neq operator', () => {
     const result = evaluateConditions(
       [{ field: 'resource.status', operator: 'neq', value: 'archived' }],

@@ -60,6 +60,25 @@ describe('permissionCache', () => {
     expect(cache.get(userKey('2'))).toBeUndefined();
   });
 
+  it('drops stale writes that started before invalidation', () => {
+    const cache = createPermissionCache(30_000, 100);
+    const key = userKey('1');
+    const observed = cache.generation(key);
+    cache.invalidate(key);
+
+    expect(cache.set(key, [perm('stale')], observed)).toBe(false);
+    expect(cache.get(key)).toBeUndefined();
+  });
+
+  it('drops stale writes after global invalidation', () => {
+    const cache = createPermissionCache(30_000, 100);
+    const key = userKey('1');
+    const observed = cache.generation(key);
+    cache.invalidateAll();
+
+    expect(cache.set(key, [perm('stale')], observed)).toBe(false);
+  });
+
   it('evicts oldest entry when at capacity', () => {
     const cache = createPermissionCache(30_000, 2);
     cache.set(userKey('1'), [perm('1')]);
