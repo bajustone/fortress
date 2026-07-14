@@ -1,20 +1,12 @@
 /**
  * Load a {@link PolicyDocument} from disk with optional env-specific
- * override.
- *
- * Default file: `fortress.policy.json` in the working directory.
- * Env override: `fortress.policy.<env>.json` (e.g. `fortress.policy.production.json`).
- *
- * The env-specific file fully **replaces** the base document; merge is not
- * attempted because policy is small and ambiguous merges produce worse
- * surprises than explicit duplication.
+ * override. Node filesystem/path modules are imported only when these
+ * file-oriented helpers run, keeping the package root import runtime-neutral.
  *
  * @module
  */
 
 import type { PolicyDocument } from './types';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { Errors } from '../errors';
 
 export interface LoadPolicyOptions {
@@ -29,29 +21,44 @@ export interface LoadPolicyOptions {
 /** Default base file name. */
 export const DEFAULT_POLICY_FILE = 'fortress.policy.json';
 
-/** Return the resolved policy-file path for an environment, or `null` if no file exists. */
-export function resolvePolicyPath(options: LoadPolicyOptions = {}): string | null {
-  if (options.filePath) {
-    return existsSync(options.filePath) ? options.filePath : null;
+async function exists(filePath: string): Promise<boolean> {
+  const { access } = await import('node:fs/promises');
+  try {
+    await access(filePath);
+    return true;
   }
+  catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT')
+      return false;
+    throw err;
+  }
+}
+
+/** Return the resolved policy-file path for an environment, or `null` if no file exists. */
+export async function resolvePolicyPath(options: LoadPolicyOptions = {}): Promise<string | null> {
+  if (options.filePath)
+    return await exists(options.filePath) ? options.filePath : null;
+
+  const { join } = await import('node:path');
   const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env.FORTRESS_ENV;
   if (env) {
     const envPath = join(cwd, `fortress.policy.${env}.json`);
-    if (existsSync(envPath))
+    if (await exists(envPath))
       return envPath;
   }
   const basePath = join(cwd, DEFAULT_POLICY_FILE);
-  return existsSync(basePath) ? basePath : null;
+  return await exists(basePath) ? basePath : null;
 }
 
 /** Load and parse a policy document. Throws when the file is missing or unparseable. */
-export function loadPolicy(options: LoadPolicyOptions = {}): { policy: PolicyDocument; filePath: string } {
-  const filePath = resolvePolicyPath(options);
+export async function loadPolicy(options: LoadPolicyOptions = {}): Promise<{ policy: PolicyDocument; filePath: string }> {
+  const filePath = await resolvePolicyPath(options);
   if (!filePath)
     throw Errors.notFound(`No policy file found (looked for fortress.policy.<env>.json then fortress.policy.json)`);
   try {
-    const text = readFileSync(filePath, 'utf-8');
+    const { readFile } = await import('node:fs/promises');
+    const text = await readFile(filePath, 'utf-8');
     const parsed = JSON.parse(text) as PolicyDocument;
     return { policy: parsed, filePath };
   }

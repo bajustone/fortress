@@ -57,7 +57,7 @@ file + line range for each so you can copy what you need.
 - Apply from a script (see [docs/policy-as-code.md](../docs/policy-as-code.md) for the full pattern):
   ```ts
   import { loadPolicy, diffPolicy, applyPolicyPlan } from '@bajustone/fortress';
-  const { policy } = loadPolicy();
+  const { policy } = await loadPolicy();
   const plan = await diffPolicy(policy, fortress.iam);
   if (!plan.inSync) await applyPolicyPlan(plan, fortress.iam);
   ```

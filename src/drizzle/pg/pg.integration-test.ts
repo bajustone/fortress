@@ -2,6 +2,7 @@ import type { Sql } from 'postgres';
 import type { StartedTestContainer } from 'testcontainers';
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { Fortress } from '../../core/fortress';
+import type { PolicyDocument } from '../../core/policy/types';
 import type { FortressUser } from '../../core/types';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
@@ -9,6 +10,8 @@ import { GenericContainer, Wait } from 'testcontainers';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createFortress } from '../../core/fortress';
+import { applyPolicyPlan } from '../../core/policy/apply';
+import { diffPolicy } from '../../core/policy/diff';
 import { assertSuccess } from '../../core/types';
 import { accountLockout } from '../../plugins/account-lockout';
 import { apiKey } from '../../plugins/api-key';
@@ -774,6 +777,26 @@ describe('pg: IAM', () => {
     expect(canRead).toBe(true);
     expect(canWrite).toBe(true);
     expect(canDelete).toBe(false);
+  });
+
+  it('converges policy pruning after unbinding a retained service account', async () => {
+    const initial: PolicyDocument = {
+      roles: [{ name: 'pg-old-role', permissions: [] }],
+      serviceAccounts: [{ name: 'pg-retained-bot', roles: ['pg-old-role'] }],
+    };
+    const initialResult = await applyPolicyPlan(await diffPolicy(initial, fortress.iam), fortress.iam);
+    expect(initialResult.errors).toEqual([]);
+    const next: PolicyDocument = {
+      roles: [],
+      serviceAccounts: [{ name: 'pg-retained-bot', roles: [] }],
+    };
+
+    const result = await applyPolicyPlan(
+      await diffPolicy(next, fortress.iam, { prune: true }),
+      fortress.iam,
+    );
+    expect(result.errors).toEqual([]);
+    expect((await diffPolicy(next, fortress.iam, { prune: true })).inSync).toBe(true);
   });
 
   it('resolves permissions through group bindings', async () => {

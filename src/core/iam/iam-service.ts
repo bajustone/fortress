@@ -11,6 +11,7 @@ import type {
   PermissionContext,
   PermissionInput,
   Role,
+  RoleBinding,
   ServiceAccount,
   Subject,
   SubjectType,
@@ -84,6 +85,10 @@ export interface IamService {
   removeUserFromGroup: (groupId: string, userId: string) => Promise<void>;
   getResources: () => Promise<ResourceFile>;
   getRoles: () => Promise<Role[]>;
+  /** Apply a resource map directly without filesystem access. */
+  pushResources: (resources: ResourceFile) => Promise<void>;
+  /** List role bindings: omitted scope means all, `null` means global only, string means one tenant. */
+  listRoleBindingsForSubject: (subject: Subject, tenantId?: string | null) => Promise<RoleBinding[]>;
   syncResources: (direction: 'push' | 'pull', filePath?: string) => Promise<void>;
   clearPermissionCache: () => void;
   /**
@@ -104,7 +109,7 @@ export interface IamService {
 
   // ── Admin CRUD ─────────────────────────────────────────────────
   getRole: (roleId: string) => Promise<Role & { permissions: Permission[] }>;
-  updateRole: (roleId: string, data: { name?: string; description?: string }) => Promise<Role>;
+  updateRole: (roleId: string, data: { name?: string; description?: string | null }) => Promise<Role>;
   listGroups: (options?: { limit?: number; offset?: number }) => Promise<{ groups: Group[]; total: number }>;
   getGroup: (groupId: string) => Promise<Group & { users: FortressUser[] }>;
   updateGroup: (groupId: string, data: { name?: string; description?: string }) => Promise<Group>;
@@ -123,7 +128,8 @@ export interface IamService {
   updateServiceAccount: (id: string, data: { displayName?: string | null; description?: string | null; isActive?: boolean }) => Promise<ServiceAccount>;
   deleteServiceAccount: (id: string) => Promise<void>;
   bindRoleToServiceAccount: (serviceAccountId: string, roleId: string, tenantId?: string) => Promise<void>;
-  unbindRoleFromServiceAccount: (serviceAccountId: string, roleId: string, tenantId?: string) => Promise<void>;
+  /** Unbind across all scopes when omitted, global only for `null`, or one tenant for a string scope. */
+  unbindRoleFromServiceAccount: (serviceAccountId: string, roleId: string, tenantId?: string | null) => Promise<void>;
   bindPermissionToServiceAccount: (serviceAccountId: string, permission: PermissionInput, tenantId?: string) => Promise<void>;
   unbindPermissionFromServiceAccount: (serviceAccountId: string, permissionId: string, tenantId?: string) => Promise<void>;
 }
@@ -550,6 +556,22 @@ export function createIamService(
       return db.findMany<Role>({ model: 'role' });
     },
 
+    async pushResources(resources: ResourceFile): Promise<void> {
+      await pushResources(db, resources);
+    },
+
+    async listRoleBindingsForSubject(subject: Subject, tenantId?: string | null): Promise<RoleBinding[]> {
+      const where: WhereClause[] = [
+        { field: 'subjectType', operator: '=', value: subject.type },
+        { field: 'subjectId', operator: '=', value: subject.id },
+      ];
+      if (tenantId === null)
+        where.push({ field: 'tenantId', operator: 'isNull', value: null });
+      else if (tenantId !== undefined)
+        where.push({ field: 'tenantId', operator: '=', value: tenantId });
+      return db.findMany<RoleBinding>({ model: 'role_binding', where });
+    },
+
     clearPermissionCache(): void {
       cache?.invalidateAll();
     },
@@ -606,7 +628,7 @@ export function createIamService(
       return { ...role, permissions };
     },
 
-    async updateRole(roleId: string, data: { name?: string; description?: string }): Promise<Role> {
+    async updateRole(roleId: string, data: { name?: string; description?: string | null }): Promise<Role> {
       const existing = await db.findOne<Role & { isSystem?: boolean }>({
         model: 'role',
         where: [{ field: 'id', operator: '=', value: roleId }],
@@ -1003,14 +1025,17 @@ export function createIamService(
     async unbindRoleFromServiceAccount(
       serviceAccountId: string,
       roleId: string,
-      tenantId?: string,
+      tenantId?: string | null,
     ): Promise<void> {
-      const where = [
-        { field: 'roleId' as const, operator: '=' as const, value: roleId },
-        { field: 'subjectType' as const, operator: '=' as const, value: 'SERVICE_ACCOUNT' },
-        { field: 'subjectId' as const, operator: '=' as const, value: serviceAccountId },
-        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+      const where: WhereClause[] = [
+        { field: 'roleId', operator: '=', value: roleId },
+        { field: 'subjectType', operator: '=', value: 'SERVICE_ACCOUNT' },
+        { field: 'subjectId', operator: '=', value: serviceAccountId },
       ];
+      if (tenantId === null)
+        where.push({ field: 'tenantId', operator: 'isNull', value: null });
+      else if (tenantId !== undefined)
+        where.push({ field: 'tenantId', operator: '=', value: tenantId });
       await db.delete({ model: 'role_binding', where });
       cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));
       emit({

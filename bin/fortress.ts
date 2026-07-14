@@ -329,15 +329,15 @@ function cmdCheckPublicRoutes(args: string[]): void {
   console.log(`Public-route check passed (${result.unexpected.length} unexpected, allow-list ok).`);
 }
 
-function cmdPolicySummary(args: string[]): void {
+async function cmdPolicySummary(args: string[]): Promise<void> {
   const filePath = parseArg(args, '--file') ?? parseArg(args, '-f');
   const env = parseArg(args, '--env');
-  const resolved = resolvePolicyPath({ filePath, env });
+  const resolved = await resolvePolicyPath({ filePath, env });
   if (!resolved) {
     console.error('No fortress.policy.json (or fortress.policy.<env>.json) found in the current directory.');
     process.exit(1);
   }
-  const { policy, filePath: loaded } = loadPolicy({ filePath, env });
+  const { policy, filePath: loaded } = await loadPolicy({ filePath, env });
   console.log(`Policy file: ${loaded}`);
   console.log(`  resources: ${(policy.resources ?? []).length}`);
   console.log(`  roles: ${(policy.roles ?? []).length}`);
@@ -357,7 +357,7 @@ function cmdPolicyHowto(name: 'diff' | 'apply' | 'check'): void {
   console.log('  } from \'@bajustone/fortress\';');
   console.log('');
   console.log('  const fortress = createFortress(config);');
-  console.log('  const { policy } = loadPolicy();');
+  console.log('  const { policy } = await loadPolicy();');
   console.log('  const plan = await diffPolicy(policy, fortress.iam);');
   if (name === 'diff') {
     console.log('  console.log(plan.ops);');
@@ -637,7 +637,10 @@ switch (command) {
     cmdMigrateCheck(args.slice(1));
     break;
   case 'policy:summary':
-    cmdPolicySummary(args.slice(1));
+    void cmdPolicySummary(args.slice(1)).catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    });
     break;
   case 'policy:diff':
     cmdPolicyHowto('diff');

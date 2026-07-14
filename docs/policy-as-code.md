@@ -69,7 +69,7 @@ import { createFortress, loadPolicy, diffPolicy, applyPolicyPlan } from '@bajust
 import config from './fortress.config';
 
 const fortress = createFortress(config);
-const { policy } = loadPolicy();        // reads fortress.policy.json (or env override)
+const { policy } = await loadPolicy();        // reads fortress.policy.json (or env override)
 const plan = await diffPolicy(policy, fortress.iam);
 if (!plan.inSync) {
   console.log('Plan:');
@@ -93,14 +93,9 @@ file. System roles (`isSystem === true`) are never deleted.
 Run the un-pruned diff first to review, then add `prune: true` when
 the diff matches your intent.
 
-### Resource ops require the sync file
+### Resource ops apply without filesystem access
 
-`applyPolicyPlan` covers roles, groups, and service accounts directly.
-Resource-creation ops require writing through `fortress.resources.json`
-(the existing `iam.syncResources('push')` path); use the
-`applyResourceOps(plan, iam, 'fortress.resources.json')` helper to write
-the merged file and push it. Most repos check that file in and reuse the
-existing `fortress sync:push` workflow.
+`applyPolicyPlan` reconciles resources/actions, roles, groups, service accounts, and their global role bindings directly through `IamService`. It never writes a temporary file, so it works in workerd/Deno-no-fs runtimes. The compatibility `applyResourceOps(plan, iam, legacyFilePath)` helper now ignores the retained path argument and applies only resource operations through the same in-memory database path.
 
 ## CLI
 
@@ -135,7 +130,7 @@ const fortress = createFortress({
   jwt: { key: process.env.FORTRESS_JWT_SECRET! },
 });
 
-const { policy } = loadPolicy();
+const { policy } = await loadPolicy();
 // Bootstrap from the policy itself so the diff result reflects only the
 // drift between two consecutive policy revisions.
 await applyPolicyPlan(await diffPolicy(policy, fortress.iam), fortress.iam);
@@ -159,7 +154,7 @@ Run it as a step in `.github/workflows/fortress-ci.yml` alongside
 | `resolvePolicyPath(options?)` | function | Resolve the file path that `loadPolicy` would use |
 | `diffPolicy(policy, iam, options?)` | function | Compute the plan to reconcile live IAM with `policy` |
 | `applyPolicyPlan(plan, iam)` | function | Apply every op in the plan; returns `applied` / `errors` |
-| `applyResourceOps(plan, iam, syncFile)` | function | Apply resource-only ops via the existing sync path |
+| `applyResourceOps(plan, iam, legacyFilePath)` | function | Compatibility helper; applies resource-only ops directly without file I/O |
 | `PolicyDocument`, `PolicyRole`, ... | types | Type-only exports for callers that read the file themselves |
 
 All exported from the package root.

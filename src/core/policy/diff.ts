@@ -92,7 +92,7 @@ export async function diffPolicy(
       ops.push({
         kind: 'update-role-description',
         role: role.name,
-        from: existing.description,
+        from: existing.description ?? undefined,
         to: role.description,
         description: `Update description on role '${role.name}'`,
       });
@@ -220,33 +220,27 @@ export async function diffPolicy(
         description: `Update fields on service account '${sa.name}'`,
       });
     }
-    // Diff role bindings using effective IAM role list per subject.
+    // Policies manage global SA bindings. Read the authoritative binding rows
+    // rather than inferring roles from effective permissions (which is
+    // ambiguous for shared/direct permissions and invisible for empty roles).
     const desiredRoles = new Set(sa.roles ?? []);
-    const currentPerms = await iam.getPermissionsForSubject({ type: 'SERVICE_ACCOUNT', id: existing.id });
-    // We don't have a direct "list role bindings for SA" method; fetch role
-    // names from all roles and check via re-binding idempotence elsewhere.
-    // For an accurate diff, we check which declared roles are missing by
-    // comparing the SA's resolved permissions against each role's perm set.
     const allRoles = await iam.getRoles();
     const roleByName = new Map(allRoles.map(role => [role.name, role]));
-    const currentRoleNames = new Set<string>();
-    for (const role of allRoles) {
-      const detail = await iam.getRole(role.id);
-      // A role is bound iff every permission in the role appears in the SA's
-      // resolved permissions (allows for direct perms on top — false
-      // positives are tolerable: bind ops are idempotent).
-      if (detail.permissions.length === 0)
-        continue;
-      const allPresent = detail.permissions.every(
-        rolePerm => currentPerms.some(p => p.resource === rolePerm.resource
-          && p.action === rolePerm.action
-          && (p.effect ?? 'ALLOW') === (rolePerm.effect ?? 'ALLOW')),
-      );
-      if (allPresent)
-        currentRoleNames.add(role.name);
-    }
+    const roleNameById = new Map(allRoles.map(role => [role.id, role.name]));
+    const bindings = await iam.listRoleBindingsForSubject(
+      { type: 'SERVICE_ACCOUNT', id: existing.id },
+      null,
+    );
+    const currentRoleNames = new Set(
+      bindings
+        .map(binding => roleNameById.get(binding.roleId))
+        .filter((name): name is string => name !== undefined),
+    );
     for (const desired of desiredRoles) {
-      if (!currentRoleNames.has(desired) && roleByName.has(desired)) {
+      if (
+        !currentRoleNames.has(desired)
+        && (roleByName.has(desired) || declaredRoleNames.has(desired))
+      ) {
         ops.push({
           kind: 'bind-service-account-role',
           serviceAccount: sa.name,

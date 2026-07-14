@@ -26,14 +26,14 @@ const OP_ORDER: Record<PolicyOp['kind'], number> = {
   'update-role-description': 3,
   'add-role-permission': 4,
   'remove-role-permission': 5,
-  'delete-role': 6,
-  'create-group': 7,
-  'update-group-description': 8,
-  'delete-group': 9,
-  'create-service-account': 10,
-  'update-service-account': 11,
-  'bind-service-account-role': 12,
-  'unbind-service-account-role': 13,
+  'create-group': 6,
+  'update-group-description': 7,
+  'create-service-account': 8,
+  'update-service-account': 9,
+  'bind-service-account-role': 10,
+  'unbind-service-account-role': 11,
+  'delete-role': 12,
+  'delete-group': 13,
   'delete-service-account': 14,
 };
 
@@ -114,21 +114,9 @@ export async function applyPolicyPlan(
                 : [...existing.actions, op.action],
             };
           }
-          // Persist via the existing sync path by writing to a temp file —
-          // actually, since pushResources isn't exposed on IamService
-          // directly outside syncResources(push), call the in-memory path
-          // by manipulating the DB through the adapter implicitly: use
-          // syncResources with a temp file would write disk. Instead, the
-          // simplest reliable apply is to use `iam.syncResources('push', ...)`
-          // after writing the temp file. To keep this in-memory, fall through
-          // to `iam.getResources()` again at the end of the loop after a
-          // direct DB push isn't available. Push the change via the IAM
-          // sync internals exposed indirectly: there's no public method, so
-          // we use a small upsert here by leaning on pushResources via the
-          // adapter the IAM service was built with. Since we cannot reach
-          // that DB adapter from IamService alone, surface an error if the
-          // operator omitted `policy({ db })`.
-          throw Errors.badRequest('Resource ops require applyPolicyPlan to be wired via applyPolicyPlanWithDb');
+          await iam.pushResources(next);
+          applied.push(op);
+          break;
         }
         case 'create-role': {
           const role = await iam.createRole(op.role.name, op.role.permissions.map(perm => ({
@@ -142,7 +130,7 @@ export async function applyPolicyPlan(
         }
         case 'update-role-description': {
           const roleId = await resolveRoleId(op.role);
-          await iam.updateRole(roleId, { description: op.to });
+          await iam.updateRole(roleId, { description: op.to ?? null });
           applied.push(op);
           break;
         }
@@ -227,7 +215,7 @@ export async function applyPolicyPlan(
         case 'unbind-service-account-role': {
           const saId = await resolveSaId(op.serviceAccount);
           const roleId = await resolveRoleId(op.role);
-          await iam.unbindRoleFromServiceAccount(saId, roleId);
+          await iam.unbindRoleFromServiceAccount(saId, roleId, null);
           applied.push(op);
           break;
         }
@@ -249,20 +237,14 @@ export async function applyPolicyPlan(
 }
 
 /**
- * Convenience: apply a plan that includes resource ops. The standard
- * {@link applyPolicyPlan} cannot push resource updates because the public
- * IamService surface does not expose `pushResources` directly; this
- * variant writes the resource file via `syncResources('push', filePath)`
- * after building it from the live state plus the resource ops.
- *
- * Most operators should use {@link applyPolicyPlan} for the
- * roles/groups/service-accounts pieces and run `fortress sync:push`
- * separately for resources (see CLI: `fortress policy:apply --no-resources`).
+ * Compatibility helper that applies only the resource operations in a plan.
+ * The file-path argument is retained for source compatibility but no file is
+ * written; resource updates are applied directly through the IAM service.
  */
 export async function applyResourceOps(
   plan: PolicyPlan,
   iam: IamService,
-  syncResourceFile: string,
+  _syncResourceFile: string,
 ): Promise<void> {
   const resourceOps = plan.ops.filter(op => op.kind === 'create-resource' || op.kind === 'add-resource-action');
   if (resourceOps.length === 0)
@@ -286,8 +268,5 @@ export async function applyResourceOps(
       };
     }
   }
-  // Write the merged resource file and push.
-  const { writeFile } = await import('node:fs/promises');
-  await writeFile(syncResourceFile, JSON.stringify(next, null, 2), 'utf-8');
-  await iam.syncResources('push', syncResourceFile);
+  await iam.pushResources(next);
 }

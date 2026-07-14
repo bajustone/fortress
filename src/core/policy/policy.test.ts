@@ -60,6 +60,111 @@ describe('policy-as-code', () => {
     expect(second.inSync).toBe(true);
   });
 
+  it('applies resource operations in memory and converges without filesystem access', async () => {
+    const fortress = freshFortress();
+    const policy: PolicyDocument = {
+      resources: [{ name: 'article', description: 'Articles', actions: ['read', 'write'] }],
+    };
+
+    const result = await applyPolicyPlan(await diffPolicy(policy, fortress.iam), fortress.iam);
+    expect(result.errors).toEqual([]);
+    expect(result.applied.map(op => op.kind)).toEqual(['create-resource']);
+    expect((await fortress.iam.getResources()).resources.article).toMatchObject({
+      description: 'Articles',
+      actions: ['read', 'write'],
+    });
+    expect((await diffPolicy(policy, fortress.iam)).inSync).toBe(true);
+  });
+
+  it('clears role descriptions and converges', async () => {
+    const fortress = freshFortress();
+    await applyPolicyPlan(await diffPolicy(basePolicy, fortress.iam), fortress.iam);
+    const cleared: PolicyDocument = {
+      ...basePolicy,
+      roles: [{ ...basePolicy.roles![0], description: undefined }],
+    };
+
+    const result = await applyPolicyPlan(await diffPolicy(cleared, fortress.iam), fortress.iam);
+    expect(result.errors).toEqual([]);
+    expect((await diffPolicy(cleared, fortress.iam)).inSync).toBe(true);
+    expect((await fortress.iam.getRoles()).find(role => role.name === 'editor')?.description).toBeNull();
+  });
+
+  it('tracks real service-account bindings to zero-permission roles', async () => {
+    const fortress = freshFortress();
+    const policy: PolicyDocument = {
+      roles: [{ name: 'empty-role', permissions: [] }],
+      serviceAccounts: [{ name: 'empty-role-bot', roles: ['empty-role'] }],
+    };
+
+    const result = await applyPolicyPlan(await diffPolicy(policy, fortress.iam), fortress.iam);
+    expect(result.errors).toEqual([]);
+    expect((await diffPolicy(policy, fortress.iam, { prune: true })).inSync).toBe(true);
+  });
+
+  it('binds a newly declared role to an existing service account in one plan', async () => {
+    const fortress = freshFortress();
+    await fortress.iam.createServiceAccount({ name: 'existing-bot' });
+    const policy: PolicyDocument = {
+      roles: [{ name: 'new-role', permissions: [] }],
+      serviceAccounts: [{ name: 'existing-bot', roles: ['new-role'] }],
+    };
+
+    const plan = await diffPolicy(policy, fortress.iam);
+    expect(plan.ops.map(op => op.kind)).toEqual(expect.arrayContaining([
+      'create-role',
+      'bind-service-account-role',
+    ]));
+    const result = await applyPolicyPlan(plan, fortress.iam);
+    expect(result.errors).toEqual([]);
+    expect((await diffPolicy(policy, fortress.iam)).inSync).toBe(true);
+  });
+
+  it('global policy unbinding preserves tenant-scoped role bindings', async () => {
+    const fortress = freshFortress();
+    const role = await fortress.iam.createRole('scoped-role', []);
+    const serviceAccount = await fortress.iam.createServiceAccount({ name: 'scoped-bot' });
+    await fortress.iam.bindRoleToServiceAccount(serviceAccount.id, role.id);
+    await fortress.iam.bindRoleToServiceAccount(serviceAccount.id, role.id, 'tenant-a');
+    const policy: PolicyDocument = {
+      roles: [{ name: 'scoped-role', permissions: [] }],
+      serviceAccounts: [{ name: 'scoped-bot', roles: [] }],
+    };
+
+    const result = await applyPolicyPlan(
+      await diffPolicy(policy, fortress.iam, { prune: true }),
+      fortress.iam,
+    );
+    expect(result.errors).toEqual([]);
+    const remaining = await fortress.iam.listRoleBindingsForSubject({
+      type: 'SERVICE_ACCOUNT',
+      id: serviceAccount.id,
+    });
+    expect(remaining.map(binding => binding.tenantId)).toEqual(['tenant-a']);
+  });
+
+  it('unbinds retained service accounts before pruning their old role', async () => {
+    const fortress = freshFortress();
+    const initial: PolicyDocument = {
+      roles: [{ name: 'old-role', permissions: [] }],
+      serviceAccounts: [{ name: 'retained-bot', roles: ['old-role'] }],
+    };
+    await applyPolicyPlan(await diffPolicy(initial, fortress.iam), fortress.iam);
+    const next: PolicyDocument = {
+      roles: [],
+      serviceAccounts: [{ name: 'retained-bot', roles: [] }],
+    };
+
+    const plan = await diffPolicy(next, fortress.iam, { prune: true });
+    expect(plan.ops.map(op => op.kind)).toEqual(expect.arrayContaining([
+      'unbind-service-account-role',
+      'delete-role',
+    ]));
+    const result = await applyPolicyPlan(plan, fortress.iam);
+    expect(result.errors).toEqual([]);
+    expect((await diffPolicy(next, fortress.iam, { prune: true })).inSync).toBe(true);
+  });
+
   it('add-role-permission op is emitted when the policy widens a role', async () => {
     const fortress = freshFortress();
     await applyPolicyPlan(await diffPolicy(basePolicy, fortress.iam), fortress.iam);
