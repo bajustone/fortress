@@ -352,6 +352,9 @@ const CREATE_TABLES_SQL = `
   CREATE INDEX IF NOT EXISTS trusted_device_user_idx ON fortress_trusted_device (user_id);
   CREATE INDEX IF NOT EXISTS webhook_delivery_retry_idx ON fortress_webhook_delivery (status, next_retry_at);
   CREATE INDEX IF NOT EXISTS audit_log_timestamp_idx ON fortress_audit_log (timestamp);
+  CREATE UNIQUE INDEX IF NOT EXISTS user_email_ci_unique ON fortress_user (lower(email));
+  CREATE UNIQUE INDEX IF NOT EXISTS login_identifier_email_ci_unique
+    ON fortress_login_identifier (lower(value)) WHERE type = 'email';
 `;
 
 const TRUNCATE_SQL = `

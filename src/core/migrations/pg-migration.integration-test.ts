@@ -114,19 +114,70 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
       [tenantRows[0].id, legacyUser.id, tenantRows[1].id, legacyUser.id],
     );
 
+    // Legacy case-variants are deterministically quarantined before the
+    // case-insensitive unique indexes are installed.
+    await db.rawQuery!(
+      `INSERT INTO fortress_user (email, name, is_active) VALUES (?, ?, true), (?, ?, true)`,
+      ['Duplicate@Example.COM', 'Oldest duplicate', 'duplicate@example.com', 'Later duplicate'],
+    );
+    const duplicateUsers = await db.rawQuery!<{ id: string; email: string }>(
+      `SELECT id, email FROM fortress_user WHERE lower(email) = ? ORDER BY id`,
+      ['duplicate@example.com'],
+    );
+    await db.rawQuery!(
+      `INSERT INTO fortress_login_identifier (user_id, type, value) VALUES (?, 'email', ?), (?, 'email', ?)`,
+      [duplicateUsers[0].id, duplicateUsers[0].email, duplicateUsers[1].id, duplicateUsers[1].email],
+    );
+    await db.rawQuery!(
+      `INSERT INTO fortress_refresh_token (user_id, token_hash, token_family, is_revoked, expires_at)
+       VALUES (?, ?, ?, false, ?)`,
+      [duplicateUsers[1].id, 'duplicate-session', 'duplicate-family', '2030-01-01T00:00:00Z'],
+    );
+
     // Conversion must not depend on the session timezone: historical
     // timestamp-without-time-zone values are interpreted as UTC explicitly.
     await db.rawQuery!('SET TIME ZONE \'America/Los_Angeles\'');
     const up = await migrateUp(db, 'pg');
     await db.rawQuery!('SET TIME ZONE \'UTC\'');
     expect(up.fromVersion).toBe(2);
-    expect(up.toVersion).toBe(5);
-    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz']);
+    expect(up.toVersion).toBe(6);
+    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email']);
     const defaults = await db.rawQuery!<{ count: string }>(
       `SELECT COUNT(*) AS count FROM fortress_tenant_user WHERE user_id = ? AND is_default = true`,
       [legacyUser.id],
     );
     expect(Number(defaults[0].count)).toBe(1);
+
+    const canonicalized = await db.rawQuery!<{ id: string; email: string; isActive: boolean }>(
+      `SELECT id, email, is_active AS "isActive" FROM fortress_user
+       WHERE id IN (?, ?) ORDER BY id`,
+      [duplicateUsers[0].id, duplicateUsers[1].id],
+    );
+    expect(canonicalized[0]).toMatchObject({
+      id: duplicateUsers[0].id,
+      email: 'duplicate@example.com',
+      isActive: true,
+    });
+    expect(canonicalized[1].email).toBe(`fortress-duplicate-${duplicateUsers[1].id}@invalid`);
+    expect(canonicalized[1].isActive).toBe(false);
+    const [duplicateSession] = await db.rawQuery!<{ isRevoked: boolean }>(
+      'SELECT is_revoked AS "isRevoked" FROM fortress_refresh_token WHERE token_hash = ?',
+      ['duplicate-session'],
+    );
+    expect(duplicateSession.isRevoked).toBe(true);
+    await expect(db.create({
+      model: 'user',
+      data: { email: 'DUPLICATE@EXAMPLE.COM', name: 'Blocked duplicate', isActive: true },
+    })).rejects.toMatchObject({ code: 'CONFLICT', statusCode: 409 });
+    const emailIndexes = await db.rawQuery!<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()
+       AND indexname IN ('user_email_ci_unique', 'login_identifier_email_ci_unique') ORDER BY indexname`,
+    );
+    expect(emailIndexes.map(row => row.indexname)).toEqual([
+      'login_identifier_email_ci_unique',
+      'user_email_ci_unique',
+    ]);
+
     const tenantIndexes = await db.rawQuery!<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes WHERE indexname = ?`,
       ['fortress_tenant_user_one_default_idx'],
@@ -159,7 +210,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(defaulted.recent).toBe(true);
 
     const after = await getMigrationStatus(db, 'pg');
-    expect(after.currentVersion).toBe(5);
+    expect(after.currentVersion).toBe(6);
     expect(after.upToDate).toBe(true);
 
     // Real-engine schema check: no missing tables, no missing columns.
@@ -210,8 +261,8 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
 
     // A targeted rollback preserves refresh rows while removing v5 through v3.
     const rollback = await migrateDown(db, 'pg', 2);
-    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
-    expect(await db.count({ model: 'refresh_token' })).toBe(3);
+    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
+    expect(await db.count({ model: 'refresh_token' })).toBe(4);
     const v3Columns = await db.rawQuery!<{ columnName: string }>(
       `SELECT column_name AS "columnName" FROM information_schema.columns
        WHERE table_schema = current_schema() AND table_name = 'fortress_refresh_token'
@@ -225,7 +276,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(continuationTables).toEqual([]);
 
     const restore = await migrateUp(db, 'pg');
-    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz']);
+    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email']);
 
     // Roll back drops every Fortress table (FK-safe via CASCADE ordering).
     const down = await migrateDown(db, 'pg');

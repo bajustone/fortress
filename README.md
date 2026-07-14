@@ -1298,19 +1298,24 @@ import { detectMigrationDrift, hasMigrationDrift, migrateUp } from '@bajustone/f
 // Provision (or upgrade) a database — idempotent, safe on every deploy.
 await migrateUp(fortress.config.database);
 
-// Preflight: fails closed on missing tables OR missing columns.
+// Preflight: fails closed on missing tables, columns, or required indexes.
 const drift = await detectMigrationDrift(fortress.config.database);
 if (hasMigrationDrift(drift))
   throw new Error('Schema drift detected');
 ```
 
-CLI helpers expose the bundled catalog and SQL:
+CLI helpers expose the bundled catalog and drift guidance:
 
 ```sh
 fortress migrate:status --dialect sqlite
-fortress migrate:up --dialect pg --out migrations.sql
 fortress migrate:check --dialect sqlite
 ```
+
+Migration v6 includes Unicode-aware email cleanup that cannot be represented
+safely as portable SQL. Consequently `fortress migrate:up --out ...` now fails
+closed instead of emitting an incomplete script. Run `migrateUp(...)` or
+`fortress.migrate()` with your configured adapter so data steps and constraints
+execute atomically.
 
 See the per-release notes
 ([0001](docs/migrations/0001-schema-version.md),

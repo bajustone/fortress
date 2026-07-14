@@ -30,6 +30,33 @@ describe('findUserByIdentifier', () => {
     expect(found!.name).toBe('Alice');
   });
 
+  it('normalizes case and Unicode only for email identifier lookup', async () => {
+    const user = await db.create<{ id: string }>({
+      model: 'user',
+      data: { email: 'é@example.com', name: 'Unicode', passwordHash: 'hashed', isActive: true },
+    });
+    await db.create({
+      model: 'login_identifier',
+      data: { userId: user.id, type: 'email', value: 'é@example.com' },
+    });
+
+    expect((await adapter.findUserByIdentifier('E\u0301@EXAMPLE.COM'))?.id).toBe(user.id);
+  });
+
+  it('preserves exact case for non-email identifiers', async () => {
+    const user = await db.create<{ id: string }>({
+      model: 'user',
+      data: { email: 'case@example.com', name: 'Case', passwordHash: 'hashed', isActive: true },
+    });
+    await db.create({
+      model: 'login_identifier',
+      data: { userId: user.id, type: 'username', value: 'CaseUser' },
+    });
+
+    expect((await adapter.findUserByIdentifier('CaseUser'))?.id).toBe(user.id);
+    expect(await adapter.findUserByIdentifier('caseuser')).toBeNull();
+  });
+
   it('falls back to email lookup when no login_identifier exists', async () => {
     await db.create({
       model: 'user',

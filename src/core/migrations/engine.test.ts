@@ -9,7 +9,7 @@ import {
   migrateDown,
   migrateUp,
 } from './engine';
-import { FORTRESS_INDEXES, FORTRESS_TABLES } from './migrations';
+import { FORTRESS_INDEXES, FORTRESS_TABLES, getFortressMigrations } from './migrations';
 
 const dialect = 'sqlite';
 
@@ -27,25 +27,38 @@ describe('migration engine', () => {
 
     const before = await getMigrationStatus(db, dialect);
     expect(before.currentVersion).toBe(0);
-    expect(before.latestVersion).toBe(5);
-    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5]);
+    expect(before.latestVersion).toBe(6);
+    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
 
     const up = await migrateUp(db, dialect);
-    expect(up).toMatchObject({ fromVersion: 0, toVersion: 5 });
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz']);
+    expect(up).toMatchObject({ fromVersion: 0, toVersion: 6 });
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email']);
 
     const after = await getMigrationStatus(db, dialect);
-    expect(after.currentVersion).toBe(5);
+    expect(after.currentVersion).toBe(6);
     expect(after.upToDate).toBe(true);
     expect(hasMigrationDrift(await detectMigrationDrift(db, dialect))).toBe(false);
 
     const down = await migrateDown(db, dialect);
-    expect(down).toMatchObject({ fromVersion: 5, toVersion: 0 });
-    expect(down.rolledBack.map(migration => migration.name)).toEqual(['hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
+    expect(down).toMatchObject({ fromVersion: 6, toVersion: 0 });
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
 
     const final = await getMigrationStatus(db, dialect);
     expect(final.hasVersionTable).toBe(false);
     expect(final.currentVersion).toBe(0);
+  });
+
+  it('fails closed when a data migration is applied as SQL without its runtime step', async () => {
+    const db = createBareSqliteAdapter();
+    await migrateUp(db, dialect, 5);
+    const migration = getFortressMigrations(dialect).find(item => item.version === 6)!;
+    const sentinelStatement = migration.up
+      .split(';')
+      .map(statement => statement.split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n').trim())
+      .find(Boolean)!;
+
+    await expect(db.rawQuery!(sentinelStatement)).rejects.toThrow();
+    expect((await getMigrationStatus(db, dialect)).currentVersion).toBe(5);
   });
 
   it('reports missing Fortress tables as drift', async () => {

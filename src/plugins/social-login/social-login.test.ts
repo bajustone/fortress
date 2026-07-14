@@ -267,6 +267,55 @@ describe('social-login plugin', () => {
       expect(tokens.refreshToken).toBe('provider-refresh-token');
     });
 
+    it('normalizes verified provider email before linking an existing user', async () => {
+      const issuer = 'https://issuer-normalized-link.example.com';
+      const existing = await db.create<{ id: string }>({
+        model: 'user',
+        data: { email: 'é.user@example.com', name: 'Existing', passwordHash: 'hashed', isActive: true },
+      });
+      await stubOidcProvider({
+        issuer,
+        email: 'E\u0301.User@EXAMPLE.COM',
+        emailVerified: true,
+        sub: 'normalized-link-sub',
+      });
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-normalized', clientId: 'oidc-client', clientSecret: 'secret', issuer }],
+        autoRegister: true,
+        linkAccounts: true,
+        tokenEncryptionKey,
+      });
+      const m = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      const result = await m.handleCallback('oidc-normalized', 'code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce');
+      expect(result.user.id).toBe(existing.id);
+      expect(result.isNewUser).toBe(false);
+      expect(await m.getLinkedAccounts(existing.id)).toEqual([
+        expect.objectContaining({ email: 'é.user@example.com' }),
+      ]);
+    });
+
+    it('normalizes provider email for JIT-provisioned users', async () => {
+      const issuer = 'https://issuer-normalized-jit.example.com';
+      await stubOidcProvider({
+        issuer,
+        email: 'New.User@EXAMPLE.COM',
+        emailVerified: true,
+        sub: 'normalized-jit-sub',
+      });
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-jit', clientId: 'oidc-client', clientSecret: 'secret', issuer }],
+        autoRegister: true,
+        linkAccounts: true,
+        tokenEncryptionKey,
+      });
+      const m = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      const result = await m.handleCallback('oidc-jit', 'code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce');
+      expect(result.user.email).toBe('new.user@example.com');
+      expect(result.isNewUser).toBe(true);
+    });
+
     it('does not auto-link to an existing account when the provider reports email_verified:false (#5/#7)', async () => {
       const issuer = 'https://issuer-unverified.example.com';
       // A real account a verified-email auto-link would otherwise take over.

@@ -15,6 +15,7 @@ import type { FortressUser } from '../../core/types';
 import type { ProviderConfig, ProviderDefinition, ProviderProfile, SocialLoginConfig } from './types';
 import { object, string } from '@bajustone/fetcher/schema';
 import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
+import { normalizeEmail } from '../../core/auth/email';
 import { Errors } from '../../core/errors';
 import { outboundClient } from '../../core/http/outbound';
 import { builtInProviders, createMicrosoftProvider } from './providers';
@@ -459,11 +460,13 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
         const profile = resolvedDefinition.mapProfile(rawProfile);
         if (!profile.id)
           throw Errors.unauthorized(`Provider ${providerName} returned no subject`);
+        const canonicalProfileEmail = normalizeEmail(profile.email);
 
-        // Validate email domain restriction
+        // Validate email domain restriction case-insensitively.
         if (pc.allowedDomains && pc.allowedDomains.length > 0) {
-          const domain = profile.email.split('@')[1];
-          if (!domain || !pc.allowedDomains.includes(domain)) {
+          const domain = canonicalProfileEmail.split('@')[1];
+          const allowedDomains = pc.allowedDomains.map(value => value.normalize('NFC').toLowerCase());
+          if (!domain || !allowedDomains.includes(domain)) {
             throw Errors.unauthorized(`Email domain '${domain ?? ''}' is not allowed for ${providerName}`);
           }
         }
@@ -503,17 +506,17 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
                   ? new Date(Date.now() + tokens.expires_in * 1000)
                   : null,
                 profile: JSON.stringify(profile.raw),
-                email: profile.email,
+                email: canonicalProfileEmail,
                 updatedAt: new Date(),
               },
             });
           }
           else {
             // No social account — try linking by verified email only.
-            if (linkAccounts && profile.email && profile.emailVerified) {
+            if (linkAccounts && canonicalProfileEmail && profile.emailVerified) {
               user = await tx.findOne<FortressUser>({
                 model: 'user',
-                where: [{ field: 'email', operator: '=', value: profile.email }],
+                where: [{ field: 'email', operator: '=', value: canonicalProfileEmail }],
               });
               if (user && !user.isActive)
                 throw Errors.unauthorized('User account not found or disabled');
@@ -528,7 +531,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
               const mapped = config.mapProfile
                 ? config.mapProfile(providerName, profile)
                 : null;
-              const email = mapped?.email ?? profile.email;
+              const email = normalizeEmail(mapped?.email ?? canonicalProfileEmail);
               const name = mapped?.name ?? profile.name ?? profile.email;
 
               user = await tx.create<FortressUser>({
@@ -556,7 +559,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
                 userId: user.id,
                 provider: providerName,
                 providerAccountId: profile.id,
-                email: profile.email,
+                email: canonicalProfileEmail,
                 accessToken: encryptedAccessToken,
                 refreshToken: encryptedRefreshToken,
                 tokenExpiresAt: tokens.expires_in

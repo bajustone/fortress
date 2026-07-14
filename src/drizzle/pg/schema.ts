@@ -22,7 +22,9 @@ const users = pgTable('fortress_user', {
   emailVerified: boolean('email_verified').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, table => [
+  uniqueIndex('user_email_ci_unique').on(sql`lower(${table.email})`),
+]);
 
 // --- Login Identifiers ---
 
@@ -31,7 +33,11 @@ const loginIdentifiers = pgTable('fortress_login_identifier', {
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   type: varchar('type', { length: 20 }).notNull(), // 'email' | 'phone' | 'username'
   value: varchar('value', { length: 255 }).notNull().unique(),
-});
+}, table => [
+  uniqueIndex('login_identifier_email_ci_unique')
+    .on(sql`lower(${table.value})`)
+    .where(sql`${table.type} = 'email'`),
+]);
 
 // --- Auth ---
 

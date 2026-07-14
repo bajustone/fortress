@@ -8,6 +8,7 @@ import type {
   ServiceAccount,
   Subject,
 } from './types';
+import { normalizeEmail } from './auth/email';
 
 // --- Stored types for typed queries ---
 
@@ -146,11 +147,24 @@ async function findOrCreatePermissionWithStatus(
 export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
   return {
     async findUserByIdentifier(identifier: string): Promise<(FortressUser & { passwordHash: string | null }) | null> {
-      // Try login_identifier first
-      const loginId = await db.findOne<LoginIdentifier>({
+      // Preserve case-sensitive username/phone semantics by trying the exact
+      // identifier first. Email gets a second canonical lookup so mixed-case
+      // and canonically-equivalent Unicode input resolves the stored identity.
+      let loginId = await db.findOne<LoginIdentifier>({
         model: 'login_identifier',
         where: [{ field: 'value', operator: '=', value: identifier }],
       });
+
+      const canonicalEmail = normalizeEmail(identifier);
+      if (!loginId && canonicalEmail !== identifier) {
+        loginId = await db.findOne<LoginIdentifier>({
+          model: 'login_identifier',
+          where: [
+            { field: 'type', operator: '=', value: 'email' },
+            { field: 'value', operator: '=', value: canonicalEmail },
+          ],
+        });
+      }
 
       if (loginId) {
         return db.findOne<FortressUser & { passwordHash: string | null }>({
@@ -159,10 +173,10 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
         });
       }
 
-      // Fallback: direct email lookup
+      // Fallback for social-only users without a login_identifier row.
       return db.findOne<FortressUser & { passwordHash: string | null }>({
         model: 'user',
-        where: [{ field: 'email', operator: '=', value: identifier }],
+        where: [{ field: 'email', operator: '=', value: canonicalEmail }],
       });
     },
 

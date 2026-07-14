@@ -42,7 +42,7 @@ const down = await migrateDown(adapter, 'sqlite', 0);
 
 const drift = await detectMigrationDrift(adapter);
 //   { currentVersion, latestVersion, missingVersionTable, unknownFutureVersion,
-//     pendingVersions, missingTables, missingColumns }
+//     pendingVersions, missingTables, missingColumns, missingIndexes }
 if (hasMigrationDrift(drift)) throw new Error('Schema drift detected');
 ```
 
@@ -54,16 +54,17 @@ and safe to run on every deploy.
 
 ```sh
 fortress migrate:status
-fortress migrate:up
 fortress migrate:down
 fortress migrate:diff
 fortress migrate:check     # exits non-zero on drift; suitable for CI
 ```
 
 The CLI commands operate on the bundled migration catalog and do **not**
-connect to a database — they report what the runtime would apply. Run
-the runtime API against your live database from application code (the
-CLI cannot access secrets or per-environment connection strings safely).
+connect to a database. Migration v6 includes a Unicode-aware data step, so
+`fortress migrate:up` intentionally refuses to emit SQL-only output that would
+skip cleanup. Run the runtime API against your live database from application
+code; it executes data steps and constraints atomically using the configured
+adapter.
 
 ## Drift signals (`detectMigrationDrift`)
 
@@ -74,8 +75,9 @@ CLI cannot access secrets or per-environment connection strings safely).
 | `unknownFutureVersion` | DB is at a higher version than the bundled migrations | Upgrade the Fortress version before deploying |
 | `missingTables` | Any `FORTRESS_TABLES` entry not present in the DB | Run `migrateUp`, or finish the interrupted migration run |
 | `missingColumns` | A table that exists but is missing a column the bundled DDL defines | Apply the migration that adds the column (or recreate the table from the bundled DDL) |
+| `missingIndexes` | A required hot-path index is absent | Apply the owning migration or restore the named index |
 
-`missingTables` and `missingColumns` are the deep checks — they catch the
+`missingTables`, `missingColumns`, and `missingIndexes` are the deep checks — they catch the
 case where the version table claims everything is applied but the schema
 is genuinely incomplete (manual DROP, partial restore, a table created
 from an older schema dump). Expected columns are parsed straight out of

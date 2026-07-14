@@ -382,6 +382,9 @@ const CREATE_TABLES_SQL = `
   CREATE INDEX IF NOT EXISTS trusted_device_user_idx ON fortress_trusted_device (user_id);
   CREATE INDEX IF NOT EXISTS webhook_delivery_retry_idx ON fortress_webhook_delivery (status, next_retry_at);
   CREATE INDEX IF NOT EXISTS audit_log_timestamp_idx ON fortress_audit_log (timestamp);
+  CREATE UNIQUE INDEX IF NOT EXISTS user_email_ci_unique ON fortress_user (lower(email));
+  CREATE UNIQUE INDEX IF NOT EXISTS login_identifier_email_ci_unique
+    ON fortress_login_identifier (lower(value)) WHERE type = 'email';
 `;
 
 const TRUNCATE_SQL = `
@@ -741,6 +744,26 @@ describe('pg: auth lifecycle', () => {
     expect(sessions[0].createdAt).toBeInstanceOf(Date);
   });
 
+  it('keeps the primary identifier synchronized across concurrent email updates', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'concurrent-email@test.com',
+      name: 'Concurrent Email',
+      password: 'password-123456',
+    });
+
+    await Promise.all([
+      fortress.auth.updateUser(user.id, { email: 'first-email@test.com' }),
+      fortress.auth.updateUser(user.id, { email: 'second-email@test.com' }),
+    ]);
+
+    const finalUser = await fortress.auth.getUserById(user.id);
+    expect(['first-email@test.com', 'second-email@test.com']).toContain(finalUser.email);
+    const emailIdentifiers = (await fortress.auth.getLoginIdentifiers(user.id))
+      .filter(identifier => identifier.type === 'email');
+    expect(emailIdentifiers).toHaveLength(1);
+    expect(emailIdentifiers[0].value).toBe(finalUser.email);
+  });
+
   it('prevents duplicate user creation', async () => {
     await fortress.auth.createUser({
       email: 'dupe@test.com',
@@ -749,7 +772,7 @@ describe('pg: auth lifecycle', () => {
     });
 
     await expect(
-      fortress.auth.createUser({ email: 'dupe@test.com', name: 'Dupe 2', password: 'pass' }),
+      fortress.auth.createUser({ email: 'DUPE@TEST.COM', name: 'Dupe 2', password: 'pass' }),
     ).rejects.toThrow('already exists');
   });
 });

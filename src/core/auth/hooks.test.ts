@@ -17,6 +17,27 @@ async function seedUser(): Promise<{ id: string }> {
 }
 
 describe('plugin hooks', () => {
+  describe('beforeRegister', () => {
+    it('re-normalizes email after a hook mutates registration data', async () => {
+      const beforeRegister = vi.fn(async (ctx: { data: { email: string } }) => {
+        ctx.data.email = 'E\u0301.HOOK@EXAMPLE.COM';
+      });
+      fortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [{ name: 'test', hooks: { beforeRegister } }],
+      });
+
+      const user = await fortress.auth.createUser({
+        email: 'original@example.com',
+        name: 'Hook User',
+        password: 'password-123456',
+      });
+      expect(user.email).toBe('é.hook@example.com');
+      expect((await fortress.auth.getLoginIdentifiers(user.id))[0].value).toBe('é.hook@example.com');
+    });
+  });
+
   describe('beforeLogout', () => {
     it('is called before logout', async () => {
       const beforeLogout = vi.fn(async () => {});

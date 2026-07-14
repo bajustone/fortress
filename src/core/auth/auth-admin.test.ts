@@ -25,6 +25,52 @@ describe('auth admin: user management', () => {
     }
   }
 
+  describe('email identity normalization', () => {
+    it('stores lowercase NFC email and identifier and accepts equivalent login input', async () => {
+      const user = await fortress.auth.createUser({
+        email: 'E\u0301.User@EXAMPLE.COM',
+        name: 'Canonical User',
+        password: 'Password123456!',
+      });
+
+      expect(user.email).toBe('é.user@example.com');
+      expect(await fortress.auth.getLoginIdentifiers(user.id)).toEqual([
+        expect.objectContaining({ type: 'email', value: 'é.user@example.com' }),
+      ]);
+      const login = await fortress.auth.login('É.User@Example.COM', 'Password123456!');
+      expect(login.status).toBe('success');
+    });
+
+    it('rejects case and NFC-equivalent duplicate registrations', async () => {
+      await fortress.auth.createUser({
+        email: 'E\u0301@Example.COM',
+        name: 'First',
+        password: 'Password123456!',
+      });
+      await expect(fortress.auth.createUser({
+        email: 'É@EXAMPLE.com',
+        name: 'Duplicate',
+        password: 'Password123456!',
+      })).rejects.toThrow('A user with this email already exists');
+    });
+
+    it('rolls back registration when the canonical identifier is already an alias', async () => {
+      const owner = await fortress.auth.createUser({
+        email: 'owner@example.com',
+        name: 'Owner',
+        password: 'Password123456!',
+      });
+      await fortress.auth.addLoginIdentifier(owner.id, 'email', 'alias@example.com');
+
+      await expect(fortress.auth.createUser({
+        email: 'ALIAS@EXAMPLE.COM',
+        name: 'Conflicting user',
+        password: 'Password123456!',
+      })).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect((await fortress.auth.listUsers({})).total).toBe(1);
+    });
+  });
+
   // ── listUsers ────────────────────────────────────────────────
 
   describe('listUsers', () => {
@@ -121,7 +167,7 @@ describe('auth admin: user management', () => {
       const { users } = await fortress.auth.listUsers({});
       const userId = users[0].id;
 
-      const updated = await fortress.auth.updateUser(userId, { email: 'new@test.com' });
+      const updated = await fortress.auth.updateUser(userId, { email: 'NeW@TEST.COM' });
 
       expect(updated.email).toBe('new@test.com');
 
@@ -156,8 +202,21 @@ describe('auth admin: user management', () => {
       const { users } = await fortress.auth.listUsers({});
 
       await expect(
-        fortress.auth.updateUser(users[0].id, { email: 'user2@test.com' }),
+        fortress.auth.updateUser(users[0].id, { email: 'USER2@TEST.COM' }),
       ).rejects.toThrow('A user with this email already exists');
+    });
+
+    it('rolls back the user email when identifier synchronization conflicts', async () => {
+      await createUsers(2);
+      const { users } = await fortress.auth.listUsers({ sortBy: 'id', sortDirection: 'asc' });
+      await fortress.auth.addLoginIdentifier(users[1].id, 'email', 'claimed@example.com');
+
+      await expect(
+        fortress.auth.updateUser(users[0].id, { email: 'CLAIMED@EXAMPLE.COM' }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect((await fortress.auth.getUserById(users[0].id)).email).toBe('user1@test.com');
+      expect((await fortress.auth.getLoginIdentifiers(users[0].id)).map(identifier => identifier.value))
+        .toContain('user1@test.com');
     });
 
     it('throws NOT_FOUND for missing user', async () => {

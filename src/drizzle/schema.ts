@@ -22,7 +22,9 @@ const users = sqliteTable('fortress_user', {
   emailVerified: integer('email_verified', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [
+  uniqueIndex('user_email_ci_unique').on(sql`${table.email} COLLATE NOCASE`),
+]);
 
 // --- Login Identifiers ---
 
@@ -31,7 +33,11 @@ const loginIdentifiers = sqliteTable('fortress_login_identifier', {
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   type: text('type').notNull(), // 'email' | 'phone' | 'username'
   value: text('value').notNull().unique(),
-});
+}, table => [
+  uniqueIndex('login_identifier_email_ci_unique')
+    .on(sql`${table.value} COLLATE NOCASE`)
+    .where(sql`${table.type} = 'email'`),
+]);
 
 // --- Auth ---
 

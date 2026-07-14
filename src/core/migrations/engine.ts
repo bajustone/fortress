@@ -218,8 +218,18 @@ export async function migrateUp(
     .filter(migration => migration.version > before.currentVersion && migration.version <= targetVersion);
 
   for (const migration of toApply) {
-    await executeSql(db, migration.up);
-    await recordVersion(db, dialect, migration.version);
+    if (migration.beforeUp) {
+      // Data cleanup and the constraint it prepares must commit atomically.
+      await db.transaction(async (tx) => {
+        await migration.beforeUp!(tx);
+        await executeSql(tx, migration.up);
+        await recordVersion(tx, dialect, migration.version);
+      });
+    }
+    else {
+      await executeSql(db, migration.up);
+      await recordVersion(db, dialect, migration.version);
+    }
   }
 
   return {

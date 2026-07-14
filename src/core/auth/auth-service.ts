@@ -31,11 +31,14 @@ import { evaluatePermissions } from '../iam/permission-evaluator';
 import { createInternalAdapter } from '../internal-adapter';
 import { createListenerList } from '../observability/listener-list';
 import { SILENT_LOGGER } from '../observability/logger';
+import { normalizeEmail } from './email';
 import { signAccessToken, verifyAccessToken } from './jwt';
 import { createDefaultHasher, normalizePasswordInput } from './password';
 import { validatePassword } from './password-policy';
 import { consumeAuthContinuation, runPostAuthGates, verifyAuthContinuation } from './post-auth-gate';
 import { deriveRefreshTokenSuccessor, generateRefreshToken, generateTokenFamily, hashToken } from './refresh-token';
+
+const NUMERIC_SUBJECT_ID_RE = /^\d+$/;
 
 /**
  * Lifecycle event emitted by the auth service. Mirrors the IAM observer
@@ -976,23 +979,28 @@ export function createAuthService(
     },
 
     async createUser(data: CreateUserInput): Promise<FortressUser> {
-      const hookCtx: HookContext & { data: CreateUserInput } = { db, config, data };
+      const normalizedData: CreateUserInput = { ...data, email: normalizeEmail(data.email) };
+      const hookCtx: HookContext & { data: CreateUserInput } = { db, config, data: normalizedData };
       const beforeResult = await runBeforeHooks('beforeRegister', hookCtx);
       if (beforeResult?.stop) {
         return beforeResult.response as unknown as FortressUser;
       }
+      // Hooks may mutate their data object; restore the canonical identity at
+      // the final persistence boundary rather than trusting hook discipline.
+      normalizedData.email = normalizeEmail(normalizedData.email);
 
-      // Check for duplicate email before inserting
+      // Preserve the established friendly duplicate error before spending on
+      // password validation/hash; the transaction repeats this check and the
+      // database constraints remain authoritative for races and aliases.
       const existing = await db.findOne<{ id: string }>({
         model: 'user',
-        where: [{ field: 'email', operator: '=', value: data.email }],
+        where: [{ field: 'email', operator: '=', value: normalizedData.email }],
       });
-      if (existing) {
+      if (existing)
         throw Errors.conflict('A user with this email already exists');
-      }
 
-      const normalizedPassword = data.password && data.password.length > 0
-        ? normalizePasswordInput(data.password)
+      const normalizedPassword = normalizedData.password && normalizedData.password.length > 0
+        ? normalizePasswordInput(normalizedData.password)
         : undefined;
       if (normalizedPassword !== undefined) {
         await validatePassword(normalizedPassword, config.passwordPolicy, passwordPolicyObserver);
@@ -1000,24 +1008,32 @@ export function createAuthService(
 
       const passwordHash = normalizedPassword !== undefined ? await hasher.hash(normalizedPassword) : null;
 
-      const user = await db.create<FortressUser>({
-        model: 'user',
-        data: {
-          email: data.email,
-          name: data.name,
-          passwordHash,
-          isActive: data.isActive ?? true,
-          emailVerified: false,
-        },
-      });
-
-      // Auto-create email login identifier
-      if (data.email) {
-        await db.create({
-          model: 'login_identifier',
-          data: { userId: user.id, type: 'email', value: data.email },
+      const user = await db.transaction(async (tx) => {
+        // The user and its canonical login identifier are one identity write:
+        // either both persist or neither does.
+        const existing = await tx.findOne<{ id: string }>({
+          model: 'user',
+          where: [{ field: 'email', operator: '=', value: normalizedData.email }],
         });
-      }
+        if (existing)
+          throw Errors.conflict('A user with this email already exists');
+
+        const created = await tx.create<FortressUser>({
+          model: 'user',
+          data: {
+            email: normalizedData.email,
+            name: normalizedData.name,
+            passwordHash,
+            isActive: normalizedData.isActive ?? true,
+            emailVerified: false,
+          },
+        });
+        await tx.create({
+          model: 'login_identifier',
+          data: { userId: created.id, type: 'email', value: normalizedData.email },
+        });
+        return created;
+      });
 
       const afterCtx: AfterHookContext = { db, config, responseHeaders: new Headers() };
       for (const plugin of plugins) {
@@ -1030,7 +1046,7 @@ export function createAuthService(
         authEventListeners.emit({
           eventType: 'REGISTER',
           actorId: user.id,
-          identifier: data.email,
+          identifier: normalizedData.email,
           method: 'password',
           outcome: 'success',
         });
@@ -1120,17 +1136,18 @@ export function createAuthService(
     async addLoginIdentifier(userId: string, type: LoginIdentifierType, value: string): Promise<void> {
       await db.create({
         model: 'login_identifier',
-        data: { userId, type, value },
+        data: { userId, type, value: type === 'email' ? normalizeEmail(value) : value },
       });
     },
 
     async removeLoginIdentifier(userId: string, type: LoginIdentifierType, value: string): Promise<void> {
+      const normalizedValue = type === 'email' ? normalizeEmail(value) : value;
       await db.delete({
         model: 'login_identifier',
         where: [
           { field: 'userId', operator: '=', value: userId },
           { field: 'type', operator: '=', value: type },
-          { field: 'value', operator: '=', value },
+          { field: 'value', operator: '=', value: normalizedValue },
         ],
       });
     },
@@ -1279,31 +1296,13 @@ export function createAuthService(
       userId: string,
       data: { name?: string; email?: string; isActive?: boolean; password?: string },
     ): Promise<FortressUser> {
-      // Verify user exists
-      const existing = await db.findOne<FortressUser>({
-        model: 'user',
-        where: [{ field: 'id', operator: '=', value: userId }],
-      });
-      if (!existing) {
-        throw Errors.notFound('User not found');
-      }
-
-      // Check email uniqueness if changing email
-      if (data.email && data.email !== existing.email) {
-        const duplicate = await db.findOne<{ id: string }>({
-          model: 'user',
-          where: [{ field: 'email', operator: '=', value: data.email }],
-        });
-        if (duplicate) {
-          throw Errors.conflict('A user with this email already exists');
-        }
-      }
+      const normalizedEmail = data.email === undefined ? undefined : normalizeEmail(data.email);
 
       const updateData: Record<string, unknown> = {};
       if (data.name !== undefined)
         updateData.name = data.name;
-      if (data.email !== undefined)
-        updateData.email = data.email;
+      if (normalizedEmail !== undefined)
+        updateData.email = normalizedEmail;
       if (data.isActive !== undefined)
         updateData.isActive = data.isActive;
       let credentialChanged = false;
@@ -1318,39 +1317,66 @@ export function createAuthService(
         credentialChanged = true;
       }
 
-      const updated = await db.update<FortressUser & { passwordHash?: string }>({
-        model: 'user',
-        where: [{ field: 'id', operator: '=', value: userId }],
-        data: updateData,
+      const updated = await db.transaction(async (tx) => {
+        // Serialize the read/modify/write across PostgreSQL processes. SQLite's
+        // adapter transaction chain already serializes writers on its single
+        // connection. Re-reading only after the lock prevents a stale old
+        // email from missing the identifier row during concurrent updates.
+        if (tx.dialect === 'pg' && tx.rawQuery && NUMERIC_SUBJECT_ID_RE.test(userId)) {
+          await tx.rawQuery(
+            'SELECT pg_advisory_xact_lock(117993, CAST(? AS integer))',
+            [userId],
+          );
+        }
+        const existing = await tx.findOne<FortressUser>({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: userId }],
+        });
+        if (!existing)
+          throw Errors.notFound('User not found');
+
+        if (normalizedEmail !== undefined && normalizedEmail !== existing.email) {
+          const duplicate = await tx.findOne<{ id: string }>({
+            model: 'user',
+            where: [{ field: 'email', operator: '=', value: normalizedEmail }],
+          });
+          if (duplicate)
+            throw Errors.conflict('A user with this email already exists');
+        }
+
+        const persisted = await tx.update<FortressUser & { passwordHash?: string }>({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: userId }],
+          data: updateData,
+        });
+        if (!persisted)
+          throw Errors.notFound('User not found');
+
+        // Update the primary email identifier atomically with the user row.
+        if (normalizedEmail !== undefined && normalizedEmail !== existing.email) {
+          await tx.update({
+            model: 'login_identifier',
+            where: [
+              { field: 'userId', operator: '=', value: userId },
+              { field: 'type', operator: '=', value: 'email' },
+              { field: 'value', operator: '=', value: existing.email },
+            ],
+            data: { value: normalizedEmail },
+          });
+        }
+
+        if (credentialChanged) {
+          await tx.update({
+            model: 'refresh_token',
+            where: [
+              { field: 'userId', operator: '=', value: userId },
+              { field: 'isRevoked', operator: '=', value: false },
+            ],
+            data: { isRevoked: true },
+          });
+        }
+        return persisted;
       });
-
-      if (!updated) {
-        throw Errors.notFound('User not found');
-      }
-
-      // Update login identifier if email changed
-      if (data.email && data.email !== existing.email) {
-        await db.update({
-          model: 'login_identifier',
-          where: [
-            { field: 'userId', operator: '=', value: userId },
-            { field: 'type', operator: '=', value: 'email' },
-            { field: 'value', operator: '=', value: existing.email },
-          ],
-          data: { value: data.email },
-        });
-      }
-
-      if (credentialChanged) {
-        await db.update({
-          model: 'refresh_token',
-          where: [
-            { field: 'userId', operator: '=', value: userId },
-            { field: 'isRevoked', operator: '=', value: false },
-          ],
-          data: { isRevoked: true },
-        });
-      }
 
       const { passwordHash: _, ...safeUser } = updated;
       return safeUser;

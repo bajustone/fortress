@@ -1,3 +1,6 @@
+import type { DatabaseAdapter } from '../../adapters/database';
+import { normalizeEmail } from '../auth/email';
+
 export type MigrationDialect = 'sqlite' | 'pg';
 
 export interface FortressMigration {
@@ -6,6 +9,12 @@ export interface FortressMigration {
   dialect: MigrationDialect;
   up: string;
   down: string;
+  /** SQL used only when provisioning an empty database from concatenated DDL. */
+  freshUp?: string;
+  /** Stable identity included in the migration checksum for a JS data step. */
+  dataStep?: string;
+  /** Runs immediately before `up` while the migration lock/transaction is held. */
+  beforeUp?: (db: DatabaseAdapter) => Promise<void>;
 }
 
 // NOTE: the version row itself is written by the migration runner
@@ -1212,6 +1221,214 @@ DROP INDEX IF EXISTS refresh_token_user_idx;
 DROP INDEX IF EXISTS refresh_token_family_idx;
 `.trim();
 
+// --- 0006: canonical, case-insensitive email identity ---
+
+interface MigrationUserEmail {
+  id: string;
+  email: string;
+}
+
+interface MigrationEmailIdentifier {
+  id: string;
+  userId: string;
+  type: string;
+  value: string;
+}
+
+/**
+ * Canonicalize legacy emails before the case-insensitive indexes are created.
+ * If multiple accounts collapse to one identity, the oldest numeric ID wins;
+ * later accounts are disabled, assigned a non-routable unique tombstone, and
+ * have all renewable OAuth/core credentials removed. Accounts are never
+ * silently merged. Email aliases are normalized independently; if aliases
+ * collide, the oldest identifier row wins and later duplicates are removed.
+ */
+async function normalizeExistingUserEmails(db: DatabaseAdapter): Promise<void> {
+  const users = await db.findMany<MigrationUserEmail>({
+    model: 'user',
+    sortBy: { field: 'id', direction: 'asc' },
+  });
+  const identifiers = await db.findMany<MigrationEmailIdentifier>({
+    model: 'login_identifier',
+    sortBy: { field: 'id', direction: 'asc' },
+  });
+  const groups = new Map<string, MigrationUserEmail[]>();
+  const usedCanonicalEmails = new Set([
+    ...users.map(user => normalizeEmail(user.email)),
+    ...identifiers.map(identifier => normalizeEmail(identifier.value)),
+  ]);
+  for (const user of users) {
+    const canonical = normalizeEmail(user.email);
+    const group = groups.get(canonical) ?? [];
+    group.push(user);
+    groups.set(canonical, group);
+  }
+
+  const tombstoneFor = (id: string): string => {
+    let attempt = 0;
+    let value = `fortress-duplicate-${id}@invalid`;
+    while (usedCanonicalEmails.has(normalizeEmail(value))) {
+      attempt++;
+      value = `fortress-duplicate-${id}-${attempt}@invalid`;
+    }
+    usedCanonicalEmails.add(normalizeEmail(value));
+    return value;
+  };
+
+  const duplicateUserIds = new Set<string>();
+  const primaryOwnerByCanonical = new Map<string, string>();
+  for (const [canonical, matches] of groups) {
+    const [survivor, ...duplicates] = matches;
+    primaryOwnerByCanonical.set(canonical, survivor.id);
+    for (const duplicate of duplicates) {
+      duplicateUserIds.add(duplicate.id);
+      const tombstone = tombstoneFor(duplicate.id);
+      await db.update({
+        model: 'refresh_token',
+        where: [{ field: 'userId', operator: '=', value: duplicate.id }],
+        data: { isRevoked: true },
+      });
+      // OAuth refresh tokens have no revoked flag; remove every OAuth bearer
+      // artifact that could renew or continue authorization for the loser.
+      for (const model of [
+        'oauth_refresh_token',
+        'oauth_access_token',
+        'oauth_authorization_code',
+        'oauth_pending_flow',
+        'auth_continuation',
+      ]) {
+        await db.delete({
+          model,
+          where: [{ field: 'userId', operator: '=', value: duplicate.id }],
+        });
+      }
+      await db.update({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: duplicate.id }],
+        data: { email: tombstone, isActive: false },
+      });
+    }
+
+    if (survivor.email !== canonical) {
+      await db.update({
+        model: 'user',
+        where: [{ field: 'id', operator: '=', value: survivor.id }],
+        data: { email: canonical },
+      });
+    }
+  }
+
+  const identifierGroups = new Map<string, MigrationEmailIdentifier[]>();
+  const occupiedNonEmailValues = new Set<string>();
+  for (const identifier of identifiers) {
+    if (duplicateUserIds.has(identifier.userId)) {
+      await db.delete({
+        model: 'login_identifier',
+        where: [{ field: 'id', operator: '=', value: identifier.id }],
+      });
+      continue;
+    }
+    if (identifier.type !== 'email') {
+      // A primary email must not be shadowed by exact-first lookup of a
+      // cross-type identifier with the same final canonical value.
+      if (primaryOwnerByCanonical.has(identifier.value)) {
+        await db.delete({
+          model: 'login_identifier',
+          where: [{ field: 'id', operator: '=', value: identifier.id }],
+        });
+      }
+      else {
+        occupiedNonEmailValues.add(identifier.value);
+      }
+      continue;
+    }
+    const canonical = normalizeEmail(identifier.value);
+    const group = identifierGroups.get(canonical) ?? [];
+    group.push(identifier);
+    identifierGroups.set(canonical, group);
+  }
+  for (const [canonical, matches] of identifierGroups) {
+    const primaryOwner = primaryOwnerByCanonical.get(canonical);
+    // A user's primary email always outranks another account's alias. Without
+    // this rule exact-first identifier lookup could route the primary address
+    // to the alias owner after migration. Otherwise an existing case-sensitive
+    // non-email identifier keeps its exact value and the conflicting email
+    // alias is removed.
+    const survivor = occupiedNonEmailValues.has(canonical)
+      ? undefined
+      : primaryOwner
+        ? matches.find(identifier => identifier.userId === primaryOwner)
+        : matches[0];
+    for (const duplicate of matches) {
+      if (duplicate.id === survivor?.id)
+        continue;
+      await db.delete({
+        model: 'login_identifier',
+        where: [{ field: 'id', operator: '=', value: duplicate.id }],
+      });
+    }
+    if (survivor && survivor.value !== canonical) {
+      await db.update({
+        model: 'login_identifier',
+        where: [{ field: 'id', operator: '=', value: survivor.id }],
+        data: { value: canonical },
+      });
+    }
+  }
+
+  if (!db.rawQuery)
+    throw new Error('Email data migration requires rawQuery support');
+  await db.rawQuery('CREATE TABLE fortress_email_migration_ready (id INTEGER PRIMARY KEY)');
+}
+
+const SQLITE_0006_UP = `
+-- This sentinel is created only by the Fortress migration engine after its
+-- Unicode-aware data step. Applying this SQL directly fails closed.
+INSERT INTO fortress_email_migration_ready (id) VALUES (1);
+CREATE UNIQUE INDEX user_email_ci_unique ON fortress_user (email COLLATE NOCASE);
+CREATE UNIQUE INDEX login_identifier_email_ci_unique
+  ON fortress_login_identifier (value COLLATE NOCASE)
+  WHERE type = 'email';
+DROP TABLE fortress_email_migration_ready;
+`.trim();
+
+const SQLITE_0006_FRESH_UP = `
+CREATE UNIQUE INDEX user_email_ci_unique ON fortress_user (email COLLATE NOCASE);
+CREATE UNIQUE INDEX login_identifier_email_ci_unique
+  ON fortress_login_identifier (value COLLATE NOCASE)
+  WHERE type = 'email';
+`.trim();
+
+const SQLITE_0006_DOWN = `
+-- Canonicalization and duplicate-account quarantine are intentionally irreversible.
+DROP INDEX IF EXISTS login_identifier_email_ci_unique;
+DROP INDEX IF EXISTS user_email_ci_unique;
+`.trim();
+
+const PG_0006_UP = `
+-- This sentinel is created only by the Fortress migration engine after its
+-- Unicode-aware data step. Applying this SQL directly fails closed.
+INSERT INTO fortress_email_migration_ready (id) VALUES (1);
+CREATE UNIQUE INDEX user_email_ci_unique ON fortress_user (lower(email));
+CREATE UNIQUE INDEX login_identifier_email_ci_unique
+  ON fortress_login_identifier (lower(value))
+  WHERE type = 'email';
+DROP TABLE fortress_email_migration_ready;
+`.trim();
+
+const PG_0006_FRESH_UP = `
+CREATE UNIQUE INDEX user_email_ci_unique ON fortress_user (lower(email));
+CREATE UNIQUE INDEX login_identifier_email_ci_unique
+  ON fortress_login_identifier (lower(value))
+  WHERE type = 'email';
+`.trim();
+
+const PG_0006_DOWN = `
+-- Canonicalization and duplicate-account quarantine are intentionally irreversible.
+DROP INDEX IF EXISTS login_identifier_email_ci_unique;
+DROP INDEX IF EXISTS user_email_ci_unique;
+`.trim();
+
 export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> = {
   sqlite: [
     { version: 1, name: 'schema_version', dialect: 'sqlite', up: SQLITE_0001_UP, down: SQLITE_0001_DOWN },
@@ -1219,6 +1436,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 3, name: 'auth_continuation', dialect: 'sqlite', up: SQLITE_0003_UP, down: SQLITE_0003_DOWN },
     { version: 4, name: 'tenant_default_unique', dialect: 'sqlite', up: SQLITE_0004_UP, down: SQLITE_0004_DOWN },
     { version: 5, name: 'hot_indexes_timestamptz', dialect: 'sqlite', up: SQLITE_0005_UP, down: SQLITE_0005_DOWN },
+    { version: 6, name: 'canonical_email', dialect: 'sqlite', up: SQLITE_0006_UP, down: SQLITE_0006_DOWN, freshUp: SQLITE_0006_FRESH_UP, dataStep: 'normalize-email-v2', beforeUp: normalizeExistingUserEmails },
   ],
   pg: [
     { version: 1, name: 'schema_version', dialect: 'pg', up: PG_0001_UP, down: PG_0001_DOWN },
@@ -1226,6 +1444,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 3, name: 'auth_continuation', dialect: 'pg', up: PG_0003_UP, down: PG_0003_DOWN },
     { version: 4, name: 'tenant_default_unique', dialect: 'pg', up: PG_0004_UP, down: PG_0004_DOWN },
     { version: 5, name: 'hot_indexes_timestamptz', dialect: 'pg', up: PG_0005_UP, down: PG_0005_DOWN },
+    { version: 6, name: 'canonical_email', dialect: 'pg', up: PG_0006_UP, down: PG_0006_DOWN, freshUp: PG_0006_FRESH_UP, dataStep: 'normalize-email-v2', beforeUp: normalizeExistingUserEmails },
   ],
 };
 
@@ -1243,7 +1462,9 @@ export function getLatestMigrationVersion(dialect: MigrationDialect): number {
  * from this so the test adapter and production migrations can never drift.
  */
 export function getMigrationUpSql(dialect: MigrationDialect): string {
-  return getFortressMigrations(dialect).map(migration => migration.up).join('\n\n');
+  return getFortressMigrations(dialect)
+    .map(migration => migration.freshUp ?? migration.up)
+    .join('\n\n');
 }
 
 /**

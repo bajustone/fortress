@@ -405,7 +405,16 @@ function cmdMigrateStatus(args: string[]): void {
 
 function cmdMigrateUp(args: string[]): void {
   const dialect = parseDialect(args);
-  const sql = getFortressMigrations(dialect)
+  const migrations = getFortressMigrations(dialect);
+  const dataMigration = migrations.find(migration => migration.dataStep);
+  if (dataMigration) {
+    console.error(
+      `Cannot export SQL-only migrations: ${dataMigration.name} includes the Unicode-aware data step '${dataMigration.dataStep}'. `
+      + 'Run fortress.migrate() with your DatabaseAdapter so cleanup and constraints execute atomically.',
+    );
+    process.exit(1);
+  }
+  const sql = migrations
     .map(migration => `-- ${String(migration.version).padStart(4, '0')}_${migration.name}.sql\n${migration.up}`)
     .join('\n\n');
   writeOrPrint(`${sql}\n`, args, 'Migration SQL');
