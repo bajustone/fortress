@@ -10,7 +10,7 @@
     "node": ">=20.19.0"
   },
   "bin": {
-    "fortress": "./bin/fortress.ts"
+    "fortress": "bin/fortress.ts"
   },
   "exports": {
     ".": {
@@ -331,8 +331,10 @@
     "check:exports": "bun scripts/check-exports-parity.ts",
     "check:testing-esm": "node scripts/check-testing-esm.mjs",
     "check:release": "bun run check:version && bun run check:exports && bun run lint && bun run typecheck && bun run typecheck:examples && bun run test && bun run test:integration && bun run build && bun run check:testing-esm",
-    "publish": "bun run check:release && npx jsr publish",
-    "publish:dry": "bun run check:release && npx jsr publish --dry-run --allow-dirty",
+    "publish:npm": "bun run check:release && npm publish --access public",
+    "publish:npm:next": "bun run check:release && npm publish --access public --tag next",
+    "publish:jsr": "bun run check:release && npx jsr publish",
+    "publish:jsr:dry": "bun run check:release && npx jsr publish --dry-run --allow-dirty",
     "prepublishOnly": "bun run build && bun run check:exports && bun run check:testing-esm",
     "prepare": "husky"
   },
