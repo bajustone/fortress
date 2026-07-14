@@ -1,7 +1,7 @@
 import type { AnyPgTable } from 'drizzle-orm/pg-core';
 
 import { sql } from 'drizzle-orm';
-import { boolean, index, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, unique, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
 
 // --- Schema Versioning ---
 
@@ -42,7 +42,7 @@ const loginIdentifiers = pgTable('fortress_login_identifier', {
 // --- Auth ---
 
 const refreshTokens = pgTable('fortress_refresh_token', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
   tokenFamily: varchar('token_family', { length: 64 }).notNull(),
@@ -63,7 +63,7 @@ const refreshTokens = pgTable('fortress_refresh_token', {
 ]);
 
 const authContinuations = pgTable('fortress_auth_continuation', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
   reason: varchar('reason', { length: 32 }).notNull(),
@@ -185,7 +185,7 @@ const directPermissionBindings = pgTable('fortress_direct_permission_binding', {
 // --- Plugins: Email Verification ---
 
 const emailVerificationTokens = pgTable('fortress_email_verification_token', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   token: text('token').notNull(),
   email: varchar('email', { length: 255 }).notNull(),
@@ -197,7 +197,7 @@ const emailVerificationTokens = pgTable('fortress_email_verification_token', {
 // --- Plugins: Magic Link ---
 
 const magicLinkTokens = pgTable('fortress_magic_link_token', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   email: varchar('email', { length: 255 }).notNull(),
   token: varchar('token', { length: 64 }).notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -314,7 +314,7 @@ const oauthClients = pgTable('fortress_oauth_client', {
 });
 
 const oauthAuthorizationCodes = pgTable('fortress_oauth_authorization_code', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   code: varchar('code', { length: 255 }).notNull().unique(),
   clientId: varchar('client_id', { length: 255 }).notNull(),
   userId: integer('user_id').notNull(),
@@ -331,7 +331,7 @@ const oauthAuthorizationCodes = pgTable('fortress_oauth_authorization_code', {
 });
 
 const oauthAccessTokens = pgTable('fortress_oauth_access_token', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   token: varchar('token', { length: 255 }).notNull().unique(),
   clientId: varchar('client_id', { length: 255 }).notNull(),
   userId: integer('user_id'),
@@ -342,7 +342,7 @@ const oauthAccessTokens = pgTable('fortress_oauth_access_token', {
 
 // RFC 6749 §6 + RFC 9700 §2.2.2 refresh tokens with rotation.
 const oauthRefreshTokens = pgTable('fortress_oauth_refresh_token', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   token: varchar('token', { length: 255 }).notNull().unique(),
   familyId: varchar('family_id', { length: 64 }).notNull(),
   clientId: varchar('client_id', { length: 255 }).notNull(),
@@ -356,7 +356,7 @@ const oauthRefreshTokens = pgTable('fortress_oauth_refresh_token', {
 });
 
 const oauthPendingFlows = pgTable('fortress_oauth_pending_flow', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   flowId: text('flow_id').notNull().unique(),
   clientId: varchar('client_id', { length: 255 }).notNull(),
   redirectUri: text('redirect_uri').notNull(),
@@ -410,7 +410,7 @@ const accountLockouts = pgTable('fortress_account_lockout', {
 // --- Core: Audit Log ---
 
 const auditLogs = pgTable('fortress_audit_log', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   timestamp: timestamp('timestamp', { withTimezone: true }).notNull().defaultNow(),
   eventType: varchar('event_type', { length: 100 }).notNull(),
   actorId: integer('actor_id'),
@@ -446,7 +446,7 @@ const webhookEndpoints = pgTable('fortress_webhook_endpoint', {
 });
 
 const webhookDeliveries = pgTable('fortress_webhook_delivery', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   endpointId: integer('endpoint_id').notNull().references(() => webhookEndpoints.id, { onDelete: 'cascade' }),
   eventType: varchar('event_type', { length: 100 }).notNull(),
   payload: text('payload').notNull(), // JSON
@@ -479,7 +479,7 @@ const webauthnCredentials = pgTable('fortress_webauthn_credential', {
 });
 
 const webauthnChallenges = pgTable('fortress_webauthn_challenge', {
-  id: serial('id').primaryKey(),
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
   challenge: text('challenge').notNull().unique(),
   userId: integer('user_id'),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),

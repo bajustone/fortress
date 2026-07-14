@@ -16,7 +16,7 @@ import { generateRefreshToken, generateTokenFamily, hashToken } from '../../core
 import { timingSafeEqualHex } from '../../core/auth/timing-safe';
 import { Errors } from '../../core/errors';
 import { issueIdToken } from './id-token';
-import { getActiveSigningKey, listJwks } from './jwks';
+import { getActiveSigningKey, listJwks, rotateSigningKey } from './jwks';
 import { verifyCodeChallenge } from './pkce';
 
 export interface OAuthConfig {
@@ -41,6 +41,8 @@ export interface OAuthConfig {
    * @see OIDC Core 1.0 §2
    */
   idTokenExpirySeconds?: number;
+  /** Seconds rotated signing keys remain published in JWKS. Default: idTokenExpirySeconds. */
+  signingKeyGraceSeconds?: number;
   /** Map OAuth scopes to IAM permissions. Example: `{ 'read:posts': { resource: 'post', action: 'read' } }` */
   scopePermissionMap?: Record<string, { resource: string; action: string }>;
   /** Base URL for the OAuth server (used in OIDC discovery document) */
@@ -275,6 +277,8 @@ export interface OAuthMethods {
   /** Read and delete a pending flow (single-use). Throws if not found or expired. */
   resumePendingFlow: (flowId: string | number, context?: { userId?: string }) => Promise<PendingFlowRecord>;
   getUserInfo: (token: string) => Promise<FortressUser | null>;
+  /** Rotate the RS256 id-token signing key and prune expired retired keys. */
+  rotateSigningKey: () => Promise<{ kid: string }>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
   handleTokenRequest: (body: TokenRequestBody, clientAuth?: ClientAuth) => Promise<Record<string, unknown>>;
   handleIntrospectRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<Record<string, unknown>>;
@@ -360,6 +364,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
   const refreshTokenExpiry = config.refreshTokenExpirySeconds ?? 30 * 24 * 3600;
   const refreshEnabled = refreshTokenExpiry > 0;
   const idTokenExpiry = config.idTokenExpirySeconds ?? 3600;
+  const signingKeyGraceSeconds = config.signingKeyGraceSeconds ?? idTokenExpiry;
   const scopePermissionMap = config.scopePermissionMap;
   const issuerUrl = config.issuerUrl ?? 'https://localhost';
 
@@ -1764,13 +1769,18 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        * fetch this URL (advertised via discovery's `jwks_uri`) and use it
        * to verify id_token signatures by `kid`.
        */
+      async rotateSigningKey(): Promise<{ kid: string }> {
+        const key = await rotateSigningKey(ctx.db, signingKeyGraceSeconds);
+        return { kid: key.kid };
+      },
+
       async handleJwksRequest(): Promise<Record<string, unknown>> {
-        const jwks = await listJwks(ctx.db);
+        const jwks = await listJwks(ctx.db, signingKeyGraceSeconds);
         // First call materialises the active key if none exists yet —
         // ensures discovery + JWKS stay in sync without a deploy step.
         if (jwks.keys.length === 0) {
           await getActiveSigningKey(ctx.db);
-          return await listJwks(ctx.db);
+          return await listJwks(ctx.db, signingKeyGraceSeconds);
         }
         return jwks;
       },

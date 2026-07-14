@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS fortress_login_identifier (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_refresh_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
   token_hash VARCHAR(64) NOT NULL UNIQUE,
   token_family VARCHAR(64) NOT NULL,
@@ -119,7 +119,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_direct_permission_binding_tenant
   WHERE tenant_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
   token TEXT NOT NULL,
   email VARCHAR(255) NOT NULL,
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_magic_link_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   email VARCHAR(255) NOT NULL,
   token VARCHAR(64) NOT NULL,
   expires_at TIMESTAMP NOT NULL,
@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS fortress_oauth_client (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   code VARCHAR(255) NOT NULL UNIQUE,
   client_id VARCHAR(255) NOT NULL,
   user_id INTEGER NOT NULL,
@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   token VARCHAR(255) NOT NULL UNIQUE,
   client_id VARCHAR(255) NOT NULL,
   user_id INTEGER,
@@ -251,7 +251,7 @@ CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_refresh_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   token VARCHAR(255) NOT NULL UNIQUE,
   family_id VARCHAR(64) NOT NULL,
   client_id VARCHAR(255) NOT NULL,
@@ -265,7 +265,7 @@ CREATE TABLE IF NOT EXISTS fortress_oauth_refresh_token (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   flow_id TEXT NOT NULL UNIQUE,
   client_id VARCHAR(255) NOT NULL,
   redirect_uri TEXT NOT NULL,
@@ -309,7 +309,7 @@ CREATE TABLE IF NOT EXISTS fortress_account_lockout (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_audit_log (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   timestamp TIMESTAMP NOT NULL DEFAULT now(),
   event_type VARCHAR(100) NOT NULL,
   actor_id INTEGER,
@@ -336,7 +336,7 @@ CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_webhook_delivery (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   endpoint_id INTEGER NOT NULL REFERENCES fortress_webhook_endpoint(id) ON DELETE CASCADE,
   event_type VARCHAR(100) NOT NULL,
   payload TEXT NOT NULL,
@@ -368,7 +368,7 @@ CREATE TABLE IF NOT EXISTS fortress_webauthn_credential (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_webauthn_challenge (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   challenge TEXT NOT NULL UNIQUE,
   user_id INTEGER,
   expires_at TIMESTAMP NOT NULL,

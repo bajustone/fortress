@@ -493,7 +493,7 @@ CREATE TABLE IF NOT EXISTS fortress_login_identifier (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_refresh_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
   token_hash VARCHAR(64) NOT NULL UNIQUE,
   token_family VARCHAR(64) NOT NULL,
@@ -593,7 +593,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_direct_permission_binding_tenant
   WHERE tenant_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
   token TEXT NOT NULL,
   email VARCHAR(255) NOT NULL,
@@ -603,7 +603,7 @@ CREATE TABLE IF NOT EXISTS fortress_email_verification_token (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_magic_link_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   email VARCHAR(255) NOT NULL,
   token VARCHAR(64) NOT NULL,
   expires_at TIMESTAMP NOT NULL,
@@ -699,7 +699,7 @@ CREATE TABLE IF NOT EXISTS fortress_oauth_client (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   code VARCHAR(255) NOT NULL UNIQUE,
   client_id VARCHAR(255) NOT NULL,
   user_id INTEGER NOT NULL,
@@ -715,7 +715,7 @@ CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   token VARCHAR(255) NOT NULL UNIQUE,
   client_id VARCHAR(255) NOT NULL,
   user_id INTEGER,
@@ -725,7 +725,7 @@ CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_refresh_token (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   token VARCHAR(255) NOT NULL UNIQUE,
   family_id VARCHAR(64) NOT NULL,
   client_id VARCHAR(255) NOT NULL,
@@ -739,7 +739,7 @@ CREATE TABLE IF NOT EXISTS fortress_oauth_refresh_token (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   flow_id TEXT NOT NULL UNIQUE,
   client_id VARCHAR(255) NOT NULL,
   redirect_uri TEXT NOT NULL,
@@ -783,7 +783,7 @@ CREATE TABLE IF NOT EXISTS fortress_account_lockout (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_audit_log (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   timestamp TIMESTAMP NOT NULL DEFAULT now(),
   event_type VARCHAR(100) NOT NULL,
   actor_id INTEGER,
@@ -810,7 +810,7 @@ CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_webhook_delivery (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   endpoint_id INTEGER NOT NULL REFERENCES fortress_webhook_endpoint(id) ON DELETE CASCADE,
   event_type VARCHAR(100) NOT NULL,
   payload TEXT NOT NULL,
@@ -842,7 +842,7 @@ CREATE TABLE IF NOT EXISTS fortress_webauthn_credential (
 );
 
 CREATE TABLE IF NOT EXISTS fortress_webauthn_challenge (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   challenge TEXT NOT NULL UNIQUE,
   user_id INTEGER,
   expires_at TIMESTAMP NOT NULL,
@@ -989,7 +989,7 @@ ALTER TABLE fortress_refresh_token
   ADD COLUMN rotated_at TIMESTAMP;
 
 CREATE TABLE fortress_auth_continuation (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
   token_hash VARCHAR(64) NOT NULL UNIQUE,
   reason VARCHAR(32) NOT NULL,
@@ -1505,6 +1505,35 @@ const SQLITE_0009_DOWN = 'SELECT 1;';
 const PG_0009_UP = SQLITE_0009_UP;
 const PG_0009_DOWN = SQLITE_0009_DOWN;
 
+// --- 0010: widen unbounded PostgreSQL append-only identifiers ---
+const SQLITE_0010_UP = 'SELECT 1;';
+const SQLITE_0010_DOWN = 'SELECT 1;';
+const PG_0010_UP = `
+ALTER SEQUENCE fortress_refresh_token_id_seq AS BIGINT;
+ALTER TABLE fortress_refresh_token ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_auth_continuation_id_seq AS BIGINT;
+ALTER TABLE fortress_auth_continuation ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_email_verification_token_id_seq AS BIGINT;
+ALTER TABLE fortress_email_verification_token ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_magic_link_token_id_seq AS BIGINT;
+ALTER TABLE fortress_magic_link_token ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_oauth_authorization_code_id_seq AS BIGINT;
+ALTER TABLE fortress_oauth_authorization_code ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_oauth_access_token_id_seq AS BIGINT;
+ALTER TABLE fortress_oauth_access_token ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_oauth_refresh_token_id_seq AS BIGINT;
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_oauth_pending_flow_id_seq AS BIGINT;
+ALTER TABLE fortress_oauth_pending_flow ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_audit_log_id_seq AS BIGINT;
+ALTER TABLE fortress_audit_log ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_webhook_delivery_id_seq AS BIGINT;
+ALTER TABLE fortress_webhook_delivery ALTER COLUMN id TYPE BIGINT;
+ALTER SEQUENCE fortress_webauthn_challenge_id_seq AS BIGINT;
+ALTER TABLE fortress_webauthn_challenge ALTER COLUMN id TYPE BIGINT;
+`.trim();
+const PG_0010_DOWN = 'SELECT 1;'; // Narrowing can lose data and is intentionally irreversible.
+
 export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> = {
   sqlite: [
     { version: 1, name: 'schema_version', dialect: 'sqlite', up: SQLITE_0001_UP, down: SQLITE_0001_DOWN },
@@ -1516,6 +1545,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 7, name: 'audit_chain_anchor', dialect: 'sqlite', up: SQLITE_0007_UP, down: SQLITE_0007_DOWN },
     { version: 8, name: 'two_factor_hardening', dialect: 'sqlite', up: SQLITE_0008_UP, down: SQLITE_0008_DOWN },
     { version: 9, name: 'encrypt_totp_secrets', dialect: 'sqlite', up: SQLITE_0009_UP, down: SQLITE_0009_DOWN },
+    { version: 10, name: 'bigint_append_only_ids', dialect: 'sqlite', up: SQLITE_0010_UP, down: SQLITE_0010_DOWN },
   ],
   pg: [
     { version: 1, name: 'schema_version', dialect: 'pg', up: PG_0001_UP, down: PG_0001_DOWN },
@@ -1527,6 +1557,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 7, name: 'audit_chain_anchor', dialect: 'pg', up: PG_0007_UP, down: PG_0007_DOWN },
     { version: 8, name: 'two_factor_hardening', dialect: 'pg', up: PG_0008_UP, down: PG_0008_DOWN },
     { version: 9, name: 'encrypt_totp_secrets', dialect: 'pg', up: PG_0009_UP, down: PG_0009_DOWN },
+    { version: 10, name: 'bigint_append_only_ids', dialect: 'pg', up: PG_0010_UP, down: PG_0010_DOWN },
   ],
 };
 

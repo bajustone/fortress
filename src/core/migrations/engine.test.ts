@@ -1,5 +1,6 @@
 import type { DatabaseAdapter } from '../../adapters/database';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +16,19 @@ import {
 import { FORTRESS_INDEXES, FORTRESS_TABLES, getFortressMigrations } from './migrations';
 
 const dialect = 'sqlite';
+
+function runMigrationChild(script: string, filename: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.env.BUN_EXE ?? 'bun', [script, filename], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', chunk => stderr += String(chunk));
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve() : reject(new Error(`migration child exited ${code}: ${stderr}`)));
+  });
+}
 
 function createBareSqliteAdapter(): DatabaseAdapter {
   // eslint-disable-next-line ts/no-require-imports
@@ -43,21 +57,21 @@ describe('migration engine', () => {
 
     const before = await getMigrationStatus(db, dialect);
     expect(before.currentVersion).toBe(0);
-    expect(before.latestVersion).toBe(9);
-    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(before.latestVersion).toBe(10);
+    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
     const up = await migrateUp(db, dialect);
-    expect(up).toMatchObject({ fromVersion: 0, toVersion: 9 });
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets']);
+    expect(up).toMatchObject({ fromVersion: 0, toVersion: 10 });
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
 
     const after = await getMigrationStatus(db, dialect);
-    expect(after.currentVersion).toBe(9);
+    expect(after.currentVersion).toBe(10);
     expect(after.upToDate).toBe(true);
     expect(hasMigrationDrift(await detectMigrationDrift(db, dialect))).toBe(false);
 
     const down = await migrateDown(db, dialect);
-    expect(down).toMatchObject({ fromVersion: 9, toVersion: 0 });
-    expect(down.rolledBack.map(migration => migration.name)).toEqual(['encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
+    expect(down).toMatchObject({ fromVersion: 10, toVersion: 0 });
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['bigint_append_only_ids', 'encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
 
     const final = await getMigrationStatus(db, dialect);
     expect(final.hasVersionTable).toBe(false);
@@ -79,13 +93,13 @@ describe('migration engine', () => {
         migrateUp(first.db, dialect),
         migrateUp(second.db, dialect),
       ]);
-      expect(results.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 9]);
-      expect(results.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 9]);
-      expect((await getMigrationStatus(second.db, dialect)).currentVersion).toBe(9);
+      expect(results.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 10]);
+      expect(results.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 10]);
+      expect((await getMigrationStatus(second.db, dialect)).currentVersion).toBe(10);
       const journal = await second.db.rawQuery!<{ version: number }>(
         'SELECT version FROM fortress_migration_journal ORDER BY version',
       );
-      expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
     finally {
       first.close();
@@ -93,6 +107,45 @@ describe('migration engine', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('serializes migrations across independent SQLite processes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fortress-migrate-process-'));
+    const filename = join(dir, 'shared.sqlite');
+    const script = join(dir, 'migrate-child.ts');
+    const adapterUrl = new URL('../../drizzle/adapter.ts', import.meta.url).href;
+    const engineUrl = new URL('./engine.ts', import.meta.url).href;
+    writeFileSync(script, `
+      import { Database } from 'bun:sqlite';
+      import { drizzle } from 'drizzle-orm/bun-sqlite';
+      import { createDrizzleAdapter } from ${JSON.stringify(adapterUrl)};
+      import { migrateUp } from ${JSON.stringify(engineUrl)};
+      const sqlite = new Database(process.argv[2]);
+      sqlite.exec('PRAGMA busy_timeout = 10000');
+      await migrateUp(createDrizzleAdapter(drizzle(sqlite)), 'sqlite');
+      sqlite.close();
+    `);
+
+    try {
+      await Promise.all([
+        runMigrationChild(script, filename),
+        runMigrationChild(script, filename),
+      ]);
+      const database = createFileSqliteAdapter(filename);
+      try {
+        expect((await getMigrationStatus(database.db, dialect)).currentVersion).toBe(10);
+        const journal = await database.db.rawQuery!<{ version: number }>(
+          'SELECT version FROM fortress_migration_journal ORDER BY version',
+        );
+        expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      }
+      finally {
+        database.close();
+      }
+    }
+    finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it('never advances migrateDown when the requested target is above current', async () => {
     const db = createBareSqliteAdapter();
@@ -122,7 +175,7 @@ describe('migration engine', () => {
     const journal = await db.rawQuery!<{ version: number; name: string; checksum: string }>(
       'SELECT version, name, checksum FROM fortress_migration_journal ORDER BY version',
     );
-    expect(journal).toHaveLength(9);
+    expect(journal).toHaveLength(10);
     expect(journal.map(row => row.name)).toEqual([
       'schema_version',
       'initial_schema',
@@ -133,6 +186,7 @@ describe('migration engine', () => {
       'audit_chain_anchor',
       'two_factor_hardening',
       'encrypt_totp_secrets',
+      'bigint_append_only_ids',
     ]);
     expect(journal.every(row => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
 
@@ -151,7 +205,7 @@ describe('migration engine', () => {
       ['0'.repeat(64)],
     );
     await expect(migrateUp(db, dialect)).rejects.toThrow(/integrity check failed/);
-    expect((await getMigrationStatus(db, dialect)).currentVersion).toBe(9);
+    expect((await getMigrationStatus(db, dialect)).currentVersion).toBe(10);
 
     await db.rawQuery!('UPDATE fortress_migration_journal SET checksum = (SELECT checksum FROM fortress_migration_journal WHERE version = 2) WHERE version = 3');
     // The copied checksum is still invalid for v3; replace via a fresh legacy
@@ -174,7 +228,7 @@ describe('migration engine', () => {
     const journal = await db.rawQuery!<{ version: number }>(
       'SELECT version FROM fortress_migration_journal ORDER BY version',
     );
-    expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it('fails closed when a data migration is applied as SQL without its runtime step', async () => {

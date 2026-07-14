@@ -58,12 +58,12 @@ describe('migration upgrade fixture (bare sqlite)', () => {
 
     const up = await migrateUp(db, 'sqlite');
     expect(up.fromVersion).toBe(0);
-    expect(up.toVersion).toBe(9);
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets']);
+    expect(up.toVersion).toBe(10);
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
 
     const after = await getMigrationStatus(db, 'sqlite');
     expect(after.hasVersionTable).toBe(true);
-    expect(after.currentVersion).toBe(9);
+    expect(after.currentVersion).toBe(10);
     expect(after.upToDate).toBe(true);
 
     // The full schema is now installed: no missing tables, no missing columns.
@@ -100,7 +100,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     // Roll back below 0 drops every Fortress table again.
     const down = await migrateDown(db, 'sqlite');
     expect(down.toVersion).toBe(0);
-    expect(down.rolledBack.map(migration => migration.name)).toEqual(['encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['bigint_append_only_ids', 'encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
     const final = await getMigrationStatus(db, 'sqlite');
     expect(final.hasVersionTable).toBe(false);
     const finalDrift = await detectMigrationDrift(db, 'sqlite');
@@ -126,7 +126,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     );
 
     const result = await migrateUp(db, 'sqlite');
-    expect(result.applied.map(migration => migration.name)).toEqual(['encrypt_totp_secrets']);
+    expect(result.applied.map(migration => migration.name)).toEqual(['encrypt_totp_secrets', 'bigint_append_only_ids']);
     expect(await db.count({ model: 'two_factor_secret' })).toBe(0);
     expect(await db.count({ model: 'backup_code' })).toBe(0);
     expect(await db.count({ model: 'trusted_device' })).toBe(0);
@@ -181,7 +181,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     );
 
     const upgrade = await migrateUp(db, 'sqlite');
-    expect(upgrade.applied.map(migration => migration.name)).toEqual(['canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets']);
+    expect(upgrade.applied.map(migration => migration.name)).toEqual(['canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
 
     const migrated = await db.rawQuery!<{ id: string; email: string; is_active: number }>(
       'SELECT id, email, is_active FROM fortress_user ORDER BY id',
@@ -306,7 +306,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     );
 
     const upgrade = await migrateUp(db, 'sqlite');
-    expect(upgrade.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets']);
+    expect(upgrade.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
     const [defaultCount] = await db.rawQuery!<{ count: number }>(
       `SELECT COUNT(*) AS count FROM fortress_tenant_user WHERE user_id = ? AND is_default = 1`,
       [user.id],
@@ -357,7 +357,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     expect(hasMigrationDrift(drift)).toBe(false);
 
     const rollback = await migrateDown(db, 'sqlite', 2);
-    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
+    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['bigint_append_only_ids', 'encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
     expect(await db.count({ model: 'refresh_token' })).toBe(3);
     const columns = await db.rawQuery!<{ name: string }>('PRAGMA table_info(fortress_refresh_token)');
     expect(columns.map(column => column.name)).not.toEqual(expect.arrayContaining([

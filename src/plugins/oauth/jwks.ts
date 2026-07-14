@@ -110,7 +110,7 @@ export async function getActiveSigningKey(db: DatabaseAdapter): Promise<ActiveSi
  * The result is the JWKS body verbatim (`{ keys: [...] }`) for cache-able
  * shipping at `/oauth/.well-known/jwks.json`.
  */
-export async function listJwks(db: DatabaseAdapter): Promise<{ keys: JWK[] }> {
+export async function listJwks(db: DatabaseAdapter, graceSeconds = 3600): Promise<{ keys: JWK[] }> {
   // Fortress's adapter doesn't have a native "fetch all" — emulate via a
   // wide query and sort. Currently we only mint one key, so this stays
   // tiny.
@@ -118,8 +118,10 @@ export async function listJwks(db: DatabaseAdapter): Promise<{ keys: JWK[] }> {
     model: 'oauth_signing_key',
     where: [],
   });
+  const cutoff = Date.now() - Math.max(0, graceSeconds) * 1000;
   return {
     keys: all
+      .filter(row => row.rotatedAt === null || new Date(row.rotatedAt).getTime() > cutoff)
       // Sort active first, then most-recently-rotated.
       .sort((a, b) => {
         if (a.rotatedAt === null && b.rotatedAt !== null)
@@ -130,6 +132,41 @@ export async function listJwks(db: DatabaseAdapter): Promise<{ keys: JWK[] }> {
       })
       .map(row => JSON.parse(row.publicJwk) as JWK),
   };
+}
+
+/** Rotate the active key and prune keys outside the verification grace window. */
+export async function rotateSigningKey(db: DatabaseAdapter, graceSeconds = 3600): Promise<ActiveSigningKey> {
+  return db.transaction(async (tx) => {
+    if (tx.dialect === 'pg' && tx.rawQuery)
+      await tx.rawQuery('SELECT pg_advisory_xact_lock(hashtext(?))', ['fortress-oauth-signing-key']);
+
+    const now = new Date();
+    const active = await tx.findOne<SigningKeyRecord>({
+      model: 'oauth_signing_key',
+      where: [{ field: 'rotatedAt', operator: 'isNull', value: null }],
+    });
+    if (active) {
+      await tx.update({
+        model: 'oauth_signing_key',
+        where: [{ field: 'id', operator: '=', value: active.id }],
+        data: { rotatedAt: now },
+      });
+    }
+
+    const cutoff = new Date(now.getTime() - Math.max(0, graceSeconds) * 1000);
+    const expired = await tx.findMany<SigningKeyRecord>({
+      model: 'oauth_signing_key',
+      where: [{ field: 'rotatedAt', operator: 'lt', value: cutoff }],
+    });
+    for (const key of expired) {
+      await tx.delete({
+        model: 'oauth_signing_key',
+        where: [{ field: 'id', operator: '=', value: key.id }],
+      });
+    }
+
+    return getActiveSigningKey(tx);
+  });
 }
 
 async function hydrate(record: SigningKeyRecord): Promise<ActiveSigningKey> {

@@ -20,7 +20,7 @@ ALTER TABLE fortress_refresh_token
   ADD COLUMN rotated_at TIMESTAMP;
 
 CREATE TABLE fortress_auth_continuation (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
   token_hash VARCHAR(64) NOT NULL UNIQUE,
   reason VARCHAR(32) NOT NULL,

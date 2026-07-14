@@ -298,6 +298,10 @@ const flow = await fortress.plugins.oauth.getPendingFlow(flowId);
 // Same as the HTTP handlers; transport-agnostic.
 const { redirectUrl } = await fortress.plugins.oauth.handleApproveFlow(flowId, { userId });
 await fortress.plugins.oauth.handleDenyFlow(flowId);
+
+// Operational key rotation. The retired public key remains in JWKS for
+// signingKeyGraceSeconds (defaults to idTokenExpirySeconds), then is pruned.
+const { kid } = await fortress.plugins.oauth.rotateSigningKey();
 ```
 
 ### Scope-to-IAM Permission Mapping
