@@ -274,7 +274,7 @@ createFortress({ /* ... */ observability: customTelemetry });
 
 Optional `startActiveSpan` is part of the frozen provider contract and is used at the request boundary for async parent propagation. Existing providers that implement only `startSpan` remain valid (Fortress falls back to it, without parent propagation). This is the escape hatch—most users should stick with `createOtelTelemetry()` because the OpenTelemetry SDK ecosystem already has exporters for every major backend.
 
-## 4. Event catalog (P2-13)
+## 4. Event catalog
 
 Fortress emits structured events through three observer surfaces:
 
@@ -325,7 +325,7 @@ All IAM mutation events carry `targetType`, `targetId`, and a `metadata` object 
 
 The handler is **synchronous and hot-path**. Keep it bounded — update a counter, push to an in-memory channel, never await a network call.
 
-## 5. Recommended dashboards and alerts (P2-13)
+## 5. Recommended dashboards and alerts
 
 ### Auth dashboard
 

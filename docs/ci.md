@@ -1,4 +1,4 @@
-# Fortress CI checks (P1-10)
+# CI checks
 
 Fortress ships a bundle of reusable CI checks under
 `@bajustone/fortress/testing` plus a `fortress check:*` CLI namespace.

@@ -1,129 +1,121 @@
-# Email Verification Plugin
+# Email verification
 
-## Overview
+Register the plugin and deliver raw verification tokens through your mail provider:
 
-The `email-verification` plugin adds token-based email verification to Fortress. It automatically sends a verification token when a user registers and can optionally block login until the email is verified.
-
-Tokens are generated using the same SHA-256 hashing used for refresh tokens -- only the hash is stored in the database.
-
-## Installation
-
-Import the `emailVerification` factory and pass it in the `plugins` array when creating a Fortress instance:
-
-```ts
-import { createFortress } from '@bajustone/fortress';
+```typescript
 import { emailVerification } from '@bajustone/fortress/plugins/email-verification';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
-  database: adapter,
-  plugins: [
-    emailVerification({
-      tokenExpirySeconds: 86400,
-      requireVerification: true,
-      onSendVerification: async (email, token, userId) => {
-        await sendEmail(email, `Verify: https://myapp.com/verify?token=${token}`);
-      },
-    }),
-  ],
+  database,
+  jwt: { key },
+  plugins: [emailVerification({
+    tokenExpirySeconds: 24 * 60 * 60,
+    requireVerification: true,
+    onSendVerification: async (email, token) => {
+      const url = `https://app.example.com/verify?token=${encodeURIComponent(token)}`;
+      await mailer.send({ to: email, text: url });
+    },
+  })] as const,
 });
 ```
 
-Once registered, methods are available at `fortress.plugins['email-verification']` with full type safety.
+| Option | Default | Use |
+|---|---:|---|
+| `tokenExpirySeconds` | `86400` | Token lifetime |
+| `requireVerification` | `true` | Hold login before session issuance |
+| `onSendVerification` | — | Deliver the raw token |
 
-## Configuration
+Fortress stores only the SHA-256 token hash.
 
-All fields on `EmailVerificationConfig` are optional:
+## Registration
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `tokenExpirySeconds` | `number` | `86400` (24 hours) | How long a verification token remains valid, in seconds. |
-| `requireVerification` | `boolean` | `true` | When `true`, unverified users receive an error response on login with `error: 'EMAIL_NOT_VERIFIED'`. |
-| `onSendVerification` | `(email: string, token: string, userId: string) => Promise<void>` | `undefined` | Callback invoked when a verification token is created. Use this to send the verification email. |
+Creating a user creates and sends a token:
 
-## How It Works
-
-The plugin uses two lifecycle hooks:
-
-1. **`afterRegister`** -- Automatically generates a verification token and calls `onSendVerification` (if provided) with the raw token.
-2. **`beforeLogin`** -- When `requireVerification` is `true`, checks if the user's `emailVerified` field is set. If not, it falls back to checking whether any verification token has been used. Unverified users receive a `{ error: 'EMAIL_NOT_VERIFIED', message: 'Please verify your email before logging in' }` response.
-
-## API Reference
-
-| Method | Signature | Returns |
-|---|---|---|
-| `sendVerification` | `(userId: string, email?: string)` | `Promise<{ sent: true }>` |
-| `verify` | `(rawToken: string)` | `Promise<{ userId: string; email: string }>` |
-
-### sendVerification
-
-Generates and sends a new verification token. Use this to resend verification emails or to verify a different email address:
-
-```ts
-// Resend to the user's current email
-await fortress.plugins['email-verification'].sendVerification(userId);
-
-// Send to a different email (email is adopted only after verification)
-await fortress.plugins['email-verification'].sendVerification(userId, 'newemail@example.com');
-```
-
-The raw token is delivered only through `onSendVerification`; it is never returned to the caller. Verifying a changed-email token atomically adopts that address and marks it verified.
-
-Throws `NotFound` if the user does not exist.
-
-### verify
-
-Validates a verification token and marks the user as email-verified:
-
-```ts
-const { userId, email } = await fortress.plugins['email-verification'].verify(rawToken);
-```
-
-This method:
-1. Hashes the raw token and looks it up in the database.
-2. Checks that the token has not been used and has not expired.
-3. Marks the token as used (`usedAt` timestamp).
-4. Sets `emailVerified = true` on the user record.
-
-Throws:
-- `NotFound` -- Invalid or unknown token.
-- `BadRequest` -- Token already used.
-- `BadRequest` -- Token expired.
-
-## Example
-
-```ts
-import { createFortress } from '@bajustone/fortress';
-import { emailVerification } from '@bajustone/fortress/plugins/email-verification';
-
-const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
-  database: adapter,
-  plugins: [
-    emailVerification({
-      tokenExpirySeconds: 3600, // 1 hour
-      requireVerification: true,
-      onSendVerification: async (email, token, userId) => {
-        await mailer.send({
-          to: email,
-          subject: 'Verify your email',
-          html: `<a href="https://myapp.com/verify?token=${token}">Click to verify</a>`,
-        });
-      },
-    }),
-  ],
-});
-
-// Registration automatically triggers onSendVerification
-const user = await fortress.auth.createUser({
+```typescript
+await fortress.auth.createUser({
   email: 'alice@example.com',
   name: 'Alice',
   password: 'correct-horse-battery-staple',
 });
-
-// User clicks the link in the email
-const { userId, email } = await fortress.plugins['email-verification'].verify(tokenFromUrl);
-
-// Now login works
-const result = await fortress.auth.login('alice@example.com', 'correct-horse-battery-staple');
 ```
+
+`afterRegister` is a committed side-effect hook. If token creation or delivery throws, Fortress logs the failure and keeps the created user. Retry delivery with `sendVerification`:
+
+```typescript
+await fortress.plugins['email-verification'].sendVerification(userId);
+```
+
+Send a changed-address token without changing the account immediately:
+
+```typescript
+await fortress.plugins['email-verification'].sendVerification(
+  userId,
+  'new-address@example.com',
+);
+```
+
+The new address is adopted only after that token is verified.
+
+## Complete a pending login
+
+With `requireVerification: true`, correct primary credentials return `pending` instead of issuing tokens:
+
+```typescript
+const login = await fortress.auth.login(email, password);
+
+if (login.status === 'pending' && login.pending.reason === 'email-verification') {
+  const result = await fortress.plugins['email-verification'].completeVerification(
+    login.pending.continuationToken,
+    tokenFromEmail,
+    { ipAddress, userAgent },
+  );
+
+  if (result.status === 'success') {
+    result.accessToken;
+    result.refreshToken;
+  }
+}
+```
+
+`completeVerification` consumes both the single-use continuation and the email token, then reruns any remaining post-auth gates before issuing a session.
+
+## Verify outside login
+
+Use `verify` for a standalone verification page:
+
+```typescript
+const verified = await fortress.plugins['email-verification'].verify(tokenFromUrl);
+// { userId, email }
+```
+
+A token is accepted only when it:
+
+- matches a stored hash;
+- has not been used;
+- has not expired;
+- belongs to the pending user when completing login.
+
+Consumption and the user update run transactionally. Invalid, used, expired, or mismatched tokens throw `NOT_FOUND` without revealing which check failed.
+
+## Methods
+
+```typescript
+interface EmailVerificationMethods {
+  sendVerification(
+    userId: string,
+    email?: string,
+  ): Promise<{ sent: true }>;
+
+  verify(
+    rawToken: string,
+  ): Promise<{ userId: string; email: string }>;
+
+  completeVerification(
+    continuationToken: string,
+    verificationToken: string,
+    meta?: RequestMeta,
+  ): Promise<AuthResult>;
+}
+```
+
+The plugin owns no HTTP routes. Use its methods in host routes. The core auth pipeline owns pending-auth continuation behavior.

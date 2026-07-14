@@ -1,10 +1,6 @@
-# Policy-as-code (P1-7)
+# Policy as code
 
-Fortress's IAM (roles, permissions, groups, service accounts) can be
-declared in a JSON policy file and reconciled against the live database
-via a `diff` / `apply` workflow. This is the policy-as-code answer to
-the existing imperative `fortress.iam.*` calls, designed for the same
-CI/Ops audience as the route-manifest and migration drift checkers.
+Declare roles, permissions, groups, and service accounts in JSON, then reconcile the file against the database with `diffPolicy()` and `applyPolicyPlan()`.
 
 ## File format
 

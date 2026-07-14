@@ -1,4 +1,4 @@
-# Compatibility matrix (P2-11)
+# Compatibility
 
 The Fortress test matrix that the maintainer runs locally and via CI.
 Numbers are "tested, working" — Fortress is framework-agnostic by

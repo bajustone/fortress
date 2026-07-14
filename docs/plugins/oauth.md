@@ -314,7 +314,11 @@ const permissions = await fortress.plugins.oauth.resolveTokenPermissions(token);
 
 // Use with fortress.iam to check access
 for (const perm of permissions) {
-  const allowed = await fortress.iam.checkPermission(userId, perm.resource, perm.action);
+  const allowed = await fortress.iam.checkPermission(
+    { type: 'USER', id: userId },
+    perm.resource,
+    perm.action,
+  );
   // ...
 }
 ```
@@ -522,7 +526,7 @@ All methods are accessed via `fortress.plugins.oauth`.
 | `resolveTokenPermissions(token)` | Map a token's scopes to IAM permissions via `scopePermissionMap`. Returns `{ resource, action }[]`. |
 | `handleTokenRequest(body, clientAuth?)` | HTTP handler for POST /oauth/token. |
 | `handleIntrospectRequest(body, clientAuth)` | HTTP handler for POST /oauth/introspect. |
-| `handleRevokeRequest(body)` | HTTP handler for POST /oauth/revoke. |
+| `handleRevokeRequest(body, clientAuth)` | HTTP handler for POST /oauth/revoke. |
 | `handleUserInfoRequest(bearerToken)` | HTTP handler for GET /oauth/userinfo. |
 | `handleDiscovery()` | HTTP handler for GET /oauth/.well-known/openid-configuration. |
 

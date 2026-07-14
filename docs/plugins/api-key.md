@@ -212,7 +212,7 @@ interface ApiKeyInfo {
 
 ## Service account flow (end-to-end)
 
-A complete walkthrough of setting up a CI deploy bot as a service account, granting it permissions, and authenticating its requests. Service accounts are first-class IAM principals — see the [README IAM section](../../README.md#service-accounts) for the conceptual overview.
+A complete walkthrough of setting up a CI deploy bot as a service account, granting it permissions, and authenticating its requests. Service accounts are first-class IAM principals — see the [README IAM section](../../README.md#use-service-accounts) for the conceptual overview.
 
 ### 1. Create the service account
 

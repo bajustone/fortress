@@ -218,6 +218,14 @@ export function createAuthService(
     }
   }
 
+  // After-* hooks run once the authentication decision is committed and the
+  // session tokens have already been issued/persisted. A failing side-effect
+  // hook (audit, webhook, analytics) must not roll back a completed login —
+  // doing so would return an error to the caller while leaving a live session
+  // behind, and would let any plugin brick authentication by throwing. So a
+  // throwing after-hook is logged and skipped (keeping the last good result),
+  // mirroring runOnLoginFailureHooks. Plugins that need to *veto* a login must
+  // use a pre-issuance hook (beforeLogin / postAuthGate), not afterLogin.
   async function runAfterLoginHooks(
     ctx: AfterHookContext,
     result: AuthSuccess,
@@ -225,7 +233,12 @@ export function createAuthService(
     let current = result;
     for (const plugin of plugins) {
       if (plugin.hooks?.afterLogin) {
-        current = await plugin.hooks.afterLogin(ctx, current);
+        try {
+          current = await plugin.hooks.afterLogin(ctx, current);
+        }
+        catch (hookError) {
+          logger?.error({ plugin: plugin.name, error: hookError }, 'afterLogin hook failed');
+        }
       }
     }
     return current;
@@ -238,7 +251,12 @@ export function createAuthService(
     let current = result;
     for (const plugin of plugins) {
       if (plugin.hooks?.afterTokenRefresh) {
-        current = await plugin.hooks.afterTokenRefresh(ctx, current);
+        try {
+          current = await plugin.hooks.afterTokenRefresh(ctx, current);
+        }
+        catch (hookError) {
+          logger?.error({ plugin: plugin.name, error: hookError }, 'afterTokenRefresh hook failed');
+        }
       }
     }
     return current;
@@ -570,6 +588,23 @@ export function createAuthService(
             outcome: 'failure',
             error: { message: error instanceof Error ? error.message : String(error) },
           });
+          // A wrong second factor is a failed authentication attempt: feed it
+          // into the onLoginFailure hooks (account-lockout, audit, webhook)
+          // keyed by the user's identifier so a brute-forced 2FA/WebAuthn step
+          // is throttled and locked out like a password failure, not just
+          // capped per continuation. Guarded so a lookup/hook error can never
+          // mask the original verification error.
+          try {
+            const failedUser = await db.findOne<FortressUser>({
+              model: 'user',
+              where: [{ field: 'id', operator: '=', value: attempted.userId }],
+            });
+            if (failedUser?.email)
+              await runOnLoginFailureHooks(failedUser.email, error as Error);
+          }
+          catch (lockoutError) {
+            logger?.error({ error: lockoutError }, 'failed to record MFA failure for account lockout');
+          }
         }
         throw error;
       }
@@ -1050,7 +1085,14 @@ export function createAuthService(
       const afterCtx: AfterHookContext = { db, config, responseHeaders: new Headers() };
       for (const plugin of plugins) {
         if (plugin.hooks?.afterRegister) {
-          await plugin.hooks.afterRegister(afterCtx, user);
+          // Fail-open: a throwing afterRegister side-effect must not undo a
+          // committed user creation (see runAfterLoginHooks).
+          try {
+            await plugin.hooks.afterRegister(afterCtx, user);
+          }
+          catch (hookError) {
+            logger?.error({ plugin: plugin.name, error: hookError }, 'afterRegister hook failed');
+          }
         }
       }
 

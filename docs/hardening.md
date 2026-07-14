@@ -1,4 +1,4 @@
-# Fortress hardening guide (P2-14)
+# Hardening
 
 A focused checklist for operators running Fortress in production. Pair
 with [deployment.md](./deployment.md) (configuration), [security.md](./security.md) (architecture),

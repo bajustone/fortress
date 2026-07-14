@@ -2,6 +2,7 @@ import type { Fortress } from '../../core/fortress';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
+import { accountLockout } from '../account-lockout';
 import { generateTOTP, twoFactor } from './index';
 
 const SECRET = 'two-factor-test-secret-at-least32';
@@ -182,5 +183,53 @@ describe('two-factor plugin', () => {
       const result = await fortress.auth.login('alice@example.com', 'password-123456', { userAgent: 'TestBrowser/1.0' });
       expect(result.status).toBe('pending');
     });
+  });
+});
+
+describe('two-factor + account-lockout integration', () => {
+  interface LockoutMethods {
+    getLockoutStatus: (identifier: string) => Promise<{ failedAttempts: number; isLocked: boolean }>;
+  }
+
+  it('feeds failed 2FA verifications into account lockout and locks the account', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [
+        // cooldown 0 so the brute-force is not artificially throttled between attempts
+        twoFactor({ secretEncryptionKey: TOTP_ENCRYPTION_KEY, failedAttemptCooldownSeconds: 0 }),
+        accountLockout({ maxFailedAttempts: 3 }),
+      ],
+    });
+    const twoFactorMethods = fortress.plugins['two-factor'] as unknown as TwoFactorMethods;
+    const lockoutMethods = fortress.plugins['account-lockout'] as unknown as LockoutMethods;
+
+    const user = await fortress.auth.createUser({
+      email: 'lockme@example.com',
+      name: 'Lock Me',
+      password: 'password-123456',
+    });
+    const setup = await twoFactorMethods.enable(user.id);
+    await twoFactorMethods.confirmSetup(user.id, await generateTOTP(setup.secret, 30, 6));
+
+    // Three wrong second-factor attempts, each on a fresh pending login so the
+    // per-continuation cap is never the thing that stops the attacker.
+    for (let i = 0; i < 3; i++) {
+      const pending = await fortress.auth.login('lockme@example.com', 'password-123456');
+      if (pending.status !== 'pending')
+        throw new Error('expected a pending 2FA challenge');
+      await expect(
+        fortress.auth.completePendingAuth(pending.pending.continuationToken, '000000'),
+      ).rejects.toThrow();
+    }
+
+    const status = await lockoutMethods.getLockoutStatus('lockme@example.com');
+    expect(status.failedAttempts).toBeGreaterThanOrEqual(3);
+    expect(status.isLocked).toBe(true);
+
+    // The locked account is now rejected before it can even reach the 2FA step.
+    await expect(
+      fortress.auth.login('lockme@example.com', 'password-123456'),
+    ).rejects.toThrow(/locked/i);
   });
 });

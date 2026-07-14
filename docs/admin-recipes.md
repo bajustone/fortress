@@ -1,4 +1,4 @@
-# Admin / operator recipes (P1-8)
+# Admin and operator recipes
 
 Fortress is API-first by design — there is no reference UI shipped with
 the library. The `admin` plugin (`@bajustone/fortress/plugins/admin`)

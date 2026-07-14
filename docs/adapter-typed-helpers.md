@@ -1,4 +1,4 @@
-# Typed adapter helpers (P1-6)
+# Typed adapter helpers
 
 Fortress's framework adapters (Hono, Express, SvelteKit) attach
 request-scoped state (`fortressSubject`, `fortressUserId`,
@@ -44,7 +44,7 @@ app.onError(errorHandler);
 app.get('/me', (c) => {
   const requestId = c.get('requestId');  // string  (host-defined)
   const subject = getSubject(c);          // Subject (fortress-defined)
-  const userId = getUserId(c);            // number  (USER-only)
+  const userId = getUserId(c);            // string  (USER-only)
   return c.json({ requestId, subject, userId });
 });
 ```
@@ -76,7 +76,7 @@ app.get('/iam/whoami', (c) => {
 | `FortressVariables` | type | The bare Fortress `Variables` slot — useful for `Hono<{ Variables: FortressVariables & MyVars }>` |
 | `FortressContext<E>` | type | Sugar for `Context<E>` typed handlers |
 | `getSubject<E>(c)` | function | Returns `Subject`; throws 401 if unauthenticated |
-| `getUserId<E>(c)` | function | Returns `number`; throws 401 if subject is not a `USER` |
+| `getUserId<E>(c)` | function | Returns `string`; throws 401 if subject is not a `USER` |
 | `getClaims<T, E>(c)` | function | Returns `TokenClaims & { customClaims?: T }` |
 | `getDb<E>(c)` | function | Per-request `DatabaseAdapter` with plugin `wrapAdapter` applied |
 | `getScopedDb<E>(c, model)` | function | Adds `scopeRules` for `model` on top of `getDb` |
@@ -112,7 +112,7 @@ router.use(createAuthMiddleware(fortress));
 
 router.get('/me', (req, res) => {
   const subject = req.fortressSubject;       // Subject | undefined  (typed)
-  const userId = req.fortressUserId;          // number   | undefined
+  const userId = req.fortressUserId;          // string   | undefined
   const claims = req.fortressClaims;          // TokenClaims | undefined
   res.json({ subject, userId, claims });
 });
@@ -180,27 +180,13 @@ const fortress = createFortress({
 
 // All typed; no casts.
 await fortress.plugins.tenancy.createTenant({ name: 'Acme', taxId: 'acme-001' });
-await fortress.plugins['api-key'].createKey({ name: 'CI', scopes: ['*'] }, ctx);
+await fortress.plugins['api-key'].createKey({
+  subject: { type: 'USER', id: userId },
+  name: 'CI',
+  scopes: ['*'],
+});
 ```
 
 For dynamic plugin lookup (e.g. a plugin loaded by name at runtime),
 use `getPluginMethods<T>(fortress, name)` to attach a known interface
 without casting.
-
----
-
-## Type-level tests
-
-The Hono helpers ship with type-level tests under
-`src/hono/middleware/auth.types.test.ts` using `expectTypeOf`. They
-assert:
-
-- `FortressEnv<MyEnv>['Variables']` keeps host-defined variables and
-  adds Fortress's.
-- `getSubject` / `getUserId` work on a parameterized
-  `Hono<FortressEnv<MyEnv>>` with no casts.
-- `getClaims<T>` narrows `customClaims` to `T`.
-- The unparameterized `FortressEnv` default still works for existing
-  callers.
-
-Run with `bunx vitest run src/hono/middleware/auth.types.test.ts`.

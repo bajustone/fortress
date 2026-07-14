@@ -164,10 +164,14 @@ describe('audit-log plugin', () => {
       expect(logError).toHaveBeenCalledTimes(4);
     });
 
-    it('does not swallow failures from unrelated plugin hooks', async () => {
+    it('isolates a throwing after-login hook so a completed login still succeeds', async () => {
+      // afterLogin hooks run after tokens are issued; a throwing side-effect
+      // hook must be logged and skipped, never fail (or orphan) the session.
+      const logError = vi.fn();
       const hookFortress = createFortress({
         jwt: { key: SECRET },
         database: createTestAdapter(),
+        logger: { ...SILENT_LOGGER, error: logError },
         plugins: [
           auditLog(),
           {
@@ -186,9 +190,50 @@ describe('audit-log plugin', () => {
         password: 'password-123456',
       });
 
-      await expect(
-        hookFortress.auth.login('hook@example.com', 'password-123456'),
-      ).rejects.toThrow('unrelated hook failed');
+      const login = await hookFortress.auth.login('hook@example.com', 'password-123456');
+      assertSuccess(login);
+      expect(login.accessToken).toBeTruthy();
+      expect(logError).toHaveBeenCalledWith(
+        expect.objectContaining({ plugin: 'unrelated-failure' }),
+        'afterLogin hook failed',
+      );
+    });
+
+    it('isolates throwing afterRegister and afterTokenRefresh hooks', async () => {
+      const logError = vi.fn();
+      const hookFortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        logger: { ...SILENT_LOGGER, error: logError },
+        plugins: [{
+          name: 'throwing-side-effects',
+          hooks: {
+            async afterRegister() { throw new Error('register hook failed'); },
+            async afterTokenRefresh() { throw new Error('refresh hook failed'); },
+          },
+        }],
+      });
+
+      const user = await hookFortress.auth.createUser({
+        email: 'sideeffect@example.com',
+        name: 'Side Effect',
+        password: 'password-123456',
+      });
+      expect(user.email).toBe('sideeffect@example.com');
+
+      const login = await hookFortress.auth.login('sideeffect@example.com', 'password-123456');
+      assertSuccess(login);
+      const refreshed = await hookFortress.auth.refresh(login.refreshToken);
+      expect(refreshed.refreshToken).toBeTruthy();
+
+      expect(logError).toHaveBeenCalledWith(
+        expect.objectContaining({ plugin: 'throwing-side-effects' }),
+        'afterRegister hook failed',
+      );
+      expect(logError).toHaveBeenCalledWith(
+        expect.objectContaining({ plugin: 'throwing-side-effects' }),
+        'afterTokenRefresh hook failed',
+      );
     });
   });
 

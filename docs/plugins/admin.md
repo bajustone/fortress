@@ -230,7 +230,7 @@ await fortress.plugins.admin.bindPermissionToServiceAccount({
 });
 ```
 
-See the [IAM service account docs](../../README.md#service-accounts) for the conceptual overview and `checkPermission({ type: 'SERVICE_ACCOUNT', id }, ...)` examples.
+See the [IAM service account docs](../../README.md#use-service-accounts) for the conceptual overview and `checkPermission({ type: 'SERVICE_ACCOUNT', id }, ...)` examples.
 
 ### API key management
 
