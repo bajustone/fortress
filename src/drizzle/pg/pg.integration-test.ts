@@ -4,6 +4,7 @@ import type { DatabaseAdapter } from '../../adapters/database';
 import type { Fortress } from '../../core/fortress';
 import type { PolicyDocument } from '../../core/policy/types';
 import type { FortressUser } from '../../core/types';
+import type { AuditLogMethods } from '../../plugins/audit-log';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { GenericContainer, Wait } from 'testcontainers';
@@ -909,28 +910,25 @@ describe('pg: plugins', () => {
     expect(result.email).toBe('verify@test.com');
   });
 
-  it('audit-log plugin records events with PG timestamps', async () => {
+  it('audit-log plugin serializes a hash chain with PG timestamps', async () => {
     const fortress = createFortress({
       jwt: { key: SECRET },
       database: createPgAdapter(),
-      plugins: [auditLog()],
+      plugins: [auditLog({ hashChain: true })],
     });
+    const methods = fortress.plugins['audit-log'] as AuditLogMethods;
 
-    await fortress.auth.createUser({
-      email: 'audit@test.com',
-      name: 'Audit',
-      password: 'password-123456',
-    });
-
-    await fortress.auth.login('audit@test.com', 'password-123456');
-
-    const methods = fortress.plugins['audit-log'] as any;
+    await Promise.all(Array.from({ length: 12 }, (_, index) => methods.logCustomEvent({
+      eventType: 'ROLE_CREATED',
+      targetId: String(index),
+    })));
     const entries = await methods.getAuditLog();
 
-    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(entries).toHaveLength(12);
     expect(entries[0].timestamp).toBeInstanceOf(Date);
     expect(entries[0].createdAt).toBeInstanceOf(Date);
-    expect(entries[0].eventType).toBe('LOGIN_SUCCESS');
+    expect(entries.filter(entry => entry.previousHash == null)).toHaveLength(1);
+    await expect(methods.verifyChain()).resolves.toMatchObject({ valid: true, totalEntries: 12 });
   });
 });
 

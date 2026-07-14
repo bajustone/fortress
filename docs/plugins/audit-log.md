@@ -19,7 +19,7 @@ const fortress = createFortress({
 });
 ```
 
-The plugin automatically creates the `audit_log` model via the database adapter. No manual migration is required beyond what your adapter handles for plugin models.
+The bundled Fortress migrations create `fortress_audit_log`; run `fortress.migrate()` before enabling the plugin.
 
 ## Configuration
 
@@ -106,7 +106,7 @@ const failures = await fortress.plugins['audit-log'].getAuditLog({
 
 // All events for a specific user, paginated
 const userHistory = await fortress.plugins['audit-log'].getAuditLog({
-  userId: 42,
+  userId: '42',
   limit: 50,
   offset: 0,
 });
@@ -125,7 +125,7 @@ Results are returned in reverse chronological order (`timestamp DESC`).
 
 | Option | Type | Description |
 |---|---|---|
-| `userId` | `number` | Filter by `actorId` |
+| `userId` | `string` | Filter by `actorId` |
 | `eventType` | `AuditEventType` | Filter by event type |
 | `from` | `Date` | Entries on or after this timestamp |
 | `to` | `Date` | Entries on or before this timestamp |
@@ -134,9 +134,9 @@ Results are returned in reverse chronological order (`timestamp DESC`).
 
 ### Hash Chain for Tamper Detection
 
-When `hashChain: true` is set, each audit entry includes a `previousHash` field containing the SHA-256 hash of the preceding entry. The hash is computed from the previous entry's `id`, `timestamp`, `eventType`, and `actorId`.
+When `hashChain: true` is set, each audit entry includes a `previousHash` field containing the SHA-256 hash of the preceding entry. The digest uses an unambiguous serialization of all 13 stored fields, including the predecessor's own `previousHash`, so the chain is cryptographically linked and changes to actor, target, request, outcome, metadata, or timestamp fields break verification.
 
-The first entry in the chain has `previousHash: null`. Every subsequent entry references the one before it, forming a verifiable chain.
+The first entry has `previousHash: null`. Every subsequent entry references the one before it. Writes are serialized transactionally; PostgreSQL also uses a transaction-scoped advisory lock, preventing concurrent application instances from forking the chain. Appends fail closed when the existing chain is invalid.
 
 ```ts
 const fortress = createFortress({
@@ -148,19 +148,17 @@ const fortress = createFortress({
 // After several auth events...
 const entries = await fortress.plugins['audit-log'].getAuditLog();
 
-// Verify chain integrity
-const sorted = [...entries].sort((a, b) => a.id - b.id);
-
-// First entry: no predecessor
-console.log(sorted[0].previousHash); // null
-
-// Subsequent entries: 64-character SHA-256 hex string
-console.log(sorted[1].previousHash); // "a3f2b8c1..."
+// Verify chain integrity without relying on identifier ordering
+const verification = await fortress.plugins['audit-log'].verifyChain();
+if (!verification.valid)
+  throw new Error(`Broken audit chain: ${JSON.stringify(verification.brokenLinks)}`);
 ```
 
 If a row is deleted or altered, the hash chain breaks. Auditors can walk the chain to confirm log integrity without trusting the application layer.
 
-**Note:** The hash chain adds one read query per write (to fetch the last entry). For high-throughput systems where write latency matters more than tamper evidence, leave it disabled and rely on your database's own integrity guarantees.
+**Upgrade note:** Chains created by releases using the former four-field, unlinked digest cannot be safely re-certified as cryptographic history. Archive and externally attest those rows before enabling the corrected chain. The plugin fails closed rather than appending to a legacy or otherwise invalid chain.
+
+**Performance note:** Chain-enabled appends inspect the existing chain while holding the write lock. This favors compliance integrity over throughput. For high-throughput systems where write latency matters more than tamper evidence, leave it disabled and rely on database-level integrity and external immutable retention.
 
 ### Exporting for compliance
 
@@ -177,7 +175,7 @@ const json = await audit.exportEntries();
 
 // CSV export of one user's last quarter, for a data-subject request
 const csv = await audit.exportEntries('csv', {
-  userId: 42,
+  userId: '42',
   from: new Date('2026-01-01'),
   to: new Date('2026-03-31'),
 });
@@ -185,7 +183,9 @@ const csv = await audit.exportEntries('csv', {
 
 The CSV output is RFC 4180-compliant: a fixed header row, one row per
 entry, with cells containing commas, quotes, or newlines quoted and their
-embedded quotes doubled. `Date` columns are emitted as ISO 8601 strings.
+embedded quotes doubled. Cells beginning with `=`, `+`, `-`, `@`, tab, or
+carriage return are prefixed with an apostrophe to prevent spreadsheet-formula
+injection. `Date` columns are emitted as ISO 8601 strings.
 Both formats stream the rows in the same order as `getAuditLog` (newest
 first).
 
@@ -212,19 +212,19 @@ first).
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | `number` | Auto-incremented entry ID |
-| `timestamp` | `string` | ISO 8601 timestamp of the event |
+| `id` | `string` | Adapter-generated entry ID |
+| `timestamp` | `Date` | Event timestamp |
 | `eventType` | `AuditEventType` | One of the six event types |
-| `actorId` | `number \| null` | User ID of the actor, or null for anonymous events |
+| `actorId` | `string \| null` | User ID of the actor, or null for anonymous events |
 | `actorType` | `string` | `"user"` or `"anonymous"` |
-| `targetId` | `number \| null` | ID of the affected resource (e.g., the new user on REGISTER) |
+| `targetId` | `string \| null` | ID of the affected resource (e.g., the new user on REGISTER) |
 | `targetType` | `string \| null` | Type of the affected resource (e.g., `"user"`) |
 | `ipAddress` | `string \| null` | Client IP if available via `RequestMeta` |
 | `userAgent` | `string \| null` | Client user-agent if available via `RequestMeta` |
 | `outcome` | `string` | `"success"` or `"failure"` |
 | `metadata` | `string \| null` | JSON string with event-specific details (e.g., error message on failure) |
 | `previousHash` | `string \| null` | SHA-256 hash of the preceding entry (only when `hashChain` is enabled) |
-| `createdAt` | `string` | ISO 8601 creation timestamp |
+| `createdAt` | `Date` | Creation timestamp |
 
 ## How It Works
 
@@ -240,8 +240,8 @@ The plugin uses Fortress's hook system to intercept auth lifecycle events withou
 | `afterRegister` | `REGISTER` |
 | `afterTokenRefresh` | `TOKEN_REFRESH` |
 
-Each hook writes a row to the `audit_log` model via the database adapter. When hash chaining is enabled, the hook first reads the most recent entry (`ORDER BY id DESC LIMIT 1`), computes `SHA-256(id + timestamp + eventType + actorId)`, and stores the result as `previousHash` on the new entry.
+Each hook writes a row to the `audit_log` model via the database adapter. When hash chaining is enabled, Fortress transactionally validates the existing graph, hashes all 13 fields of its unique tail, and stores that digest as `previousHash` on the new entry. Graph traversal avoids assuming that string identifiers are numerically ordered.
 
 The `getAuditLog` method builds `WhereClause` filters from the query options and delegates to `db.findMany`, keeping the plugin fully database-agnostic.
 
-All hooks are non-blocking with respect to the auth flow -- they run inline but do not alter the auth response (except to pass it through). A logging failure will propagate as an error rather than silently swallow it, which is the correct behavior for compliance-critical audit trails.
+All hooks run inline with the auth flow. They do not alter successful auth responses, but a logging or chain-integrity failure propagates rather than being silently swallowed, which is the correct fail-closed behavior for compliance-critical audit trails.

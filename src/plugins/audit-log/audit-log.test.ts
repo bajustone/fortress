@@ -169,6 +169,13 @@ describe('audit-log plugin', () => {
   });
 
   describe('hash chain', () => {
+    it('declares string identifiers consistently with the public entry type', () => {
+      const model = auditLog().models?.find(candidate => candidate.name === 'audit_log');
+      expect(model?.fields.id.type).toBe('string');
+      expect(model?.fields.actorId.type).toBe('string');
+      expect(model?.fields.targetId.type).toBe('string');
+    });
+
     it('creates previousHash entries when enabled', async () => {
       const chainFortress = createFortress({
         jwt: { key: SECRET },
@@ -196,6 +203,51 @@ describe('audit-log plugin', () => {
       expect(sortedEntries[1].previousHash).toBeTruthy();
       expect(typeof sortedEntries[1].previousHash).toBe('string');
       expect(sortedEntries[1].previousHash!.length).toBe(64); // SHA-256 hex is 64 chars
+    });
+
+    it('serializes concurrent writes into one unbranched chain', async () => {
+      const chainFortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [auditLog({ hashChain: true })],
+      });
+      const methods = chainFortress.plugins['audit-log'] as AuditLogMethods;
+
+      await Promise.all(Array.from({ length: 20 }, (_, index) => methods.logCustomEvent({
+        eventType: 'ROLE_CREATED',
+        targetId: String(index),
+        metadata: { index },
+      })));
+
+      const entries = await methods.getAuditLog();
+      expect(entries).toHaveLength(20);
+      expect(entries.filter(entry => entry.previousHash == null)).toHaveLength(1);
+      expect(new Set(entries.flatMap(entry => entry.previousHash ?? [])).size).toBe(19);
+      await expect(methods.verifyChain()).resolves.toMatchObject({ valid: true, totalEntries: 20 });
+    });
+
+    it('detects tampering in fields omitted by the old digest and refuses to append', async () => {
+      const db = createTestAdapter();
+      const chainFortress = createFortress({
+        jwt: { key: SECRET },
+        database: db,
+        plugins: [auditLog({ hashChain: true })],
+      });
+      const methods = chainFortress.plugins['audit-log'] as AuditLogMethods;
+      await methods.logCustomEvent({ eventType: 'ROLE_CREATED', metadata: { state: 'original' } });
+      await methods.logCustomEvent({ eventType: 'ROLE_UPDATED', metadata: { state: 'second' } });
+      const root = (await methods.getAuditLog()).find(entry => entry.previousHash == null)!;
+
+      await db.rawQuery!(
+        'UPDATE fortress_audit_log SET metadata = ? WHERE id = ?',
+        [JSON.stringify({ state: 'tampered' }), root.id],
+      );
+
+      await expect(methods.verifyChain()).resolves.toMatchObject({ valid: false, totalEntries: 2 });
+      await expect(
+        methods.logCustomEvent({ eventType: 'ROLE_DELETED' }),
+      ).rejects.toThrow('Cannot append to an invalid audit hash chain');
+      expect(await db.count({ model: 'audit_log' })).toBe(2);
     });
   });
 
@@ -359,6 +411,19 @@ describe('audit-log plugin', () => {
       // The metadata JSON contains a comma and quotes, so the cell must be
       // wrapped and its embedded quotes doubled.
       expect(csv).toContain('""note""');
+    });
+
+    it('neutralizes spreadsheet formula prefixes in CSV cells', async () => {
+      const methods = fortress.plugins['audit-log'] as AuditLogMethods;
+      const dangerous = ['=cmd', '+cmd', '-cmd', '@cmd', '\tcmd', '\rcmd'];
+      await Promise.all(dangerous.map(actorType => methods.logCustomEvent({
+        eventType: 'ROLE_CREATED',
+        actorType,
+      })));
+
+      const csv = await methods.exportEntries('csv');
+      for (const value of dangerous)
+        expect(csv).toContain(`'${value}`);
     });
 
     it('honours query filters when exporting', async () => {
