@@ -118,6 +118,10 @@ export interface RequestMeta {
   ipAddress?: string;
   userAgent?: string;
   deviceName?: string;
+  /** Raw server-issued trusted-device secret from the host-owned cookie. */
+  trustedDeviceToken?: string;
+  /** Explicitly request enrollment of this browser/device after a successful factor. */
+  rememberDevice?: boolean;
 }
 
 /** A persisted refresh-token session as exposed to session-management UIs. */

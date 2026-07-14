@@ -94,6 +94,36 @@ describe('social-login plugin', () => {
   });
 
   describe('token exchange — response validation', () => {
+    it('accepts GitHub form-urlencoded token responses and requests JSON first', async () => {
+      const requests: Request[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const request = input instanceof Request ? input : new Request(String(input));
+        requests.push(request);
+        if (request.url === 'https://github.com/login/oauth/access_token') {
+          return new Response('access_token=gho_test&token_type=bearer&scope=read%3Auser', {
+            status: 200,
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          });
+        }
+        if (request.url === 'https://api.github.com/user')
+          return Response.json({ id: 123, login: 'octocat', email: 'octocat@example.com', name: 'Octo Cat' });
+        throw new Error(`unexpected fetch ${request.url}`);
+      }));
+
+      const result = await methods.handleCallback(
+        'github',
+        'code',
+        'https://app.com/callback',
+        'verifier',
+        'state',
+        'state',
+        'nonce',
+      );
+      expect(result.profile.id).toBe('123');
+      expect(result.user.email).toBe('octocat@example.com');
+      expect(requests[0]?.headers.get('accept')).toBe('application/json');
+    });
+
     it('rejects a token response missing access_token (schema-validated via fetcher)', async () => {
       vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
         const href = input instanceof Request ? input.url : String(input);
@@ -128,6 +158,35 @@ describe('social-login plugin', () => {
       await expect(
         methods.getAuthorizationUrl('unknown', 'https://app.com/callback'),
       ).rejects.toThrow('not configured');
+    });
+
+    it('does not trust or cache discovery whose issuer differs from configured issuer', async () => {
+      const issuer = 'https://issuer-trust.example.com';
+      let discoveryAttempts = 0;
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const href = input instanceof Request ? input.url : String(input);
+        if (href !== `${issuer}/.well-known/openid-configuration`)
+          throw new Error(`unexpected fetch ${href}`);
+        discoveryAttempts++;
+        return Response.json({
+          issuer: discoveryAttempts === 1 ? 'https://attacker.example.com' : issuer,
+          authorization_endpoint: `${issuer}/discovered-authorize`,
+          token_endpoint: `${issuer}/token`,
+          jwks_uri: `${issuer}/jwks`,
+        });
+      }));
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-trust', clientId: 'trust-client', clientSecret: 'secret', issuer }],
+      });
+      const trustMethods = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      const degraded = await trustMethods.getAuthorizationUrl('oidc-trust', 'https://app.com/callback');
+      expect(degraded.url).toContain(`${issuer}/authorize`);
+      expect(degraded.url).not.toContain('discovered-authorize');
+
+      const recovered = await trustMethods.getAuthorizationUrl('oidc-trust', 'https://app.com/callback');
+      expect(recovered.url).toContain(`${issuer}/discovered-authorize`);
+      expect(discoveryAttempts).toBe(2);
     });
   });
 
@@ -365,6 +424,123 @@ describe('social-login plugin', () => {
       await expect(
         m.handleCallback('oidc-x', 'code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce'),
       ).rejects.toThrow('User account not found or disabled');
+    });
+
+    it('accepts a Microsoft token from a concrete tenant with the default common authority', async () => {
+      const { publicKey, privateKey } = await generateKeyPair('RS256');
+      const jwk = await exportJWK(publicKey);
+      const tenantId = '11111111-2222-3333-4444-555555555555';
+      const issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
+      const idToken = await new SignJWT({
+        sub: 'microsoft-sub',
+        tid: tenantId,
+        email: 'microsoft@example.com',
+        nonce: 'nonce',
+      })
+        .setProtectedHeader({ alg: 'RS256', kid: 'microsoft-kid' })
+        .setIssuer(issuer)
+        .setAudience('microsoft-client')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(privateKey);
+
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const href = input instanceof Request ? input.url : String(input);
+        if (href === 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration') {
+          return Response.json({
+            issuer: 'https://login.microsoftonline.com/{tenantid}/v2.0',
+            authorization_endpoint: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+            token_endpoint: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+            jwks_uri: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
+          });
+        }
+        if (href === 'https://login.microsoftonline.com/common/oauth2/v2.0/token')
+          return Response.json({ access_token: 'microsoft-access', id_token: idToken });
+        if (href === 'https://login.microsoftonline.com/common/discovery/v2.0/keys')
+          return Response.json({ keys: [{ ...jwk, kid: 'microsoft-kid', alg: 'RS256', use: 'sig' }] });
+        if (href === 'https://graph.microsoft.com/v1.0/me')
+          return Response.json({ id: 'microsoft-sub', mail: 'microsoft@example.com', displayName: 'Microsoft User' });
+        throw new Error(`unexpected fetch ${href}`);
+      }));
+
+      const plugin = socialLogin({
+        providers: [{ name: 'microsoft', clientId: 'microsoft-client', clientSecret: 'secret' }],
+        tokenEncryptionKey,
+      });
+      const microsoftMethods = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      const result = await microsoftMethods.handleCallback(
+        'microsoft',
+        'code',
+        'https://app.com/callback',
+        'verifier',
+        'state',
+        'state',
+        'nonce',
+      );
+      expect(result.user.email).toBe('microsoft@example.com');
+    });
+
+    it('retries discovery after a transient failure instead of caching degradation', async () => {
+      const issuer = 'https://issuer-discovery-retry.example.com';
+      const { publicKey, privateKey } = await generateKeyPair('RS256');
+      const jwk = await exportJWK(publicKey);
+      const idToken = await new SignJWT({ sub: 'retry-sub', email: 'retry@example.com', email_verified: true, nonce: 'nonce' })
+        .setProtectedHeader({ alg: 'RS256', kid: 'retry-kid' })
+        .setIssuer(issuer)
+        .setAudience('retry-client')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(privateKey);
+      let discoveryAttempts = 0;
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const href = input instanceof Request ? input.url : String(input);
+        if (href === `${issuer}/.well-known/openid-configuration`) {
+          discoveryAttempts++;
+          if (discoveryAttempts === 1)
+            return Response.json({ error: 'temporarily unavailable' }, { status: 503 });
+          return Response.json({
+            issuer,
+            authorization_endpoint: `${issuer}/authorize`,
+            token_endpoint: `${issuer}/token`,
+            userinfo_endpoint: `${issuer}/userinfo`,
+            jwks_uri: `${issuer}/jwks`,
+          });
+        }
+        if (href === `${issuer}/token`)
+          return Response.json({ access_token: 'retry-access', id_token: idToken });
+        if (href === `${issuer}/jwks`)
+          return Response.json({ keys: [{ ...jwk, kid: 'retry-kid', alg: 'RS256', use: 'sig' }] });
+        if (href === `${issuer}/userinfo`)
+          return Response.json({ sub: 'retry-sub', email: 'retry@example.com', email_verified: true });
+        throw new Error(`unexpected fetch ${href}`);
+      }));
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-retry', clientId: 'retry-client', clientSecret: 'secret', issuer }],
+        tokenEncryptionKey,
+      });
+      const retryMethods = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as SocialLoginMethods;
+
+      await expect(retryMethods.handleCallback(
+        'oidc-retry',
+        'code',
+        'https://app.com/callback',
+        'verifier',
+        'state',
+        'state',
+        'nonce',
+      )).rejects.toThrow(/JWKS URI|ID token/);
+      const result = await retryMethods.handleCallback(
+        'oidc-retry',
+        'code',
+        'https://app.com/callback',
+        'verifier',
+        'state',
+        'state',
+        'nonce',
+      );
+      expect(result.user.email).toBe('retry@example.com');
+      expect(discoveryAttempts).toBe(2);
     });
 
     it('fails closed when OIDC discovery degrades and the provider has no static jwksUri', async () => {

@@ -69,8 +69,15 @@ const authContinuations = sqliteTable('fortress_auth_continuation', {
   reason: text('reason').notNull(),
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   consumedAt: integer('consumed_at', { mode: 'timestamp' }),
+  failedAttempts: integer('failed_attempts').notNull().default(0),
+  lastFailedAt: integer('last_failed_at', { mode: 'timestamp' }),
+  invalidatedAt: integer('invalidated_at', { mode: 'timestamp' }),
+  maxAttempts: integer('max_attempts').notNull().default(5),
+  cooldownSeconds: integer('cooldown_seconds').notNull().default(1),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [
+  index('auth_continuation_failure_idx').on(table.userId, table.reason, table.lastFailedAt),
+]);
 
 // --- IAM: Groups ---
 
@@ -238,7 +245,8 @@ const backupCodes = sqliteTable('fortress_backup_code', {
 const trustedDevices = sqliteTable('fortress_trusted_device', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  deviceHash: text('device_hash').notNull(), // Hash of device fingerprint
+  /** SHA-256 hash of the server-issued trusted-device secret (never raw token). */
+  deviceHash: text('device_hash').notNull(),
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   lastUsedAt: integer('last_used_at', { mode: 'timestamp' }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),

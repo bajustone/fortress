@@ -136,7 +136,7 @@ Results are returned in reverse chronological order (`timestamp DESC`).
 
 When `hashChain: true` is set, each audit entry includes a `previousHash` field containing the SHA-256 hash of the preceding entry. The digest uses an unambiguous serialization of all 13 stored fields, including the predecessor's own `previousHash`, so the chain is cryptographically linked and changes to actor, target, request, outcome, metadata, or timestamp fields break verification.
 
-The first entry has `previousHash: null`. Every subsequent entry references the one before it. A permanent singleton `fortress_audit_chain_state` anchor starts at `{ lastHash: null, entryCount: 0 }` and stores the expected terminal hash/count after each append, making deletion or mutation of the final row—or deletion of the entire chain—detectable as well. Writes and anchor updates are serialized in one transaction; verification acquires the same lock and reads both tables from that transaction, preventing false corruption during an in-flight append. PostgreSQL also uses a transaction-scoped advisory lock, preventing concurrent application instances from forking the chain. Appends fail closed when the existing chain or anchor is invalid.
+The first entry has `previousHash: null`. Every subsequent entry references the one before it. A permanent singleton `fortress_audit_chain_state` anchor starts at `{ lastHash: null, entryCount: 0 }` and stores the expected terminal hash/count after each append, making deletion or mutation of the final row—or deletion of the entire chain—detectable as well. Each append reads this anchor, inserts the new row using `anchor.lastHash`, and advances the anchor in the same serialized transaction, so append work remains constant as the log grows. A zero anchor performs one bounded (`LIMIT 1`) existence probe to reject an untransformed legacy log safely; no history is hashed or traversed. SQLite transactions are queued per adapter instance to accommodate synchronous drivers; PostgreSQL uses a transaction-scoped advisory lock across application instances and is not placed on an in-process/global queue. `verifyChain()` performs the separate full historical scan.
 
 ```ts
 const fortress = createFortress({
@@ -154,11 +154,24 @@ if (!verification.valid)
   throw new Error(`Broken audit chain: ${JSON.stringify(verification.brokenLinks)}`);
 ```
 
-If a row is deleted or altered, either an internal link or the persisted terminal anchor breaks. Auditors can verify both the chain graph and its expected terminal state through `verifyChain()`.
+If a row is deleted or altered, either an internal link or the persisted terminal anchor breaks. Auditors can verify both the chain graph and its expected terminal state through `verifyChain()`. Appends intentionally do not rescan history; schedule `verifyChain()` independently and alert on an invalid result.
 
-**Upgrade note:** Chains created by releases using the former four-field, unlinked digest cannot be safely re-certified as cryptographic history. Archive and externally attest those rows before enabling the corrected chain. The plugin fails closed rather than appending to a legacy or otherwise invalid chain.
+### Enabling hash chaining on an existing log
 
-**Performance note:** Chain-enabled appends inspect the existing chain while holding the write lock. This favors compliance integrity over throughput. For high-throughput systems where write latency matters more than tamper evidence, leave it disabled and rely on database-level integrity and external immutable retention.
+A non-empty log written with `hashChain: false` must be explicitly transitioned before normal auth traffic starts using `hashChain: true`. Archive and externally attest the legacy rows first: rebaselining links the stored rows from that point forward but cannot prove that their earlier history was untampered.
+
+```ts
+const audit = fortress.plugins['audit-log'];
+const result = await audit.rebaselineChain();
+if (!result.valid)
+  throw new Error('Audit rebaseline failed');
+```
+
+`rebaselineChain()` runs under the same transaction/advisory lock as append, accepts only the migration-seeded zero anchor plus rows whose `previousHash` values are all null, orders those rows by `createdAt` and then string `id`, rewrites their links, advances the anchor, and verifies the result before commit. It rejects an already or partially chained log, so it cannot be used as a general-purpose way to erase evidence of detected tampering. Run it once during a maintenance window after migrations, before exposing login/register/refresh/logout traffic on the hash-chain-enabled instance.
+
+Automatic audit hook writes are best-effort after auth state changes: an audit storage/anchor failure is sent to the configured logger and does not turn a committed login, registration, refresh, or logout into a reported auth failure. Direct `logCustomEvent()` and maintenance methods still reject on errors, allowing operators to monitor and fail their own workflows explicitly.
+
+**Performance note:** Chain-enabled append is O(1) with respect to historical row count. `verifyChain()` and the one-time `rebaselineChain()` are O(n) maintenance operations and hold the chain lock while they run.
 
 ### Exporting for compliance
 
@@ -204,6 +217,7 @@ first).
 | `getAuditLog` | `(options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>` | Query audit log entries with optional filters |
 | `logCustomEvent` | `(event: CustomAuditEvent) => Promise<void>` | Append an application-defined event |
 | `verifyChain` | `() => Promise<ChainVerificationResult>` | Walk the hash chain and report broken links |
+| `rebaselineChain` | `() => Promise<ChainVerificationResult>` | One-time transactional conversion of an unchained legacy log |
 | `exportEntries` | `(format?: 'json' \| 'csv', options?: AuditLogQueryOptions) => Promise<string>` | Serialize entries for compliance export (defaults to `json`) |
 
 ### Types
@@ -240,8 +254,8 @@ The plugin uses Fortress's hook system to intercept auth lifecycle events withou
 | `afterRegister` | `REGISTER` |
 | `afterTokenRefresh` | `TOKEN_REFRESH` |
 
-Each hook writes a row to the `audit_log` model via the database adapter. When hash chaining is enabled, Fortress transactionally validates the existing graph and terminal anchor, hashes all 13 fields of its unique tail, stores that digest as `previousHash` on the new entry, and advances the anchor to the new terminal hash/count. Graph traversal avoids assuming that string identifiers are numerically ordered.
+Each hook writes a row to the `audit_log` model via the database adapter. When hash chaining is enabled, Fortress reads the persisted terminal anchor, stores its `lastHash` as the new entry's `previousHash`, hashes the inserted entry, and advances the anchor in the same serialized transaction. Full graph traversal and all-field digest verification are reserved for `verifyChain()`.
 
 The `getAuditLog` method builds `WhereClause` filters from the query options and delegates to `db.findMany`, keeping the plugin fully database-agnostic.
 
-All hooks run inline with the auth flow. They do not alter successful auth responses, but a logging or chain-integrity failure propagates rather than being silently swallowed, which is the correct fail-closed behavior for compliance-critical audit trails.
+All hooks run inline with the auth flow. Audit-plugin write failures are logged and contained so they cannot report a committed auth state change as failed. Failures from other plugins are unaffected, and explicit audit method calls continue to reject on storage or chain-maintenance errors.

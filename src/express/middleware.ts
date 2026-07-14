@@ -224,7 +224,10 @@ export function createCsrfMiddleware(config?: CsrfConfig): ExpressMiddleware {
  * — this middleware only handles routes the caller registered themselves.
  */
 export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions): ExpressMiddleware {
-  const routeMap = options?.routeMap ?? {};
+  // Express's default router is case-insensitive and ignores one trailing slash.
+  // Canonicalize configured paths once so exact and parameterized lookups share
+  // those semantics with the request path below.
+  const routeMap = normalizeRouteMap(options?.routeMap ?? {});
   const skipPaths = options?.skipPaths ?? [];
   const skipPatterns = skipPaths.map(p => pathToRegex(p));
   const unmappedRoutes = options?.unmappedRoutes ?? 'allow';
@@ -234,7 +237,7 @@ export function createRbacMiddleware(fortress: Fortress, options?: RbacOptions):
       // Express strips an `app.use('/mount', ...)` prefix from req.path/url.
       // Match against originalUrl so route maps use the same full path as
       // Hono/SvelteKit and as the host wrote in configuration.
-      const path = new URL(expressRequestPath(req), 'http://localhost').pathname;
+      const path = normalizeExpressPath(new URL(expressRequestPath(req), 'http://localhost').pathname);
       const method = req.method;
 
       if (skipPatterns.some(pattern => pattern.test(path))) {
@@ -515,10 +518,32 @@ function matchesCsrfSkipPath(path: string, skipPaths: string[]): boolean {
   });
 }
 
+function normalizeRouteMap(routeMap: Record<string, RouteMapping>): Record<string, RouteMapping> {
+  return Object.fromEntries(Object.entries(routeMap).map(([pattern, mapping]) => {
+    const separator = pattern.indexOf(' ');
+    if (separator < 0)
+      return [pattern, mapping];
+    const method = pattern.slice(0, separator);
+    const path = normalizeExpressPath(pattern.slice(separator + 1));
+    return [`${method} ${path}`, mapping];
+  }));
+}
+
+function normalizeExpressPath(path: string): string {
+  const lowerCased = path.toLowerCase();
+  return lowerCased.length > 1 && lowerCased.endsWith('/')
+    ? lowerCased.slice(0, -1)
+    : lowerCased;
+}
+
 function pathToRegex(pattern: string): RegExp {
-  const regexStr = pattern
+  // Escape literals first, then add back only the route syntax Fortress
+  // supports. This prevents dots (and other regex metacharacters) in a
+  // configured path from matching unintended requests.
+  const regexStr = normalizeExpressPath(pattern)
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(/:[^/]+/g, '[^/]+')
-    .replace(/\*/g, '.*')
+    .replace(/\\\*/g, '.*')
     .replace(/\//g, '\\/');
-  return new RegExp(`^${regexStr}$`);
+  return new RegExp(`^${regexStr}$`, 'i');
 }

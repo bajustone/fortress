@@ -506,6 +506,46 @@ describe('api-key plugin — HTTP routes (opt-in flag)', () => {
   });
 });
 
+// ── User lifecycle gates ───────────────────────────────────────────
+
+describe('api-key plugin — USER lifecycle', () => {
+  it('rejects a deactivated user key and does not retain cached permissions', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      rbac: { cache: { ttlSeconds: 300 } },
+      plugins: [apiKey({ prefix: 'test' })],
+    });
+    const methods = fortress.plugins['api-key'] as unknown as ApiKeyMethods;
+    const user = await fortress.auth.createUser({
+      email: 'disabled-key@example.com',
+      name: 'Disabled Key',
+      password: 'password-123456',
+    });
+    const role = await fortress.iam.createRole('cached-reader', [
+      { resource: 'report', action: 'read' },
+    ]);
+    await fortress.iam.bindRoleToUser(user.id, role.id);
+    const { key } = await methods.createKey({ subject: userSubject(user.id), name: 'Before disable' });
+
+    // Warm the permission cache before changing activation state.
+    await expect(fortress.iam.checkPermission(userSubject(user.id), 'report', 'read')).resolves.toBe(true);
+    await fortress.auth.updateUser(user.id, { isActive: false });
+
+    await expect(methods.resolveKey(key)).resolves.toBeNull();
+    await expect(fortress.iam.checkPermission(userSubject(user.id), 'report', 'read')).resolves.toBe(false);
+  });
+
+  it('rejects a key whose user owner was deleted', async () => {
+    const { fortress, methods, userId } = await setup();
+    const { key } = await methods.createKey({ subject: userSubject(userId), name: 'Before delete' });
+
+    await fortress.auth.deleteUser(userId);
+
+    await expect(methods.resolveKey(key)).resolves.toBeNull();
+  });
+});
+
 // ── Service account pipeline ────────────────────────────────────────
 
 describe('api-key plugin — SERVICE_ACCOUNT subjects', () => {

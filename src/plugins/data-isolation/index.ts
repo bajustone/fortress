@@ -11,6 +11,7 @@
 import type { ScopeRule } from '../../adapters/database/types';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { Errors } from '../../core/errors';
 
 export interface DataIsolationScope {
   /** Scope name for identification and bypass control */
@@ -25,6 +26,12 @@ export interface DataIsolationScope {
 
 export interface DataIsolationConfig {
   scopes: DataIsolationScope[];
+  /**
+   * Behavior when an applicable scope resolves to `null` or `undefined`.
+   * Defaults to `'deny'`. `'skip'` is an unsafe legacy compatibility mode
+   * that removes that scope's row isolation for the operation.
+   */
+  unresolvedScope?: 'deny' | 'skip';
 }
 
 /**
@@ -103,8 +110,11 @@ export function dataIsolation(config: DataIsolationConfig): FortressPlugin & { r
           continue;
 
         const value = await scope.resolveValue(userId, ctx);
-        if (value === undefined || value === null)
-          continue;
+        if (value === undefined || value === null) {
+          if (config.unresolvedScope === 'skip')
+            continue;
+          throw Errors.forbidden(`Data isolation scope '${scope.name}' could not be resolved`);
+        }
 
         filters.push({ field: scope.field, operator: '=', value });
         defaults[scope.field] = value;

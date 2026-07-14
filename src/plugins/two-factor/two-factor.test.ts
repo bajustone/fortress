@@ -8,8 +8,8 @@ const SECRET = 'two-factor-test-secret-at-least32';
 
 interface TwoFactorMethods {
   enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
-  confirmSetup: (userId: string, code: string, meta?: { userAgent?: string }) => Promise<{ verified: true }>;
-  verify: (continuationToken: string, code: string, meta?: { userAgent?: string }) => Promise<unknown>;
+  confirmSetup: (userId: string, code: string, meta?: { userAgent?: string; trustedDeviceToken?: string; rememberDevice?: boolean }) => Promise<{ verified: true; trustedDeviceToken?: string }>;
+  verify: (continuationToken: string, code: string, meta?: { userAgent?: string; trustedDeviceToken?: string; rememberDevice?: boolean }) => Promise<unknown>;
   disable: (userId: string) => Promise<void>;
 }
 
@@ -141,19 +141,31 @@ describe('two-factor plugin', () => {
       expect(result.refreshToken).toBeTruthy();
     });
 
-    it('skips 2FA for trusted device', async () => {
+    it('requires explicit opt-in and uses a server-issued trusted-device secret', async () => {
       const setup = await methods.enable(userId);
       const code = await generateTOTP(setup.secret, 30, 6);
-      const userAgent = 'TestBrowser/1.0';
 
-      // First verify with device info to trust it
-      await methods.confirmSetup(userId, code, { userAgent });
+      const enrolled = await methods.confirmSetup(userId, code, { rememberDevice: true });
+      expect(enrolled.trustedDeviceToken).toMatch(/^[\w-]{40,}$/);
+      expect(await fortress.config.database.count({ model: 'trusted_device' })).toBe(1);
+      const stored = await fortress.config.database.findOne<{ deviceHash: string }>({
+        model: 'trusted_device',
+        where: [{ field: 'userId', operator: '=', value: userId }],
+      });
+      expect(stored?.deviceHash).not.toBe(enrolled.trustedDeviceToken);
 
-      // Login with same userAgent should bypass 2FA
-      const result = await fortress.auth.login('alice@example.com', 'password-123456', { userAgent });
-      if (result.status !== 'success')
-        throw new Error('Expected successful login');
-      expect(result.accessToken).toBeTruthy();
+      const result = await fortress.auth.login('alice@example.com', 'password-123456', {
+        trustedDeviceToken: enrolled.trustedDeviceToken,
+      });
+      expect(result.status).toBe('success');
+    });
+
+    it('does not trust User-Agent without opt-in', async () => {
+      const setup = await methods.enable(userId);
+      const code = await generateTOTP(setup.secret, 30, 6);
+      await methods.confirmSetup(userId, code, { userAgent: 'TestBrowser/1.0' });
+      const result = await fortress.auth.login('alice@example.com', 'password-123456', { userAgent: 'TestBrowser/1.0' });
+      expect(result.status).toBe('pending');
     });
   });
 });

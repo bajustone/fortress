@@ -403,6 +403,7 @@ export function createAuthService(
     meta?: RequestMeta,
     identifier?: string,
     completedReasons: readonly PendingReason[] = [],
+    pluginData?: Record<string, unknown>,
   ): Promise<AuthResult> {
     const hold = await runPostAuthGates(plugins, db, config, user, meta, completedReasons);
     if (hold) {
@@ -410,7 +411,7 @@ export function createAuthService(
         status: 'pending',
         user,
         pending: hold.challenge,
-        pluginData: hold.pluginData,
+        pluginData: { ...hold.pluginData, ...pluginData },
       };
       if (authEventListeners.size() > 0) {
         authEventListeners.emit({
@@ -434,6 +435,7 @@ export function createAuthService(
       method,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
+      ...(pluginData && Object.keys(pluginData).length > 0 ? { pluginData } : {}),
     };
 
     const afterCtx: AfterHookContext = { db, config, meta, responseHeaders: new Headers(), identifier };
@@ -530,6 +532,7 @@ export function createAuthService(
 
     async completePendingAuth(continuationToken: string, completion: unknown, meta?: RequestMeta): Promise<AuthResult> {
       let attempted: { reason: PendingReason; userId: string } | undefined;
+      let verificationData: Record<string, unknown> | undefined;
       let continuation: StoredContinuation;
       try {
         continuation = await consumeAuthContinuation(db, continuationToken, async (tx, pending) => {
@@ -541,7 +544,7 @@ export function createAuthService(
           if (!storedUser || !storedUser.isActive)
             throw Errors.unauthorized('User not found or disabled');
           const { passwordHash: _, ...user } = storedUser;
-          await verifyAuthContinuation(plugins, tx, config, user, pending, completion, meta);
+          verificationData = (await verifyAuthContinuation(plugins, tx, config, user, pending, completion, meta)) ?? undefined;
         });
       }
       catch (error) {
@@ -586,7 +589,7 @@ export function createAuthService(
             ? 'webauthn'
             : 'password';
 
-      return finishAuthentication(refreshedUser, method, meta, undefined, [continuation.reason]);
+      return finishAuthentication(refreshedUser, method, meta, undefined, [continuation.reason], verificationData);
     },
 
     async refresh(refreshToken: string, meta?: RequestMeta): Promise<AuthTokenPair> {

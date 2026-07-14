@@ -141,8 +141,12 @@ export interface PostAuthGateVerificationContext extends HookContext {
 
 export interface PostAuthGateProvider {
   reason: PendingReason;
+  /** Durable failed-proof policy stored on each continuation. */
+  maxAttempts?: number;
+  cooldownSeconds?: number;
   evaluate: (ctx: PostAuthGateContext) => Promise<PostAuthGateDecision | void>;
-  verify: (ctx: PostAuthGateVerificationContext, completion: unknown) => Promise<void>;
+  /** Return optional plugin data to include in the final AuthResult. */
+  verify: (ctx: PostAuthGateVerificationContext, completion: unknown) => Promise<Record<string, unknown> | void>;
 }
 
 // --- Supporting Types ---

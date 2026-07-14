@@ -11,7 +11,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin } from '../../core/plugin';
 import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
-import { hashToken } from '../../core/auth/refresh-token';
+import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
 
 export interface TwoFactorConfig {
@@ -27,8 +27,12 @@ export interface TwoFactorConfig {
     /** Number of backup codes to generate (default: 10) */
     count?: number;
   };
-  /** Days to trust a device after successful 2FA (default: 30) */
+  /** Days to trust a device after explicit remember-device opt-in (default: 30) */
   trustedDeviceDays?: number;
+  /** Maximum rejected continuation proofs before invalidation (default: 5). */
+  maxAttempts?: number;
+  /** Minimum delay between rejected proofs for an account (default: 1 second). */
+  failedAttemptCooldownSeconds?: number;
 }
 
 interface TwoFactorSecretRecord {
@@ -50,6 +54,7 @@ interface BackupCodeRecord {
 interface TrustedDeviceRecord {
   id: string;
   userId: string;
+  /** Hash of the server-issued secret; the raw secret is never persisted. */
   deviceHash: string;
   expiresAt: Date;
   lastUsedAt: Date;
@@ -193,7 +198,7 @@ async function generateBackupCodes(count: number): Promise<{ raw: string[]; hash
 
 export interface TwoFactorMethods {
   enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
-  confirmSetup: (userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: true }>;
+  confirmSetup: (userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: true; trustedDeviceToken?: string }>;
   verify: (continuationToken: string, code: string, meta?: RequestMeta) => Promise<AuthResult>;
   disable: (userId: string) => Promise<void>;
 }
@@ -208,13 +213,15 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
   const digits = config.totp?.digits ?? 6;
   const backupCodeCount = config.backupCodes?.count ?? 10;
   const trustedDeviceDays = config.trustedDeviceDays ?? 30;
+  const maxAttempts = config.maxAttempts ?? 5;
+  const failedAttemptCooldownSeconds = config.failedAttemptCooldownSeconds ?? 1;
 
   async function verifyCode(
     db: DatabaseAdapter,
     userId: string,
     code: string,
     meta?: RequestMeta,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const secretRecord = await db.findOne<TwoFactorSecretRecord>({
       model: 'two_factor_secret',
       where: [{ field: 'userId', operator: '=', value: userId }],
@@ -241,22 +248,16 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
       if (!claimed)
         throw Errors.unauthorized('Two-factor code has already been used');
 
-      if (meta?.userAgent) {
-        const deviceHash = await hashToken(`${userId}:${meta.userAgent}`);
+      if (meta?.rememberDevice) {
+        const trusted = await generateRefreshToken();
         const expiresAt = new Date(Date.now() + trustedDeviceDays * 24 * 60 * 60 * 1000);
-        await db.delete({
-          model: 'trusted_device',
-          where: [
-            { field: 'userId', operator: '=', value: userId },
-            { field: 'deviceHash', operator: '=', value: deviceHash },
-          ],
-        });
         await db.create({
           model: 'trusted_device',
-          data: { userId, deviceHash, expiresAt, lastUsedAt: new Date() },
+          data: { userId, deviceHash: trusted.hash, expiresAt, lastUsedAt: new Date() },
         });
+        return trusted.raw;
       }
-      return;
+      return undefined;
     }
 
     const backupCodes = await db.findMany<BackupCodeRecord>({
@@ -289,6 +290,16 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
         data: { isEnabled: true },
       });
     }
+    if (meta?.rememberDevice) {
+      const trusted = await generateRefreshToken();
+      const expiresAt = new Date(Date.now() + trustedDeviceDays * 24 * 60 * 60 * 1000);
+      await db.create({
+        model: 'trusted_device',
+        data: { userId, deviceHash: trusted.hash, expiresAt, lastUsedAt: new Date() },
+      });
+      return trusted.raw;
+    }
+    return undefined;
   }
 
   return {
@@ -332,6 +343,8 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
     hooks: {
       postAuthGate: {
         reason: 'two-factor',
+        maxAttempts,
+        cooldownSeconds: failedAttemptCooldownSeconds,
         async evaluate(ctx) {
           const secret = await ctx.db.findOne<TwoFactorSecretRecord>({
             model: 'two_factor_secret',
@@ -343,8 +356,8 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           if (!secret)
             return;
 
-          if (ctx.meta?.userAgent) {
-            const deviceHash = await hashToken(`${ctx.user.id}:${ctx.meta.userAgent}`);
+          if (ctx.meta?.trustedDeviceToken) {
+            const deviceHash = await hashToken(ctx.meta.trustedDeviceToken);
             const trusted = await ctx.db.findOne<TrustedDeviceRecord>({
               model: 'trusted_device',
               where: [
@@ -367,7 +380,8 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
         async verify(ctx, completion) {
           if (typeof completion !== 'string')
             throw Errors.unauthorized('Invalid two-factor code');
-          await verifyCode(ctx.db, ctx.user.id, completion, ctx.meta);
+          const trustedDeviceToken = await verifyCode(ctx.db, ctx.user.id, completion, ctx.meta);
+          return trustedDeviceToken ? { trustedDeviceToken } : undefined;
         },
       },
     },
@@ -433,9 +447,9 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           return { secret, otpauthUrl, backupCodes: backupCodesRaw };
         },
 
-        async confirmSetup(userId: string, code: string, meta?: RequestMeta): Promise<{ verified: true }> {
-          await verifyCode(ctx.db, userId, code, meta);
-          return { verified: true };
+        async confirmSetup(userId: string, code: string, meta?: RequestMeta): Promise<{ verified: true; trustedDeviceToken?: string }> {
+          const trustedDeviceToken = await verifyCode(ctx.db, userId, code, meta);
+          return { verified: true, ...(trustedDeviceToken ? { trustedDeviceToken } : {}) };
         },
 
         async verify(continuationToken: string, code: string, meta?: RequestMeta): Promise<AuthResult> {

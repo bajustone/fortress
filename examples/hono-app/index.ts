@@ -180,6 +180,7 @@ const fortress = createFortress({
               { field: 'scopeName', operator: '=', value: 'org' },
             ],
           });
+          // Missing assignments fail closed (FORBIDDEN) by default.
           return assignment?.scopeValue ?? null;
         },
       }],

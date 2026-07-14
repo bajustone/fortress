@@ -225,6 +225,36 @@ describe('getSubjectPermissions', () => {
     expect(permissions).toEqual([]);
   });
 
+  it('returns empty for an inactive USER even with a bound role', async () => {
+    const user = await db.create<{ id: string }>({
+      model: 'user',
+      data: { email: 'disabled@example.com', name: 'Disabled', passwordHash: 'hashed', isActive: false },
+    });
+    await db.create({ model: 'resource', data: { name: 'document-disabled' } });
+    const permission = await db.create<{ id: string }>({
+      model: 'permission',
+      data: { resource: 'document-disabled', action: 'read', effect: 'ALLOW', description: null },
+    });
+    const role = await db.create<{ id: string }>({ model: 'role', data: { name: 'disabled-reader' } });
+    await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
+    await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'USER', subjectId: user.id } });
+
+    await expect(adapter.getSubjectPermissions({ type: 'USER', id: user.id })).resolves.toEqual([]);
+  });
+
+  it('returns empty for a missing USER even when stale bindings remain', async () => {
+    await db.create({ model: 'resource', data: { name: 'stale-document' } });
+    const permission = await db.create<{ id: string }>({
+      model: 'permission',
+      data: { resource: 'stale-document', action: 'read', effect: 'ALLOW', description: null },
+    });
+    const role = await db.create<{ id: string }>({ model: 'role', data: { name: 'stale-reader' } });
+    await db.create({ model: 'role_permission', data: { roleId: role.id, permissionId: permission.id } });
+    await db.create({ model: 'role_binding', data: { roleId: role.id, subjectType: 'USER', subjectId: '99999' } });
+
+    await expect(adapter.getSubjectPermissions({ type: 'USER', id: '99999' })).resolves.toEqual([]);
+  });
+
   it('resolves permissions through a SERVICE_ACCOUNT role binding', async () => {
     const sa = await db.create<{ id: string }>({
       model: 'service_account',

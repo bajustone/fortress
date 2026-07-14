@@ -79,21 +79,30 @@ async function sha256Hex(input: string): Promise<string> {
 }
 
 // Synchronous SQLite drivers can deadlock the event loop while waiting on a
-// second connection's writer lock. The local queue avoids that; the database
-// transaction/advisory lock remains authoritative across processes.
-let auditWriteChain: Promise<void> = Promise.resolve();
+// second write on the same adapter. Queue those transactions per adapter, not
+// process-wide. PostgreSQL relies solely on its transaction-scoped advisory
+// lock, so unrelated databases and PG transactions never share this queue.
+const auditWriteChains = new WeakMap<object, Promise<void>>();
 
 function withAuditChainLock<T>(
   db: import('../../adapters/database').DatabaseAdapter,
   fn: (tx: import('../../adapters/database').DatabaseAdapter) => Promise<T>,
 ): Promise<T> {
   const run = (): Promise<T> => db.transaction(async (tx) => {
-    if (tx.dialect === 'pg' && tx.rawQuery)
+    if (tx.dialect === 'pg') {
+      if (!tx.rawQuery)
+        throw new Error('PostgreSQL audit hash chains require rawQuery advisory-lock support');
       await tx.rawQuery('SELECT pg_advisory_xact_lock(117993, 1)');
+    }
     return fn(tx);
   });
-  const result = auditWriteChain.then(run, run);
-  auditWriteChain = result.then(() => undefined, () => undefined);
+
+  if (db.dialect === 'pg')
+    return run();
+
+  const previous = auditWriteChains.get(db) ?? Promise.resolve();
+  const result = previous.then(run, run);
+  auditWriteChains.set(db, result.then(() => undefined, () => undefined));
   return result;
 }
 
@@ -122,6 +131,8 @@ export interface AuditLogMethods {
   getAuditLog: (options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>;
   logCustomEvent: (event: CustomAuditEvent) => Promise<void>;
   verifyChain: () => Promise<ChainVerificationResult>;
+  /** Transactionally convert an unchained legacy log into a hash chain. */
+  rebaselineChain: () => Promise<ChainVerificationResult>;
   exportEntries: (format?: AuditLogExportFormat, options?: AuditLogQueryOptions) => Promise<string>;
 }
 
@@ -380,23 +391,63 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
     }
 
     await withAuditChainLock(db, async (tx) => {
-      const entries = await tx.findMany<AuditLogEntry>({ model: 'audit_log' });
       const anchor = await readChainAnchor(tx);
-      const state = await inspectChain(entries, anchor);
-      if (!anchor || state.brokenLinks.length > 0)
-        throw new Error('Cannot append to an invalid audit hash chain');
-      const previousHash = state.tail ? await computeEntryHash(state.tail) : null;
+      if (
+        !anchor
+        || !Number.isInteger(anchor.entryCount)
+        || anchor.entryCount < 0
+        || (anchor.entryCount === 0) !== (anchor.lastHash === null)
+      ) {
+        throw new Error('Cannot append without a valid audit hash-chain anchor');
+      }
+
+      if (anchor.entryCount === 0) {
+        const existing = await tx.findMany<Pick<AuditLogEntry, 'id'>>({
+          model: 'audit_log',
+          limit: 1,
+        });
+        if (existing.length > 0) {
+          throw new Error(
+            'Cannot append to an unchained legacy audit log; call rebaselineChain() first',
+          );
+        }
+      }
+
       const created = await tx.create<AuditLogEntry>({
         model: 'audit_log',
-        data: { ...entry, previousHash },
+        data: { ...entry, previousHash: anchor.lastHash },
       });
       const lastHash = await computeEntryHash(created);
-      await tx.update({
+      const updated = await tx.update({
         model: 'audit_chain_state',
         where: [{ field: 'id', operator: '=', value: anchor.id }],
-        data: { lastHash, entryCount: entries.length + 1, updatedAt: new Date() },
+        data: { lastHash, entryCount: anchor.entryCount + 1, updatedAt: new Date() },
       });
+      if (!updated)
+        throw new Error('Audit hash-chain anchor disappeared during append');
     });
+  }
+
+  async function writeAuthEntry(
+    db: import('../../adapters/database').DatabaseAdapter,
+    entry: Omit<AuditLogEntry, 'id' | 'createdAt' | 'previousHash'>,
+    logger: import('../../core/observability/logger').FortressLogger | undefined,
+  ): Promise<void> {
+    try {
+      await writeEntry(db, entry);
+    }
+    catch (error) {
+      // Auth state may already be committed when after-hooks run. Audit
+      // availability must not turn a successful auth operation into a reported
+      // failure; explicit logCustomEvent calls still surface write failures.
+      try {
+        logger?.error({ plugin: 'audit-log', error }, 'audit log write failed');
+      }
+      catch {
+        // A custom observability sink must never alter an already-completed
+        // authentication operation.
+      }
+    }
   }
 
   return {
@@ -434,7 +485,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         if (!shouldLog('LOGIN_SUCCESS'))
           return result;
 
-        await writeEntry(ctx.db, {
+        await writeAuthEntry(ctx.db, {
           timestamp: new Date(),
           eventType: 'LOGIN_SUCCESS',
           actorId: result.user.id,
@@ -445,7 +496,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
           userAgent: ctx.meta?.userAgent ?? null,
           outcome: 'success',
           metadata: null,
-        });
+        }, ctx.config.logger);
 
         return result;
       },
@@ -454,7 +505,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         if (!shouldLog('LOGIN_FAILURE'))
           return;
 
-        await writeEntry(ctx.db, {
+        await writeAuthEntry(ctx.db, {
           timestamp: new Date(),
           eventType: 'LOGIN_FAILURE',
           actorId: null,
@@ -465,14 +516,14 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
           userAgent: null,
           outcome: 'failure',
           metadata: JSON.stringify({ identifier: ctx.identifier, error: ctx.error.message }),
-        });
+        }, ctx.config.logger);
       },
 
       async beforeLogout(ctx) {
         if (!shouldLog('LOGOUT'))
           return;
 
-        await writeEntry(ctx.db, {
+        await writeAuthEntry(ctx.db, {
           timestamp: new Date(),
           eventType: 'LOGOUT',
           actorId: null,
@@ -483,14 +534,14 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
           userAgent: ctx.meta?.userAgent ?? null,
           outcome: 'success',
           metadata: null,
-        });
+        }, ctx.config.logger);
       },
 
       async afterRegister(ctx, user) {
         if (!shouldLog('REGISTER'))
           return;
 
-        await writeEntry(ctx.db, {
+        await writeAuthEntry(ctx.db, {
           timestamp: new Date(),
           eventType: 'REGISTER',
           actorId: user.id,
@@ -501,14 +552,14 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
           userAgent: ctx.meta?.userAgent ?? null,
           outcome: 'success',
           metadata: null,
-        });
+        }, ctx.config.logger);
       },
 
       async afterTokenRefresh(ctx, result) {
         if (!shouldLog('TOKEN_REFRESH'))
           return result;
 
-        await writeEntry(ctx.db, {
+        await writeAuthEntry(ctx.db, {
           timestamp: new Date(),
           eventType: 'TOKEN_REFRESH',
           actorId: null,
@@ -519,7 +570,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
           userAgent: ctx.meta?.userAgent ?? null,
           outcome: 'success',
           metadata: null,
-        });
+        }, ctx.config.logger);
 
         return result;
       },
@@ -546,6 +597,59 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
           userAgent: event.userAgent ?? null,
           outcome: event.outcome ?? 'success',
           metadata: event.metadata ? JSON.stringify(event.metadata) : null,
+        });
+      },
+
+      async rebaselineChain(): Promise<ChainVerificationResult> {
+        if (!hashChain)
+          throw new Error('Enable hashChain before rebaselining the audit log');
+
+        return withAuditChainLock(ctx.db, async (tx) => {
+          const anchor = await readChainAnchor(tx);
+          if (!anchor)
+            throw new Error('Cannot rebaseline without the persistent audit hash-chain anchor');
+          if (anchor.entryCount !== 0 || anchor.lastHash !== null) {
+            throw new Error('Cannot rebaseline an audit hash chain that has already been initialized');
+          }
+
+          const entries = await tx.findMany<AuditLogEntry>({ model: 'audit_log' });
+          if (entries.some(entry => entry.previousHash !== null)) {
+            throw new Error('Cannot rebaseline a partially or previously chained audit log');
+          }
+          entries.sort((left, right) => {
+            const timeDifference = left.createdAt.getTime() - right.createdAt.getTime();
+            if (timeDifference !== 0)
+              return timeDifference;
+            return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+          });
+
+          let previousHash: string | null = null;
+          const rebaselined: AuditLogEntry[] = [];
+          for (const entry of entries) {
+            const updated = await tx.update<AuditLogEntry>({
+              model: 'audit_log',
+              where: [{ field: 'id', operator: '=', value: entry.id }],
+              data: { previousHash },
+            });
+            if (!updated)
+              throw new Error(`Audit entry ${entry.id} disappeared during rebaseline`);
+            rebaselined.push(updated);
+            previousHash = await computeEntryHash(updated);
+          }
+
+          const updatedAt = new Date();
+          const updatedAnchor = await tx.update<AuditChainAnchor>({
+            model: 'audit_chain_state',
+            where: [{ field: 'id', operator: '=', value: anchor.id }],
+            data: { lastHash: previousHash, entryCount: entries.length, updatedAt },
+          });
+          if (!updatedAnchor)
+            throw new Error('Audit hash-chain anchor disappeared during rebaseline');
+
+          const { brokenLinks } = await inspectChain(rebaselined, updatedAnchor);
+          if (brokenLinks.length > 0)
+            throw new Error('Rebaselined audit hash chain failed verification');
+          return { valid: true, totalEntries: entries.length, brokenLinks: [] };
         });
       },
 

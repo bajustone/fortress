@@ -26,6 +26,12 @@ const fortress = createFortress({
 2. Wait for all existing access tokens to expire (default 15 min)
 3. Remove the old secret: `secret: 'new'`
 
+## Two-Factor Authentication
+
+Two-factor continuation proofs are durably counted on the existing continuation record. Rejected TOTP and backup-code proofs survive transaction rollback, are invalidated after `maxAttempts` (default 5), and are subject to a short per-account cooldown (`failedAttemptCooldownSeconds`, default 1 second). These controls do not permanently lock an account; a new login creates a new continuation after the cooldown.
+
+Trusted devices are explicit opt-in only. Pass `{ rememberDevice: true }` when completing setup or a two-factor challenge. Fortress returns a high-entropy `trustedDeviceToken`; pass it back in `RequestMeta.trustedDeviceToken` on later logins. The database stores only its hash and never uses User-Agent as a credential. Core is adapter-neutral and does not set plugin cookies: the host application must set the returned token in a `Secure`, `HttpOnly`, `SameSite=Lax` (or stricter), appropriately scoped cookie and forward it on subsequent requests.
+
 ## Password Hashing
 
 Default: Argon2id via WASM (`hash-wasm`).

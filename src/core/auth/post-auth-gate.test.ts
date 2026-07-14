@@ -12,12 +12,14 @@ function factorPlugin(
   reason: 'two-factor' | 'webauthn',
   expectedCompletion: string,
   onVerify?: () => void,
+  policy?: { maxAttempts?: number; cooldownSeconds?: number },
 ): FortressPlugin {
   return {
     name,
     hooks: {
       postAuthGate: {
         reason,
+        ...policy,
         async evaluate() {
           return { pluginData: { factor: reason } };
         },
@@ -61,7 +63,7 @@ describe('post-auth gate', () => {
             },
           },
         },
-        factorPlugin('factor', 'two-factor', '123456'),
+        factorPlugin('factor', 'two-factor', '123456', undefined, { cooldownSeconds: 0 }),
       ],
     });
     await seedUser(fortress);
@@ -120,6 +122,45 @@ describe('post-auth gate', () => {
       fortress.auth.completePendingAuth(pending.pending.continuationToken, '123456'),
     ).rejects.toThrow('Invalid or expired auth continuation');
     expect(await database.count({ model: 'refresh_token' })).toBe(1);
+  });
+
+  it('durably caps concurrent rejected proofs at the continuation attempt limit', async () => {
+    const database = createTestAdapter();
+    let verificationCalls = 0;
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database,
+      plugins: [factorPlugin(
+        'factor',
+        'two-factor',
+        'correct',
+        () => verificationCalls++,
+        { maxAttempts: 3, cooldownSeconds: 0 },
+      )],
+    });
+    await seedUser(fortress);
+
+    const pending = await fortress.auth.login('gated@example.com', 'password-123456');
+    if (pending.status !== 'pending' || !pending.pending)
+      throw new Error('Expected pending auth challenge');
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, () =>
+        fortress.auth.completePendingAuth(pending.pending!.continuationToken, 'wrong')),
+    );
+    expect(results.every(result => result.status === 'rejected')).toBe(true);
+    expect(verificationCalls).toBe(3);
+
+    const continuation = await database.findOne<{
+      failedAttempts: number;
+      invalidatedAt: Date | null;
+      consumedAt: Date | null;
+    }>({
+      model: 'auth_continuation',
+      where: [{ field: 'userId', operator: '=', value: pending.user.id }],
+    });
+    expect(continuation).toMatchObject({ failedAttempts: 3, consumedAt: null });
+    expect(continuation?.invalidatedAt).toBeInstanceOf(Date);
   });
 
   it('reruns remaining gates after one factor completes', async () => {

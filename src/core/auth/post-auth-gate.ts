@@ -14,12 +14,16 @@ export interface PostAuthGateHold {
   pluginData?: Record<string, unknown>;
 }
 
+const DEFAULT_MAX_ATTEMPTS = 5;
+const DEFAULT_COOLDOWN_SECONDS = 1;
+
 /** Persist a short-lived, hashed continuation and return only its raw bearer token. */
 export async function mintAuthContinuation(
   db: DatabaseAdapter,
   userId: string,
   reason: PendingReason,
   ttlSeconds: number = AUTH_CONTINUATION_TTL_SECONDS,
+  policy: { maxAttempts?: number; cooldownSeconds?: number } = {},
 ): Promise<AuthChallenge> {
   const { raw, hash } = await generateRefreshToken();
   const now = new Date();
@@ -31,6 +35,11 @@ export async function mintAuthContinuation(
       reason,
       expiresAt: new Date(now.getTime() + ttlSeconds * 1000),
       consumedAt: null,
+      failedAttempts: 0,
+      lastFailedAt: null,
+      invalidatedAt: null,
+      maxAttempts: Math.max(1, policy.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
+      cooldownSeconds: Math.max(0, policy.cooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS),
       createdAt: now,
     },
   });
@@ -38,7 +47,7 @@ export async function mintAuthContinuation(
 }
 
 function assertUsableContinuation(record: StoredContinuation | null): StoredContinuation {
-  if (!record || record.consumedAt || record.expiresAt <= new Date())
+  if (!record || record.consumedAt || record.invalidatedAt || record.expiresAt <= new Date())
     throw Errors.unauthorized('Invalid or expired auth continuation');
   return record;
 }
@@ -65,24 +74,80 @@ export async function consumeAuthContinuation(
   const tokenHash = await hashToken(continuationToken);
   const consumedAt = new Date();
 
-  return db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx): Promise<
+    | { ok: true; continuation: StoredContinuation }
+    | { ok: false; error: unknown }
+  > => {
+    const existing = await tx.findOne<StoredContinuation>({
+      model: 'auth_continuation',
+      where: [{ field: 'tokenHash', operator: '=', value: tokenHash }],
+    });
+    const usable = assertUsableContinuation(existing);
+    const maxAttempts = usable.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    const failedAttempts = usable.failedAttempts ?? 0;
+    if (failedAttempts >= maxAttempts)
+      throw Errors.unauthorized('Invalid or expired auth continuation');
+
+    const cooldownSeconds = usable.cooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS;
+    if (cooldownSeconds > 0) {
+      const cutoff = new Date(consumedAt.getTime() - cooldownSeconds * 1000);
+      const recent = await tx.findOne<StoredContinuation>({
+        model: 'auth_continuation',
+        where: [
+          { field: 'userId', operator: '=', value: usable.userId },
+          { field: 'reason', operator: '=', value: usable.reason },
+          { field: 'lastFailedAt', operator: 'gt', value: cutoff },
+        ],
+      });
+      if (recent)
+        throw Errors.unauthorized('Too many authentication attempts; try again shortly');
+    }
+
     const record = await tx.update<StoredContinuation>({
       model: 'auth_continuation',
       where: [
         { field: 'tokenHash', operator: '=', value: tokenHash },
         { field: 'consumedAt', operator: 'isNull', value: null },
+        { field: 'invalidatedAt', operator: 'isNull', value: null },
         { field: 'expiresAt', operator: 'gt', value: consumedAt },
+        { field: 'failedAttempts', operator: 'lt', value: maxAttempts },
       ],
       data: { consumedAt },
     });
     if (!record)
       throw Errors.unauthorized('Invalid or expired auth continuation');
 
-    // Verification runs while the claim is held. A rejected proof rolls back
-    // both the claim and provider-side database mutations, allowing retry.
-    await verify?.(tx, record);
-    return record;
+    try {
+      // The row claim serializes concurrent guesses. On rejection, convert the
+      // error to data so the transaction can durably release the claim and
+      // increment the counter before the original error is re-thrown outside.
+      await verify?.(tx, record);
+      return { ok: true, continuation: record };
+    }
+    catch (error) {
+      const nextFailedAttempts = (record.failedAttempts ?? 0) + 1;
+      const released = await tx.update<StoredContinuation>({
+        model: 'auth_continuation',
+        where: [
+          { field: 'tokenHash', operator: '=', value: tokenHash },
+          { field: 'consumedAt', operator: '=', value: consumedAt },
+        ],
+        data: {
+          consumedAt: null,
+          failedAttempts: nextFailedAttempts,
+          lastFailedAt: consumedAt,
+          ...(nextFailedAttempts >= maxAttempts ? { invalidatedAt: consumedAt } : {}),
+        },
+      });
+      if (!released)
+        throw Errors.unauthorized('Invalid or expired auth continuation');
+      return { ok: false, error };
+    }
   });
+
+  if (!outcome.ok)
+    throw outcome.error;
+  return outcome.continuation;
 }
 
 /** Run post-credential gates in registration order and mint the first hold. */
@@ -121,7 +186,10 @@ export async function runPostAuthGates(
       continue;
 
     return {
-      challenge: await mintAuthContinuation(db, user.id, provider.reason),
+      challenge: await mintAuthContinuation(db, user.id, provider.reason, AUTH_CONTINUATION_TTL_SECONDS, {
+        maxAttempts: provider.maxAttempts,
+        cooldownSeconds: provider.cooldownSeconds,
+      }),
       pluginData: decision.pluginData,
     };
   }
@@ -137,7 +205,7 @@ export async function verifyAuthContinuation(
   continuation: StoredContinuation,
   completion: unknown,
   meta?: RequestMeta,
-): Promise<void> {
+): Promise<Record<string, unknown> | void> {
   const providers = plugins.flatMap((plugin) => {
     const provider = plugin.hooks?.postAuthGate;
     return provider?.reason === continuation.reason ? [provider] : [];
@@ -146,7 +214,7 @@ export async function verifyAuthContinuation(
     throw Errors.unauthorized('No unique auth gate can complete this continuation');
   const [provider] = providers;
 
-  await provider.verify({
+  return provider.verify({
     db,
     config,
     meta,

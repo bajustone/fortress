@@ -372,12 +372,18 @@ async function invokeAuthHandler(
   const meta = auth.meta;
   switch (handler) {
     case 'login':
-      return fortress.auth.login(String(body.identifier ?? ''), String(body.password ?? ''), meta);
+      return fortress.auth.login(String(body.identifier ?? ''), String(body.password ?? ''), {
+        ...meta,
+        ...(typeof body.trustedDeviceToken === 'string' ? { trustedDeviceToken: body.trustedDeviceToken } : {}),
+      });
     case 'verifyTwoFactor': {
       const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)['two-factor'];
       if (!methods?.verify)
         throw Errors.badRequest('Two-factor plugin is not configured');
-      return methods.verify(String(body.continuationToken ?? ''), String(body.code ?? ''), meta);
+      return methods.verify(String(body.continuationToken ?? ''), String(body.code ?? ''), {
+        ...meta,
+        ...(body.rememberDevice === true ? { rememberDevice: true } : {}),
+      });
     }
     case 'verifyMagicLink': {
       const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)['magic-link'];

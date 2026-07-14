@@ -74,9 +74,29 @@ describe('data-isolation plugin', () => {
     expect(rules!.filters[0].value).toBe(1);
   });
 
-  it('skips scope when resolveValue returns null', async () => {
+  it.each([null, undefined])('denies by default when an applicable scope resolves to %s', async (value) => {
     const db = createTestAdapter();
     const plugin = dataIsolation({
+      scopes: [{
+        name: 'site',
+        field: 'siteId',
+        models: ['sale'],
+        resolveValue: async () => value,
+      }],
+    });
+
+    const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
+
+    await expect(plugin.scopeRules!('1', 'sale', ctx)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Data isolation scope \'site\' could not be resolved',
+    });
+  });
+
+  it('supports explicit unsafe legacy skip mode for unresolved scopes', async () => {
+    const db = createTestAdapter();
+    const plugin = dataIsolation({
+      unresolvedScope: 'skip',
       scopes: [{
         name: 'site',
         field: 'siteId',
@@ -86,9 +106,8 @@ describe('data-isolation plugin', () => {
     });
 
     const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-    const rules = await plugin.scopeRules!('1', 'sale', ctx);
 
-    expect(rules).toBeNull();
+    await expect(plugin.scopeRules!('1', 'sale', ctx)).resolves.toBeNull();
   });
 
   describe('bypass methods', () => {
@@ -110,6 +129,19 @@ describe('data-isolation plugin', () => {
 
       expect(rules!.filters).toHaveLength(1);
       expect(rules!.filters[0].field).toBe('orgId');
+    });
+
+    it('withoutScope explicitly bypasses an unresolved named scope', async () => {
+      const db = createTestAdapter();
+      const plugin = dataIsolation({
+        scopes: [{ name: 'site', field: 'siteId', models: ['sale'], resolveValue: async () => null }],
+      });
+      const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
+      const methods = plugin.methods!(ctx) as { withoutScope: <T>(name: string, fn: () => Promise<T>) => Promise<T> };
+
+      await expect(
+        methods.withoutScope('site', () => plugin.scopeRules!('1', 'sale', ctx)),
+      ).resolves.toBeNull();
     });
 
     it('unscoped bypasses all scopes', async () => {

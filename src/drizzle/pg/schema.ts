@@ -69,8 +69,15 @@ const authContinuations = pgTable('fortress_auth_continuation', {
   reason: varchar('reason', { length: 32 }).notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  failedAttempts: integer('failed_attempts').notNull().default(0),
+  lastFailedAt: timestamp('last_failed_at', { withTimezone: true }),
+  invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+  maxAttempts: integer('max_attempts').notNull().default(5),
+  cooldownSeconds: integer('cooldown_seconds').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, table => [
+  index('auth_continuation_failure_idx').on(table.userId, table.reason, table.lastFailedAt),
+]);
 
 // --- IAM: Groups ---
 
@@ -236,6 +243,7 @@ const backupCodes = pgTable('fortress_backup_code', {
 const trustedDevices = pgTable('fortress_trusted_device', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /** SHA-256 hash of the server-issued trusted-device secret (never raw token). */
   deviceHash: varchar('device_hash', { length: 64 }).notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull(),

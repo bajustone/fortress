@@ -37,6 +37,11 @@ export interface StoredContinuation {
   reason: PendingReason;
   expiresAt: Date;
   consumedAt: Date | null;
+  failedAttempts: number;
+  lastFailedAt: Date | null;
+  invalidatedAt: Date | null;
+  maxAttempts: number;
+  cooldownSeconds: number;
   createdAt: Date;
 }
 
@@ -53,8 +58,9 @@ export interface InternalAdapter {
    * Resolve every permission that applies to a subject. For `USER` subjects,
    * walks group memberships and unions their bindings. For `SERVICE_ACCOUNT`
    * and other non-user subjects, only direct bindings on that subject are
-   * considered. Inactive service accounts return an empty list (the isActive
-   * gate is a second layer of defense alongside the api-key resolver).
+   * considered. Missing or inactive users and service accounts return an empty
+   * list (the existence/isActive gate is a second layer of defense alongside
+   * credential resolution).
    */
   getSubjectPermissions: (subject: Subject, tenantId?: string) => Promise<Permission[]>;
   /** Find an existing permission or create it if missing */
@@ -210,10 +216,18 @@ export function createInternalAdapter(db: DatabaseAdapter): InternalAdapter {
       const tenantlessFilter = tenantId == null;
       const isUser = subject.type === 'USER';
 
-      // Inactive service accounts never resolve any permissions. This is the
-      // second line of defense — the api-key resolver also short-circuits on
-      // isActive=false so requests never reach the permission check.
-      if (subject.type === 'SERVICE_ACCOUNT') {
+      // Missing or inactive principals never resolve permissions. This is a
+      // second line of defense behind credential resolution and also protects
+      // callers that invoke IAM APIs directly.
+      if (subject.type === 'USER') {
+        const user = await db.findOne<FortressUser>({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: subject.id }],
+        });
+        if (!user || !user.isActive)
+          return [];
+      }
+      else if (subject.type === 'SERVICE_ACCOUNT') {
         const sa = await db.findOne<ServiceAccount>({
           model: 'service_account',
           where: [{ field: 'id', operator: '=', value: subject.id }],

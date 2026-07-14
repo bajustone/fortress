@@ -78,10 +78,16 @@ Display the backup codes and instruct the user to store them securely. These are
 
 ### Confirm setup and complete challenges
 
-After `enable`, activate the secret with `confirmSetup(userId, code)`. This setup-only method returns `{ verified: true }` and does not issue a session.
+After `enable`, activate the secret with `confirmSetup(userId, code)`. This setup-only method returns `{ verified: true, trustedDeviceToken? }` and does not issue a session. Device enrollment is explicit:
 
 ```ts
-await fortress.plugins['two-factor'].confirmSetup(userId, '123456');
+const confirmation = await fortress.plugins['two-factor'].confirmSetup(
+  userId,
+  '123456',
+  { rememberDevice: true },
+);
+// If present, put confirmation.trustedDeviceToken in a host-managed
+// Secure, HttpOnly, SameSite cookie. Fortress stores only its hash.
 ```
 
 During login, call `verify` with the pending continuation token and a TOTP or backup code. It returns the unified `AuthResult` and issues tokens only when every configured gate is complete.
@@ -90,11 +96,11 @@ During login, call `verify` with the pending continuation token and a TOTP or ba
 const result = await fortress.plugins['two-factor'].verify(
   loginResult.pending.continuationToken,
   code,
-  { userAgent: request.headers.get('user-agent') ?? undefined },
+  { rememberDevice: true },
 );
 ```
 
-The equivalent HTTP endpoint is `POST /auth/2fa/verify` with `{ continuationToken, code }`.
+The equivalent HTTP endpoint is `POST /auth/2fa/verify` with `{ continuationToken, code, rememberDevice?: boolean }`. A successful opted-in response carries the raw token once in `pluginData.trustedDeviceToken`.
 
 ### Disable 2FA
 
@@ -112,14 +118,14 @@ When a user with enabled 2FA logs in, Fortress checks trusted-device state befor
 
 ```ts
 const loginResult = await fortress.auth.login(email, password, {
-  userAgent: request.headers.get('user-agent') ?? undefined,
+  trustedDeviceToken: readTrustedDeviceCookie(request),
 });
 
 if (loginResult.status === 'pending' && loginResult.pending.reason === 'two-factor') {
   const completed = await fortress.plugins['two-factor'].verify(
     loginResult.pending.continuationToken,
     codeFromUser,
-    { userAgent: request.headers.get('user-agent') ?? undefined },
+    { rememberDevice: shouldRememberDevice },
   );
 
   if (completed.status === 'success') {
@@ -130,12 +136,14 @@ if (loginResult.status === 'pending' && loginResult.pending.reason === 'two-fact
 
 ### Trusted Devices
 
-When `verify` is called with a `RequestMeta` containing a `userAgent`, the plugin automatically creates a trusted device record. On subsequent logins with the same `userAgent`, the `postAuthGate` hook skips the 2FA challenge.
+Trusted-device enrollment occurs only when `rememberDevice: true` is supplied to `confirmSetup` or `verify`. Fortress generates a high-entropy opaque token, returns it once, and stores only its SHA-256 hash. User-Agent is metadata only and is never a trust credential.
 
-- Device identity is a SHA-256 hash of `userId:userAgent`.
+The host must store the raw token in a `Secure`, `HttpOnly`, appropriately scoped `SameSite` cookie and pass it as `RequestMeta.trustedDeviceToken` on later programmatic logins. The HTTP login endpoint accepts the same opaque value as optional `trustedDeviceToken`; the host adapter is responsible for copying its cookie into that field.
+
 - Trust expires after `trustedDeviceDays` (default 30).
-- The `lastUsedAt` timestamp is updated each time a trusted device is recognized during login.
+- `lastUsedAt` is updated whenever a valid token is recognized.
 - Calling `disable` removes all trusted devices for the user.
+- Never expose the token to JavaScript-readable storage.
 
 ## API Reference
 
@@ -144,7 +152,7 @@ All methods are accessed via `fortress.plugins['two-factor']`.
 | Method | Signature | Description |
 |---|---|---|
 | `enable` | `(userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>` | Generate an unconfirmed TOTP secret and backup codes. Throws if 2FA is already enabled. |
-| `confirmSetup` | `(userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: true }>` | Verify the first TOTP code and activate setup. |
+| `confirmSetup` | `(userId: string, code: string, meta?: RequestMeta) => Promise<{ verified: true; trustedDeviceToken?: string }>` | Verify the first TOTP code, activate setup, and optionally enroll a trusted device. |
 | `verify` | `(continuationToken: string, code: string, meta?: RequestMeta) => Promise<AuthResult>` | Complete a pending login with TOTP or a single-use backup code, rerun remaining gates, and issue the session on success. |
 | `disable` | `(userId: string) => Promise<void>` | Remove all 2FA data (secret, backup codes, trusted devices) for the user. |
 

@@ -1,5 +1,8 @@
+import type { ErrorRequestHandler, Express, RequestHandler } from 'express';
 import type { PluginRequestContext } from '../core/http/plugin-middleware';
 import type { ExpressNextFunction, ExpressRequest, ExpressResponse } from './middleware';
+import { once } from 'node:events';
+import express from 'express';
 import { describe, expect, it } from 'vitest';
 import { FortressError } from '../core/errors';
 import { createFortress } from '../core/fortress';
@@ -26,6 +29,23 @@ function mockRes(): ExpressResponse {
     get _statusCode() { return statusCode; },
     get _body() { return body; },
   } as any;
+}
+
+async function withExpressServer(app: Express, run: (baseUrl: string) => Promise<void>): Promise<void> {
+  const server = app.listen(0);
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('Express test server did not bind to a TCP port');
+
+  try {
+    await run(`http://127.0.0.1:${address.port}`);
+  }
+  finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve());
+    });
+  }
 }
 
 describe('express adapter', () => {
@@ -298,6 +318,68 @@ describe('express adapter', () => {
     }) as ExpressNextFunction);
     // If req.path were used, this would silently fall through as unmapped.
     expect(nextError).toMatchObject({ code: 'UNAUTHORIZED', statusCode: 401 });
+  });
+
+  it('protects Express case and trailing-slash route variants and treats dots literally', async () => {
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
+    const app = express();
+    const router = express.Router();
+    const rbac = createRbacMiddleware(fortress, {
+      routeMap: {
+        'GET /API/Admin/Users/': { resource: 'admin', action: 'list' },
+        'GET /API/Report.JSON/': { resource: 'report', action: 'read' },
+        'GET /API/Users/:id/': { resource: 'user', action: 'read' },
+      },
+    });
+
+    router.use(rbac as unknown as RequestHandler);
+    router.get('/admin/users', (_req, res) => res.json({ bypassed: true }));
+    router.get('/report.json', (_req, res) => res.json({ bypassed: true }));
+    router.get('/users/:id', (_req, res) => res.json({ bypassed: true }));
+    router.get('/reportXjson', (_req, res) => res.json({ public: true }));
+    app.use('/api', router);
+    app.use(createErrorHandler() as unknown as ErrorRequestHandler);
+
+    await withExpressServer(app, async (baseUrl) => {
+      for (const path of ['/api/Admin/users', '/api/admin/users/']) {
+        const response = await fetch(`${baseUrl}${path}`);
+        expect(response.status, path).toBe(401);
+      }
+
+      const protectedParam = await fetch(`${baseUrl}/api/Users/42/`);
+      expect(protectedParam.status).toBe(401);
+
+      const protectedDot = await fetch(`${baseUrl}/api/report.json`);
+      expect(protectedDot.status).toBe(401);
+
+      const literalDot = await fetch(`${baseUrl}/api/reportXjson`);
+      expect(literalDot.status).toBe(200);
+      expect(await literalDot.json()).toEqual({ public: true });
+    });
+  });
+
+  it('normalizes configured Express skip paths for case and trailing slashes', async () => {
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
+    const app = express();
+    const router = express.Router();
+    const rbac = createRbacMiddleware(fortress, {
+      routeMap: {},
+      skipPaths: ['/API/Health/', '/API/Public/*'],
+      unmappedRoutes: 'deny',
+    });
+
+    router.use(rbac as unknown as RequestHandler);
+    router.get('/health', (_req, res) => res.json({ ok: true }));
+    router.get('/public/info', (_req, res) => res.json({ ok: true }));
+    app.use('/api', router);
+    app.use(createErrorHandler() as unknown as ErrorRequestHandler);
+
+    await withExpressServer(app, async (baseUrl) => {
+      for (const path of ['/api/health', '/api/HEALTH/', '/api/Public/Info/']) {
+        const response = await fetch(`${baseUrl}${path}`);
+        expect(response.status, path).toBe(200);
+      }
+    });
   });
 
   it('rbac middleware denies unmapped routes when unmappedRoutes: deny', async () => {

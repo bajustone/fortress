@@ -149,8 +149,8 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     const up = await migrateUp(db, 'pg');
     await db.rawQuery!('SET TIME ZONE \'UTC\'');
     expect(up.fromVersion).toBe(2);
-    expect(up.toVersion).toBe(7);
-    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor']);
+    expect(up.toVersion).toBe(8);
+    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening']);
     const defaults = await db.rawQuery!<{ count: string }>(
       `SELECT COUNT(*) AS count FROM fortress_tenant_user WHERE user_id = ? AND is_default = true`,
       [legacyUser.id],
@@ -219,7 +219,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(defaulted.recent).toBe(true);
 
     const after = await getMigrationStatus(db, 'pg');
-    expect(after.currentVersion).toBe(7);
+    expect(after.currentVersion).toBe(8);
     expect(after.upToDate).toBe(true);
 
     // Real-engine schema check: no missing tables, no missing columns.
@@ -238,7 +238,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
          AND data_type LIKE 'timestamp%'
        GROUP BY data_type`,
     );
-    expect(timestampTypes).toEqual([{ dataType: 'timestamp with time zone', count: '60' }]);
+    expect(timestampTypes).toEqual([{ dataType: 'timestamp with time zone', count: '62' }]);
 
     const allIndexRows = await db.rawQuery!<{ indexname: string; indexdef: string }>(
       `SELECT indexname, indexdef FROM pg_indexes
@@ -271,7 +271,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
 
     // A targeted rollback preserves refresh rows while removing v5 through v3.
     const rollback = await migrateDown(db, 'pg', 2);
-    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
+    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
     expect(await db.count({ model: 'refresh_token' })).toBe(4);
     const v3Columns = await db.rawQuery!<{ columnName: string }>(
       `SELECT column_name AS "columnName" FROM information_schema.columns
@@ -286,7 +286,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(continuationTables).toEqual([]);
 
     const restore = await migrateUp(db, 'pg');
-    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor']);
+    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening']);
 
     // Roll back drops every Fortress table (FK-safe via CASCADE ordering).
     const down = await migrateDown(db, 'pg');
@@ -305,20 +305,20 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
         migrateUp(first, 'pg'),
         migrateUp(second, 'pg'),
       ]);
-      expect(upResults.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 7]);
-      expect(upResults.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 7]);
+      expect(upResults.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 8]);
+      expect(upResults.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 8]);
 
       const journal = await first.rawQuery!<{ version: number; checksum: string }>(
         'SELECT version, checksum FROM fortress_migration_journal ORDER BY version',
       );
-      expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       expect(journal.every(row => SHA256_HEX_RE.test(row.checksum))).toBe(true);
 
       const downResults = await Promise.all([
         migrateDown(first, 'pg', 4),
         migrateDown(second, 'pg', 4),
       ]);
-      expect(downResults.map(result => result.rolledBack.length).sort((a, b) => a - b)).toEqual([0, 3]);
+      expect(downResults.map(result => result.rolledBack.length).sort((a, b) => a - b)).toEqual([0, 4]);
       expect((await getMigrationStatus(first, 'pg')).currentVersion).toBe(4);
 
       await first.rawQuery!(

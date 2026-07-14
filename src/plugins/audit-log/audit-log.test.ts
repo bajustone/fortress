@@ -1,7 +1,9 @@
+import type { DatabaseAdapter } from '../../adapters/database';
 import type { Fortress } from '../../core/fortress';
 import type { AuditLogEntry, AuditLogMethods, AuditLogQueryOptions, ChainVerificationResult } from './index';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
+import { SILENT_LOGGER } from '../../core/observability/logger';
 import { assertSuccess } from '../../core/types';
 import { createTestAdapter } from '../../testing';
 import { auditLog } from './index';
@@ -128,6 +130,68 @@ describe('audit-log plugin', () => {
     });
   });
 
+  describe('audit write failures', () => {
+    it('does not report committed register, login, refresh, or logout state as failed', async () => {
+      const db = createTestAdapter();
+      const legacy = createFortress({
+        jwt: { key: SECRET },
+        database: db,
+        plugins: [auditLog()],
+      }).plugins['audit-log'] as AuditLogMethods;
+      await legacy.logCustomEvent({ eventType: 'ROLE_CREATED' });
+
+      const logError = vi.fn();
+      const resilientFortress = createFortress({
+        jwt: { key: SECRET },
+        database: db,
+        logger: { ...SILENT_LOGGER, error: logError },
+        plugins: [auditLog({ hashChain: true })],
+      });
+
+      const user = await resilientFortress.auth.createUser({
+        email: 'resilient@example.com',
+        name: 'Resilient',
+        password: 'password-123456',
+      });
+      expect(user.email).toBe('resilient@example.com');
+      expect(await db.count({ model: 'user' })).toBe(1);
+
+      const login = await resilientFortress.auth.login('resilient@example.com', 'password-123456');
+      assertSuccess(login);
+      const refreshed = await resilientFortress.auth.refresh(login.refreshToken);
+      await expect(resilientFortress.auth.logout(refreshed.refreshToken)).resolves.toBeUndefined();
+      await expect(resilientFortress.auth.refresh(refreshed.refreshToken)).rejects.toThrow();
+      expect(logError).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not swallow failures from unrelated plugin hooks', async () => {
+      const hookFortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          auditLog(),
+          {
+            name: 'unrelated-failure',
+            hooks: {
+              async afterLogin() {
+                throw new Error('unrelated hook failed');
+              },
+            },
+          },
+        ],
+      });
+      await hookFortress.auth.createUser({
+        email: 'hook@example.com',
+        name: 'Hook',
+        password: 'password-123456',
+      });
+
+      await expect(
+        hookFortress.auth.login('hook@example.com', 'password-123456'),
+      ).rejects.toThrow('unrelated hook failed');
+    });
+  });
+
   describe('getAuditLog method', () => {
     it('returns entries filtered by userId', async () => {
       const alice = await fortress.auth.createUser({
@@ -233,6 +297,103 @@ describe('audit-log plugin', () => {
       await expect(methods.verifyChain()).resolves.toMatchObject({ valid: true, totalEntries: 20 });
     });
 
+    it('appends from the persisted anchor without reading historical entries', async () => {
+      const db = createTestAdapter();
+      const chainFortress = createFortress({
+        jwt: { key: SECRET },
+        database: db,
+        plugins: [auditLog({ hashChain: true })],
+      });
+      const methods = chainFortress.plugins['audit-log'] as AuditLogMethods;
+      await methods.logCustomEvent({ eventType: 'ROLE_CREATED' });
+
+      const originalTransaction = db.transaction.bind(db);
+      db.transaction = <T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> => {
+        return originalTransaction(tx => fn(new Proxy(tx, {
+          get(target, property, receiver) {
+            if (property === 'findMany') {
+              return (params: { model: string }) => {
+                if (params.model === 'audit_log')
+                  throw new Error('append performed a historical audit-log read');
+                return target.findMany(params);
+              };
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        })));
+      };
+      await methods.logCustomEvent({ eventType: 'ROLE_UPDATED' });
+      await methods.logCustomEvent({ eventType: 'ROLE_DELETED' });
+
+      expect(await db.count({ model: 'audit_log' })).toBe(3);
+    });
+
+    it('does not serialize audit writes for unrelated database adapters', async () => {
+      const blockedDb = createTestAdapter();
+      const independentDb = createTestAdapter();
+      const originalTransaction = blockedDb.transaction.bind(blockedDb);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      blockedDb.transaction = async <T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> => {
+        entered();
+        await gate;
+        return originalTransaction(fn);
+      };
+      const blocked = createFortress({
+        jwt: { key: SECRET },
+        database: blockedDb,
+        plugins: [auditLog({ hashChain: true })],
+      }).plugins['audit-log'] as AuditLogMethods;
+      const independent = createFortress({
+        jwt: { key: SECRET },
+        database: independentDb,
+        plugins: [auditLog({ hashChain: true })],
+      }).plugins['audit-log'] as AuditLogMethods;
+
+      const blockedWrite = blocked.logCustomEvent({ eventType: 'ROLE_CREATED' });
+      await started;
+      await independent.logCustomEvent({ eventType: 'ROLE_CREATED' });
+      expect(await independentDb.count({ model: 'audit_log' })).toBe(1);
+      release();
+      await blockedWrite;
+    });
+
+    it('transactionally rebaselines a non-empty unchained legacy log', async () => {
+      const db = createTestAdapter();
+      const legacy = createFortress({
+        jwt: { key: SECRET },
+        database: db,
+        plugins: [auditLog()],
+      }).plugins['audit-log'] as AuditLogMethods;
+      await legacy.logCustomEvent({ eventType: 'ROLE_CREATED', targetId: '1' });
+      await legacy.logCustomEvent({ eventType: 'ROLE_UPDATED', targetId: '2' });
+      await legacy.logCustomEvent({ eventType: 'ROLE_DELETED', targetId: '3' });
+
+      const chained = createFortress({
+        jwt: { key: SECRET },
+        database: db,
+        plugins: [auditLog({ hashChain: true })],
+      }).plugins['audit-log'] as AuditLogMethods;
+      await expect(chained.verifyChain()).resolves.toMatchObject({ valid: false, totalEntries: 3 });
+      await expect(
+        chained.logCustomEvent({ eventType: 'PERMISSION_CHANGED' }),
+      ).rejects.toThrow('call rebaselineChain() first');
+      await expect(chained.rebaselineChain()).resolves.toEqual({
+        valid: true,
+        totalEntries: 3,
+        brokenLinks: [],
+      });
+      await chained.logCustomEvent({ eventType: 'PERMISSION_CHANGED' });
+      await expect(chained.verifyChain()).resolves.toMatchObject({ valid: true, totalEntries: 4 });
+      await expect(chained.rebaselineChain()).rejects.toThrow('already been initialized');
+    });
+
     it('verifies from the same locked snapshot while appends are in flight', async () => {
       const chainFortress = createFortress({
         jwt: { key: SECRET },
@@ -253,7 +414,7 @@ describe('audit-log plugin', () => {
       await expect(methods.verifyChain()).resolves.toMatchObject({ valid: true, totalEntries: 12 });
     });
 
-    it('detects tampering in fields omitted by the old digest and refuses to append', async () => {
+    it('keeps historical tamper detection in verifyChain without scanning on append', async () => {
       const db = createTestAdapter();
       const chainFortress = createFortress({
         jwt: { key: SECRET },
@@ -271,10 +432,8 @@ describe('audit-log plugin', () => {
       );
 
       await expect(methods.verifyChain()).resolves.toMatchObject({ valid: false, totalEntries: 2 });
-      await expect(
-        methods.logCustomEvent({ eventType: 'ROLE_DELETED' }),
-      ).rejects.toThrow('Cannot append to an invalid audit hash chain');
-      expect(await db.count({ model: 'audit_log' })).toBe(2);
+      await expect(methods.logCustomEvent({ eventType: 'ROLE_DELETED' })).resolves.toBeUndefined();
+      await expect(methods.verifyChain()).resolves.toMatchObject({ valid: false, totalEntries: 3 });
     });
 
     it('detects deletion of the terminal entry through the persisted anchor', async () => {
@@ -298,10 +457,8 @@ describe('audit-log plugin', () => {
       const verification = await methods.verifyChain();
       expect(verification).toMatchObject({ valid: false, totalEntries: 2 });
       expect(verification.brokenLinks.some(link => link.expected === 'anchor entry count 3')).toBe(true);
-      await expect(
-        methods.logCustomEvent({ eventType: 'ROLE_DELETED' }),
-      ).rejects.toThrow('Cannot append to an invalid audit hash chain');
-      expect(await db.count({ model: 'audit_log' })).toBe(2);
+      await expect(methods.logCustomEvent({ eventType: 'ROLE_DELETED' })).resolves.toBeUndefined();
+      await expect(methods.verifyChain()).resolves.toMatchObject({ valid: false, totalEntries: 3 });
     });
 
     it('does not treat deletion of both the chain and anchor as fresh bootstrap', async () => {
@@ -326,7 +483,7 @@ describe('audit-log plugin', () => {
       });
       await expect(
         methods.logCustomEvent({ eventType: 'ROLE_DELETED' }),
-      ).rejects.toThrow('Cannot append to an invalid audit hash chain');
+      ).rejects.toThrow('valid audit hash-chain anchor');
       expect(await db.count({ model: 'audit_log' })).toBe(0);
     });
   });

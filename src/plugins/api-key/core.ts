@@ -15,7 +15,7 @@
  */
 
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { ServiceAccount, Subject, SubjectType } from '../../core/types';
+import type { FortressUser, ServiceAccount, Subject, SubjectType } from '../../core/types';
 import { hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
 
@@ -226,9 +226,9 @@ export async function rotateKeyForSubject(
  * unknown, revoked, expired, or inactive keys. Side-effect: updates
  * `lastUsedAt` on successful resolution.
  *
- * SERVICE_ACCOUNT owners are additionally checked for `isActive` — this is
- * the first line of defense before the permission resolver enforces the
- * same gate in `internal-adapter.getSubjectPermissions`.
+ * USER and SERVICE_ACCOUNT owners are additionally checked for existence and
+ * `isActive` — this is the first line of defense before the permission
+ * resolver enforces the same gate in `internal-adapter.getSubjectPermissions`.
  */
 export async function resolveApiKey(
   db: DatabaseAdapter,
@@ -245,8 +245,16 @@ export async function resolveApiKey(
   if (record.expiresAt && record.expiresAt < new Date())
     return null;
 
-  // Enforce isActive for service-account owners.
-  if (record.subjectType === 'SERVICE_ACCOUNT') {
+  // A credential cannot outlive or bypass deactivation of its owner.
+  if (record.subjectType === 'USER') {
+    const user = await db.findOne<FortressUser>({
+      model: 'user',
+      where: [{ field: 'id', operator: '=', value: record.subjectId }],
+    });
+    if (!user || !user.isActive)
+      return null;
+  }
+  else if (record.subjectType === 'SERVICE_ACCOUNT') {
     const sa = await db.findOne<ServiceAccount>({
       model: 'service_account',
       where: [{ field: 'id', operator: '=', value: record.subjectId }],

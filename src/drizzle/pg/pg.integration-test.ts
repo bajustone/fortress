@@ -73,8 +73,15 @@ const CREATE_TABLES_SQL = `
     reason VARCHAR(32) NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     consumed_at TIMESTAMPTZ,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    last_failed_at TIMESTAMPTZ,
+    invalidated_at TIMESTAMPTZ,
+    max_attempts INTEGER NOT NULL DEFAULT 5,
+    cooldown_seconds INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  CREATE INDEX IF NOT EXISTS auth_continuation_failure_idx
+    ON fortress_auth_continuation (user_id, reason, last_failed_at);
 
   CREATE TABLE IF NOT EXISTS fortress_group (
     id SERIAL PRIMARY KEY,

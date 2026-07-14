@@ -1978,6 +1978,7 @@ should avoid the bypass helpers.
 import { dataIsolation } from '@bajustone/fortress/plugins/data-isolation';
 
 dataIsolation({
+  // Nullish applicable scope values fail closed with FORBIDDEN by default.
   scopes: [
     {
       name: 'organization',
@@ -1996,6 +1997,8 @@ dataIsolation({
 With this configuration, when user 42 (orgId: 'acme') queries posts:
 - `findMany({ model: 'post' })` automatically adds `WHERE orgId = 'acme'`
 - `create({ model: 'post', data: {...} })` automatically sets `orgId = 'acme'`
+
+If the applicable resolver returns `null` or `undefined`, reads and creates fail closed with `FORBIDDEN`. The explicit `unresolvedScope: 'skip'` option exists only as unsafe legacy compatibility because it removes isolation when assignments are missing. For reviewed administrative access, prefer `withoutScope()` or `unscoped()`.
 
 **Methods:**
 

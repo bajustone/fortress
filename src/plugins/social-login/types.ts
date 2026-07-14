@@ -73,7 +73,7 @@ export interface SocialLoginConfig {
   mapProfile?: (provider: string, profile: ProviderProfile) => { email: string; name: string };
   /** Called on first-ever login for a social user */
   onFirstLogin?: (user: { id: string }, provider: string, profile: ProviderProfile) => Promise<void>;
-  /** Persist encrypted provider access/refresh tokens. Default: true. */
+  /** Persist encrypted provider access/refresh tokens. Default: false (explicit opt-in). */
   persistTokens?: boolean;
   /** 32-byte AES-256-GCM key (raw bytes as base64/base64url/hex, or a UTF-8 string of at least 32 bytes). */
   tokenEncryptionKey?: string;

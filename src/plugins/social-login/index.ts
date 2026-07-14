@@ -13,7 +13,7 @@ import type { JWTPayload } from 'jose';
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import type { ProviderConfig, ProviderDefinition, ProviderProfile, SocialLoginConfig } from './types';
-import { object, string } from '@bajustone/fetcher/schema';
+import { object, string, union } from '@bajustone/fetcher/schema';
 import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
 import { normalizeEmail } from '../../core/auth/email';
 import { Errors } from '../../core/errors';
@@ -24,7 +24,7 @@ import { createOidcProvider } from './providers/oidc';
 /** Response shape guard — the upstream returned a JSON object (not array/null/scalar). */
 const jsonObjectSchema = object({});
 /** OAuth token response: `access_token` must be a present string; other fields pass through. */
-const tokenResponseSchema = object({ access_token: string() });
+const tokenResponseSchema = union([object({ access_token: string() }), string()]);
 
 interface SocialAccountRecord {
   id: string;
@@ -50,6 +50,8 @@ const HEX_32_BYTE_KEY = /^[0-9a-f]+$/i;
 const discoveryCache = new Map<string, Promise<ResolvedProviderDefinition>>();
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 const appleSecretCache = new Map<string, { value: string; expiresAt: number }>();
+const MICROSOFT_DISCOVERY_ISSUER_PATTERN = /^https:\/\/login\.microsoftonline\.com\/(?:\{tenantid\}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/v2\.0$/i;
+const MICROSOFT_TOKEN_ISSUER_PATTERN = /^https:\/\/login\.microsoftonline\.com\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/v2\.0$/i;
 
 function randomBase64Url(bytes = 32): string {
   const data = new Uint8Array(bytes);
@@ -167,33 +169,82 @@ function resolveProviderDefinition(providerConfig: ProviderConfig): ProviderDefi
   throw Errors.badRequest(`Unknown social login provider: ${providerConfig.name}. Provide an 'issuer' URL for custom OIDC providers.`);
 }
 
+function isAbsoluteUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0)
+    return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  }
+  catch {
+    return false;
+  }
+}
+
+function isMicrosoftMultiTenant(providerConfig: ProviderConfig): boolean {
+  return providerConfig.name === 'microsoft'
+    && ['common', 'organizations', 'consumers'].includes(providerConfig.tenant ?? 'common');
+}
+
+/**
+ * Resolve OIDC discovery once, caching only a complete and trusted document.
+ * Failed or semantically invalid discovery is deliberately not cached so a
+ * later login can recover after a transient provider outage.
+ */
 async function resolveDiscoveredDefinition(definition: ProviderDefinition, providerConfig: ProviderConfig): Promise<ResolvedProviderDefinition> {
   if (!definition.discoveryUrl || (definition.issuer && definition.jwksUri && !providerConfig.issuer)) {
     return definition;
   }
 
   const cacheKey = `${providerConfig.name}:${definition.discoveryUrl}`;
-  let cached = discoveryCache.get(cacheKey);
-  if (!cached) {
-    cached = (async () => {
-      const res = await outboundClient.get(definition.discoveryUrl!, { responseSchema: jsonObjectSchema }).result();
-      // Degrade to the static definition on non-2xx, timeout, network failure,
-      // or a non-object body — same fallback the bare fetch had, now also
-      // covering hangs (native fetch had no timeout).
-      if (!res.ok)
-        return definition;
-      const discovered = res.data as Record<string, unknown>;
-      return {
-        ...definition,
-        issuer: String(discovered.issuer ?? definition.issuer ?? providerConfig.issuer ?? ''),
-        authorizationUrl: providerConfig.authorizationUrl ?? String(discovered.authorization_endpoint ?? definition.authorizationUrl),
-        tokenUrl: providerConfig.tokenUrl ?? String(discovered.token_endpoint ?? definition.tokenUrl),
-        userInfoUrl: providerConfig.userInfoUrl ?? (discovered.userinfo_endpoint ? String(discovered.userinfo_endpoint) : definition.userInfoUrl),
-        jwksUri: providerConfig.jwksUri ?? String(discovered.jwks_uri ?? definition.jwksUri ?? ''),
-      };
-    })();
-    discoveryCache.set(cacheKey, cached);
-  }
+  const existing = discoveryCache.get(cacheKey);
+  if (existing)
+    return existing;
+
+  const pending = (async () => {
+    const res = await outboundClient.get(definition.discoveryUrl!, { responseSchema: jsonObjectSchema }).result();
+    if (!res.ok)
+      return null;
+
+    const discovered = res.data as Record<string, unknown>;
+    const discoveredIssuer = discovered.issuer;
+    const expectedIssuer = definition.issuer ?? providerConfig.issuer;
+    const trustedIssuer = isMicrosoftMultiTenant(providerConfig)
+      ? (typeof discoveredIssuer === 'string'
+        && (discoveredIssuer === expectedIssuer
+          || MICROSOFT_DISCOVERY_ISSUER_PATTERN.test(discoveredIssuer)))
+      : typeof discoveredIssuer === 'string' && discoveredIssuer === expectedIssuer;
+
+    // The issuer and JWKS URI are security-critical. Do not trust a discovery
+    // response that omits them, changes the configured issuer, or supplies a
+    // non-HTTPS endpoint. Endpoint overrides remain explicitly trusted config.
+    if (!trustedIssuer || !isAbsoluteUrl(discovered.jwks_uri))
+      return null;
+
+    return {
+      ...definition,
+      // Multi-tenant Microsoft authorities advertise a {tenantid} issuer in
+      // discovery; the concrete tenant is checked against the ID token below.
+      issuer: isMicrosoftMultiTenant(providerConfig) ? definition.issuer : discoveredIssuer as string,
+      authorizationUrl: providerConfig.authorizationUrl ?? (isAbsoluteUrl(discovered.authorization_endpoint) ? discovered.authorization_endpoint : definition.authorizationUrl),
+      tokenUrl: providerConfig.tokenUrl ?? (isAbsoluteUrl(discovered.token_endpoint) ? discovered.token_endpoint : definition.tokenUrl),
+      userInfoUrl: providerConfig.userInfoUrl ?? (isAbsoluteUrl(discovered.userinfo_endpoint) ? discovered.userinfo_endpoint : definition.userInfoUrl),
+      jwksUri: providerConfig.jwksUri ?? discovered.jwks_uri,
+    };
+  })();
+
+  const cached = pending.then((result) => {
+    if (result)
+      return result;
+    // Never retain a degraded/invalid result. The next request retries.
+    if (discoveryCache.get(cacheKey) === cached)
+      discoveryCache.delete(cacheKey);
+    return definition;
+  }, (error) => {
+    if (discoveryCache.get(cacheKey) === cached)
+      discoveryCache.delete(cacheKey);
+    throw error;
+  });
+  discoveryCache.set(cacheKey, cached);
   return cached;
 }
 
@@ -221,12 +272,24 @@ async function verifyIdToken(
     jwksCache.set(definition.jwksUri, jwks);
   }
 
+  const multiTenantMicrosoft = isMicrosoftMultiTenant(providerConfig);
   const { payload } = await jwtVerify(idToken, jwks, {
-    issuer: definition.issuer,
+    ...(multiTenantMicrosoft ? {} : { issuer: definition.issuer }),
     audience: providerConfig.clientId,
+    // Accept asymmetric OIDC signing algorithms while excluding `none` and
+    // every shared-secret HS* algorithm (which could enable key-confusion).
+    algorithms: ['RS256', 'PS256', 'ES256', 'EdDSA'],
   }).catch(() => {
     throw Errors.unauthorized(`Invalid ID token from ${providerConfig.name}`);
   });
+
+  if (multiTenantMicrosoft) {
+    const issuer = typeof payload.iss === 'string' ? payload.iss : '';
+    const tenantId = typeof payload.tid === 'string' ? payload.tid : '';
+    const match = MICROSOFT_TOKEN_ISSUER_PATTERN.exec(issuer);
+    if (!match || !tenantId || match[1]!.toLowerCase() !== tenantId.toLowerCase())
+      throw Errors.unauthorized(`Invalid ID token issuer from ${providerConfig.name}`);
+  }
 
   if (payload.nonce !== nonce)
     throw Errors.unauthorized(`Invalid ID token nonce from ${providerConfig.name}`);
@@ -401,7 +464,12 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
         // Exchange code for tokens. POST is never retried (RFC 9110); the
         // shared client adds a timeout and validates `access_token` is present.
         const tokenRes = await outboundClient.post(resolvedDefinition.tokenUrl, {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            // GitHub defaults to form-urlencoded; explicitly requesting JSON
+            // makes its response interoperable while retaining the fallback.
+            'Accept': 'application/json',
+          },
           body: new URLSearchParams({
             grant_type: 'authorization_code',
             code,
@@ -417,12 +485,25 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
           throw Errors.unauthorized(`Failed to exchange authorization code with ${providerName}`);
         }
 
-        const tokens = tokenRes.data as {
-          access_token: string;
-          refresh_token?: string;
-          expires_in?: number;
-          id_token?: string;
-        };
+        const tokenData = tokenRes.data;
+        const tokens = typeof tokenData === 'string'
+          ? (() => {
+              const form = new URLSearchParams(tokenData);
+              return {
+                access_token: form.get('access_token') ?? '',
+                refresh_token: form.get('refresh_token') ?? undefined,
+                expires_in: form.has('expires_in') ? Number(form.get('expires_in')) : undefined,
+                id_token: form.get('id_token') ?? undefined,
+              };
+            })()
+          : tokenData as {
+            access_token: string;
+            refresh_token?: string;
+            expires_in?: number;
+            id_token?: string;
+          };
+        if (!tokens.access_token)
+          throw Errors.unauthorized(`Failed to exchange authorization code with ${providerName}`);
 
         const idTokenClaims = await verifyIdToken(resolvedDefinition, pc, tokens.id_token, storedNonce);
 

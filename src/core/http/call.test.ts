@@ -23,6 +23,7 @@ describe('fortress.call', () => {
       expectTypeOf<InferEndpointCallInput<typeof authEndpoints.login>>().toEqualTypeOf<{
         identifier: string;
         password: string;
+        trustedDeviceToken?: string;
       }>();
     });
 

@@ -281,13 +281,13 @@ export const authRef: AuthComponents['ref'] = authComponents.ref;
  */
 export interface AuthEndpointsMap {
   login: EndpointDefinition<
-    { identifier: string; password: string },
+    { identifier: string; password: string; trustedDeviceToken?: string },
     EmptyInput,
     EmptyInput,
     { 200: AuthResultWire; 401: ErrorResponseWire }
   >;
   verifyTwoFactor: EndpointDefinition<
-    { continuationToken: string; code: string },
+    { continuationToken: string; code: string; rememberDevice?: boolean },
     EmptyInput,
     EmptyInput,
     { 200: AuthResultWire; 400: ErrorResponseWire; 401: ErrorResponseWire }
@@ -382,7 +382,11 @@ export const authEndpoints: AuthEndpointsMap = {
     .tags('Auth')
     .security('none')
     .body(obj(
-      { identifier: str('Email, username, or phone'), password: str('User password') },
+      {
+        identifier: str('Email, username, or phone'),
+        password: str('User password'),
+        trustedDeviceToken: str('Opaque trusted-device token previously returned after two-factor verification'),
+      },
       'identifier',
       'password',
     ))
@@ -399,6 +403,7 @@ export const authEndpoints: AuthEndpointsMap = {
       {
         continuationToken: str('Single-use auth continuation token'),
         code: str('TOTP or backup code'),
+        rememberDevice: bool('Issue an opaque trusted-device token after successful verification'),
       },
       'continuationToken',
       'code',

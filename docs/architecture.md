@@ -1137,18 +1137,20 @@ TOTP (RFC 6238), backup codes, and trusted devices.
 {
   totp: { issuer: 'Fortress', period: 30, digits: 6 },
   backupCodes: { count: 10 },
-  trustedDeviceDays: 30
+  trustedDeviceDays: 30,
+  maxAttempts: 5,
+  failedAttemptCooldownSeconds: 1
 }
 ```
 
 **Models:** `two_factor_secret` (Base32-encoded, enabled flag), `backup_code` (single-use), `trusted_device` (hash + expiry)
 
-**Gate: `postAuthGate`** — If 2FA is enabled and the device is not trusted, returns an `AuthPending` challenge before any token row is written. The client presents its continuation token with the TOTP/backup code.
+**Gate: `postAuthGate`** — If 2FA is enabled and the high-entropy trusted-device token is absent or invalid, returns an `AuthPending` challenge before any token row is written. The client presents its continuation token with the TOTP/backup code. Rejected proofs are durably counted and bounded; User-Agent is never a trust credential.
 
 **Methods:**
 - `enable(userId)` → `{ secret, otpauthUrl, backupCodes }` — generates TOTP secret + QR URL + backup codes
-- `confirmSetup(userId, code, meta?)` → `{ verified: true }` — activates the newly configured factor
-- `verify(continuationToken, code, meta?)` → `AuthResult` — atomically consumes the continuation, verifies the factor, reruns remaining gates, and issues the session on success
+- `confirmSetup(userId, code, meta?)` → `{ verified: true, trustedDeviceToken? }` — activates the factor and optionally enrolls a device when `meta.rememberDevice` is true
+- `verify(continuationToken, code, meta?)` → `AuthResult` — atomically consumes the continuation, verifies the factor, reruns remaining gates, issues the session, and optionally returns `pluginData.trustedDeviceToken`
 - `disable(userId)` — revokes secret, backup codes, and all trusted devices
 
 **Internal TOTP implementation:** `generateTOTP()` uses HMAC-SHA1 over the time counter (`floor(now / period)`), extracts a 6-digit code via dynamic truncation per RFC 4226. `verifyTOTP()` checks the current window ±1 step.

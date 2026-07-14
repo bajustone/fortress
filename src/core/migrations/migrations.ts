@@ -1457,6 +1457,41 @@ INSERT INTO fortress_audit_chain_state (id, last_hash, entry_count) VALUES (1, N
 
 const PG_0007_DOWN = 'DROP TABLE IF EXISTS fortress_audit_chain_state;';
 
+// --- 0008: bounded failed-proof accounting ---
+
+const SQLITE_0008_UP = `
+ALTER TABLE fortress_auth_continuation ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE fortress_auth_continuation ADD COLUMN last_failed_at INTEGER;
+ALTER TABLE fortress_auth_continuation ADD COLUMN invalidated_at INTEGER;
+ALTER TABLE fortress_auth_continuation ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE fortress_auth_continuation ADD COLUMN cooldown_seconds INTEGER NOT NULL DEFAULT 1;
+CREATE INDEX auth_continuation_failure_idx ON fortress_auth_continuation (user_id, reason, last_failed_at);
+`.trim();
+const SQLITE_0008_DOWN = `
+CREATE TABLE fortress_auth_continuation_old AS SELECT id, user_id, token_hash, reason, expires_at, consumed_at, created_at FROM fortress_auth_continuation;
+DROP TABLE fortress_auth_continuation;
+CREATE TABLE fortress_auth_continuation (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE, reason TEXT NOT NULL, expires_at INTEGER NOT NULL, consumed_at INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+INSERT INTO fortress_auth_continuation SELECT * FROM fortress_auth_continuation_old;
+DROP TABLE fortress_auth_continuation_old;
+`.trim();
+const PG_0008_UP = `
+ALTER TABLE fortress_auth_continuation
+  ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN last_failed_at TIMESTAMPTZ,
+  ADD COLUMN invalidated_at TIMESTAMPTZ,
+  ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 5,
+  ADD COLUMN cooldown_seconds INTEGER NOT NULL DEFAULT 1;
+CREATE INDEX auth_continuation_failure_idx ON fortress_auth_continuation (user_id, reason, last_failed_at);
+`.trim();
+const PG_0008_DOWN = `
+DROP INDEX IF EXISTS auth_continuation_failure_idx;
+ALTER TABLE fortress_auth_continuation DROP COLUMN cooldown_seconds, DROP COLUMN max_attempts, DROP COLUMN invalidated_at, DROP COLUMN last_failed_at, DROP COLUMN failed_attempts;
+`.trim();
+
 export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> = {
   sqlite: [
     { version: 1, name: 'schema_version', dialect: 'sqlite', up: SQLITE_0001_UP, down: SQLITE_0001_DOWN },
@@ -1466,6 +1501,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 5, name: 'hot_indexes_timestamptz', dialect: 'sqlite', up: SQLITE_0005_UP, down: SQLITE_0005_DOWN },
     { version: 6, name: 'canonical_email', dialect: 'sqlite', up: SQLITE_0006_UP, down: SQLITE_0006_DOWN, freshUp: SQLITE_0006_FRESH_UP, dataStep: 'normalize-email-v2', beforeUp: normalizeExistingUserEmails },
     { version: 7, name: 'audit_chain_anchor', dialect: 'sqlite', up: SQLITE_0007_UP, down: SQLITE_0007_DOWN },
+    { version: 8, name: 'two_factor_hardening', dialect: 'sqlite', up: SQLITE_0008_UP, down: SQLITE_0008_DOWN },
   ],
   pg: [
     { version: 1, name: 'schema_version', dialect: 'pg', up: PG_0001_UP, down: PG_0001_DOWN },
@@ -1475,6 +1511,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 5, name: 'hot_indexes_timestamptz', dialect: 'pg', up: PG_0005_UP, down: PG_0005_DOWN },
     { version: 6, name: 'canonical_email', dialect: 'pg', up: PG_0006_UP, down: PG_0006_DOWN, freshUp: PG_0006_FRESH_UP, dataStep: 'normalize-email-v2', beforeUp: normalizeExistingUserEmails },
     { version: 7, name: 'audit_chain_anchor', dialect: 'pg', up: PG_0007_UP, down: PG_0007_DOWN },
+    { version: 8, name: 'two_factor_hardening', dialect: 'pg', up: PG_0008_UP, down: PG_0008_DOWN },
   ],
 };
 

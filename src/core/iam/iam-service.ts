@@ -320,7 +320,25 @@ export function createIamService(
       let permissions: Permission[];
       let cached = false;
 
-      if (tenantId) {
+      // USER activation is security state, not permission state. Re-check it
+      // before consulting the permission cache so a cached ALLOW cannot survive
+      // account deactivation/deletion (including changes made by another
+      // process that cannot invalidate this in-memory cache).
+      let activeUser = true;
+      if (subject.type === 'USER') {
+        const user = await db.findOne<Pick<FortressUser, 'isActive'>>({
+          model: 'user',
+          where: [{ field: 'id', operator: '=', value: subject.id }],
+        });
+        activeUser = user?.isActive === true;
+        if (!activeUser)
+          cache?.invalidate(cacheKey);
+      }
+
+      if (!activeUser) {
+        permissions = [];
+      }
+      else if (tenantId) {
         // Tenant-scoped: bypass cache (tenant varies per request)
         permissions = await adapter.getSubjectPermissions(subject, tenantId);
       }

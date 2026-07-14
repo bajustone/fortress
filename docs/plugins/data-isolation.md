@@ -53,6 +53,7 @@ The `DataIsolationConfig` requires a `scopes` array:
 | Option | Type | Required | Description |
 |---|---|---|---|
 | `scopes` | `DataIsolationScope[]` | Yes | Array of scope definitions that control row-level filtering. |
+| `unresolvedScope` | `'deny' \| 'skip'` | No | Behavior for a nullish applicable scope. Defaults to secure `'deny'`. `'skip'` is unsafe legacy compatibility mode. |
 
 Each `DataIsolationScope` has the following fields:
 
@@ -70,7 +71,17 @@ The plugin implements `scopeRules`, which the database adapter calls on every qu
 - **Reads** (`findOne`, `findMany`, `count`) -- A WHERE filter is added: `WHERE {field} = {resolvedValue}`.
 - **Creates** (`create`) -- The scoping field is set as a default value: `data.{field} = {resolvedValue}`.
 
-If `resolveValue` returns `null` or `undefined`, that scope is skipped for the current request.
+If an applicable `resolveValue` returns `null` or `undefined`, the plugin fails closed by default with a `FORBIDDEN` error. Scope resolution happens before a scoped adapter is returned, so both reads and creates are denied rather than becoming unscoped or accepting caller-controlled scope fields.
+
+For migration only, `unresolvedScope: 'skip'` restores the unsafe legacy behavior of omitting an unresolved filter. This can expose every row and permit cross-scope creates; do not use it as an authorization bypass. Use the explicit async-context-local `withoutScope()` or `unscoped()` helpers for reviewed administrative operations.
+
+```ts
+// Unsafe legacy compatibility only — remove after scope assignments are complete.
+dataIsolation({
+  unresolvedScope: 'skip',
+  scopes: [/* ... */],
+});
+```
 
 ### Example behavior
 
