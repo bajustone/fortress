@@ -91,7 +91,7 @@ ops for entities present in the database but absent from the policy
 file. System roles (`isSystem === true`) are never deleted.
 
 Run the un-pruned diff first to review, then add `prune: true` when
-the diff matches your intent.
+the diff matches your intent. An empty policy is rejected under prune by default because it would delete all managed IAM state; the destructive operation requires explicit `{ prune: true, allowEmptyPrune: true }` acknowledgement.
 
 ### Resource ops apply without filesystem access
 
@@ -150,8 +150,8 @@ Run it as a step in `.github/workflows/fortress-ci.yml` alongside
 
 | Export | Kind | Purpose |
 |---|---|---|
-| `loadPolicy(options?)` | function | Read + parse the policy file (env-aware) |
-| `resolvePolicyPath(options?)` | function | Resolve the file path that `loadPolicy` would use |
+| `loadPolicy(options?)` | async function | Read, validate, and parse the policy file (env-aware) |
+| `resolvePolicyPath(options?)` | async function | Resolve the file path that `loadPolicy` would use |
 | `diffPolicy(policy, iam, options?)` | function | Compute the plan to reconcile live IAM with `policy` |
 | `applyPolicyPlan(plan, iam)` | function | Apply every op in the plan; returns `applied` / `errors` |
 | `applyResourceOps(plan, iam, legacyFilePath)` | function | Compatibility helper; applies resource-only ops directly without file I/O |

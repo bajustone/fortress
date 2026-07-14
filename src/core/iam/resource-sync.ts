@@ -1,4 +1,5 @@
 import type { DatabaseAdapter } from '../../adapters/database';
+import { Errors } from '../errors';
 
 export interface ResourceDefinition {
   actions: string[];
@@ -7,6 +8,40 @@ export interface ResourceDefinition {
 
 export interface ResourceFile {
   resources: Record<string, ResourceDefinition>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Validate and normalize the canonical map-shaped resource document. */
+export function parseResourceFile(value: unknown): ResourceFile {
+  if (!isRecord(value))
+    throw Errors.badRequest('fortress.resources.json must be an object');
+  if (Array.isArray(value.resources)) {
+    throw Errors.badRequest(
+      'fortress.resources.json uses the legacy resources array; use a map keyed by resource name',
+    );
+  }
+  if (!isRecord(value.resources))
+    throw Errors.badRequest('fortress.resources.json must have a resources object map');
+
+  const resources: Record<string, ResourceDefinition> = {};
+  for (const [name, raw] of Object.entries(value.resources)) {
+    if (!name || ['__proto__', 'constructor', 'prototype'].includes(name))
+      throw Errors.badRequest(`Resource name '${name}' is reserved or empty`);
+    if (!isRecord(raw))
+      throw Errors.badRequest(`Resource '${name}' must be an object`);
+    if (!Array.isArray(raw.actions) || raw.actions.some(action => typeof action !== 'string' || action.length === 0))
+      throw Errors.badRequest(`Resource '${name}' actions must be an array of non-empty strings`);
+    if (raw.description !== undefined && typeof raw.description !== 'string')
+      throw Errors.badRequest(`Resource '${name}' description must be a string`);
+    resources[name] = {
+      actions: [...new Set(raw.actions as string[])],
+      ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
+    };
+  }
+  return { resources };
 }
 
 /**
@@ -25,7 +60,14 @@ export async function loadResourceFile(filePath: string): Promise<ResourceFile> 
       return { resources: {} };
     throw err;
   }
-  return JSON.parse(text) as ResourceFile;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  }
+  catch (err) {
+    throw Errors.badRequest(`Failed to parse resource file ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return parseResourceFile(parsed);
 }
 
 /**
@@ -118,12 +160,15 @@ export function generateResourceTypes(resources: ResourceFile): string {
     return `export type FortressResource = never;\nexport type FortressAction<R extends FortressResource> = never;\n`;
   }
 
-  const resourceType = resourceNames.map(n => `'${n}'`).join(' | ');
+  const resourceType = resourceNames.map(name => JSON.stringify(name)).join(' | ');
 
   const actionBranches = resourceNames
     .map((name) => {
-      const actions = resources.resources[name].actions.map(a => `'${a}'`).join(' | ');
-      return `  R extends '${name}' ? ${actions} :`;
+      const rawActions = resources.resources[name].actions;
+      const actions = rawActions.length > 0
+        ? rawActions.map(action => JSON.stringify(action)).join(' | ')
+        : 'never';
+      return `  R extends ${JSON.stringify(name)} ? ${actions} :`;
     })
     .join('\n');
 

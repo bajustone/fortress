@@ -19,6 +19,7 @@ import type {
   PolicyPermission,
   PolicyPlan,
 } from './types';
+import { Errors } from '../errors';
 
 function permissionKey(perm: { resource: string; action: string; effect?: string }): string {
   return `${perm.resource}::${perm.action}::${perm.effect ?? 'ALLOW'}`;
@@ -38,6 +39,15 @@ export async function diffPolicy(
   iam: IamService,
   options: DiffPolicyOptions = {},
 ): Promise<PolicyPlan> {
+  const declaredCount = (policy.resources?.length ?? 0)
+    + (policy.roles?.length ?? 0)
+    + (policy.groups?.length ?? 0)
+    + (policy.serviceAccounts?.length ?? 0);
+  if (options.prune && declaredCount === 0 && !options.allowEmptyPrune) {
+    throw Errors.badRequest(
+      'Refusing to prune with an empty policy; pass allowEmptyPrune: true to acknowledge deleting all managed IAM state',
+    );
+  }
   const ops: PolicyOp[] = [];
 
   // ── Resources ──────────────────────────────────────────────────────

@@ -100,4 +100,6 @@ export interface DiffPolicyOptions {
    * and updates unless the operator opts in to deletions.
    */
   prune?: boolean;
+  /** Explicitly acknowledge that pruning with no declared entities deletes all managed IAM state. */
+  allowEmptyPrune?: boolean;
 }

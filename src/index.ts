@@ -116,26 +116,29 @@ export type {
 /** Manifest-driven RBAC permission seeding. See {@link Fortress.syncPermissionsFromManifest}. */
 export { runPermissionSync } from './core/iam/permission-sync';
 export type { PermissionSyncOptions, PermissionSyncResult } from './core/iam/permission-sync';
+export { parseResourceFile } from './core/iam/resource-sync';
+
+export type { ResourceDefinition, ResourceFile } from './core/iam/resource-sync';
 /** JSON Schema types and the inferred TypeScript type helpers used by the schema builder. */
 export type { FortressSchema, Infer, JSONSchema, Simplify } from './core/json-schema';
 
 /** Canonical route-security manifest and drift checker. */
 export { detectRouteManifestDrift, hasRouteManifestDrift } from './core/manifest/drift';
+
 export type { DetectRouteManifestDriftOptions, RouteManifestDrift } from './core/manifest/drift';
 
 export { buildRouteManifest } from './core/manifest/route-manifest';
-
 export type { RouteClassification, RouteManifestEntry } from './core/manifest/route-manifest';
-
 /** Fortress schema migration metadata and runner helpers. */
 export { detectMigrationDrift, getMigrationStatus, hasMigrationDrift, migrateDown, migrateUp } from './core/migrations/engine';
 export type { MigrationApplyResult, MigrationDownResult, MigrationDrift, MigrationStatus } from './core/migrations/engine';
+
 export { FORTRESS_TABLES, fortressMigrations, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion, getMigrationUpSql } from './core/migrations/migrations';
 export type { FortressMigration, MigrationDialect } from './core/migrations/migrations';
-
 export type { Unsubscribe } from './core/observability/listener-list';
 /** Runtime-neutral logging, telemetry, and observer contracts. */
 export type { FortressLogger } from './core/observability/logger';
+
 export type {
   Attributes,
   AttributeValue,
@@ -146,10 +149,10 @@ export type {
   TelemetryProvider,
   Tracer,
 } from './core/observability/types';
+
 export { toOpenAPI } from './core/openapi';
 
 export type { ToOpenAPIOptions } from './core/openapi';
-
 /**
  * Plugin authoring types — implement {@link FortressPlugin} to extend fortress
  * with new models, hooks, methods, routes, middleware, scope rules, or
@@ -171,14 +174,13 @@ export type {
   PostAuthGateProvider,
   PostAuthGateVerificationContext,
 } from './core/plugin';
-
 /** Type-level mapping helpers used to expose plugin methods and typed call maps on the fortress instance. */
 export type { CallableForEndpoints, InferPluginCallMap, InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
 /** Declarative policy-as-code: loader, diff, and apply primitives. */
 export { applyPolicyPlan, applyResourceOps } from './core/policy/apply';
 export type { ApplyPolicyResult } from './core/policy/apply';
 export { diffPolicy } from './core/policy/diff';
-export { DEFAULT_POLICY_FILE, loadPolicy, resolvePolicyPath } from './core/policy/loader';
+export { DEFAULT_POLICY_FILE, loadPolicy, parsePolicyDocument, resolvePolicyPath } from './core/policy/loader';
 export type { LoadPolicyOptions } from './core/policy/loader';
 
 export type { DiffPolicyOptions, PolicyDocument, PolicyGroup, PolicyOp, PolicyPermission, PolicyPlan, PolicyResource, PolicyRole, PolicyServiceAccount } from './core/policy/types';

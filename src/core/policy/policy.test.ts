@@ -209,13 +209,14 @@ describe('policy-as-code', () => {
     expect((await diffPolicy(narrowed, fortress.iam)).inSync).toBe(true);
   });
 
-  it('prune: true emits delete ops for undeclared entities', async () => {
+  it('requires explicit acknowledgement before pruning with an empty policy', async () => {
     const fortress = freshFortress();
     await applyPolicyPlan(await diffPolicy(basePolicy, fortress.iam), fortress.iam);
 
     // Empty policy with prune should delete role/group/SA.
     const empty: PolicyDocument = {};
-    const plan = await diffPolicy(empty, fortress.iam, { prune: true });
+    await expect(diffPolicy(empty, fortress.iam, { prune: true })).rejects.toThrow('allowEmptyPrune');
+    const plan = await diffPolicy(empty, fortress.iam, { prune: true, allowEmptyPrune: true });
     const kinds = plan.ops.map(op => op.kind).sort();
     expect(kinds).toContain('delete-role');
     expect(kinds).toContain('delete-group');
@@ -223,6 +224,9 @@ describe('policy-as-code', () => {
 
     const result = await applyPolicyPlan(plan, fortress.iam);
     expect(result.errors).toEqual([]);
-    expect((await diffPolicy(empty, fortress.iam, { prune: true })).inSync).toBe(true);
+    expect((await diffPolicy(empty, fortress.iam, {
+      prune: true,
+      allowEmptyPrune: true,
+    })).inSync).toBe(true);
   });
 });
