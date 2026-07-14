@@ -147,20 +147,19 @@ describe('jwt', () => {
       await expect(verifyAccessToken(token, secret)).rejects.toThrow('Invalid or expired token');
     });
 
-    it('supports audience and additional required claim verification', async () => {
-      const token = await new SignJWT({ name: 'Test User', subjectType: 'USER', groups: [], tenantId: 'acme' })
-        .setProtectedHeader({ alg: 'HS256' })
-        .setIssuedAt()
-        .setExpirationTime('900s')
-        .setIssuer('fortress-test')
-        .setSubject('42')
-        .setAudience('fortress-api')
-        .sign(new TextEncoder().encode(secret));
+    it('signs and verifies audience end-to-end', async () => {
+      const token = await signAccessToken(
+        { ...claims, customClaims: { tenantId: 'acme' } },
+        secret,
+        900,
+        { audience: 'fortress-api' },
+      );
 
       const decoded = await verifyAccessToken(token, secret, {
         audience: 'fortress-api',
         requiredClaims: ['tenantId'],
       });
+      expect(decoded.aud).toBe('fortress-api');
       expect(decoded.customClaims?.tenantId).toBe('acme');
 
       await expect(

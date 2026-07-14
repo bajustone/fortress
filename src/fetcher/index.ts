@@ -26,7 +26,56 @@
  * @module
  */
 
-export * from '@bajustone/fetcher';
+export {
+  authBearer,
+  bearerWithRefresh,
+  cookieAuth,
+  createFetch,
+  extractErrorMessage,
+  FetcherAbortError,
+  FetcherHTTPError,
+  FetcherNetworkError,
+  FetcherRequestError,
+  FetcherTimeoutError,
+  FetcherValidationError,
+  parseSetCookie,
+  retry,
+  timeout,
+  withInputType,
+} from '@bajustone/fetcher';
+export type {
+  BearerWithRefreshOptions,
+  CookieAuthOptions,
+  ExcludeMatcher,
+  ExtractPathParams,
+  FetchConfig,
+  FetcherError,
+  FetcherErrorLocation,
+  FetchFn,
+  HttpMethod,
+  InferOutput,
+  InferRoutesFromSpec,
+  InferSchema,
+  JSONSchemaToType,
+  MethodShortcutFn,
+  Middleware,
+  PathsToRoutes,
+  QueryDescriptor,
+  QuerySerializer,
+  ResultData,
+  RetryOptions,
+  RouteDefinition,
+  Routes,
+  Schema,
+  SchemaOf,
+  StandardSchemaV1,
+  StandardSchemaV1Issue,
+  StandardSchemaV1PathSegment,
+  StandardSchemaV1Result,
+  TypedFetchFn,
+  TypedFetchPromise,
+  TypedResponse,
+} from '@bajustone/fetcher';
 export * as openapi from '@bajustone/fetcher/openapi';
 export * as schema from '@bajustone/fetcher/schema';
 export * as specTools from '@bajustone/fetcher/spec-tools';

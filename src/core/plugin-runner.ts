@@ -213,8 +213,9 @@ export function collectPluginModels(
  */
 function middlewarePathToRegex(pattern: string): RegExp {
   const regexStr = canonicalizePath(pattern)
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(/:[^/]+/g, '[^/]+')
-    .replace(/\*/g, '.*')
+    .replace(/\\\*/g, '.*')
     .replace(/\//g, '\\/');
   return new RegExp(`^${regexStr}$`);
 }

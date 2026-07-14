@@ -1,3 +1,4 @@
+import type { JSONSchema } from './json-schema';
 import { describe, expect, it } from 'vitest';
 import { FortressError } from './errors';
 import { iamEndpoints } from './iam/iam-endpoints';
@@ -5,18 +6,55 @@ import { int, num, obj, str } from './schema-builder';
 import { coerceBySchema, validateRequest } from './validation';
 
 describe('coerceBySchema', () => {
-  it('coerces only canonical decimal URL numerics', () => {
+  it('coerces only lossless canonical decimal URL numerics', () => {
     const schema = obj({ integer: int(), number: num() });
-    expect(coerceBySchema(schema, { integer: '-12', number: '.5' })).toEqual({
+    expect(coerceBySchema(schema, { integer: '-12', number: '0.5' })).toEqual({
       integer: -12,
       number: 0.5,
     });
-    for (const value of ['', '0x10', '1e3', '+1', 'Infinity']) {
+    for (const value of [
+      '',
+      '0x10',
+      '1e3',
+      '+1',
+      '.5',
+      '01',
+      '1.0',
+      '-0',
+      '9007199254740992',
+      '0.10000000000000001',
+      'Infinity',
+    ]) {
       expect(coerceBySchema(schema, { integer: value, number: value })).toEqual({
         integer: value,
         number: value,
       });
     }
+  });
+
+  it('leaves unsafe integers uncoerced so validation rejects them', async () => {
+    const paramsSchema = obj({ id: int() }, 'id');
+    const params = coerceBySchema(paramsSchema, { id: '9007199254740992' });
+
+    expect(params).toEqual({ id: '9007199254740992' });
+    await expect(
+      validateRequest({ params: paramsSchema, paramsSchema }, { params }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', statusCode: 422 });
+  });
+
+  it('coerces numeric enum and const properties without an explicit type', async () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        mode: { enum: [1, 2] },
+        version: { const: 3 },
+      },
+      required: ['mode', 'version'],
+    };
+    const params = coerceBySchema(schema, { mode: '2', version: '3' });
+
+    expect(params).toEqual({ mode: 2, version: 3 });
+    await expect(validateRequest({ params: schema }, { params })).resolves.toBeUndefined();
   });
 });
 
@@ -26,7 +64,43 @@ describe('validateRequest', () => {
   });
 
   it('no-op when no schemas are set', async () => {
-    await expect(validateRequest({ body: { type: 'object' } }, {})).resolves.toBeUndefined();
+    await expect(validateRequest({}, {})).resolves.toBeUndefined();
+  });
+
+  it('validates hand-authored JSON Schemas and aggregates locations', async () => {
+    const input = {
+      body: { type: 'object' as const, properties: { name: { type: 'string' as const } }, required: ['name'] },
+      query: { type: 'object' as const, properties: { page: { type: 'integer' as const } }, required: ['page'] },
+      params: { type: 'object' as const, properties: { id: { type: 'integer' as const } }, required: ['id'] },
+    };
+
+    try {
+      await validateRequest(input, { body: {}, query: {}, params: {} });
+      expect.unreachable();
+    }
+    catch (err) {
+      expect(err).toMatchObject({ code: 'VALIDATION_ERROR', statusCode: 422 });
+      const details = (err as FortressError).details as Array<{ location: string }>;
+      expect(details.map(issue => issue.location)).toEqual(['body', 'query', 'params']);
+    }
+  });
+
+  it('preserves definitions when validating a raw JSON Schema ref', async () => {
+    const body = {
+      $ref: '#/$defs/AdminBody',
+      $defs: {
+        AdminBody: {
+          type: 'object',
+          properties: { name: { type: 'string' } },
+          required: ['name'],
+        },
+      },
+    } as unknown as JSONSchema;
+
+    await expect(validateRequest({ body }, { body: { name: 'admin' } })).resolves.toBeUndefined();
+    await expect(
+      validateRequest({ body }, { body: {} }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', statusCode: 422 });
   });
 
   it('enforces component refs through a real IAM endpoint body', async () => {

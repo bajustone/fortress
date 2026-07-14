@@ -679,7 +679,7 @@ describe('plugin route mounting: OAuth', () => {
     expect(body.error).toBe('invalid_token');
   });
 
-  it('gET /oauth/userinfo returns user for valid token with userId', async () => {
+  it('gET /oauth/userinfo scope-gates identity claims for a valid token', async () => {
     // Create user and auth code
     const user = await fortress.auth.createUser({
       email: 'oauth-user@test.com',
@@ -707,8 +707,8 @@ describe('plugin route mounting: OAuth', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.sub).toBe(String(user.id));
-    expect(body.email).toBe('oauth-user@test.com');
-    expect(body.name).toBe('OAuth User');
+    expect(body.email).toBeUndefined();
+    expect(body.name).toBeUndefined();
   });
 });
 

@@ -56,14 +56,24 @@ describe('schema builders', () => {
     expect(s.nullable).toBe(true);
   });
 
-  it('oneOf() composes schemas', () => {
-    const s = oneOf(str(), int());
+  it('oneOf() composes schemas and requires exactly one runtime match', async () => {
+    const left = obj({ left: str() }, 'left');
+    const right = obj({ right: str() }, 'right');
+    const s = oneOf(left, right);
     expect(s.oneOf).toHaveLength(2);
+
+    expect(await s['~standard'].validate({ left: 'yes' })).toEqual({ value: { left: 'yes' } });
+    expectIssues(await s['~standard'].validate({ neither: true }));
+    expectIssues(await s['~standard'].validate({ left: 'yes', right: 'yes' }));
   });
 
-  it('anyOf() composes schemas', () => {
-    const s = anyOf(str(), int());
+  it('anyOf() composes schemas and permits overlapping runtime matches', async () => {
+    const s = anyOf(
+      obj({ left: str() }, 'left'),
+      obj({ right: str() }, 'right'),
+    );
     expect(s.anyOf).toHaveLength(2);
+    expect((await s['~standard'].validate({ left: 'yes', right: 'yes' }) as any).issues).toBeUndefined();
   });
 
   it('ref() returns $ref', () => {

@@ -18,7 +18,6 @@ const fortress = createFortress({
   jwt: { key: process.env.JWT_SECRET!, issuer: 'my-app' },
   plugins: [
     socialLogin({
-      tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
       providers: [
         {
           name: 'google',
@@ -49,6 +48,16 @@ The plugin registers a `social_account` table that links provider identities to 
 | `linkAccounts` | `boolean` | `true` | When a provider-verified social login email matches an active existing user, link the social identity to that user instead of creating a duplicate. |
 | `persistTokens` | `boolean` | `false` | Persist encrypted provider access/refresh tokens. **Off by default** — set to `true` only if you need server-side access to provider tokens (e.g. to call the provider's API after sign-in); requires `tokenEncryptionKey`. |
 | `tokenEncryptionKey` | `string` | required when `persistTokens` | 32-byte AES-256-GCM key (base64/base64url/hex/raw UTF-8) for provider token encryption. Hard requirement — the plugin throws at construction if `persistTokens` is enabled without one. |
+
+To call `getProviderTokens`, enable persistence explicitly:
+
+```typescript
+socialLogin({
+  persistTokens: true,
+  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
+  providers: [/* ... */],
+})
+```
 | `mapProfile` | `(provider, profile) => { email, name }` | `undefined` | Custom mapping from provider profile to Fortress user fields during JIT provisioning. |
 | `onFirstLogin` | `(user, provider, profile) => Promise<void>` | `undefined` | Callback invoked once when a user is created via social login. Useful for assigning default roles, sending welcome emails, etc. |
 
@@ -76,7 +85,6 @@ Each entry in `providers` has these fields:
 
 ```typescript
 socialLogin({
-  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   providers: [
     { name: 'google', clientId: '...', clientSecret: '...' },
     { name: 'github', clientId: '...', clientSecret: '...' },
@@ -90,7 +98,6 @@ socialLogin({
 
 ```typescript
 socialLogin({
-  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   providers: [
     {
       name: 'okta',
@@ -180,7 +187,6 @@ To customize the user record created during provisioning, use `mapProfile`:
 
 ```typescript
 socialLogin({
-  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   autoRegister: true,
   mapProfile: (provider, profile) => ({
     email: profile.email,
@@ -194,7 +200,6 @@ To run logic after user creation (assign roles, send a welcome email), use `onFi
 
 ```typescript
 socialLogin({
-  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   onFirstLogin: async (user, provider, profile) => {
     await fortress.iam.assignRole(user.id, 'member');
     await sendWelcomeEmail(profile.email, profile.name);
@@ -217,7 +222,6 @@ Restrict sign-in to specific email domains per provider using `allowedDomains`. 
 
 ```typescript
 socialLogin({
-  tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!,
   providers: [
     {
       name: 'google',

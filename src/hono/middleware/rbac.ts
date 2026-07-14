@@ -17,12 +17,9 @@ export interface RbacOptions {
   mapRequest?: (method: string, path: string) => RouteMapping | null;
   /** Paths that skip permission checks entirely (supports * wildcards) */
   skipPaths?: string[];
-  /**
-   * When `true`, a non-skipped route that matches no `routeMap`/`mapRequest`
-   * entry is refused with a 403 (fail closed) instead of being allowed as
-   * public. List genuinely public routes in {@link RbacOptions.skipPaths}.
-   * Default: `false` (unmapped routes are allowed).
-   */
+  /** Behavior for non-skipped routes absent from routeMap/mapRequest. */
+  unmappedRoutes?: 'allow' | 'deny';
+  /** @deprecated Use `unmappedRoutes: 'deny'`. */
   defaultDeny?: boolean;
 }
 
@@ -50,7 +47,8 @@ export function createRbacMiddleware(
   const routeMap = options?.routeMap ?? {};
   const skipPaths = options?.skipPaths ?? [];
   const skipPatterns = skipPaths.map(p => pathToRegex(p));
-  const defaultDeny = options?.defaultDeny ?? false;
+  const unmappedRoutes = options?.unmappedRoutes
+    ?? (options?.defaultDeny ? 'deny' : 'allow');
 
   return async (c, next) => {
     const path = c.req.path;
@@ -73,7 +71,7 @@ export function createRbacMiddleware(
     }
 
     if (!mapping) {
-      if (defaultDeny) {
+      if (unmappedRoutes === 'deny') {
         // Fail closed: an unmapped route is refused rather than treated as
         // public. Genuinely public routes belong in skipPaths.
         throw new FortressError('FORBIDDEN', 'No permission mapping for this route', 403);
@@ -125,8 +123,9 @@ function findRouteMapMatch(method: string, path: string, routeMap: Record<string
  */
 function pathToRegex(pattern: string): RegExp {
   const regexStr = pattern
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(/:[^/]+/g, '[^/]+')
-    .replace(/\*/g, '.*')
+    .replace(/\\\*/g, '.*')
     .replace(/\//g, '\\/');
   return new RegExp(`^${regexStr}$`);
 }

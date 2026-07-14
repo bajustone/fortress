@@ -81,6 +81,7 @@ export type AuthEventListener = (event: AuthEvent) => void | Promise<void>;
 interface ResolvedConfig {
   key: JwtKeyMaterial;
   issuer: string;
+  audience?: string | string[];
   accessTokenExpiry: number;
   refreshTokenExpiry: number;
 }
@@ -89,6 +90,7 @@ function resolveConfig(config: FortressConfig): ResolvedConfig {
   return {
     key: config.jwt.key,
     issuer: config.jwt.issuer ?? 'fortress',
+    audience: config.jwt.audience,
     accessTokenExpiry: config.jwt.accessTokenExpirySeconds ?? 900,
     refreshTokenExpiry: config.jwt.refreshTokenExpirySeconds ?? 604800,
   };
@@ -109,7 +111,7 @@ export interface AuthService {
   me: (userId: string) => Promise<FortressUser>;
   createUser: (data: CreateUserInput) => Promise<FortressUser>;
   verifyToken: (token: string) => Promise<TokenClaims>;
-  signToken: (claims: Omit<TokenClaims, 'iat' | 'exp'>) => Promise<string>;
+  signToken: (claims: Omit<TokenClaims, 'iat' | 'exp' | 'aud'>) => Promise<string>;
   listSessions: (userId: string) => Promise<SessionInfo[]>;
   revokeSession: (userId: string, tokenId: string) => Promise<void>;
   revokeAllOtherSessions: (userId: string, currentTokenId: string) => Promise<void>;
@@ -303,6 +305,7 @@ export function createAuthService(
       },
       resolved.key,
       resolved.accessTokenExpiry,
+      { audience: resolved.audience },
     );
   }
 
@@ -1061,7 +1064,10 @@ export function createAuthService(
     async verifyToken(token: string): Promise<TokenClaims> {
       const start = performance.now();
       try {
-        const claims = await verifyAccessToken(token, resolved.key, { issuer: resolved.issuer });
+        const claims = await verifyAccessToken(token, resolved.key, {
+          issuer: resolved.issuer,
+          ...(resolved.audience !== undefined ? { audience: resolved.audience } : {}),
+        });
         tokenVerifyDuration?.record(
           (performance.now() - start) / 1000,
           { result: 'ok' },
@@ -1077,8 +1083,10 @@ export function createAuthService(
       }
     },
 
-    async signToken(claims: Omit<TokenClaims, 'iat' | 'exp'>): Promise<string> {
-      return signAccessToken(claims, resolved.key, resolved.accessTokenExpiry);
+    async signToken(claims: Omit<TokenClaims, 'iat' | 'exp' | 'aud'>): Promise<string> {
+      return signAccessToken(claims, resolved.key, resolved.accessTokenExpiry, {
+        audience: resolved.audience,
+      });
     },
 
     async listSessions(userId: string): Promise<SessionInfo[]> {
@@ -1180,7 +1188,7 @@ export function createAuthService(
         where: [{ field: 'id', operator: '=', value: targetUserId }],
       });
 
-      if (!targetUser) {
+      if (!targetUser || !targetUser.isActive) {
         throw Errors.notFound('Target user not found');
       }
 
@@ -1206,6 +1214,7 @@ export function createAuthService(
         },
         resolved.key,
         expirySeconds,
+        { audience: resolved.audience },
       );
 
       // Do NOT issue a refresh token for impersonation — non-renewable

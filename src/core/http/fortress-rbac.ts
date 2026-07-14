@@ -95,12 +95,8 @@ export async function enforceFortressPermission(
 ): Promise<void> {
   const security = endpoint.meta?.security;
 
-  // Public routes
-  if (security?.includes('none') || security?.includes('basic')) {
-    return;
-  }
-
-  // Routes with explicit IAM permission requirement
+  // Explicit IAM permission requirements always win over transport metadata.
+  // A route cannot become public merely because it also accepts Basic auth.
   if (endpoint.meta?.permission) {
     if (!subject)
       throw Errors.unauthorized('Not authenticated');
@@ -114,6 +110,10 @@ export async function enforceFortressPermission(
       throw Errors.forbidden('Insufficient permissions');
     return;
   }
+
+  // Public/self-authenticated routes without an IAM requirement.
+  if (security?.includes('none') || security?.includes('basic'))
+    return;
 
   // Bearer-only routes — auth required, no IAM check
   if (security?.includes('bearer')) {

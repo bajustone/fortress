@@ -220,6 +220,37 @@ describe('tenant-scoped IAM', () => {
     expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'settings', 'read', { tenantId: 'tenant-b' })).toBe(true);
   });
 
+  it('unbindRole distinguishes global-only null from omitted all-scopes', async () => {
+    const user = await fortress.auth.createUser({
+      email: 'tri-state@example.com',
+      name: 'Tri State',
+      password: 'password-123456',
+    });
+    const role = await fortress.iam.createRole('tri-state-role', [{ resource: 'reports', action: 'read' }]);
+    await fortress.iam.bindRole('USER', user.id, role.id);
+    await fortress.iam.bindRole('USER', user.id, role.id, 'tenant-a');
+
+    await fortress.iam.unbindRole('USER', user.id, role.id, null);
+    expect(await fortress.config.database.count({
+      model: 'role_binding',
+      where: [
+        { field: 'subjectType', operator: '=', value: 'USER' },
+        { field: 'subjectId', operator: '=', value: user.id },
+        { field: 'roleId', operator: '=', value: role.id },
+      ],
+    })).toBe(1);
+
+    await fortress.iam.unbindRole('USER', user.id, role.id);
+    expect(await fortress.config.database.count({
+      model: 'role_binding',
+      where: [
+        { field: 'subjectType', operator: '=', value: 'USER' },
+        { field: 'subjectId', operator: '=', value: user.id },
+        { field: 'roleId', operator: '=', value: role.id },
+      ],
+    })).toBe(0);
+  });
+
   it('global role bindings apply across all tenants', async () => {
     const user = await fortress.auth.createUser({
       email: 'bob@test.com',

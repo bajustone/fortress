@@ -186,7 +186,9 @@ async function generateBackupCodes(count: number): Promise<{ raw: string[]; hash
   const hashes: string[] = [];
 
   for (let i = 0; i < count; i++) {
-    const bytes = new Uint8Array(4);
+    // Recovery credentials need offline-strength entropy even when endpoint
+    // throttling is misconfigured. 16 random bytes = 128 bits.
+    const bytes = new Uint8Array(16);
     crypto.getRandomValues(bytes);
     const code = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
     raw.push(code);

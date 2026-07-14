@@ -44,8 +44,7 @@ export interface IdTokenParams {
  * Claim coverage (OIDC Core \u00a72 + \u00a75.1):
  * - `iss`, `sub`, `aud`, `iat`, `exp`, `auth_time` always
  * - `nonce` when supplied
- * - `email`, `email_verified` when scope contains `email` or `openid` is
- *   the only OIDC scope (matches userinfo's permissive baseline)
+ * - `email`, `email_verified` only when scope contains `email`
  * - `name`, `preferred_username` when scope contains `profile`
  * - `updated_at` always (mirrors userinfo)
  */
@@ -53,7 +52,7 @@ export async function issueIdToken(params: IdTokenParams): Promise<string> {
   const ttl = params.ttlSeconds ?? 3600;
   const now = Math.floor(Date.now() / 1000);
   const scopes = params.scope ? params.scope.split(' ').filter(Boolean) : [];
-  const exposeEmail = scopes.includes('email') || scopes.includes('openid');
+  const exposeEmail = scopes.includes('email');
   const exposeProfile = scopes.includes('profile');
 
   // Standard + scope-gated identity claims.

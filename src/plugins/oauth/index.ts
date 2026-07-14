@@ -2074,14 +2074,11 @@ export function toOidcUserinfo(
   scope: string | null | undefined,
 ): Record<string, unknown> {
   const scopes = scope ? scope.split(' ').filter(Boolean) : [];
-  // OIDC Core §5.4 only governs scope gating when the request was an
-  // OIDC request (i.e. used `openid`). For non-OIDC OAuth tokens we expose
-  // the full claim set — this preserves the long-standing fortress
-  // behaviour for callers that rely on /oauth/userinfo as a generic
-  // user-profile endpoint and matches what the TDMP override emitted.
-  const isOidc = scopes.includes('openid');
-  const exposeEmail = !isOidc || scopes.includes('email');
-  const exposeProfile = !isOidc || scopes.includes('profile');
+  // Identity claims are always scope-gated, including when a generic OAuth
+  // token calls this endpoint. Possessing an unrelated API scope must not
+  // disclose profile PII.
+  const exposeEmail = scopes.includes('email');
+  const exposeProfile = scopes.includes('profile');
 
   const claims: Record<string, unknown> = { sub: String(user.id) };
   if (exposeEmail) {

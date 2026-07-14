@@ -17,19 +17,19 @@ export interface PasswordHasher {
  * Cookie configuration consumed by `fortress.handleRequest` and any framework
  * adapter that wants to serialize auth tokens to `Set-Cookie` headers.
  *
- * Defaults are production-safe: `__Host-` prefixed names, `httpOnly`,
- * `secure`, `sameSite: 'lax'`, `path: '/'`. In non-production environments
- * the `__Host-` prefix is dropped and `secure` is disabled so localhost
- * over HTTP works during development.
+ * Defaults are environment-independent and production-safe: `__Host-`
+ * prefixed names, `httpOnly`, `secure`, `sameSite: 'lax'`, `path: '/'`.
+ * Plain-HTTP local development must explicitly set `secure: false`, which
+ * also selects non-`__Host-` default names.
  */
 export interface CookieConfig {
-  /** Override the access-token cookie name. Defaults: `__Host-fortress_access` (prod) / `fortress_access` (dev). */
+  /** Override the access-token cookie name. Default: `__Host-fortress_access` when host-prefix constraints permit. */
   accessName?: string;
-  /** Override the refresh-token cookie name. Defaults: `__Host-fortress_refresh` (prod) / `fortress_refresh` (dev). */
+  /** Override the refresh-token cookie name. Default: `__Host-fortress_refresh` when host-prefix constraints permit. */
   refreshName?: string;
   /** SameSite attribute. Default: `'lax'`. */
   sameSite?: 'lax' | 'strict' | 'none';
-  /** Force the `Secure` attribute on or off. Default: `true` in production, `false` otherwise. */
+  /** Force the `Secure` attribute on or off. Default: `true` in every environment. */
   secure?: boolean;
   /** Optional `Domain` attribute. Defaults to host-only when omitted. */
   domain?: string;
@@ -60,6 +60,8 @@ export interface FortressConfig {
      */
     key: JwtKeyMaterial;
     issuer?: string;
+    /** Optional audience included in and required for access tokens. */
+    audience?: string | string[];
     accessTokenExpirySeconds?: number;
     refreshTokenExpirySeconds?: number;
     validateRefreshFingerprint?: boolean | 'warn';
@@ -138,7 +140,7 @@ export interface FortressConfig {
   observability?: TelemetryProvider;
 }
 
-/** Cookie attributes resolved against the runtime environment (NODE_ENV-aware). */
+/** Validated cookie attributes resolved independently of `NODE_ENV`. */
 export interface ResolvedCookieConfig {
   accessName: string;
   refreshName: string;
@@ -149,10 +151,9 @@ export interface ResolvedCookieConfig {
 }
 
 /**
- * Resolve a {@link CookieConfig} against `NODE_ENV`. In production, defaults
- * to `__Host-` prefixed names, `secure: true`, and `sameSite: 'lax'`. In dev,
- * drops the `__Host-` prefix (which requires `Secure` per spec) and disables
- * `secure` so localhost over HTTP works.
+ * Resolve a {@link CookieConfig} with secure, environment-independent defaults.
+ * Plain-HTTP localhost development must explicitly pass `secure: false`; this
+ * disables the `__Host-` default names because that prefix requires Secure.
  */
 export function resolveCookieConfig(config?: CookieConfig): ResolvedCookieConfig {
   // P3.7: default to `Secure` unless the caller explicitly opts out. Many

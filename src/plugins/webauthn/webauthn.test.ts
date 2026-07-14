@@ -1,6 +1,7 @@
 import type { Fortress } from '../../core/fortress';
 import type { PluginRouteContext } from '../../core/plugin';
 import type { WebAuthnMethods } from './index';
+import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
@@ -23,6 +24,11 @@ const SECRET = 'webauthn-test-secret-at-least-32chars';
 const MOCK_CHALLENGE = 'dGVzdC1jaGFsbGVuZ2U'; // base64url of "test-challenge"
 const MOCK_CREDENTIAL_ID = 'Y3JlZGVudGlhbC1pZA'; // base64url
 const MOCK_PUBLIC_KEY = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+const MOCK_CLIENT_DATA_JSON = Buffer.from(JSON.stringify({
+  type: 'webauthn.get',
+  challenge: MOCK_CHALLENGE,
+  origin: 'http://localhost:3000',
+})).toString('base64url');
 
 // Mock @simplewebauthn/server
 vi.mock('@simplewebauthn/server', () => ({
@@ -129,7 +135,7 @@ describe('webauthn plugin', () => {
       // Register a credential first
       await methods.generateRegistrationOptions({}, httpCtx(userId));
       await methods.verifyRegistration(
-        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
         httpCtx(userId),
       );
 
@@ -148,7 +154,7 @@ describe('webauthn plugin', () => {
       await methods.generateRegistrationOptions({}, httpCtx(userId));
 
       const result = await methods.verifyRegistration(
-        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
         httpCtx(userId),
       );
 
@@ -191,7 +197,7 @@ describe('webauthn plugin', () => {
       // Register a credential first
       await methods.generateRegistrationOptions({}, httpCtx(userId));
       await methods.verifyRegistration(
-        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
         httpCtx(userId),
       );
 
@@ -217,7 +223,7 @@ describe('webauthn plugin', () => {
       // Register credential
       await methods.generateRegistrationOptions({}, httpCtx(userId));
       await methods.verifyRegistration(
-        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
         httpCtx(userId),
       );
 
@@ -229,7 +235,7 @@ describe('webauthn plugin', () => {
       await registerAndPrepareAuth();
 
       const result = await methods.verifyAuthentication({
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
+        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       });
 
       expect(result.status).toBe('success');
@@ -241,7 +247,7 @@ describe('webauthn plugin', () => {
       await registerAndPrepareAuth();
 
       const result = await methods.verifyAuthentication({
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
+        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       });
 
       if (result.status !== 'success')
@@ -276,13 +282,13 @@ describe('webauthn plugin', () => {
       });
       await gatedMethods.generateRegistrationOptions({}, httpCtx(user.id));
       await gatedMethods.verifyRegistration(
-        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
         httpCtx(user.id),
       );
       await gatedMethods.generateAuthenticationOptions({ userId: user.id });
 
       const result = await gatedMethods.verifyAuthentication({
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
+        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       });
       expect(result.status).toBe('pending');
       expect(result.status === 'pending' ? result.pending?.reason : undefined).toBe('two-factor');
@@ -293,7 +299,7 @@ describe('webauthn plugin', () => {
       await methods.generateAuthenticationOptions({});
 
       await expect(methods.verifyAuthentication({
-        response: { id: 'unknown-id', rawId: 'unknown-id', response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
+        response: { id: 'unknown-id', rawId: 'unknown-id', response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       })).rejects.toThrow('Unknown credential');
     });
 
@@ -314,7 +320,7 @@ describe('webauthn plugin', () => {
       });
 
       await expect(methods.verifyAuthentication({
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
+        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       })).rejects.toThrow('Authentication verification failed');
     });
 
@@ -336,7 +342,7 @@ describe('webauthn plugin', () => {
       });
 
       await methods.verifyAuthentication({
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
+        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       });
 
       // Second auth: counter rolls back to 3 (clone!)
@@ -356,7 +362,7 @@ describe('webauthn plugin', () => {
       });
 
       await expect(methods.verifyAuthentication({
-        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
+        response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any,
       })).rejects.toThrow('counter validation failed');
     });
   });
@@ -381,7 +387,7 @@ describe('webauthn plugin', () => {
       // Register a credential
       await m.generateRegistrationOptions({}, httpCtx(user.id));
       await m.verifyRegistration(
-        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: {}, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
+        { response: { id: MOCK_CREDENTIAL_ID, rawId: MOCK_CREDENTIAL_ID, response: { clientDataJSON: MOCK_CLIENT_DATA_JSON }, type: 'public-key', clientExtensionResults: {}, authenticatorAttachment: 'platform' } as any },
         httpCtx(user.id),
       );
 

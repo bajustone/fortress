@@ -30,6 +30,8 @@ export interface TokenClaims {
   name: string;
   groups: string[];
   iss: string;
+  /** Optional JWT audience, when configured for this deployment. */
+  aud?: string | string[];
   iat: number;
   exp: number;
   act?: { sub: string; subjectType?: SubjectType }; // RFC 8693 actor claim for impersonation

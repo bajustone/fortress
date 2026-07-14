@@ -8,10 +8,26 @@
 import type { EndpointInput } from './endpoint';
 import type { JSONSchema } from './json-schema';
 import type { StandardSchemaV1 } from './standard-schema';
+import { fromJSONSchema } from '@bajustone/fetcher/openapi';
 import { Errors } from './errors';
 
+// Keep URL numerics deliberately narrower than Number(): no exponent, sign, or
+// hexadecimal forms. The spelling must round-trip exactly so precision loss,
+// leading zeroes, and other non-canonical values remain validation failures.
 const DECIMAL_INTEGER_RE = /^-?\d+$/;
-const DECIMAL_NUMBER_RE = /^-?(?:\d+(?:\.\d+)?|\.\d+)$/;
+const DECIMAL_NUMBER_RE = /^-?\d+(?:\.\d+)?$/;
+const rawSchemaValidators = new WeakMap<object, StandardSchemaV1>();
+
+function standardSchemaFor(schema: StandardSchemaV1 | JSONSchema): StandardSchemaV1 {
+  if ('~standard' in schema)
+    return schema as StandardSchemaV1;
+  let compiled = rawSchemaValidators.get(schema as object);
+  if (!compiled) {
+    compiled = fromJSONSchema(schema as object) as unknown as StandardSchemaV1;
+    rawSchemaValidators.set(schema as object, compiled);
+  }
+  return compiled;
+}
 
 /**
  * Coerce URL-sourced query/params values to the types declared in a JSON
@@ -49,14 +65,16 @@ export function coerceBySchema(
 }
 
 function coerceScalar(schema: JSONSchema, value: string): unknown {
-  switch (schema.type) {
+  // `enums()` and `literal()` intentionally omit `type`; infer numeric URL
+  // parameters from their numeric constraints so `/items?id=1` can satisfy
+  // `{ enum: [1, 2] }` and `{ const: 1 }`.
+  const type = schema.type ?? numericConstraintType(schema);
+  switch (type) {
     case 'integer': {
-      // Only canonical base-10 integer text. Number('')/hex/exponent forms
-      // must not become URL parameter values implicitly.
       if (!DECIMAL_INTEGER_RE.test(value))
         return undefined;
       const n = Number(value);
-      if (Number.isFinite(n) && Number.isInteger(n))
+      if (Number.isFinite(n) && Number.isSafeInteger(n) && String(n) === value)
         return n;
       return undefined;
     }
@@ -64,7 +82,7 @@ function coerceScalar(schema: JSONSchema, value: string): unknown {
       if (!DECIMAL_NUMBER_RE.test(value))
         return undefined;
       const n = Number(value);
-      if (Number.isFinite(n))
+      if (Number.isFinite(n) && (!Number.isInteger(n) || Number.isSafeInteger(n)) && String(n) === value)
         return n;
       return undefined;
     }
@@ -79,6 +97,14 @@ function coerceScalar(schema: JSONSchema, value: string): unknown {
       // Leave strings (and anything else) alone.
       return undefined;
   }
+}
+
+function numericConstraintType(schema: JSONSchema): 'integer' | 'number' | undefined {
+  if (typeof schema.const === 'number')
+    return Number.isInteger(schema.const) ? 'integer' : 'number';
+  if (schema.enum && schema.enum.length > 0 && schema.enum.every(value => typeof value === 'number'))
+    return schema.enum.every(value => Number.isInteger(value as number)) ? 'integer' : 'number';
+  return undefined;
 }
 
 /**
@@ -97,18 +123,18 @@ export async function validateRequest(
 
   const allIssues: Array<{ path?: unknown; message: string; location: string }> = [];
 
-  if (input.bodySchema) {
-    const issues = await validateSchema(input.bodySchema, data.body, 'body');
+  if (input.bodySchema || input.body) {
+    const issues = await validateSchema(input.bodySchema ?? input.body!, data.body, 'body');
     allIssues.push(...issues);
   }
 
-  if (input.querySchema) {
-    const issues = await validateSchema(input.querySchema, data.query, 'query');
+  if (input.querySchema || input.query) {
+    const issues = await validateSchema(input.querySchema ?? input.query!, data.query, 'query');
     allIssues.push(...issues);
   }
 
-  if (input.paramsSchema) {
-    const issues = await validateSchema(input.paramsSchema, data.params, 'params');
+  if (input.paramsSchema || input.params) {
+    const issues = await validateSchema(input.paramsSchema ?? input.params!, data.params, 'params');
     allIssues.push(...issues);
   }
 
@@ -118,11 +144,11 @@ export async function validateRequest(
 }
 
 async function validateSchema(
-  schema: StandardSchemaV1,
+  schema: StandardSchemaV1 | JSONSchema,
   data: unknown,
   location: string,
 ): Promise<Array<{ path?: unknown; message: string; location: string }>> {
-  const result = await schema['~standard'].validate(data);
+  const result = await standardSchemaFor(schema)['~standard'].validate(data);
   if (result.issues) {
     return result.issues.map(issue => ({
       path: issue.path,

@@ -124,6 +124,8 @@ export interface SvelteKitAdapterOptions {
    * `'GET /api/users': { resource: 'user', action: 'list' }`.
    */
   routeMap?: Record<string, { resource: string; action: string }>;
+  /** Behavior for user-owned routes absent from routeMap (default: allow). */
+  unmappedRoutes?: 'allow' | 'deny';
   /**
    * Paths the user-route RBAC pass should skip entirely (supports `*`).
    * Example: `['/api/health', '/api/public/*']`.

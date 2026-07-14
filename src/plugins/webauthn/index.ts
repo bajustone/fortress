@@ -230,18 +230,27 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
     if (!credentialRecord)
       throw Errors.unauthorized('Unknown credential');
 
-    const challengeRecord = await db.findOne<ChallengeRecord>({
+    let responseChallenge: string;
+    try {
+      const clientData = JSON.parse(
+        new TextDecoder().decode(base64urlToUint8Array(response.response.clientDataJSON)),
+      ) as { challenge?: unknown };
+      if (typeof clientData.challenge !== 'string' || clientData.challenge.length === 0)
+        throw new Error('missing challenge');
+      responseChallenge = clientData.challenge;
+    }
+    catch {
+      throw Errors.unauthorized('Invalid WebAuthn client data');
+    }
+
+    // The challenge value uniquely identifies the ceremony. Looking up by
+    // userId (especially NULL for discoverable credentials) is ambiguous when
+    // multiple logins are in flight and could select another user's row.
+    const challenge = await db.findOne<ChallengeRecord>({
       model: 'webauthn_challenge',
-      where: [{ field: 'userId', operator: '=', value: credentialRecord.userId }],
+      where: [{ field: 'challenge', operator: '=', value: responseChallenge }],
     });
-    const discoverableChallenge = challengeRecord
-      ? null
-      : await db.findOne<ChallengeRecord>({
-          model: 'webauthn_challenge',
-          where: [{ field: 'userId', operator: 'isNull', value: null }],
-        });
-    const challenge = challengeRecord ?? discoverableChallenge;
-    if (!challenge)
+    if (!challenge || (challenge.userId !== null && challenge.userId !== credentialRecord.userId))
       throw Errors.badRequest('No pending authentication challenge');
 
     if (new Date(challenge.expiresAt) < new Date()) {

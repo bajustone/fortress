@@ -67,6 +67,7 @@ export function createSvelteKitHandle(
   const routeTable = buildRouteTable(fortress.manifest.filter(route => route.mounted));
   const skipPatterns = (options.skipPaths ?? []).map(p => pathToRegex(p));
   const routeMap = options.routeMap ?? {};
+  const unmappedRoutes = options.unmappedRoutes ?? 'allow';
   // Coalesce overlapping SSR requests that arrive with the same expired
   // cookie pair. Entries remain until every request that joined has finished
   // its full handle/resolve lifecycle—not merely until refresh() settles—so a
@@ -213,6 +214,8 @@ export function createSvelteKitHandle(
       // 6. User-route RBAC via routeMap (skip-patterns filtered out first).
       if (!skipPatterns.some(p => p.test(fullPath))) {
         const mapping = matchRouteMap(routeMap, event.request.method, fullPath);
+        if (!mapping && unmappedRoutes === 'deny')
+          throw Errors.forbidden('No permission mapping for this route');
         if (mapping) {
           if (!subject)
             throw Errors.unauthorized('Not authenticated');
@@ -323,8 +326,9 @@ function rewriteRequest(original: Request, url: URL, innerPath: string): Request
 /** Convert a simple path pattern (`:param` and `*`) to a regex. */
 function pathToRegex(pattern: string): RegExp {
   const regexStr = pattern
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(/:[^/]+/g, '[^/]+')
-    .replace(/\*/g, '.*')
+    .replace(/\\\*/g, '.*')
     .replace(/\//g, '\\/');
   return new RegExp(`^${regexStr}$`);
 }

@@ -70,6 +70,11 @@ export const RESERVED_JWT_CLAIMS: ReadonlySet<string> = new Set([
   'name',
 ]);
 
+export interface SignAccessTokenOptions {
+  /** Audience to include in the JWT `aud` claim. Omitted when unset. */
+  audience?: string | string[];
+}
+
 export interface VerifyAccessTokenOptions {
   /** Expected issuer. When set, jose also requires the `iss` claim to be present. */
   issuer?: string | string[];
@@ -131,9 +136,10 @@ function normalizeKeys(key: JwtKeyMaterial): Uint8Array[] {
  * Sign a JWT access token.
  */
 export async function signAccessToken(
-  claims: Omit<TokenClaims, 'iat' | 'exp'>,
+  claims: Omit<TokenClaims, 'iat' | 'exp' | 'aud'>,
   key: JwtKeyMaterial,
   expiresInSeconds: number,
+  options?: SignAccessTokenOptions,
 ): Promise<string> {
   const [signingKey] = normalizeKeys(key);
 
@@ -142,7 +148,7 @@ export async function signAccessToken(
   // overwrite `act`, `sub`, `groups`, etc. (See RESERVED_JWT_CLAIMS.)
   const safeCustom = stripReservedClaims(claims.customClaims, 'signAccessToken.customClaims');
 
-  return new SignJWT({
+  let jwt = new SignJWT({
     name: claims.name,
     subjectType: claims.subjectType,
     groups: claims.groups,
@@ -152,9 +158,10 @@ export async function signAccessToken(
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime(`${expiresInSeconds}s`)
-    .setIssuer(claims.iss)
-    .setSubject(claims.sub)
-    .sign(signingKey);
+    .setIssuer(claims.iss);
+  if (options?.audience !== undefined)
+    jwt = jwt.setAudience(options.audience);
+  return jwt.setSubject(claims.sub).sign(signingKey);
 }
 
 /**
@@ -187,6 +194,7 @@ export async function verifyAccessToken(
       const groups = payload.groups;
       const name = payload.name;
       const issuer = payload.iss;
+      const audience = payload.aud;
       const issuedAt = payload.iat;
       const expiresAt = payload.exp;
 
@@ -200,6 +208,8 @@ export async function verifyAccessToken(
         throw new Error('Invalid groups claim');
       if (typeof issuer !== 'string' || issuer.length === 0)
         throw new Error('Invalid iss claim');
+      if (audience !== undefined && (!Array.isArray(audience) || !audience.every(value => typeof value === 'string')) && typeof audience !== 'string')
+        throw new Error('Invalid aud claim');
       if (typeof issuedAt !== 'number')
         throw new Error('Invalid iat claim');
       if (typeof expiresAt !== 'number')
@@ -211,6 +221,7 @@ export async function verifyAccessToken(
         name,
         groups,
         iss: issuer,
+        ...(audience !== undefined ? { aud: audience } : {}),
         iat: issuedAt,
         exp: expiresAt,
         act: payload.act as { sub: string; subjectType?: SubjectType } | undefined,

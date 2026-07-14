@@ -172,14 +172,51 @@ function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~st
   } as StandardSchemaV1<T, T>['~standard'];
 }
 
+/**
+ * Standard Schema validation for builder `oneOf`: JSON Schema requires that
+ * exactly one branch succeeds, while some validator bridges treat it as an
+ * ordinary union. Validate each branch directly so this invariant is retained
+ * independently of the bridge, including for branches backed by `$ref`.
+ */
+function createExactOneOfProps<T>(schemas: readonly FortressSchema<any>[]): StandardSchemaV1<T, T>['~standard'] {
+  type Result = StandardSchemaV1.Result<T>;
+  type ValidateFn = (value: unknown) => Result | Promise<Result>;
+  const validate: ValidateFn = (value) => {
+    const results = schemas.map(schema => schema['~standard'].validate(value));
+    if (results.some(result => result instanceof Promise)) {
+      return Promise.all(results).then(resolved => exactOneResult(resolved));
+    }
+    return exactOneResult(results as Result[]);
+  };
+  return {
+    version: 1,
+    vendor: 'fortress',
+    validate,
+  };
+}
+
+function exactOneResult<T>(results: readonly StandardSchemaV1.Result<T>[]): StandardSchemaV1.Result<T> {
+  const successes = results.filter((result): result is StandardSchemaV1.SuccessResult<T> => !result.issues);
+  if (successes.length === 1)
+    return { value: successes[0].value };
+  return {
+    issues: [{
+      message: successes.length === 0
+        ? 'Value must match exactly one oneOf variant'
+        : 'Value must match exactly one oneOf variant; multiple variants matched',
+    }],
+  };
+}
+
 function toFortressSchema<T>(
   schema: JSONSchema,
   refDefinitions?: Record<string, JSONSchema>,
+  standardProps?: StandardSchemaV1<T, T>['~standard'],
 ): FortressSchema<T> {
   if (refDefinitions)
     refDefinitionContexts.set(schema, refDefinitions);
   return Object.assign(schema, {
-    '~standard': createStandardProps<T>(schema),
+    '~standard': standardProps ?? createStandardProps<T>(schema),
   }) as FortressSchema<T>;
 }
 
@@ -311,7 +348,12 @@ export function nullable<T>(schema: FortressSchema<T>): FortressSchema<T | null>
 export function oneOf<S extends FortressSchema<any>[]>(
   ...schemas: S
 ): FortressSchema<Infer<S[number]>> {
-  return toFortressSchema<Infer<S[number]>>({ oneOf: schemas as JSONSchema[] });
+  const schema: JSONSchema = { oneOf: schemas as JSONSchema[] };
+  return toFortressSchema<Infer<S[number]>>(
+    schema,
+    undefined,
+    createExactOneOfProps<Infer<S[number]>>(schemas),
+  );
 }
 
 /** Build a union schema (any one variant may match). */

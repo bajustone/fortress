@@ -81,7 +81,7 @@ export type {
 export { Errors, FortressError } from './core/errors';
 
 /** Discriminated string union of every error code fortress can throw. */
-export type { FortressErrorCode } from './core/errors';
+export type { FortressErrorCode, OAuthErrorCode } from './core/errors';
 
 /** Factory that builds a configured fortress instance and the helper for type-safe plugin method access. */
 export { createFortress, getPluginMethods } from './core/fortress';

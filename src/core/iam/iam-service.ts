@@ -75,11 +75,12 @@ export interface IamService {
   bindRole: (subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string) => Promise<void>;
   bindRoleToUser: (userId: string, roleId: string, tenantId?: string) => Promise<void>;
   bindRoleToGroup: (groupId: string, roleId: string, tenantId?: string) => Promise<void>;
-  unbindRole: (subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string) => Promise<void>;
+  /** Omitted removes all scopes; null removes only the global binding; a string removes one tenant. */
+  unbindRole: (subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string | null) => Promise<void>;
   bindPermissionToUser: (userId: string, permission: PermissionInput, tenantId?: string) => Promise<void>;
   bindPermissionToGroup: (groupId: string, permission: PermissionInput, tenantId?: string) => Promise<void>;
-  unbindPermissionFromUser: (userId: string, permissionId: string, tenantId?: string) => Promise<void>;
-  unbindPermissionFromGroup: (groupId: string, permissionId: string, tenantId?: string) => Promise<void>;
+  unbindPermissionFromUser: (userId: string, permissionId: string, tenantId?: string | null) => Promise<void>;
+  unbindPermissionFromGroup: (groupId: string, permissionId: string, tenantId?: string | null) => Promise<void>;
   createGroup: (name: string, description?: string) => Promise<Group>;
   addUserToGroup: (groupId: string, userId: string) => Promise<void>;
   removeUserFromGroup: (groupId: string, userId: string) => Promise<void>;
@@ -131,7 +132,7 @@ export interface IamService {
   /** Unbind across all scopes when omitted, global only for `null`, or one tenant for a string scope. */
   unbindRoleFromServiceAccount: (serviceAccountId: string, roleId: string, tenantId?: string | null) => Promise<void>;
   bindPermissionToServiceAccount: (serviceAccountId: string, permission: PermissionInput, tenantId?: string) => Promise<void>;
-  unbindPermissionFromServiceAccount: (serviceAccountId: string, permissionId: string, tenantId?: string) => Promise<void>;
+  unbindPermissionFromServiceAccount: (serviceAccountId: string, permissionId: string, tenantId?: string | null) => Promise<void>;
 }
 
 export interface IamServiceDeps {
@@ -174,6 +175,14 @@ export function createIamService(
 
   function tenantWhere(tenantId?: string): { field: 'tenantId'; operator: '=' | 'isNull'; value: string | null }[] {
     return tenantId == null
+      ? [{ field: 'tenantId', operator: 'isNull', value: null }]
+      : [{ field: 'tenantId', operator: '=', value: tenantId }];
+  }
+
+  function unbindTenantWhere(tenantId?: string | null): WhereClause[] {
+    if (tenantId === undefined)
+      return [];
+    return tenantId === null
       ? [{ field: 'tenantId', operator: 'isNull', value: null }]
       : [{ field: 'tenantId', operator: '=', value: tenantId }];
   }
@@ -478,12 +487,12 @@ export function createIamService(
       emit({ eventType: 'ROLE_BOUND', targetId: roleId, targetType: 'role', metadata: { subjectType: 'GROUP', groupId, tenantId } });
     },
 
-    async unbindRole(subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string): Promise<void> {
+    async unbindRole(subjectType: SubjectType, subjectId: string, roleId: string, tenantId?: string | null): Promise<void> {
       const where = [
         { field: 'roleId' as const, operator: '=' as const, value: roleId },
         { field: 'subjectType' as const, operator: '=' as const, value: subjectType },
         { field: 'subjectId' as const, operator: '=' as const, value: subjectId },
-        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+        ...unbindTenantWhere(tenantId),
       ];
       await db.delete({ model: 'role_binding', where });
       if (subjectType === 'USER')
@@ -517,24 +526,24 @@ export function createIamService(
       emit({ eventType: 'PERMISSION_CHANGED', targetId: perm.id, targetType: 'permission', metadata: { action: 'bind', subjectType: 'GROUP', groupId, tenantId } });
     },
 
-    async unbindPermissionFromUser(userId: string, permissionId: string, tenantId?: string): Promise<void> {
+    async unbindPermissionFromUser(userId: string, permissionId: string, tenantId?: string | null): Promise<void> {
       const where = [
         { field: 'permissionId' as const, operator: '=' as const, value: permissionId },
         { field: 'subjectType' as const, operator: '=' as const, value: 'USER' },
         { field: 'subjectId' as const, operator: '=' as const, value: userId },
-        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+        ...unbindTenantWhere(tenantId),
       ];
       await db.delete({ model: 'direct_permission_binding', where });
       cache?.invalidate(subjectCacheKey({ type: 'USER', id: userId }));
       emit({ eventType: 'PERMISSION_CHANGED', actorId: userId, targetId: permissionId, targetType: 'permission', metadata: { action: 'unbind', subjectType: 'USER', tenantId } });
     },
 
-    async unbindPermissionFromGroup(groupId: string, permissionId: string, tenantId?: string): Promise<void> {
+    async unbindPermissionFromGroup(groupId: string, permissionId: string, tenantId?: string | null): Promise<void> {
       const where = [
         { field: 'permissionId' as const, operator: '=' as const, value: permissionId },
         { field: 'subjectType' as const, operator: '=' as const, value: 'GROUP' },
         { field: 'subjectId' as const, operator: '=' as const, value: groupId },
-        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+        ...unbindTenantWhere(tenantId),
       ];
       await db.delete({ model: 'direct_permission_binding', where });
       cache?.invalidateAll();
@@ -1093,13 +1102,13 @@ export function createIamService(
     async unbindPermissionFromServiceAccount(
       serviceAccountId: string,
       permissionId: string,
-      tenantId?: string,
+      tenantId?: string | null,
     ): Promise<void> {
       const where = [
         { field: 'permissionId' as const, operator: '=' as const, value: permissionId },
         { field: 'subjectType' as const, operator: '=' as const, value: 'SERVICE_ACCOUNT' },
         { field: 'subjectId' as const, operator: '=' as const, value: serviceAccountId },
-        ...(tenantId ? [{ field: 'tenantId' as const, operator: '=' as const, value: tenantId }] : []),
+        ...unbindTenantWhere(tenantId),
       ];
       await db.delete({ model: 'direct_permission_binding', where });
       cache?.invalidate(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: serviceAccountId }));

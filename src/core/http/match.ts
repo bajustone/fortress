@@ -22,6 +22,15 @@ export interface RouteEntry<T extends RouteLike = EndpointDefinition> {
   paramNames: string[];
 }
 
+/** Higher values are more specific when two routes have the same shape. */
+function segmentSpecificity(segment: string): number {
+  if (segment === '*')
+    return 0;
+  if (segment.startsWith(':'))
+    return 1;
+  return 2;
+}
+
 /** Successful match: the endpoint/route plus extracted path parameters. */
 export interface RouteMatch<T extends RouteLike = EndpointDefinition> {
   endpoint: T;
@@ -39,7 +48,7 @@ export function canonicalizePath(pathname: string): string {
  * at startup and hand the result to {@link matchRoute} on every request.
  */
 export function buildRouteTable<T extends RouteLike>(endpoints: readonly T[]): RouteEntry<T>[] {
-  return endpoints.map((ep) => {
+  const table = endpoints.map((ep) => {
     const segments = canonicalizePath(ep.path).split('/').filter(Boolean);
     const paramNames: string[] = [];
     for (const seg of segments) {
@@ -53,6 +62,23 @@ export function buildRouteTable<T extends RouteLike>(endpoints: readonly T[]): R
       paramNames,
     };
   });
+
+  // Match specificity lexicographically so a static segment always wins over
+  // a parameter (and a parameter over a wildcard), independent of registration
+  // order. Stable sorting retains registration order for duplicate patterns.
+  return table
+    .map((route, index) => ({ route, index }))
+    .sort((a, b) => {
+      const length = Math.max(a.route.segments.length, b.route.segments.length);
+      for (let i = 0; i < length; i++) {
+        const difference = segmentSpecificity(b.route.segments[i] ?? '')
+          - segmentSpecificity(a.route.segments[i] ?? '');
+        if (difference !== 0)
+          return difference;
+      }
+      return a.index - b.index;
+    })
+    .map(({ route }) => route);
 }
 
 /**
@@ -60,10 +86,10 @@ export function buildRouteTable<T extends RouteLike>(endpoints: readonly T[]): R
  * matched endpoint and any extracted `:param` values, or `null` if nothing
  * matches.
  *
- * Matching is segment-by-segment with literal segments compared verbatim
- * and `:param` segments capturing into `params`. Static segments take
- * priority because they're checked first; the iteration order follows the
- * order in which endpoints were registered.
+ * Matching is segment-by-segment with literal segments compared verbatim,
+ * `:param` segments capturing into `params`, and `*` matching any one segment.
+ * Static segments take priority over params, which take priority over
+ * wildcards, independent of registration order.
  */
 export function matchRoute<T extends RouteLike>(
   table: RouteEntry<T>[],
@@ -87,7 +113,7 @@ export function matchRoute<T extends RouteLike>(
       if (routeSeg.startsWith(':')) {
         params[routeSeg.slice(1)] = decodeURIComponent(pathSeg);
       }
-      else if (routeSeg !== pathSeg) {
+      else if (routeSeg !== '*' && routeSeg !== pathSeg) {
         matched = false;
         break;
       }

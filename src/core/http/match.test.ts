@@ -61,4 +61,62 @@ describe('matchRoute', () => {
     const m = matchRoute(table, 'GET', '/iam/users/hello%20world/permissions');
     expect(m?.params.id).toBe('hello world');
   });
+
+  it.each([
+    [
+      [
+        ep('GET', '/users/:id', 'param'),
+        ep('GET', '/users/me', 'static'),
+      ],
+      'static',
+    ],
+    [
+      [
+        ep('GET', '/users/me', 'static'),
+        ep('GET', '/users/:id', 'param'),
+      ],
+      'static',
+    ],
+  ] as const)('prefers /users/me over /users/:id regardless of registration order', (routes, handler) => {
+    const m = matchRoute(buildRouteTable(routes), 'GET', '/users/me');
+    expect(m?.endpoint.handler).toBe(handler);
+    expect(m?.params).toEqual({});
+  });
+
+  it.each([
+    [
+      [
+        ep('GET', '/users/*', 'wildcard'),
+        ep('GET', '/users/:id', 'param'),
+        ep('GET', '/users/me', 'static'),
+      ],
+      'static',
+      '/users/me',
+      {},
+    ],
+    [
+      [
+        ep('GET', '/users/me', 'static'),
+        ep('GET', '/users/*', 'wildcard'),
+        ep('GET', '/users/:id', 'param'),
+      ],
+      'param',
+      '/users/alice',
+      { id: 'alice' },
+    ],
+    [
+      [
+        ep('GET', '/accounts/:id', 'param'),
+        ep('GET', '/users/me', 'static'),
+        ep('GET', '/users/*', 'wildcard'),
+      ],
+      'wildcard',
+      '/users/alice',
+      {},
+    ],
+  ] as const)('uses static, param, then wildcard precedence deterministically', (routes, handler, path, params) => {
+    const m = matchRoute(buildRouteTable(routes), 'GET', path);
+    expect(m?.endpoint.handler).toBe(handler);
+    expect(m?.params).toEqual(params);
+  });
 });

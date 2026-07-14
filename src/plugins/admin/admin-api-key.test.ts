@@ -111,14 +111,14 @@ describe('admin plugin bootstrap hardening', () => {
       database: createTestAdapter(),
       plugins: [admin({ bootstrap: { enabled: true, secret: BOOTSTRAP_SECRET } })],
     });
-    const enabledUser = await enabledFortress.auth.createUser({ email: 'boot2@example.com', name: 'Boot2', password: 'password-123456' });
+    await enabledFortress.auth.createUser({ email: 'boot2@example.com', name: 'Boot2', password: 'password-123456' });
     const enabledLogin = await enabledFortress.auth.login('boot2@example.com', 'password-123456');
     if (enabledLogin.status !== 'success')
       throw new Error('expected login success');
     const badSecret = await enabledFortress.handleRequest(new Request('http://localhost/iam/admin/bootstrap', {
       method: 'POST',
       headers: { 'authorization': `Bearer ${enabledLogin.accessToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ userId: enabledUser.id, secret: 'wrong-secret' }),
+      body: JSON.stringify({ secret: 'wrong-secret' }),
     }));
     expect(badSecret.status).toBe(403);
   });
@@ -265,6 +265,23 @@ describe('admin plugin — api-key routes', () => {
       // And resolves back to the target user — not the admin who minted it.
       const resolved = await s.apiKeyMethods.resolveKey(body.key);
       expect(resolved!.subject).toEqual({ type: 'USER', id: s.targetUserId });
+    });
+
+    it('rejects a malformed hand-authored admin request body with 422', async () => {
+      const res = await s.fortress.handleRequest(new Request(`http://localhost/admin/users/${s.targetUserId}/api-keys`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${s.adminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 123 }),
+      }));
+
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({
+        code: 'VALIDATION_ERROR',
+        statusCode: 422,
+      });
     });
 
     it('admin POST /admin/users/:userId/api-keys returns 404 for a non-existent user', async () => {

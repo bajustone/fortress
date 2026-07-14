@@ -532,6 +532,9 @@ await fortress.iam.bindPermissionToGroup(groupId, {
   action: 'export',
   effect: 'DENY',  // explicit deny
 });
+// Important: DENY entries are enforced only when
+// rbac.evaluationMode is 'deny-overrides'. The default 'allow-only' mode
+// intentionally ignores DENY entries.
 
 // Remove direct permissions
 await fortress.iam.unbindPermissionFromUser(userId, permissionId);
@@ -1875,6 +1878,7 @@ socialLogin({
   ],
   autoRegister: true,     // default: true (create user on first social login)
   linkAccounts: true,      // default: true (link by matching verified email only)
+  persistTokens: true,     // required for getProviderTokens(); default false
   tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY!, // 32-byte AES key
   onFirstLogin: async (user, provider, profile) => {
     // Called when a user logs in via social for the first time

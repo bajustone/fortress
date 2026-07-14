@@ -131,8 +131,11 @@ describe('impersonation', () => {
     expect(claims.exp - claims.iat).toBeGreaterThanOrEqual(599);
   });
 
-  it('throws NOT_FOUND if target user does not exist', async () => {
+  it('throws NOT_FOUND if target user does not exist or is inactive', async () => {
     await expect(fortress.auth.impersonate(adminId, '99999')).rejects.toThrow('Target user not found');
+
+    await fortress.auth.updateUser(targetId, { isActive: false });
+    await expect(fortress.auth.impersonate(adminId, targetId)).rejects.toThrow('Target user not found');
   });
 
   it('includes reason in pluginData when provided', async () => {

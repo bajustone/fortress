@@ -455,7 +455,7 @@ curl -X POST https://auth.example.com/oauth/revoke \
 
 ### GET /oauth/userinfo
 
-Get the user profile for a valid access token (OIDC userinfo). Requires a Bearer token.
+Get scope-authorized identity claims for a valid user-bound access token. Requires a Bearer token. `email`/`email_verified` are returned only with the `email` scope; `name`/`preferred_username` only with `profile`. Tokens carrying unrelated API scopes receive `sub` but no identity PII.
 
 ```bash
 curl https://auth.example.com/oauth/userinfo \

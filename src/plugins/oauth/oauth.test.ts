@@ -1240,13 +1240,13 @@ describe('oauth plugin', () => {
       expect(claims.preferred_username).toBeUndefined();
     });
 
-    it('exposes full claims for non-OIDC tokens (no openid scope) for legacy compat', async () => {
+    it('does not expose identity claims to non-OIDC tokens without identity scopes', async () => {
       const { accessToken } = await issueTokenWithScope();
       const claims = await methods.handleUserInfoRequest(accessToken);
 
       expect(claims.sub).toBe(String(userId));
-      expect(claims.email).toBe('alice@example.com');
-      expect(claims.name).toBe('Alice');
+      expect(claims.email).toBeUndefined();
+      expect(claims.name).toBeUndefined();
     });
 
     it('does NOT leak DB-internal fields', async () => {
@@ -1441,6 +1441,17 @@ describe('oauth plugin', () => {
       expect(payload.email).toBe('alice@example.com');
       expect(payload.name).toBe('Alice');
       expect(payload.preferred_username).toBe('alice@example.com');
+    });
+
+    it('id_token omits email and profile claims for openid-only scope', async () => {
+      const { idToken } = await issueIdTokenViaCode({ scope: 'openid' });
+      const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
+      const key = await importJWK(jwks.keys[0], 'RS256');
+      const { payload } = await jwtVerify(idToken, key);
+      expect(payload.email).toBeUndefined();
+      expect(payload.email_verified).toBeUndefined();
+      expect(payload.name).toBeUndefined();
+      expect(payload.preferred_username).toBeUndefined();
     });
 
     it('id_token omits profile claims when only openid+email scope', async () => {

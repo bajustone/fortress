@@ -242,13 +242,13 @@ describe('hono rbacMiddleware', () => {
     expect(res.status).toBe(200);
   });
 
-  it('denies unmapped routes when defaultDeny is set, but honors skipPaths', async () => {
+  it('denies unmapped routes when unmappedRoutes is deny, but honors skipPaths', async () => {
     const token = await loginAndGetToken();
 
     const { authMiddleware, rbacMiddleware, errorHandler } = createHonoMiddleware(fortress, {
       routeMap: { 'GET /api/posts': { resource: 'post', action: 'list' } },
       skipPaths: ['/api/public/*'],
-      defaultDeny: true,
+      unmappedRoutes: 'deny',
     });
     const denyApp = new Hono<FortressEnv>();
     denyApp.onError(errorHandler);

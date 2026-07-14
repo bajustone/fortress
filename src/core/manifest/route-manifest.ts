@@ -47,8 +47,9 @@ function classifyEndpoint(endpoint: EndpointDefinition): RouteClassification {
 
 function pathPatternToRegex(pattern: string): RegExp {
   const regexStr = pattern
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(/:[^/]+/g, '[^/]+')
-    .replace(/\*/g, '.*')
+    .replace(/\\\*/g, '.*')
     .replace(/\//g, '\\/');
   return new RegExp(`^${regexStr}$`);
 }

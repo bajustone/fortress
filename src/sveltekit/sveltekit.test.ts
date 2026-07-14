@@ -767,6 +767,17 @@ describe('createSvelteKitHandle: api-key on user routes', () => {
     expect(response.status).toBe(403);
   });
 
+  it('route-map RBAC can fail closed for unmapped routes', async () => {
+    const { fortress } = await setupWithApiKey();
+    const handle = createSvelteKitHandle(fortress, {
+      routeMap: { 'POST /deploy/run': { resource: 'deploy', action: 'run' } },
+      unmappedRoutes: 'deny',
+    });
+    const event = fakeEvent({ method: 'GET', url: 'http://localhost/reports' });
+    const response = await handle({ event, resolve: async () => new Response('should not reach') });
+    expect(response.status).toBe(403);
+  });
+
   it('route-map RBAC returns 401 when there is no credential at all', async () => {
     const { fortress } = await setupWithApiKey();
     const handle = createSvelteKitHandle(fortress, {
