@@ -1,4 +1,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleAdapter } from '../../drizzle/adapter';
 import { createTestAdapter } from '../../testing';
@@ -19,6 +22,19 @@ function createBareSqliteAdapter(): DatabaseAdapter {
   // eslint-disable-next-line ts/no-require-imports
   const { drizzle } = require('drizzle-orm/better-sqlite3');
   return createDrizzleAdapter(drizzle(new BetterSqlite3(':memory:')));
+}
+
+function createFileSqliteAdapter(filename: string): { db: DatabaseAdapter; close: () => void } {
+  // eslint-disable-next-line ts/no-require-imports
+  const BetterSqlite3 = require('better-sqlite3');
+  // eslint-disable-next-line ts/no-require-imports
+  const { drizzle } = require('drizzle-orm/better-sqlite3');
+  const sqlite = new BetterSqlite3(filename);
+  sqlite.pragma('busy_timeout = 5000');
+  return {
+    db: createDrizzleAdapter(drizzle(sqlite)),
+    close: () => sqlite.close(),
+  };
 }
 
 describe('migration engine', () => {
@@ -46,6 +62,116 @@ describe('migration engine', () => {
     const final = await getMigrationStatus(db, dialect);
     expect(final.hasVersionTable).toBe(false);
     expect(final.currentVersion).toBe(0);
+    const metadata = await db.rawQuery!<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table'
+       AND name IN ('fortress_migration_journal', 'fortress_migration_state', 'fortress_migration_lock')`,
+    );
+    expect(metadata).toEqual([]);
+  });
+
+  it('serializes concurrent SQLite migrators and re-reads version after the lock', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fortress-migrate-'));
+    const filename = join(dir, 'shared.sqlite');
+    const first = createFileSqliteAdapter(filename);
+    const second = createFileSqliteAdapter(filename);
+    try {
+      const results = await Promise.all([
+        migrateUp(first.db, dialect),
+        migrateUp(second.db, dialect),
+      ]);
+      expect(results.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 6]);
+      expect(results.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 6]);
+      expect((await getMigrationStatus(second.db, dialect)).currentVersion).toBe(6);
+      const journal = await second.db.rawQuery!<{ version: number }>(
+        'SELECT version FROM fortress_migration_journal ORDER BY version',
+      );
+      expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
+    }
+    finally {
+      first.close();
+      second.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('never advances migrateDown when the requested target is above current', async () => {
+    const db = createBareSqliteAdapter();
+    await migrateUp(db, dialect, 2);
+    await db.rawQuery!('UPDATE fortress_schema_version SET applied_at = 123 WHERE id = 1');
+
+    const result = await migrateDown(db, dialect, 99);
+    expect(result).toMatchObject({ fromVersion: 2, toVersion: 2, rolledBack: [] });
+    expect((await getMigrationStatus(db, dialect)).currentVersion).toBe(2);
+    const [checkpoint] = await db.rawQuery!<{ applied_at: number }>(
+      'SELECT applied_at FROM fortress_schema_version WHERE id = 1',
+    );
+    expect(checkpoint.applied_at).toBe(123);
+  });
+
+  it('rejects invalid migration targets without mutation', async () => {
+    const db = createBareSqliteAdapter();
+    await migrateUp(db, dialect, 2);
+    for (const target of [-1, 1.5, Number.NaN])
+      await expect(migrateDown(db, dialect, target)).rejects.toThrow(/non-negative safe integer/);
+    expect((await getMigrationStatus(db, dialect)).currentVersion).toBe(2);
+  });
+
+  it('records deterministic checksums and removes journal rows on rollback', async () => {
+    const db = createBareSqliteAdapter();
+    await migrateUp(db, dialect);
+    const journal = await db.rawQuery!<{ version: number; name: string; checksum: string }>(
+      'SELECT version, name, checksum FROM fortress_migration_journal ORDER BY version',
+    );
+    expect(journal).toHaveLength(6);
+    expect(journal.map(row => row.name)).toEqual([
+      'schema_version',
+      'initial_schema',
+      'auth_continuation',
+      'tenant_default_unique',
+      'hot_indexes_timestamptz',
+      'canonical_email',
+    ]);
+    expect(journal.every(row => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
+
+    await migrateDown(db, dialect, 4);
+    const remaining = await db.rawQuery!<{ version: number }>(
+      'SELECT version FROM fortress_migration_journal ORDER BY version',
+    );
+    expect(remaining.map(row => Number(row.version))).toEqual([1, 2, 3, 4]);
+  });
+
+  it('fails closed on a corrupted or incomplete migration journal', async () => {
+    const db = createBareSqliteAdapter();
+    await migrateUp(db, dialect);
+    await db.rawQuery!(
+      'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 3',
+      ['0'.repeat(64)],
+    );
+    await expect(migrateUp(db, dialect)).rejects.toThrow(/integrity check failed/);
+    expect((await getMigrationStatus(db, dialect)).currentVersion).toBe(6);
+
+    await db.rawQuery!('UPDATE fortress_migration_journal SET checksum = (SELECT checksum FROM fortress_migration_journal WHERE version = 2) WHERE version = 3');
+    // The copied checksum is still invalid for v3; replace via a fresh legacy
+    // database to exercise the separate missing-row path deterministically.
+    const legacy = createTestAdapter();
+    await migrateUp(legacy, dialect); // backfills the pre-journal fixture
+    await legacy.rawQuery!('DELETE FROM fortress_migration_journal WHERE version = 4');
+    await expect(migrateUp(legacy, dialect)).rejects.toThrow(/missing version 4/);
+
+    const completeLoss = createTestAdapter();
+    await migrateUp(completeLoss, dialect); // legacy backfill sets initialized
+    await completeLoss.rawQuery!('DELETE FROM fortress_migration_journal');
+    await expect(migrateUp(completeLoss, dialect)).rejects.toThrow(/missing version 1/);
+  });
+
+  it('backfills journal rows for a legacy checkpoint without reapplying migrations', async () => {
+    const db = createTestAdapter();
+    const result = await migrateUp(db, dialect);
+    expect(result.applied).toEqual([]);
+    const journal = await db.rawQuery!<{ version: number }>(
+      'SELECT version FROM fortress_migration_journal ORDER BY version',
+    );
+    expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it('fails closed when a data migration is applied as SQL without its runtime step', async () => {

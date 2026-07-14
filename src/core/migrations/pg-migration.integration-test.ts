@@ -17,19 +17,28 @@ import { GenericContainer, Wait } from 'testcontainers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDrizzleAdapter } from '../../drizzle/adapter';
 import {
+  computeMigrationChecksum,
   detectMigrationDrift,
   getMigrationStatus,
   hasMigrationDrift,
   migrateDown,
   migrateUp,
 } from './engine';
-import { FORTRESS_INDEXES, FORTRESS_TABLES } from './migrations';
+import { FORTRESS_INDEXES, FORTRESS_TABLES, getFortressMigrations } from './migrations';
+
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
+const INTEGRITY_FAILURE_RE = /integrity check failed/;
 
 let container: StartedTestContainer;
 let pgClient: Sql;
+let connectionString: string;
+
+function adapterFor(client: Sql): DatabaseAdapter {
+  return createDrizzleAdapter(drizzle(client) as any, { dialect: 'pg' });
+}
 
 function adapter(): DatabaseAdapter {
-  return createDrizzleAdapter(drizzle(pgClient) as any, { dialect: 'pg' });
+  return adapterFor(pgClient);
 }
 
 beforeAll(async () => {
@@ -43,7 +52,7 @@ beforeAll(async () => {
     .withWaitStrategy(Wait.forListeningPorts())
     .start();
 
-  const connectionString = `postgres://test:test@${container.getHost()}:${container.getMappedPort(5432)}/fortress_migrate_test`;
+  connectionString = `postgres://test:test@${container.getHost()}:${container.getMappedPort(5432)}/fortress_migrate_test`;
   pgClient = postgres(connectionString);
 }, 60_000);
 
@@ -225,6 +234,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
        FROM information_schema.columns
        WHERE table_schema = current_schema()
          AND table_name LIKE 'fortress_%'
+         AND table_name <> 'fortress_migration_journal'
          AND data_type LIKE 'timestamp%'
        GROUP BY data_type`,
     );
@@ -283,5 +293,51 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(down.toVersion).toBe(0);
     const finalDrift = await detectMigrationDrift(db, 'pg');
     expect(finalDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
+  }, 60_000);
+
+  it('serializes concurrent migrators and rejects journal tampering', async () => {
+    const firstClient = postgres(connectionString);
+    const secondClient = postgres(connectionString);
+    const first = adapterFor(firstClient);
+    const second = adapterFor(secondClient);
+    try {
+      const upResults = await Promise.all([
+        migrateUp(first, 'pg'),
+        migrateUp(second, 'pg'),
+      ]);
+      expect(upResults.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 6]);
+      expect(upResults.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 6]);
+
+      const journal = await first.rawQuery!<{ version: number; checksum: string }>(
+        'SELECT version, checksum FROM fortress_migration_journal ORDER BY version',
+      );
+      expect(journal.map(row => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(journal.every(row => SHA256_HEX_RE.test(row.checksum))).toBe(true);
+
+      const downResults = await Promise.all([
+        migrateDown(first, 'pg', 4),
+        migrateDown(second, 'pg', 4),
+      ]);
+      expect(downResults.map(result => result.rolledBack.length).sort((a, b) => a - b)).toEqual([0, 2]);
+      expect((await getMigrationStatus(first, 'pg')).currentVersion).toBe(4);
+
+      await first.rawQuery!(
+        'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 3',
+        ['f'.repeat(64)],
+      );
+      await expect(migrateUp(second, 'pg')).rejects.toThrow(INTEGRITY_FAILURE_RE);
+      expect((await getMigrationStatus(first, 'pg')).currentVersion).toBe(4);
+
+      const migration3 = getFortressMigrations('pg').find(migration => migration.version === 3)!;
+      await first.rawQuery!(
+        'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 3',
+        [await computeMigrationChecksum(migration3)],
+      );
+      await migrateDown(first, 'pg', 0);
+    }
+    finally {
+      await firstClient.end();
+      await secondClient.end();
+    }
   }, 60_000);
 });

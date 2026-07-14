@@ -47,8 +47,12 @@ if (hasMigrationDrift(drift)) throw new Error('Schema drift detected');
 ```
 
 Pass an explicit `dialect` when the adapter does not advertise one (most
-non-Drizzle adapters). Both `migrateUp` and `migrateDown` are idempotent
-and safe to run on every deploy.
+non-Drizzle adapters). Both `migrateUp` and `migrateDown` are idempotent and safe to run on every
+deploy. Mutation runs acquire a database-backed lock, re-read the checkpoint
+only after locking, and execute transactionally. The engine maintains
+`fortress_migration_journal` with one SHA-256 checksum per applied migration;
+legacy checkpoints are backfilled once, while later missing or changed rows
+fail closed before any schema mutation.
 
 ## CLI
 

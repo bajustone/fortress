@@ -1290,7 +1290,9 @@ creates every Fortress table, so `migrateUp` provisions a brand-new database
 end-to-end through the adapter's `rawQuery` — no Drizzle or `drizzle-kit`
 dependency at runtime. Runtime helpers compare your live database's
 `fortress_schema_version` singleton row (and the actual tables/columns)
-against the bundled catalog.
+against the bundled catalog. Migration runs are transactionally serialized
+(SQLite writer lock / PostgreSQL advisory lock), and a per-version SHA-256
+journal rejects edited or incomplete migration history before executing DDL.
 
 ```typescript
 import { detectMigrationDrift, hasMigrationDrift, migrateUp } from '@bajustone/fortress';

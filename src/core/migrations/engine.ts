@@ -190,6 +190,218 @@ async function recordVersion(db: DatabaseAdapter, dialect: MigrationDialect, ver
   );
 }
 
+interface MigrationJournalRow {
+  version: number | string;
+  name: string;
+  dialect: string;
+  checksum: string;
+}
+
+/** SHA-256 of every immutable migration input, including runtime data-step identity. */
+export async function computeMigrationChecksum(migration: FortressMigration): Promise<string> {
+  const payload = JSON.stringify([
+    migration.dialect,
+    migration.version,
+    migration.name,
+    migration.up,
+    migration.down,
+    migration.freshUp ?? null,
+    migration.dataStep ?? null,
+  ]);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function ensureMigrationMetadata(db: DatabaseAdapter, dialect: MigrationDialect): Promise<void> {
+  const rawQuery = assertRawQuery(db);
+  if (dialect === 'sqlite') {
+    // The singleton write forces a database-level writer lock even for
+    // adapters whose transaction begins deferred. Separate processes then
+    // serialize before the checkpoint is re-read.
+    await rawQuery(`CREATE TABLE IF NOT EXISTS fortress_migration_lock (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      touched_at INTEGER NOT NULL
+    )`);
+    await rawQuery(
+      `INSERT INTO fortress_migration_lock (id, touched_at) VALUES (1, unixepoch())
+       ON CONFLICT(id) DO UPDATE SET touched_at = excluded.touched_at`,
+    );
+    await rawQuery(`CREATE TABLE IF NOT EXISTS fortress_migration_journal (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      dialect TEXT NOT NULL,
+      checksum TEXT NOT NULL,
+      applied_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`);
+    await rawQuery(`CREATE TABLE IF NOT EXISTS fortress_migration_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      journal_initialized INTEGER NOT NULL DEFAULT 0
+    )`);
+    await rawQuery(
+      `INSERT INTO fortress_migration_state (id, journal_initialized) VALUES (1, 0)
+       ON CONFLICT(id) DO NOTHING`,
+    );
+    return;
+  }
+
+  // Transaction-scoped: releases automatically on commit and rollback and
+  // stays bound to the transaction adapter's one pooled connection.
+  await rawQuery('SELECT pg_advisory_xact_lock(117993, 0)');
+  const journalTable = await rawQuery<{ name: string | null }>(
+    `SELECT to_regclass('public.fortress_migration_journal') AS name`,
+  );
+  if (!journalTable[0]?.name) {
+    await rawQuery(`CREATE TABLE fortress_migration_journal (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      dialect TEXT NOT NULL,
+      checksum VARCHAR(64) NOT NULL,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  }
+  const stateTable = await rawQuery<{ name: string | null }>(
+    `SELECT to_regclass('public.fortress_migration_state') AS name`,
+  );
+  if (!stateTable[0]?.name) {
+    await rawQuery(`CREATE TABLE fortress_migration_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      journal_initialized BOOLEAN NOT NULL DEFAULT false
+    )`);
+  }
+  await rawQuery(
+    `INSERT INTO fortress_migration_state (id, journal_initialized) VALUES (1, false)
+     ON CONFLICT(id) DO NOTHING`,
+  );
+}
+
+async function readJournal(db: DatabaseAdapter): Promise<MigrationJournalRow[]> {
+  return assertRawQuery(db)<MigrationJournalRow>(
+    'SELECT version, name, dialect, checksum FROM fortress_migration_journal ORDER BY version',
+  );
+}
+
+async function isJournalInitialized(db: DatabaseAdapter): Promise<boolean> {
+  const rows = await assertRawQuery(db)<{ journal_initialized: boolean | number | string }>(
+    'SELECT journal_initialized FROM fortress_migration_state WHERE id = 1',
+  );
+  const value = rows[0]?.journal_initialized;
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+async function markJournalInitialized(db: DatabaseAdapter, dialect: MigrationDialect): Promise<void> {
+  await assertRawQuery(db)(
+    `UPDATE fortress_migration_state SET journal_initialized = ${dialect === 'pg' ? 'true' : '1'} WHERE id = 1`,
+  );
+}
+
+async function insertJournal(
+  db: DatabaseAdapter,
+  dialect: MigrationDialect,
+  migration: FortressMigration,
+): Promise<void> {
+  const rawQuery = assertRawQuery(db);
+  const checksum = await computeMigrationChecksum(migration);
+  if (dialect === 'sqlite') {
+    await rawQuery(
+      `INSERT INTO fortress_migration_journal (version, name, dialect, checksum, applied_at)
+       VALUES (?, ?, ?, ?, unixepoch())`,
+      [migration.version, migration.name, dialect, checksum],
+    );
+    return;
+  }
+  await rawQuery(
+    `INSERT INTO fortress_migration_journal (version, name, dialect, checksum, applied_at)
+     VALUES (?, ?, ?, ?, now())`,
+    [migration.version, migration.name, dialect, checksum],
+  );
+}
+
+async function verifyOrBackfillJournal(
+  db: DatabaseAdapter,
+  dialect: MigrationDialect,
+  currentVersion: number,
+): Promise<void> {
+  const migrations = getFortressMigrations(dialect);
+  const latestVersion = getLatestMigrationVersion(dialect);
+  if (currentVersion > latestVersion) {
+    throw Errors.badRequest(
+      `Database schema version ${currentVersion} is newer than bundled version ${latestVersion}`,
+    );
+  }
+
+  let rows = await readJournal(db);
+  const initialized = await isJournalInitialized(db);
+  // Compatibility bridge for installations created before the journal. The
+  // persistent state marker makes this a one-time transition: once initialized,
+  // even complete row loss is corruption and must not be silently re-certified.
+  if (!initialized && rows.length === 0 && currentVersion > 0) {
+    for (const migration of migrations.filter(item => item.version <= currentVersion))
+      await insertJournal(db, dialect, migration);
+    rows = await readJournal(db);
+  }
+
+  const byVersion = new Map(rows.map(row => [Number(row.version), row]));
+  for (const row of rows) {
+    const version = Number(row.version);
+    const migration = migrations.find(item => item.version === version);
+    if (!migration || version > currentVersion) {
+      throw Errors.badRequest(`Migration journal contains unexpected version ${version}`);
+    }
+    const checksum = await computeMigrationChecksum(migration);
+    if (row.name !== migration.name || row.dialect !== dialect || row.checksum !== checksum) {
+      throw Errors.badRequest(`Migration journal integrity check failed for version ${version}`);
+    }
+  }
+  for (const migration of migrations.filter(item => item.version <= currentVersion)) {
+    if (!byVersion.has(migration.version)) {
+      throw Errors.badRequest(`Migration journal is missing version ${migration.version}`);
+    }
+  }
+  if (!initialized)
+    await markJournalInitialized(db, dialect);
+}
+
+async function deleteJournalVersion(db: DatabaseAdapter, version: number): Promise<void> {
+  await assertRawQuery(db)(
+    'DELETE FROM fortress_migration_journal WHERE version = ?',
+    [version],
+  );
+}
+
+async function dropMigrationMetadata(db: DatabaseAdapter, dialect: MigrationDialect): Promise<void> {
+  const rawQuery = assertRawQuery(db);
+  await rawQuery('DROP TABLE IF EXISTS fortress_migration_journal');
+  await rawQuery('DROP TABLE IF EXISTS fortress_migration_state');
+  if (dialect === 'sqlite')
+    await rawQuery('DROP TABLE IF EXISTS fortress_migration_lock');
+}
+
+function assertTargetVersion(targetVersion: number): void {
+  if (!Number.isSafeInteger(targetVersion) || targetVersion < 0)
+    throw Errors.badRequest('Migration target version must be a non-negative safe integer');
+}
+
+// better-sqlite3 waits synchronously on a cross-connection writer lock, which
+// can starve the first transaction's Promise continuation in the same process.
+// Serialize local migration callers as well; the database write lock remains
+// the cross-process authority.
+let sqliteMigrationChain: Promise<void> = Promise.resolve();
+
+function withMigrationTransaction<T>(
+  db: DatabaseAdapter,
+  dialect: MigrationDialect,
+  fn: (tx: DatabaseAdapter) => Promise<T>,
+): Promise<T> {
+  if (dialect === 'pg')
+    return db.transaction(fn);
+  const result = sqliteMigrationChain.then(
+    () => db.transaction(fn),
+    () => db.transaction(fn),
+  );
+  sqliteMigrationChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 export async function getMigrationStatus(
   db: DatabaseAdapter,
   dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
@@ -213,31 +425,32 @@ export async function migrateUp(
   dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
   targetVersion: number = getLatestMigrationVersion(dialect),
 ): Promise<MigrationApplyResult> {
-  const before = await getMigrationStatus(db, dialect);
-  const toApply = getFortressMigrations(dialect)
-    .filter(migration => migration.version > before.currentVersion && migration.version <= targetVersion);
+  assertTargetVersion(targetVersion);
+  return withMigrationTransaction(db, dialect, async (tx) => {
+    await ensureMigrationMetadata(tx, dialect);
+    // Mandatory post-lock read: no plan computed before this point is trusted.
+    const { version: currentVersion } = await readCurrentVersion(tx, dialect);
+    await verifyOrBackfillJournal(tx, dialect, currentVersion);
 
-  for (const migration of toApply) {
-    if (migration.beforeUp) {
-      // Data cleanup and the constraint it prepares must commit atomically.
-      await db.transaction(async (tx) => {
-        await migration.beforeUp!(tx);
-        await executeSql(tx, migration.up);
-        await recordVersion(tx, dialect, migration.version);
-      });
+    const toApply = getFortressMigrations(dialect)
+      .filter(migration => migration.version > currentVersion && migration.version <= targetVersion);
+    for (const migration of toApply) {
+      await migration.beforeUp?.(tx);
+      await executeSql(tx, migration.up);
+      await insertJournal(tx, dialect, migration);
+      await recordVersion(tx, dialect, migration.version);
     }
-    else {
-      await executeSql(db, migration.up);
-      await recordVersion(db, dialect, migration.version);
-    }
-  }
 
-  return {
-    dialect,
-    fromVersion: before.currentVersion,
-    toVersion: toApply.at(-1)?.version ?? before.currentVersion,
-    applied: toApply,
-  };
+    const toVersion = toApply.at(-1)?.version ?? currentVersion;
+    if (toVersion === 0)
+      await dropMigrationMetadata(tx, dialect);
+    return {
+      dialect,
+      fromVersion: currentVersion,
+      toVersion,
+      applied: toApply,
+    };
+  });
 }
 
 export async function migrateDown(
@@ -245,22 +458,42 @@ export async function migrateDown(
   dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
   targetVersion: number = 0,
 ): Promise<MigrationDownResult> {
-  const before = await getMigrationStatus(db, dialect);
-  const toRollback = getFortressMigrations(dialect)
-    .filter(migration => migration.version <= before.currentVersion && migration.version > targetVersion)
-    .sort((a, b) => b.version - a.version);
+  assertTargetVersion(targetVersion);
+  return withMigrationTransaction(db, dialect, async (tx) => {
+    await ensureMigrationMetadata(tx, dialect);
+    const { version: currentVersion } = await readCurrentVersion(tx, dialect);
+    await verifyOrBackfillJournal(tx, dialect, currentVersion);
 
-  for (const migration of toRollback) {
-    await executeSql(db, migration.down);
-  }
-  await recordVersion(db, dialect, targetVersion);
+    // A target above current is an idempotent no-op, never a version advance.
+    const effectiveTarget = Math.min(targetVersion, currentVersion);
+    const migrations = getFortressMigrations(dialect);
+    if (
+      effectiveTarget > 0
+      && effectiveTarget < currentVersion
+      && !migrations.some(migration => migration.version === effectiveTarget)
+    ) {
+      throw Errors.badRequest(`Unknown migration target version ${effectiveTarget}`);
+    }
+    const toRollback = migrations
+      .filter(migration => migration.version <= currentVersion && migration.version > effectiveTarget)
+      .sort((a, b) => b.version - a.version);
 
-  return {
-    dialect,
-    fromVersion: before.currentVersion,
-    toVersion: targetVersion,
-    rolledBack: toRollback,
-  };
+    for (const migration of toRollback) {
+      await executeSql(tx, migration.down);
+      await deleteJournalVersion(tx, migration.version);
+    }
+    if (effectiveTarget === 0)
+      await dropMigrationMetadata(tx, dialect);
+    else if (toRollback.length > 0)
+      await recordVersion(tx, dialect, effectiveTarget);
+
+    return {
+      dialect,
+      fromVersion: currentVersion,
+      toVersion: effectiveTarget,
+      rolledBack: toRollback,
+    };
+  });
 }
 
 export async function detectMigrationDrift(
