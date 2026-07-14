@@ -15,6 +15,12 @@ import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
 
 export interface TwoFactorConfig {
+  /**
+   * 32-byte AES-256-GCM key used to encrypt TOTP seeds at rest. Accepts
+   * base64/base64url, 64-character hex, or exactly 32 UTF-8 bytes. Keep this
+   * key stable and outside the database; changing it requires re-enrolment.
+   */
+  secretEncryptionKey: string;
   totp?: {
     /** Issuer name shown in authenticator apps (default: 'Fortress') */
     issuer?: string;
@@ -58,6 +64,76 @@ interface TrustedDeviceRecord {
   deviceHash: string;
   expiresAt: Date;
   lastUsedAt: Date;
+}
+
+const ENCODER = new TextEncoder();
+const DECODER = new TextDecoder();
+const HEX_32_BYTE_KEY = /^[0-9a-f]{64}$/i;
+
+function decodeEncryptionKey(value: string): Uint8Array {
+  const trimmed = value.trim();
+  if (HEX_32_BYTE_KEY.test(trimmed))
+    return new Uint8Array(trimmed.match(/.{2}/g)!.map(byte => Number.parseInt(byte, 16)));
+  try {
+    const normalized = trimmed.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const raw = atob(padded);
+    const decoded = Uint8Array.from(raw, char => char.charCodeAt(0));
+    if (decoded.length === 32)
+      return decoded;
+  }
+  catch {
+    // Fall through to exact-length UTF-8 key material.
+  }
+  return ENCODER.encode(value);
+}
+
+function base64UrlEncode(value: Uint8Array): string {
+  return btoa(String.fromCharCode(...value))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='));
+  return Uint8Array.from(raw, char => char.charCodeAt(0));
+}
+
+function toArrayBuffer(value: Uint8Array): ArrayBuffer {
+  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+}
+
+async function encryptSecret(keyPromise: Promise<CryptoKey>, secret: string, userId: string): Promise<string> {
+  const key = await keyPromise;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: ENCODER.encode(userId) },
+    key,
+    ENCODER.encode(secret),
+  ));
+  return `v1.${base64UrlEncode(iv)}.${base64UrlEncode(ciphertext)}`;
+}
+
+async function decryptSecret(keyPromise: Promise<CryptoKey>, encrypted: string, userId: string): Promise<string> {
+  const [version, encodedIv, encodedCiphertext] = encrypted.split('.');
+  if (version !== 'v1' || !encodedIv || !encodedCiphertext)
+    throw Errors.unauthorized('Two-factor enrolment uses an unsupported secret format; re-enrolment is required');
+  try {
+    const key = await keyPromise;
+    const iv = base64UrlDecode(encodedIv);
+    const ciphertext = base64UrlDecode(encodedCiphertext);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: toArrayBuffer(iv), additionalData: ENCODER.encode(userId) },
+      key,
+      toArrayBuffer(ciphertext),
+    );
+    return DECODER.decode(plaintext);
+  }
+  catch {
+    throw Errors.unauthorized('Unable to decrypt two-factor secret');
+  }
 }
 
 // --- TOTP Implementation (RFC 6238 / RFC 4226) ---
@@ -209,7 +285,14 @@ export interface TwoFactorMethods {
  * that adds TOTP enrolment and verification, hashed backup codes, and
  * trusted-device opt-out for the sign-in flow.
  */
-export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { readonly name: 'two-factor' } {
+export function twoFactor(config: TwoFactorConfig): FortressPlugin & { readonly name: 'two-factor' } {
+  if (!config?.secretEncryptionKey)
+    throw Errors.badRequest('twoFactor requires secretEncryptionKey');
+  const keyBytes = decodeEncryptionKey(config.secretEncryptionKey);
+  if (keyBytes.length !== 32)
+    throw Errors.badRequest('twoFactor secretEncryptionKey must decode to exactly 32 bytes for AES-256-GCM');
+  const keyBuffer = keyBytes.buffer.slice(keyBytes.byteOffset, keyBytes.byteOffset + keyBytes.byteLength) as ArrayBuffer;
+  const encryptionKey = crypto.subtle.importKey('raw', keyBuffer, 'AES-GCM', false, ['encrypt', 'decrypt']);
   const issuer = config.totp?.issuer ?? 'Fortress';
   const period = config.totp?.period ?? 30;
   const digits = config.totp?.digits ?? 6;
@@ -231,7 +314,8 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
     if (!secretRecord)
       throw Errors.badRequest('Two-factor authentication is not set up');
 
-    const matchedCounter = await verifyTOTPWithCounter(secretRecord.secret, code, period, digits);
+    const secret = await decryptSecret(encryptionKey, secretRecord.secret, userId);
+    const matchedCounter = await verifyTOTPWithCounter(secret, code, period, digits);
     if (matchedCounter !== null) {
       const previousCounter = secretRecord.lastUsedCounter;
       if (previousCounter !== null && matchedCounter <= previousCounter)
@@ -432,10 +516,12 @@ export function twoFactor(config: TwoFactorConfig = {}): FortressPlugin & { read
           // Generate backup codes
           const { raw: backupCodesRaw, hashes } = await generateBackupCodes(backupCodeCount);
 
-          // Store secret (not yet enabled — enable after first verify)
+          // Store only an authenticated ciphertext; the raw TOTP seed is
+          // returned once for authenticator enrolment and never persisted.
+          const encryptedSecret = await encryptSecret(encryptionKey, secret, userId);
           await ctx.db.create({
             model: 'two_factor_secret',
-            data: { userId, secret, isEnabled: false, lastUsedCounter: null },
+            data: { userId, secret: encryptedSecret, isEnabled: false, lastUsedCounter: null },
           });
 
           // Store backup code hashes

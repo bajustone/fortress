@@ -1215,7 +1215,7 @@ describe('pg: two-factor plugin', () => {
     const fortress = createFortress({
       jwt: { key: SECRET },
       database: createPgAdapter(),
-      plugins: [twoFactor({ totp: { issuer: 'PGTest' }, backupCodes: { count: 5 } })],
+      plugins: [twoFactor({ secretEncryptionKey: 'p'.repeat(32), totp: { issuer: 'PGTest' }, backupCodes: { count: 5 } })],
     });
 
     const user = await fortress.auth.createUser({

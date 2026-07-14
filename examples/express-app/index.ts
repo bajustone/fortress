@@ -93,7 +93,10 @@ const fortress = createFortress({
     }),
 
     // ── Auth enhancement plugins ──
-    twoFactor({ totp: { issuer: 'Fortress Express Example' } }),
+    twoFactor({
+      secretEncryptionKey: process.env.FORTRESS_TOTP_ENCRYPTION_KEY!,
+      totp: { issuer: 'Fortress Express Example' },
+    }),
     magicLink({
       onSendMagicLink: async (email, token) => {
         console.warn(`[magic-link] email=${email} token=${token}`);

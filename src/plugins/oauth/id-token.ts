@@ -29,9 +29,10 @@ export interface IdTokenParams {
   nonce?: string;
   /**
    * Unix seconds when the user authenticated (\u00a72). Required when
-   * `max_age` was used; harmless to always include.
+   * `max_age` was used. Omit on refresh when the original authentication
+   * time was not persisted; never substitute the refresh time.
    */
-  authTimeSeconds: number;
+  authTimeSeconds?: number;
   /** Space-separated scope; gates the identity claims. */
   scope: string | null;
   /** Pre-resolved active signing key from {@link getActiveSigningKey}. */
@@ -42,8 +43,8 @@ export interface IdTokenParams {
  * Build and sign an OIDC id_token. Returns the compact JWS string.
  *
  * Claim coverage (OIDC Core \u00a72 + \u00a75.1):
- * - `iss`, `sub`, `aud`, `iat`, `exp`, `auth_time` always
- * - `nonce` when supplied
+ * - `iss`, `sub`, `aud`, `iat`, `exp` always
+ * - `auth_time` and `nonce` when supplied
  * - `email`, `email_verified` only when scope contains `email`
  * - `name`, `preferred_username` when scope contains `profile`
  * - `updated_at` always (mirrors userinfo)
@@ -56,9 +57,9 @@ export async function issueIdToken(params: IdTokenParams): Promise<string> {
   const exposeProfile = scopes.includes('profile');
 
   // Standard + scope-gated identity claims.
-  const claims: Record<string, unknown> = {
-    auth_time: params.authTimeSeconds,
-  };
+  const claims: Record<string, unknown> = {};
+  if (params.authTimeSeconds !== undefined)
+    claims.auth_time = params.authTimeSeconds;
   if (params.nonce)
     claims.nonce = params.nonce;
   if (exposeEmail) {

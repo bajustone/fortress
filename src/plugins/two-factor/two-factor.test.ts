@@ -5,6 +5,7 @@ import { createTestAdapter } from '../../testing';
 import { generateTOTP, twoFactor } from './index';
 
 const SECRET = 'two-factor-test-secret-at-least32';
+const TOTP_ENCRYPTION_KEY = 't'.repeat(32);
 
 interface TwoFactorMethods {
   enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
@@ -22,7 +23,7 @@ describe('two-factor plugin', () => {
     fortress = createFortress({
       jwt: { key: SECRET },
       database: createTestAdapter(),
-      plugins: [twoFactor({ totp: { issuer: 'TestApp' }, backupCodes: { count: 5 } })],
+      plugins: [twoFactor({ secretEncryptionKey: TOTP_ENCRYPTION_KEY, totp: { issuer: 'TestApp' }, backupCodes: { count: 5 } })],
     });
 
     methods = fortress.plugins['two-factor'] as unknown as TwoFactorMethods;
@@ -35,6 +36,13 @@ describe('two-factor plugin', () => {
     userId = user.id;
   });
 
+  describe('configuration', () => {
+    it('requires an exact 32-byte encryption key', () => {
+      expect(() => twoFactor(undefined as any)).toThrow('requires secretEncryptionKey');
+      expect(() => twoFactor({ secretEncryptionKey: 'too-short' })).toThrow('exactly 32 bytes');
+    });
+  });
+
   describe('enable', () => {
     it('returns secret, otpauth URL, and backup codes', async () => {
       const setup = await methods.enable(userId);
@@ -43,6 +51,12 @@ describe('two-factor plugin', () => {
       expect(setup.otpauthUrl).toContain('otpauth://totp/');
       expect(setup.otpauthUrl).toContain('TestApp');
       expect(setup.backupCodes).toHaveLength(5);
+      const stored = await fortress.config.database.findOne<{ secret: string }>({
+        model: 'two_factor_secret',
+        where: [{ field: 'userId', operator: '=', value: userId }],
+      });
+      expect(stored?.secret).toMatch(/^v1\./);
+      expect(stored?.secret).not.toContain(setup.secret);
     });
 
     it('rejects if already enabled', async () => {

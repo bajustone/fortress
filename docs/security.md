@@ -28,6 +28,8 @@ const fortress = createFortress({
 
 ## Two-Factor Authentication
 
+TOTP seeds are stored only as user-bound AES-256-GCM envelopes using the required application-held `twoFactor({ secretEncryptionKey })` key. Keep that key outside the database and backed up; migration 0009 removes legacy plaintext enrolments and requires affected users to re-enrol.
+
 Two-factor continuation proofs are durably counted on the existing continuation record. Rejected TOTP and backup-code proofs survive transaction rollback, are invalidated after `maxAttempts` (default 5), and are subject to a short per-account cooldown (`failedAttemptCooldownSeconds`, default 1 second). These controls do not permanently lock an account; a new login creates a new continuation after the cooldown.
 
 Trusted devices are explicit opt-in only. Pass `{ rememberDevice: true }` when completing setup or a two-factor challenge. Fortress returns a high-entropy `trustedDeviceToken`; pass it back in `RequestMeta.trustedDeviceToken` on later logins. The database stores only its hash and never uses User-Agent as a credential. Core is adapter-neutral and does not set plugin cookies: the host application must set the returned token in a `Secure`, `HttpOnly`, `SameSite=Lax` (or stricter), appropriately scoped cookie and forward it on subsequent requests.

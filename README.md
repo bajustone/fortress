@@ -1460,7 +1460,7 @@ const fortress = createFortress({
   plugins: [
     rateLimit(),
     accountLockout(),
-    twoFactor(),
+    twoFactor({ secretEncryptionKey: process.env.FORTRESS_TOTP_ENCRYPTION_KEY! }),
     auditLog({ hashChain: true }),
   ],
 });
@@ -1672,6 +1672,8 @@ TOTP (RFC 6238) with backup codes and trusted device support. Integrates into th
 import { twoFactor } from '@bajustone/fortress/plugins/two-factor';
 
 twoFactor({
+  // Exactly 32 bytes; keep outside the database and stable across deploys.
+  secretEncryptionKey: process.env.FORTRESS_TOTP_ENCRYPTION_KEY!,
   totp: {
     issuer: 'My App',      // default: 'Fortress'
     period: 30,             // default: 30 seconds
@@ -1683,6 +1685,11 @@ twoFactor({
   trustedDeviceDays: 30,    // default: 30
 })
 ```
+
+TOTP seeds are encrypted at rest with AES-256-GCM. Back up the encryption key
+in your secrets manager: losing or changing it requires every enrolled user to
+set up 2FA again. Migration `0009_encrypt_totp_secrets` removes legacy plaintext
+enrolments so they cannot remain exposed after upgrade.
 
 **Methods:**
 

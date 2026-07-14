@@ -13,6 +13,7 @@ const fortress = createFortress({
   database: yourAdapter,
   plugins: [
     twoFactor({
+      secretEncryptionKey: process.env.FORTRESS_TOTP_ENCRYPTION_KEY!,
       totp: { issuer: 'MyApp' },
     }),
   ],
@@ -23,10 +24,11 @@ The plugin registers three database models automatically: `two_factor_secret`, `
 
 ## Configuration
 
-All options are optional. Pass a `TwoFactorConfig` object to `twoFactor()`.
+Pass a `TwoFactorConfig` object to `twoFactor()`. `secretEncryptionKey` is required; all other options are optional.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
+| `secretEncryptionKey` | `string` | required | Exactly 32 bytes (raw UTF-8, hex, base64, or base64url) used for AES-256-GCM encryption of TOTP seeds |
 | `totp.issuer` | `string` | `'Fortress'` | Issuer name displayed in authenticator apps (Google Authenticator, Authy, etc.) |
 | `totp.period` | `number` | `30` | TOTP time step in seconds |
 | `totp.digits` | `number` | `6` | Number of digits in the TOTP code |
@@ -35,6 +37,7 @@ All options are optional. Pass a `TwoFactorConfig` object to `twoFactor()`.
 
 ```ts
 twoFactor({
+  secretEncryptionKey: process.env.FORTRESS_TOTP_ENCRYPTION_KEY!,
   totp: {
     issuer: 'MyApp',
     period: 30,
@@ -55,7 +58,9 @@ const tf = fortress.plugins['two-factor'];
 
 ### Enable 2FA
 
-Call `enable` to generate a TOTP secret and backup codes. The user must verify a code before 2FA is activated -- the secret is stored but `isEnabled` stays `false` until the first successful `verify`.
+Call `enable` to generate a TOTP secret and backup codes. The user must verify a code before 2FA is activated. Only an AES-256-GCM ciphertext is stored; `isEnabled` stays `false` until the first successful `verify`.
+
+Keep the encryption key in a secrets manager, separate from the database, and back it up. Losing or changing it makes existing seeds undecryptable and requires re-enrolment. Migration `0009_encrypt_totp_secrets` deletes legacy plaintext enrolments and associated recovery/trusted-device records so an upgrade cannot leave usable plaintext seeds behind.
 
 ```ts
 const setup = await fortress.plugins['two-factor'].enable(userId);

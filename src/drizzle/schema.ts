@@ -228,7 +228,7 @@ const apiKeys = sqliteTable('fortress_api_key', {
 const twoFactorSecrets = sqliteTable('fortress_two_factor_secret', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
-  secret: text('secret').notNull(), // Base32-encoded TOTP secret
+  secret: text('secret').notNull(), // Versioned AES-GCM envelope containing the TOTP seed
   isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(false),
   lastUsedCounter: integer('last_used_counter'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),

@@ -1492,6 +1492,19 @@ DROP INDEX IF EXISTS auth_continuation_failure_idx;
 ALTER TABLE fortress_auth_continuation DROP COLUMN cooldown_seconds, DROP COLUMN max_attempts, DROP COLUMN invalidated_at, DROP COLUMN last_failed_at, DROP COLUMN failed_attempts;
 `.trim();
 
+// --- 0009: remove legacy plaintext TOTP enrolments ---
+// SQL cannot encrypt existing seeds without the application-held key. Delete
+// the enrolment atomically so upgraded databases cannot retain usable plaintext
+// credentials. Users re-enrol and all newly stored seeds are AES-GCM envelopes.
+const SQLITE_0009_UP = `
+DELETE FROM fortress_backup_code;
+DELETE FROM fortress_trusted_device;
+DELETE FROM fortress_two_factor_secret;
+`.trim();
+const SQLITE_0009_DOWN = 'SELECT 1;';
+const PG_0009_UP = SQLITE_0009_UP;
+const PG_0009_DOWN = SQLITE_0009_DOWN;
+
 export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> = {
   sqlite: [
     { version: 1, name: 'schema_version', dialect: 'sqlite', up: SQLITE_0001_UP, down: SQLITE_0001_DOWN },
@@ -1502,6 +1515,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 6, name: 'canonical_email', dialect: 'sqlite', up: SQLITE_0006_UP, down: SQLITE_0006_DOWN, freshUp: SQLITE_0006_FRESH_UP, dataStep: 'normalize-email-v2', beforeUp: normalizeExistingUserEmails },
     { version: 7, name: 'audit_chain_anchor', dialect: 'sqlite', up: SQLITE_0007_UP, down: SQLITE_0007_DOWN },
     { version: 8, name: 'two_factor_hardening', dialect: 'sqlite', up: SQLITE_0008_UP, down: SQLITE_0008_DOWN },
+    { version: 9, name: 'encrypt_totp_secrets', dialect: 'sqlite', up: SQLITE_0009_UP, down: SQLITE_0009_DOWN },
   ],
   pg: [
     { version: 1, name: 'schema_version', dialect: 'pg', up: PG_0001_UP, down: PG_0001_DOWN },
@@ -1512,6 +1526,7 @@ export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> =
     { version: 6, name: 'canonical_email', dialect: 'pg', up: PG_0006_UP, down: PG_0006_DOWN, freshUp: PG_0006_FRESH_UP, dataStep: 'normalize-email-v2', beforeUp: normalizeExistingUserEmails },
     { version: 7, name: 'audit_chain_anchor', dialect: 'pg', up: PG_0007_UP, down: PG_0007_DOWN },
     { version: 8, name: 'two_factor_hardening', dialect: 'pg', up: PG_0008_UP, down: PG_0008_DOWN },
+    { version: 9, name: 'encrypt_totp_secrets', dialect: 'pg', up: PG_0009_UP, down: PG_0009_DOWN },
   ],
 };
 

@@ -923,7 +923,9 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
                 clientId: params.clientId,
                 issuerUrl,
                 ttlSeconds: idTokenExpiry,
-                authTimeSeconds: Math.floor(Date.now() / 1000),
+                // The original authentication time is not stored on the
+                // refresh family. Omit auth_time rather than fabricating a
+                // fresh authentication event at token rotation.
                 scope,
                 signingKey,
               });

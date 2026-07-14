@@ -15,7 +15,7 @@
 ### Fixed
 - fix
 
-## [Unreleased]
+## [1.0.0-rc.1] - 2026-07-14
 
 ### Added
 - **Release verification is now a hard publish prerequisite.** Tag publishing waits for lint, source and example typechecks, the full unit/OpenAPI-drift suite, PostgreSQL/Testcontainers integration tests, build/export parity, and a pure-Node-ESM `dist/testing` smoke test. PostgreSQL integration now runs on every CI push as well as pull requests and nightly schedules. The same checks are available locally through `bun run check:release`.
@@ -34,6 +34,9 @@
 - **OpenAPI: Zod-free schema converters + a spec-drift CI gate.** `@bajustone/fortress/hono` now exports `identitySchemaConverter`, `fetcherSchemaConverter`, and `toJSONSchemaConverter` so you can `mountFortressOpenAPI` / `convertRoutes` using fortress's or fetcher's builder **without installing Zod** (existing Zod callers unaffected). A new gate (`src/core/openapi-drift.test.ts`) runs `@bajustone/fetcher/spec-tools`' `lintSpec` over the emitted spec and fails on any unenforced request-schema keyword beyond the intentional `format`/`additionalProperties`. The `/auth/register` body's `email` field now uses the **enforced** `email()` builder (ReDoS-safe pattern) instead of annotation-only `strFormat('email')`, so malformed emails are rejected at registration.
 
 ### Fixed
+- **TOTP seeds are encrypted at rest.** `twoFactor()` now requires a 32-byte application-held `secretEncryptionKey` and stores only AES-256-GCM envelopes bound to the user id. Migration `0009_encrypt_totp_secrets` securely invalidates legacy plaintext enrolments and their recovery/trusted-device state, requiring affected users to re-enrol.
+- **Outbound deadlines cover the complete response body.** OAuth/OIDC, social-login, GitHub, and HIBP requests remain abortable after headers, preventing slow-body peers from stalling authentication or password writes indefinitely.
+- **OIDC refresh no longer fabricates authentication recency.** Refresh-issued id_tokens omit `auth_time` because the original event was not persisted, rather than resetting it to the refresh time and bypassing RP `max_age` policies.
 - **SvelteKit helpers now accept Fortress instances with strongly typed plugin maps.** Adapter signatures previously instantiated the default `Fortress` generic, rejecting instances whose inferred plugin methods lacked a string index signature; the accepted instance type is now generic-map agnostic while preserving the real SvelteKit `Handle`/`Action` return contracts.
 - **The `openapi` and `schemas --format zod` CLI commands no longer crash.** Endpoint definition maps are now converted with `Object.values(...)`; a subprocess smoke suite invokes every documented command and verifies controlled failures do not surface runtime exceptions.
 - **Audit hash chains now protect every stored field, retain a terminal anchor, and cannot fork under concurrent writes.** The audit plugin hashes an unambiguous serialization of all 13 entry fields, including `previousHash`, and migration v7 adds a permanent zero-entry sentinel/terminal hash-count anchor so deletion or mutation of the tail, the full chain, or the anchor is detectable. It traverses links without assuming numerically ordered string IDs, updates the entry and anchor in one serialized transaction (with a PostgreSQL advisory lock), and refuses to append to an invalid chain. Audit `id`, `actorId`, and `targetId` model metadata now match their public string types. CSV exports neutralize spreadsheet-formula prefixes in addition to RFC 4180 escaping.
@@ -66,12 +69,12 @@
 - **DatabaseAdapter contract hardened for freeze.** `DrizzleDialect` is now `'sqlite' | 'pg'` — `mysql` is dropped (it was only smoke-tested and had no constraint-error mapping or CI lane; it can be re-added once there's a real consumer). `update`, `delete`, and `findOne` now **throw** on an empty `where` clause instead of silently matching every row (a full-table wipe footgun); unfiltered `findMany`/`count` reads are still allowed. The Drizzle adapter now maps **SQLite** constraint errors to typed `FortressError`s the same way it already did for Postgres (`UNIQUE`/`PRIMARYKEY` → `CONFLICT/409`, `FOREIGN KEY` → `UNPROCESSABLE_ENTITY/422`, `NOT NULL` → `BAD_REQUEST/400`), and the exported helper `rethrowPgError` is renamed `rethrowDbError(err, dialect)`. The `rawQuery` contract now uses portable `?` positional placeholders on every dialect (the adapter translates to driver syntax), and the conformance suite asserts placeholder behavior, empty-`where` rejection, and unique-violation mapping.
 
 ### Changed (breaking)
-- **Validation migration window and dependency are frozen for the next release.** `@bajustone/fetcher` is pinned exactly to `1.0.0`; consumers must migrate issue-path readers from `[{key}]` to bare property keys and replace exclusive `oneOf` assumptions with `discriminatedUnion()` before upgrading. No dual-shape compatibility shim is provided during the 0.x breaking-change window.
+- **Validation migration window and dependency are frozen for the next release.** Consumers must migrate issue-path readers from `[{key}]` to bare property keys. Fortress explicitly re-exports its reviewed fetcher API and accepts compatible `@bajustone/fetcher` 1.x security patches via `^1.0.0`; no dual-shape compatibility shim is provided during the 0.x breaking-change window.
 - **Request/response validation now runs on `@bajustone/fetcher`'s `fromJSONSchema`.** Fortress's hand-rolled `validateJsonSchema` (`src/core/json-schema-validator.ts`) is deleted; `FortressSchema` objects keep `vendor: 'fortress'` and stay plain JSON Schema objects, but their `~standard.validate()` delegates to fetcher's compiled validator. Consequences:
   - The `422 VALIDATION_ERROR` body's issue `path` segments are now fetcher's bare `PropertyKey`s (e.g. `["email"]`) instead of fortress's `{ key }` objects (e.g. `[{ key: "email" }]`). The `location`/`message`/`code` envelope is unchanged.
-  - `oneOf` now validates as "matches at least one" (union) rather than "matches exactly one". Use `discriminatedUnion()` for tagged variants.
+  - `oneOf` enforces JSON Schema's exactly-one semantics; overlapping branches are rejected. `anyOf` remains the at-least-one combinator.
   - More keywords are now actually enforced (`minimum`/`maximum`, `const`, `allOf`, `additionalProperties: false`, `discriminator`) — schemas that emitted these previously passed them through unchecked.
-  - `$ref` fields in request bodies remain present-but-unconstrained at validation time (compiled in isolation without the components map), preserving prior behavior; full ref resolution is a follow-up.
+  - `$ref` fields in request bodies resolve against the component definitions and are enforced transitively at runtime.
 - **Node `>=20.19.0` is now required** (matches `@bajustone/fetcher`'s engine floor), declared in `package.json#engines`.
 
 ### Changed (breaking)
@@ -181,7 +184,6 @@
 ### Added
 - oauth2
 
-## [Unreleased]
 
 ### Security
 - Hardened the tenancy plugin: tenant schema names now use numeric ids, tenant context comes from verified JWT custom claims instead of `X-Tenant-Code`, PostgreSQL `search_path` is transaction-pinned with a bound parameter, invalid tenant claims are rejected, and missing tenant context fails closed.
@@ -274,7 +276,6 @@
 ### Added
 - feat(rate-limit)!: whole-app coverage via check() + framework wrappers
 
-## Unreleased
 
 ### Fixed
 - `extractJsonSchema` now recognizes Standard Schema implementations that are themselves JSON Schema objects (e.g. `@bajustone/fetcher`), not just fortress. Previously only schemas with `vendor: 'fortress'` or a `~standard.jsonSchema.input()` adapter (Zod, Valibot, ArkType) survived — fetcher schemas fell through to `{}` and bodies/queries/params disappeared from generated OpenAPI specs. Detection uses structural JSON Schema props (`type` matching a spec type, or `$ref`/`oneOf`/`anyOf`/`allOf`), so Zod-style wrappers whose `type` is an internal kind string (`'ZodObject'`) still route through the adapter path.
@@ -355,7 +356,6 @@
 - refactor(adapters)!: delete deprecated dispatch APIs, delegate fully to fortress.handleRequest
 - refactor
 
-## [Unreleased]
 
 ### Added
 - **Pluggable logger via `FortressConfig.logger`.** Accepts any object
@@ -868,7 +868,6 @@ Full per-field details below.
 ### Added
 - docs: sync documentation with source code
 
-## [Unreleased]
 
 ### Fixed
 - docs: sync README, SECURITY.md, docs/security.md, and architecture.md with source code
@@ -927,7 +926,6 @@ Full per-field details below.
 - feat: add admin plugin, plugin middleware wiring, and default deny for fortress routes
 - feat(openapi): add additionalEndpoints and convertRoutes for unified spec generation
 
-## [Unreleased]
 
 ### Added
 - **Admin CRUD endpoints** — 15 new endpoints in the admin plugin for managing users, roles, groups, and permissions

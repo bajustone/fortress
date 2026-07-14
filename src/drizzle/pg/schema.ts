@@ -226,7 +226,7 @@ const apiKeys = pgTable('fortress_api_key', {
 const twoFactorSecrets = pgTable('fortress_two_factor_secret', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
-  secret: text('secret').notNull(), // Base32-encoded TOTP secret
+  secret: text('secret').notNull(), // Versioned AES-GCM envelope containing the TOTP seed
   isEnabled: boolean('is_enabled').notNull().default(false),
   lastUsedCounter: integer('last_used_counter'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

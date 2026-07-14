@@ -91,7 +91,7 @@ smoke tests.
 
 ## Current migration catalog
 
-Eight migrations ship today:
+Nine migrations ship today:
 
 - **`0001_schema_version`** — installs the schema checkpoint.
 - **`0002_initial_schema`** — creates the original Fortress schema.
@@ -101,6 +101,7 @@ Eight migrations ship today:
 - **`0006_canonical_email`** — performs runtime Unicode email cleanup and installs case-insensitive uniqueness.
 - **`0007_audit_chain_anchor`** — installs the permanent zero-entry sentinel and persists the terminal audit hash/count so tail or full-chain deletion is detectable.
 - **`0008_two_factor_hardening`** — adds durable continuation failure counters, invalidation/cooldown metadata, and the indexed per-account failure lookup used by MFA throttling.
+- **`0009_encrypt_totp_secrets`** — removes legacy plaintext TOTP enrolments, backup codes, and trusted devices. SQL cannot encrypt legacy seeds with the application-held key, so affected users must re-enrol; new seeds are stored as AES-256-GCM envelopes.
 
 If `fortress_audit_log` already contains rows written without hash chaining, migration 0007 intentionally leaves the anchor at zero; SQL cannot establish a trustworthy cryptographic history. Before serving auth traffic with `auditLog({ hashChain: true })`, archive and externally attest those rows, create the hash-chain-enabled Fortress instance during a maintenance window, and call `await fortress.plugins['audit-log'].rebaselineChain()`. The method transactionally accepts only an uninitialized zero anchor and fully unchained rows, links them deterministically, advances the anchor, and verifies the result. See [Audit Log Plugin](../plugins/audit-log.md#enabling-hash-chaining-on-an-existing-log).
 

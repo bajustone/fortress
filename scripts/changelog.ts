@@ -73,9 +73,10 @@ for (const msg of log) {
   }
 }
 
-// Build section
+// Build section content. The existing top-level [Unreleased] heading is
+// promoted in place so curated migration notes remain attached to the release.
 const today = new Date().toISOString().split('T')[0];
-let section = `\n## [${version}] - ${today}\n`;
+let section = '';
 
 if (added.length > 0) {
   section += `\n### Added\n${added.map(m => `- ${m}`).join('\n')}\n`;
@@ -87,13 +88,20 @@ if (fixed.length > 0) {
   section += `\n### Fixed\n${fixed.map(m => `- ${m}`).join('\n')}\n`;
 }
 
-// Insert after "# Changelog" header
 const changelogPath = join(root, 'CHANGELOG.md');
 const existing = readFileSync(changelogPath, 'utf-8');
+const unreleased = /^## \[Unreleased\]$/m;
+const match = unreleased.exec(existing);
+if (!match)
+  throw new Error('CHANGELOG.md must contain a top [Unreleased] section');
 
-const headerEnd = existing.indexOf('\n');
+const releaseHeading = `## [${version}] - ${today}`;
+const headingEnd = match.index + match[0].length;
 const updated
-  = existing.slice(0, headerEnd + 1) + section + existing.slice(headerEnd + 1);
+  = existing.slice(0, match.index)
+    + releaseHeading
+    + section
+    + existing.slice(headingEnd);
 
 writeFileSync(changelogPath, updated);
 

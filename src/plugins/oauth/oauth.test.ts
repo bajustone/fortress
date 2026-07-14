@@ -1,6 +1,6 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { OAuthMethods } from './index';
-import { importJWK, jwtVerify } from 'jose';
+import { decodeJwt, importJWK, jwtVerify } from 'jose';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { generateRefreshToken } from '../../core/auth/refresh-token';
 import { createTestAdapter } from '../../testing';
@@ -1720,6 +1720,7 @@ describe('oauth plugin', () => {
         refreshToken,
       }) as { idToken?: string };
       expect(result.idToken).toBeTruthy();
+      expect(decodeJwt(result.idToken!).auth_time).toBeUndefined();
     });
 
     it('handleTokenRequest dispatches grant_type=refresh_token', async () => {

@@ -1,5 +1,5 @@
 import { Errors } from '../errors';
-import { outboundClient } from '../http/outbound';
+import { createOutboundClient } from '../http/outbound';
 import { normalizePasswordInput } from './password';
 
 export type PasswordBreachFailureMode = 'open' | 'closed';
@@ -42,6 +42,7 @@ const DEFAULT_CACHE_MAX_ENTRIES = 1_000;
 // Tighter timeout than the default outbound budget: the breach check runs in
 // the password-validation hot path, so a slow HIBP must not stall writes.
 const HIBP_TIMEOUT_MS = 6_000;
+const hibpOutboundClient = createOutboundClient(HIBP_TIMEOUT_MS);
 
 // Module-level LRU cache for HIBP range responses (keyed by 5-char prefix).
 // Map insertion order is used as recency order.
@@ -172,9 +173,8 @@ export async function isPasswordBreached(
 
   let response: Response;
   try {
-    response = await outboundClient.get(`https://api.pwnedpasswords.com/range/${prefix}`, {
+    response = await hibpOutboundClient.get(`https://api.pwnedpasswords.com/range/${prefix}`, {
       headers: { 'Add-Padding': 'true' },
-      timeout: HIBP_TIMEOUT_MS,
     });
   }
   catch (error) {
