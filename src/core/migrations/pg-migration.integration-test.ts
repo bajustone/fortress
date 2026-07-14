@@ -23,7 +23,7 @@ import {
   migrateDown,
   migrateUp,
 } from './engine';
-import { FORTRESS_TABLES } from './migrations';
+import { FORTRESS_INDEXES, FORTRESS_TABLES } from './migrations';
 
 let container: StartedTestContainer;
 let pgClient: Sql;
@@ -114,10 +114,14 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
       [tenantRows[0].id, legacyUser.id, tenantRows[1].id, legacyUser.id],
     );
 
+    // Conversion must not depend on the session timezone: historical
+    // timestamp-without-time-zone values are interpreted as UTC explicitly.
+    await db.rawQuery!('SET TIME ZONE \'America/Los_Angeles\'');
     const up = await migrateUp(db, 'pg');
+    await db.rawQuery!('SET TIME ZONE \'UTC\'');
     expect(up.fromVersion).toBe(2);
-    expect(up.toVersion).toBe(4);
-    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique']);
+    expect(up.toVersion).toBe(5);
+    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz']);
     const defaults = await db.rawQuery!<{ count: string }>(
       `SELECT COUNT(*) AS count FROM fortress_tenant_user WHERE user_id = ? AND is_default = true`,
       [legacyUser.id],
@@ -155,7 +159,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(defaulted.recent).toBe(true);
 
     const after = await getMigrationStatus(db, 'pg');
-    expect(after.currentVersion).toBe(4);
+    expect(after.currentVersion).toBe(5);
     expect(after.upToDate).toBe(true);
 
     // Real-engine schema check: no missing tables, no missing columns.
@@ -163,6 +167,31 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(hasMigrationDrift(afterDrift)).toBe(false);
     expect(afterDrift.missingTables).toEqual([]);
     expect(afterDrift.missingColumns).toEqual([]);
+    expect(afterDrift.missingIndexes).toEqual([]);
+
+    const timestampTypes = await db.rawQuery!<{ dataType: string; count: string }>(
+      `SELECT data_type AS "dataType", COUNT(*) AS count
+       FROM information_schema.columns
+       WHERE table_schema = current_schema()
+         AND table_name LIKE 'fortress_%'
+         AND data_type LIKE 'timestamp%'
+       GROUP BY data_type`,
+    );
+    expect(timestampTypes).toEqual([{ dataType: 'timestamp with time zone', count: '60' }]);
+
+    const allIndexRows = await db.rawQuery!<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+       WHERE schemaname = current_schema() AND tablename LIKE 'fortress_%'`,
+    );
+    const requiredNames = new Set(FORTRESS_INDEXES.map(index => index.name));
+    const indexRows = allIndexRows.filter(row => requiredNames.has(row.indexname));
+    expect(indexRows.map(row => row.indexname).sort()).toEqual(
+      FORTRESS_INDEXES.map(index => index.name).sort(),
+    );
+    for (const expected of FORTRESS_INDEXES) {
+      const definition = indexRows.find(row => row.indexname === expected.name)?.indexdef.replaceAll('"', '');
+      expect(definition, expected.name).toContain(`(${expected.columns.join(', ')})`);
+    }
 
     // The provisioned schema is usable: insert a row through the adapter,
     // exercising SERIAL ids (stringified at the adapter boundary, see the
@@ -179,9 +208,9 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     const reapply = await migrateUp(db, 'pg');
     expect(reapply.applied).toEqual([]);
 
-    // A targeted rollback preserves refresh rows while removing only v3.
+    // A targeted rollback preserves refresh rows while removing v5 through v3.
     const rollback = await migrateDown(db, 'pg', 2);
-    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['tenant_default_unique', 'auth_continuation']);
+    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
     expect(await db.count({ model: 'refresh_token' })).toBe(3);
     const v3Columns = await db.rawQuery!<{ columnName: string }>(
       `SELECT column_name AS "columnName" FROM information_schema.columns
@@ -196,7 +225,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(continuationTables).toEqual([]);
 
     const restore = await migrateUp(db, 'pg');
-    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique']);
+    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz']);
 
     // Roll back drops every Fortress table (FK-safe via CASCADE ordering).
     const down = await migrateDown(db, 'pg');

@@ -1,0 +1,10 @@
+CREATE INDEX refresh_token_family_idx ON fortress_refresh_token (token_family);
+CREATE INDEX refresh_token_user_idx ON fortress_refresh_token (user_id);
+CREATE INDEX email_verification_token_token_idx ON fortress_email_verification_token (token);
+CREATE INDEX magic_link_token_token_idx ON fortress_magic_link_token (token);
+CREATE INDEX role_binding_subject_idx ON fortress_role_binding (subject_type, subject_id);
+CREATE INDEX direct_permission_binding_subject_idx ON fortress_direct_permission_binding (subject_type, subject_id);
+CREATE INDEX backup_code_user_idx ON fortress_backup_code (user_id);
+CREATE INDEX trusted_device_user_idx ON fortress_trusted_device (user_id);
+CREATE INDEX webhook_delivery_retry_idx ON fortress_webhook_delivery (status, next_retry_at);
+CREATE INDEX audit_log_timestamp_idx ON fortress_audit_log (timestamp);

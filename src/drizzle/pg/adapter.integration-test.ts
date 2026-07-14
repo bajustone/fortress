@@ -17,8 +17,8 @@ const CREATE_TABLES_SQL = `
     password_hash TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
     email_verified BOOLEAN NOT NULL DEFAULT false,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_login_identifier (
@@ -33,17 +33,17 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     token_hash VARCHAR(64) NOT NULL UNIQUE,
     token_family VARCHAR(64) NOT NULL,
-    family_created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    family_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     successor_token_hash VARCHAR(64),
-    rotated_at TIMESTAMP,
+    rotated_at TIMESTAMPTZ,
     is_revoked BOOLEAN NOT NULL DEFAULT false,
-    expires_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
     ip_address VARCHAR(45),
     user_agent TEXT,
     device_name TEXT,
-    last_active_at TIMESTAMP,
+    last_active_at TIMESTAMPTZ,
     fingerprint_hash VARCHAR(64),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_auth_continuation (
@@ -51,9 +51,9 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     token_hash VARCHAR(64) NOT NULL UNIQUE,
     reason VARCHAR(32) NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    consumed_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_group (
@@ -74,8 +74,8 @@ const CREATE_TABLES_SQL = `
     display_name VARCHAR(255),
     description TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_resource (
@@ -117,18 +117,18 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     token TEXT NOT NULL,
     email VARCHAR(255) NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    used_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_magic_link_token (
     id SERIAL PRIMARY KEY,
     email VARCHAR(255) NOT NULL,
     token VARCHAR(64) NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    used_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_api_key (
@@ -139,10 +139,10 @@ const CREATE_TABLES_SQL = `
     key_hash VARCHAR(64) NOT NULL UNIQUE,
     key_prefix VARCHAR(20) NOT NULL,
     scopes TEXT,
-    expires_at TIMESTAMP,
-    last_used_at TIMESTAMP,
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
     is_revoked BOOLEAN NOT NULL DEFAULT false,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
   CREATE INDEX IF NOT EXISTS api_key_subject_idx ON fortress_api_key (subject_type, subject_id);
 
@@ -151,7 +151,7 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL UNIQUE REFERENCES fortress_user(id) ON DELETE CASCADE,
     secret TEXT NOT NULL,
     is_enabled BOOLEAN NOT NULL DEFAULT false,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_backup_code (
@@ -159,16 +159,16 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     code_hash TEXT NOT NULL,
     is_used BOOLEAN NOT NULL DEFAULT false,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_trusted_device (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     device_hash VARCHAR(64) NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    last_used_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    expires_at TIMESTAMPTZ NOT NULL,
+    last_used_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_social_account (
@@ -179,10 +179,10 @@ const CREATE_TABLES_SQL = `
     email VARCHAR(255),
     access_token TEXT,
     refresh_token TEXT,
-    token_expires_at TIMESTAMP,
+    token_expires_at TIMESTAMPTZ,
     profile JSONB,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_tenant (
@@ -190,8 +190,8 @@ const CREATE_TABLES_SQL = `
     name VARCHAR(255) NOT NULL,
     tax_id VARCHAR(100) NOT NULL UNIQUE,
     description TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_tenant_user (
@@ -212,7 +212,7 @@ const CREATE_TABLES_SQL = `
     grant_types TEXT NOT NULL,
     allowed_scopes TEXT,
     token_endpoint_auth_method TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_authorization_code (
@@ -226,9 +226,9 @@ const CREATE_TABLES_SQL = `
     code_challenge_method VARCHAR(10),
     nonce TEXT,
     auth_time INTEGER,
-    expires_at TIMESTAMP NOT NULL,
-    used_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_access_token (
@@ -237,8 +237,8 @@ const CREATE_TABLES_SQL = `
     client_id VARCHAR(255) NOT NULL,
     user_id INTEGER,
     scope TEXT,
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_refresh_token (
@@ -248,11 +248,11 @@ const CREATE_TABLES_SQL = `
     client_id VARCHAR(255) NOT NULL,
     user_id INTEGER NOT NULL,
     scope TEXT,
-    issued_at TIMESTAMP NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    used_at TIMESTAMP,
+    issued_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
     parent_id INTEGER,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_pending_flow (
@@ -264,8 +264,8 @@ const CREATE_TABLES_SQL = `
     code_challenge TEXT,
     code_challenge_method VARCHAR(10),
     nonce TEXT,
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_signing_key (
@@ -274,8 +274,8 @@ const CREATE_TABLES_SQL = `
     alg VARCHAR(16) NOT NULL,
     public_jwk TEXT NOT NULL,
     private_jwk TEXT NOT NULL,
-    rotated_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    rotated_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_user_scope_assignment (
@@ -283,22 +283,22 @@ const CREATE_TABLES_SQL = `
     user_id INTEGER NOT NULL REFERENCES fortress_user(id) ON DELETE CASCADE,
     scope_name VARCHAR(100) NOT NULL,
     scope_value VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_account_lockout (
     id SERIAL PRIMARY KEY,
     identifier VARCHAR(255) NOT NULL UNIQUE,
     failed_attempts INTEGER NOT NULL DEFAULT 0,
-    last_failed_at TIMESTAMP,
-    locked_until TIMESTAMP,
+    last_failed_at TIMESTAMPTZ,
+    locked_until TIMESTAMPTZ,
     lockout_count INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_audit_log (
     id SERIAL PRIMARY KEY,
-    timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     event_type VARCHAR(100) NOT NULL,
     actor_id INTEGER,
     actor_type VARCHAR(20) NOT NULL DEFAULT 'USER',
@@ -309,7 +309,7 @@ const CREATE_TABLES_SQL = `
     outcome VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
     metadata JSONB,
     previous_hash TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_webhook_endpoint (
@@ -320,7 +320,7 @@ const CREATE_TABLES_SQL = `
     is_active BOOLEAN NOT NULL DEFAULT true,
     deactivated_reason TEXT,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS fortress_webhook_delivery (
@@ -331,17 +331,27 @@ const CREATE_TABLES_SQL = `
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
     idempotency_key TEXT,
-    last_attempt_at TIMESTAMP,
-    next_retry_at TIMESTAMP,
+    last_attempt_at TIMESTAMPTZ,
+    next_retry_at TIMESTAMPTZ,
     response_status INTEGER,
     response_body TEXT,
     error_kind TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   CREATE UNIQUE INDEX IF NOT EXISTS uniq_webhook_delivery_idempotency
     ON fortress_webhook_delivery (endpoint_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
+
+  CREATE INDEX IF NOT EXISTS refresh_token_family_idx ON fortress_refresh_token (token_family);
+  CREATE INDEX IF NOT EXISTS refresh_token_user_idx ON fortress_refresh_token (user_id);
+  CREATE INDEX IF NOT EXISTS email_verification_token_token_idx ON fortress_email_verification_token (token);
+  CREATE INDEX IF NOT EXISTS magic_link_token_token_idx ON fortress_magic_link_token (token);
+  CREATE INDEX IF NOT EXISTS role_binding_subject_idx ON fortress_role_binding (subject_type, subject_id);
+  CREATE INDEX IF NOT EXISTS backup_code_user_idx ON fortress_backup_code (user_id);
+  CREATE INDEX IF NOT EXISTS trusted_device_user_idx ON fortress_trusted_device (user_id);
+  CREATE INDEX IF NOT EXISTS webhook_delivery_retry_idx ON fortress_webhook_delivery (status, next_retry_at);
+  CREATE INDEX IF NOT EXISTS audit_log_timestamp_idx ON fortress_audit_log (timestamp);
 `;
 
 const TRUNCATE_SQL = `

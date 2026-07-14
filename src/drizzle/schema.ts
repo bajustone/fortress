@@ -51,7 +51,10 @@ const refreshTokens = sqliteTable('fortress_refresh_token', {
   lastActiveAt: integer('last_active_at', { mode: 'timestamp' }),
   fingerprintHash: text('fingerprint_hash'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [
+  index('refresh_token_family_idx').on(table.tokenFamily),
+  index('refresh_token_user_idx').on(table.userId),
+]);
 
 const authContinuations = sqliteTable('fortress_auth_continuation', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -150,6 +153,7 @@ const roleBindings = sqliteTable('fortress_role_binding', {
   unique().on(table.roleId, table.subjectType, table.subjectId, table.tenantId),
   uniqueIndex('uniq_role_binding_global').on(table.roleId, table.subjectType, table.subjectId).where(sql`${table.tenantId} is null`),
   uniqueIndex('uniq_role_binding_tenant').on(table.roleId, table.subjectType, table.subjectId, table.tenantId).where(sql`${table.tenantId} is not null`),
+  index('role_binding_subject_idx').on(table.subjectType, table.subjectId),
 ]);
 
 // --- IAM: Direct Permission Bindings ---
@@ -164,6 +168,7 @@ const directPermissionBindings = sqliteTable('fortress_direct_permission_binding
   unique().on(table.permissionId, table.subjectType, table.subjectId, table.tenantId),
   uniqueIndex('uniq_direct_permission_binding_global').on(table.permissionId, table.subjectType, table.subjectId).where(sql`${table.tenantId} is null`),
   uniqueIndex('uniq_direct_permission_binding_tenant').on(table.permissionId, table.subjectType, table.subjectId, table.tenantId).where(sql`${table.tenantId} is not null`),
+  index('direct_permission_binding_subject_idx').on(table.subjectType, table.subjectId),
 ]);
 
 // --- Plugins: Email Verification ---
@@ -176,7 +181,7 @@ const emailVerificationTokens = sqliteTable('fortress_email_verification_token',
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   usedAt: integer('used_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [index('email_verification_token_token_idx').on(table.token)]);
 
 // --- Plugins: Magic Link ---
 
@@ -187,7 +192,7 @@ const magicLinkTokens = sqliteTable('fortress_magic_link_token', {
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   usedAt: integer('used_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [index('magic_link_token_token_idx').on(table.token)]);
 
 // --- Plugins: API Key ---
 
@@ -222,7 +227,7 @@ const backupCodes = sqliteTable('fortress_backup_code', {
   codeHash: text('code_hash').notNull(),
   isUsed: integer('is_used', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [index('backup_code_user_idx').on(table.userId)]);
 
 const trustedDevices = sqliteTable('fortress_trusted_device', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -231,7 +236,7 @@ const trustedDevices = sqliteTable('fortress_trusted_device', {
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
   lastUsedAt: integer('last_used_at', { mode: 'timestamp' }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [index('trusted_device_user_idx').on(table.userId)]);
 
 // --- Plugins: Social Login ---
 
@@ -409,7 +414,7 @@ const auditLogs = sqliteTable('fortress_audit_log', {
   metadata: text('metadata'),
   previousHash: text('previous_hash'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-});
+}, table => [index('audit_log_timestamp_idx').on(table.timestamp)]);
 
 // --- Plugins: Webhook ---
 
@@ -440,6 +445,7 @@ const webhookDeliveries = sqliteTable('fortress_webhook_delivery', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, table => [
   uniqueIndex('uniq_webhook_delivery_idempotency').on(table.endpointId, table.idempotencyKey).where(sql`${table.idempotencyKey} is not null`),
+  index('webhook_delivery_retry_idx').on(table.status, table.nextRetryAt),
 ]);
 
 // --- Plugins: WebAuthn ---

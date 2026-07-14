@@ -1,7 +1,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressMigration, MigrationDialect } from './migrations';
 import { Errors } from '../errors';
-import { FORTRESS_TABLES, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion } from './migrations';
+import { FORTRESS_INDEXES, FORTRESS_TABLES, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion } from './migrations';
 
 export interface MigrationStatus {
   dialect: MigrationDialect;
@@ -51,6 +51,8 @@ export interface MigrationDrift {
    * reported via {@link missingTables} instead.
    */
   missingColumns: { table: string; columns: string[] }[];
+  /** Required hot-path indexes absent from the live database. */
+  missingIndexes: string[];
 }
 
 function assertRawQuery(db: DatabaseAdapter): NonNullable<DatabaseAdapter['rawQuery']> {
@@ -140,6 +142,24 @@ async function listColumns(
     [table],
   );
   return new Set(rows.map(row => row.column_name.toLowerCase()));
+}
+
+async function listFortressIndexes(
+  db: DatabaseAdapter,
+  dialect: MigrationDialect,
+): Promise<Set<string>> {
+  const rawQuery = assertRawQuery(db);
+  if (dialect === 'sqlite') {
+    const rows = await rawQuery<{ name: string }>(
+      'SELECT name FROM sqlite_master WHERE type = \'index\' AND name NOT LIKE \'sqlite_autoindex_%\'',
+    );
+    return new Set(rows.map(row => row.name));
+  }
+
+  const rows = await rawQuery<{ indexname: string }>(
+    'SELECT indexname FROM pg_indexes WHERE schemaname = \'public\' AND tablename LIKE \'fortress_%\'',
+  );
+  return new Set(rows.map(row => row.indexname));
 }
 
 async function readCurrentVersion(db: DatabaseAdapter, dialect: MigrationDialect): Promise<{ version: number; hasVersionTable: boolean }> {
@@ -256,6 +276,11 @@ export async function detectMigrationDrift(
       missingColumns.push({ table, columns: missing });
   }
 
+  const presentIndexes = await listFortressIndexes(db, dialect);
+  const missingIndexes = FORTRESS_INDEXES
+    .map(index => index.name)
+    .filter(name => !presentIndexes.has(name));
+
   return {
     dialect,
     currentVersion: status.currentVersion,
@@ -265,6 +290,7 @@ export async function detectMigrationDrift(
     pendingVersions: status.pending.map(migration => migration.version),
     missingTables,
     missingColumns,
+    missingIndexes,
   };
 }
 
@@ -273,5 +299,6 @@ export function hasMigrationDrift(drift: MigrationDrift): boolean {
     || drift.unknownFutureVersion
     || drift.pendingVersions.length > 0
     || drift.missingTables.length > 0
-    || drift.missingColumns.length > 0;
+    || drift.missingColumns.length > 0
+    || drift.missingIndexes.length > 0;
 }

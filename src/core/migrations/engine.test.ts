@@ -9,7 +9,7 @@ import {
   migrateDown,
   migrateUp,
 } from './engine';
-import { FORTRESS_TABLES } from './migrations';
+import { FORTRESS_INDEXES, FORTRESS_TABLES } from './migrations';
 
 const dialect = 'sqlite';
 
@@ -27,21 +27,21 @@ describe('migration engine', () => {
 
     const before = await getMigrationStatus(db, dialect);
     expect(before.currentVersion).toBe(0);
-    expect(before.latestVersion).toBe(4);
-    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4]);
+    expect(before.latestVersion).toBe(5);
+    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4, 5]);
 
     const up = await migrateUp(db, dialect);
-    expect(up).toMatchObject({ fromVersion: 0, toVersion: 4 });
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique']);
+    expect(up).toMatchObject({ fromVersion: 0, toVersion: 5 });
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz']);
 
     const after = await getMigrationStatus(db, dialect);
-    expect(after.currentVersion).toBe(4);
+    expect(after.currentVersion).toBe(5);
     expect(after.upToDate).toBe(true);
     expect(hasMigrationDrift(await detectMigrationDrift(db, dialect))).toBe(false);
 
     const down = await migrateDown(db, dialect);
-    expect(down).toMatchObject({ fromVersion: 4, toVersion: 0 });
-    expect(down.rolledBack.map(migration => migration.name)).toEqual(['tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
+    expect(down).toMatchObject({ fromVersion: 5, toVersion: 0 });
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
 
     const final = await getMigrationStatus(db, dialect);
     expect(final.hasVersionTable).toBe(false);
@@ -63,7 +63,25 @@ describe('migration engine', () => {
     const drift = await detectMigrationDrift(db, dialect);
     expect(drift.missingTables).toEqual([]);
     expect(drift.missingColumns).toEqual([]);
+    expect(drift.missingIndexes).toEqual([]);
     expect(FORTRESS_TABLES.length).toBeGreaterThan(30);
+  });
+
+  it('creates every required hot index with the expected column order', async () => {
+    const db = createTestAdapter();
+    for (const expected of FORTRESS_INDEXES) {
+      const rows = await db.rawQuery!<{ name: string }>(`PRAGMA index_info(${expected.name})`);
+      expect(rows.map(row => row.name), expected.name).toEqual(expected.columns);
+    }
+  });
+
+  it('reports a missing required hot index as drift', async () => {
+    const db = createTestAdapter();
+    await db.rawQuery!('DROP INDEX refresh_token_family_idx');
+
+    const drift = await detectMigrationDrift(db, dialect);
+    expect(drift.missingIndexes).toEqual(['refresh_token_family_idx']);
+    expect(hasMigrationDrift(drift)).toBe(true);
   });
 
   it('reports a present-but-stale table missing a column as drift', async () => {

@@ -1036,18 +1036,196 @@ const PG_0004_DOWN = `
 DROP INDEX IF EXISTS fortress_tenant_user_one_default_idx;
 `.trim();
 
+// --- 0005: hot-path indexes and timezone-safe PostgreSQL timestamps ---
+
+const SQLITE_0005_UP = `
+CREATE INDEX refresh_token_family_idx ON fortress_refresh_token (token_family);
+CREATE INDEX refresh_token_user_idx ON fortress_refresh_token (user_id);
+CREATE INDEX email_verification_token_token_idx ON fortress_email_verification_token (token);
+CREATE INDEX magic_link_token_token_idx ON fortress_magic_link_token (token);
+CREATE INDEX role_binding_subject_idx ON fortress_role_binding (subject_type, subject_id);
+CREATE INDEX direct_permission_binding_subject_idx ON fortress_direct_permission_binding (subject_type, subject_id);
+CREATE INDEX backup_code_user_idx ON fortress_backup_code (user_id);
+CREATE INDEX trusted_device_user_idx ON fortress_trusted_device (user_id);
+CREATE INDEX webhook_delivery_retry_idx ON fortress_webhook_delivery (status, next_retry_at);
+CREATE INDEX audit_log_timestamp_idx ON fortress_audit_log (timestamp);
+`.trim();
+
+const SQLITE_0005_DOWN = `
+DROP INDEX IF EXISTS audit_log_timestamp_idx;
+DROP INDEX IF EXISTS webhook_delivery_retry_idx;
+DROP INDEX IF EXISTS trusted_device_user_idx;
+DROP INDEX IF EXISTS backup_code_user_idx;
+DROP INDEX IF EXISTS direct_permission_binding_subject_idx;
+DROP INDEX IF EXISTS role_binding_subject_idx;
+DROP INDEX IF EXISTS magic_link_token_token_idx;
+DROP INDEX IF EXISTS email_verification_token_token_idx;
+DROP INDEX IF EXISTS refresh_token_user_idx;
+DROP INDEX IF EXISTS refresh_token_family_idx;
+`.trim();
+
+const PG_0005_UP = `
+CREATE INDEX refresh_token_family_idx ON fortress_refresh_token (token_family);
+CREATE INDEX refresh_token_user_idx ON fortress_refresh_token (user_id);
+CREATE INDEX email_verification_token_token_idx ON fortress_email_verification_token (token);
+CREATE INDEX magic_link_token_token_idx ON fortress_magic_link_token (token);
+CREATE INDEX role_binding_subject_idx ON fortress_role_binding (subject_type, subject_id);
+CREATE INDEX direct_permission_binding_subject_idx ON fortress_direct_permission_binding (subject_type, subject_id);
+CREATE INDEX backup_code_user_idx ON fortress_backup_code (user_id);
+CREATE INDEX trusted_device_user_idx ON fortress_trusted_device (user_id);
+CREATE INDEX webhook_delivery_retry_idx ON fortress_webhook_delivery (status, next_retry_at);
+CREATE INDEX audit_log_timestamp_idx ON fortress_audit_log (timestamp);
+
+ALTER TABLE fortress_schema_version ALTER COLUMN applied_at TYPE TIMESTAMPTZ USING applied_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_user ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_user ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN family_created_at TYPE TIMESTAMPTZ USING family_created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN rotated_at TYPE TIMESTAMPTZ USING rotated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN last_active_at TYPE TIMESTAMPTZ USING last_active_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_auth_continuation ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_auth_continuation ALTER COLUMN consumed_at TYPE TIMESTAMPTZ USING consumed_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_auth_continuation ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_service_account ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_service_account ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_email_verification_token ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_email_verification_token ALTER COLUMN used_at TYPE TIMESTAMPTZ USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_email_verification_token ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_magic_link_token ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_magic_link_token ALTER COLUMN used_at TYPE TIMESTAMPTZ USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_magic_link_token ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_api_key ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_api_key ALTER COLUMN last_used_at TYPE TIMESTAMPTZ USING last_used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_api_key ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_two_factor_secret ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_backup_code ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_trusted_device ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_trusted_device ALTER COLUMN last_used_at TYPE TIMESTAMPTZ USING last_used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_trusted_device ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_social_account ALTER COLUMN token_expires_at TYPE TIMESTAMPTZ USING token_expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_social_account ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_social_account ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_tenant ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_tenant ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_client ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_authorization_code ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_authorization_code ALTER COLUMN used_at TYPE TIMESTAMPTZ USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_authorization_code ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_access_token ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_access_token ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN issued_at TYPE TIMESTAMPTZ USING issued_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN used_at TYPE TIMESTAMPTZ USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_pending_flow ALTER COLUMN used_at TYPE TIMESTAMPTZ USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_pending_flow ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_pending_flow ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_signing_key ALTER COLUMN rotated_at TYPE TIMESTAMPTZ USING rotated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_signing_key ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_user_scope_assignment ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_account_lockout ALTER COLUMN last_failed_at TYPE TIMESTAMPTZ USING last_failed_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_account_lockout ALTER COLUMN locked_until TYPE TIMESTAMPTZ USING locked_until AT TIME ZONE 'UTC';
+ALTER TABLE fortress_account_lockout ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_audit_log ALTER COLUMN timestamp TYPE TIMESTAMPTZ USING timestamp AT TIME ZONE 'UTC';
+ALTER TABLE fortress_audit_log ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webhook_endpoint ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webhook_delivery ALTER COLUMN last_attempt_at TYPE TIMESTAMPTZ USING last_attempt_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webhook_delivery ALTER COLUMN next_retry_at TYPE TIMESTAMPTZ USING next_retry_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webhook_delivery ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webauthn_credential ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webauthn_challenge ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webauthn_challenge ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+`.trim();
+
+const PG_0005_DOWN = `
+ALTER TABLE fortress_schema_version ALTER COLUMN applied_at TYPE TIMESTAMP USING applied_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_user ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_user ALTER COLUMN updated_at TYPE TIMESTAMP USING updated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN family_created_at TYPE TIMESTAMP USING family_created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN rotated_at TYPE TIMESTAMP USING rotated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN last_active_at TYPE TIMESTAMP USING last_active_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_refresh_token ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_auth_continuation ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_auth_continuation ALTER COLUMN consumed_at TYPE TIMESTAMP USING consumed_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_auth_continuation ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_service_account ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_service_account ALTER COLUMN updated_at TYPE TIMESTAMP USING updated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_email_verification_token ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_email_verification_token ALTER COLUMN used_at TYPE TIMESTAMP USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_email_verification_token ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_magic_link_token ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_magic_link_token ALTER COLUMN used_at TYPE TIMESTAMP USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_magic_link_token ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_api_key ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_api_key ALTER COLUMN last_used_at TYPE TIMESTAMP USING last_used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_api_key ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_two_factor_secret ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_backup_code ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_trusted_device ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_trusted_device ALTER COLUMN last_used_at TYPE TIMESTAMP USING last_used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_trusted_device ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_social_account ALTER COLUMN token_expires_at TYPE TIMESTAMP USING token_expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_social_account ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_social_account ALTER COLUMN updated_at TYPE TIMESTAMP USING updated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_tenant ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_tenant ALTER COLUMN updated_at TYPE TIMESTAMP USING updated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_client ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_authorization_code ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_authorization_code ALTER COLUMN used_at TYPE TIMESTAMP USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_authorization_code ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_access_token ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_access_token ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN issued_at TYPE TIMESTAMP USING issued_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN used_at TYPE TIMESTAMP USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_refresh_token ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_pending_flow ALTER COLUMN used_at TYPE TIMESTAMP USING used_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_pending_flow ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_pending_flow ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_signing_key ALTER COLUMN rotated_at TYPE TIMESTAMP USING rotated_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_oauth_signing_key ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_user_scope_assignment ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_account_lockout ALTER COLUMN last_failed_at TYPE TIMESTAMP USING last_failed_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_account_lockout ALTER COLUMN locked_until TYPE TIMESTAMP USING locked_until AT TIME ZONE 'UTC';
+ALTER TABLE fortress_account_lockout ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_audit_log ALTER COLUMN timestamp TYPE TIMESTAMP USING timestamp AT TIME ZONE 'UTC';
+ALTER TABLE fortress_audit_log ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webhook_endpoint ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webhook_delivery ALTER COLUMN last_attempt_at TYPE TIMESTAMP USING last_attempt_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webhook_delivery ALTER COLUMN next_retry_at TYPE TIMESTAMP USING next_retry_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webhook_delivery ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webauthn_credential ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webauthn_challenge ALTER COLUMN expires_at TYPE TIMESTAMP USING expires_at AT TIME ZONE 'UTC';
+ALTER TABLE fortress_webauthn_challenge ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
+
+DROP INDEX IF EXISTS audit_log_timestamp_idx;
+DROP INDEX IF EXISTS webhook_delivery_retry_idx;
+DROP INDEX IF EXISTS trusted_device_user_idx;
+DROP INDEX IF EXISTS backup_code_user_idx;
+DROP INDEX IF EXISTS direct_permission_binding_subject_idx;
+DROP INDEX IF EXISTS role_binding_subject_idx;
+DROP INDEX IF EXISTS magic_link_token_token_idx;
+DROP INDEX IF EXISTS email_verification_token_token_idx;
+DROP INDEX IF EXISTS refresh_token_user_idx;
+DROP INDEX IF EXISTS refresh_token_family_idx;
+`.trim();
+
 export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> = {
   sqlite: [
     { version: 1, name: 'schema_version', dialect: 'sqlite', up: SQLITE_0001_UP, down: SQLITE_0001_DOWN },
     { version: 2, name: 'initial_schema', dialect: 'sqlite', up: SQLITE_0002_UP, down: SQLITE_0002_DOWN },
     { version: 3, name: 'auth_continuation', dialect: 'sqlite', up: SQLITE_0003_UP, down: SQLITE_0003_DOWN },
     { version: 4, name: 'tenant_default_unique', dialect: 'sqlite', up: SQLITE_0004_UP, down: SQLITE_0004_DOWN },
+    { version: 5, name: 'hot_indexes_timestamptz', dialect: 'sqlite', up: SQLITE_0005_UP, down: SQLITE_0005_DOWN },
   ],
   pg: [
     { version: 1, name: 'schema_version', dialect: 'pg', up: PG_0001_UP, down: PG_0001_DOWN },
     { version: 2, name: 'initial_schema', dialect: 'pg', up: PG_0002_UP, down: PG_0002_DOWN },
     { version: 3, name: 'auth_continuation', dialect: 'pg', up: PG_0003_UP, down: PG_0003_DOWN },
     { version: 4, name: 'tenant_default_unique', dialect: 'pg', up: PG_0004_UP, down: PG_0004_DOWN },
+    { version: 5, name: 'hot_indexes_timestamptz', dialect: 'pg', up: PG_0005_UP, down: PG_0005_DOWN },
   ],
 };
 
@@ -1115,6 +1293,24 @@ export const FORTRESS_TABLES: readonly string[] = [
   'fortress_webhook_delivery',
   'fortress_webauthn_credential',
   'fortress_webauthn_challenge',
+] as const;
+
+/** Hot-path indexes whose presence is part of the runtime schema contract. */
+export const FORTRESS_INDEXES: ReadonlyArray<{
+  name: string;
+  table: string;
+  columns: readonly string[];
+}> = [
+  { name: 'refresh_token_family_idx', table: 'fortress_refresh_token', columns: ['token_family'] },
+  { name: 'refresh_token_user_idx', table: 'fortress_refresh_token', columns: ['user_id'] },
+  { name: 'email_verification_token_token_idx', table: 'fortress_email_verification_token', columns: ['token'] },
+  { name: 'magic_link_token_token_idx', table: 'fortress_magic_link_token', columns: ['token'] },
+  { name: 'role_binding_subject_idx', table: 'fortress_role_binding', columns: ['subject_type', 'subject_id'] },
+  { name: 'direct_permission_binding_subject_idx', table: 'fortress_direct_permission_binding', columns: ['subject_type', 'subject_id'] },
+  { name: 'backup_code_user_idx', table: 'fortress_backup_code', columns: ['user_id'] },
+  { name: 'trusted_device_user_idx', table: 'fortress_trusted_device', columns: ['user_id'] },
+  { name: 'webhook_delivery_retry_idx', table: 'fortress_webhook_delivery', columns: ['status', 'next_retry_at'] },
+  { name: 'audit_log_timestamp_idx', table: 'fortress_audit_log', columns: ['timestamp'] },
 ] as const;
 
 const CONSTRAINT_KEYWORDS = new Set(['primary', 'unique', 'foreign', 'constraint', 'check']);
