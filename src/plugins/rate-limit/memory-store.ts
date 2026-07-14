@@ -1,61 +1,61 @@
 export interface RateLimitStore {
   /** Increment the counter for a key within a sliding window. Returns current count and reset time. */
   increment: (key: string, windowMs: number) => Promise<{ count: number; resetAt: number }>;
-  /** Get the current counter for a key. Returns null if no record exists. */
+  /** Get the current counter for the most recently used window. */
   get: (key: string) => Promise<{ count: number; resetAt: number } | null>;
 }
 
-/**
- * In-memory sliding window rate limit store.
- * Stores timestamps of each request per key and prunes expired entries.
- */
-export function createMemoryStore(): RateLimitStore {
-  const store = new Map<string, number[]>();
+interface WindowRecord {
+  /** Retained for the largest window ever used by this key. */
+  timestamps: number[];
+  maxWindowMs: number;
+  lastWindowMs: number;
+}
 
-  // Prune expired entries every 60 seconds
+/** In-memory sliding-window store with per-key retention. */
+export function createMemoryStore(): RateLimitStore {
+  const store = new Map<string, WindowRecord>();
+
   const cleanupInterval = setInterval(() => {
     const now = Date.now();
-    for (const [key, timestamps] of store) {
-      // Keep only entries that could still be within any reasonable window (max 1 hour)
-      const filtered = timestamps.filter(t => now - t < 3_600_000);
-      if (filtered.length === 0) {
+    for (const [key, record] of store) {
+      const timestamps = record.timestamps.filter(timestamp => now - timestamp < record.maxWindowMs);
+      if (timestamps.length === 0)
         store.delete(key);
-      }
-      else {
-        store.set(key, filtered);
-      }
+      else
+        store.set(key, { ...record, timestamps });
     }
   }, 60_000);
 
-  // Allow the process to exit even if the interval is active (Node/Bun)
-  if (typeof cleanupInterval === 'object' && 'unref' in cleanupInterval) {
+  if (typeof cleanupInterval === 'object' && 'unref' in cleanupInterval)
     (cleanupInterval as { unref: () => void }).unref();
-  }
 
   return {
     async increment(key: string, windowMs: number): Promise<{ count: number; resetAt: number }> {
       const now = Date.now();
-      const windowStart = now - windowMs;
+      const existing = store.get(key);
+      const maxWindowMs = Math.max(existing?.maxWindowMs ?? 0, windowMs);
+      const retained = (existing?.timestamps ?? [])
+        .filter(timestamp => timestamp > now - maxWindowMs);
+      retained.push(now);
+      store.set(key, { timestamps: retained, maxWindowMs, lastWindowMs: windowMs });
 
-      const existing = store.get(key) ?? [];
-      const filtered = existing.filter(t => t > windowStart);
-      filtered.push(now);
-      store.set(key, filtered);
-
-      // resetAt = when the oldest entry in the window will expire
-      const resetAt = filtered[0] + windowMs;
-
-      return { count: filtered.length, resetAt };
+      const active = retained.filter(timestamp => timestamp > now - windowMs);
+      return { count: active.length, resetAt: active[0] + windowMs };
     },
 
     async get(key: string): Promise<{ count: number; resetAt: number } | null> {
-      const timestamps = store.get(key);
-      if (!timestamps || timestamps.length === 0)
+      const record = store.get(key);
+      if (!record)
         return null;
-
-      // We don't know the window here, so return the count as-is
-      // The caller knows the window and can filter
-      return { count: timestamps.length, resetAt: timestamps[0] };
+      const now = Date.now();
+      const active = record.timestamps.filter(timestamp => timestamp > now - record.lastWindowMs);
+      if (active.length === 0)
+        return null;
+      return {
+        count: active.length,
+        resetAt: active[0] + record.lastWindowMs,
+      };
     },
   };
 }

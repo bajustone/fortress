@@ -140,6 +140,11 @@ export function normalizeIp(ip: string | undefined | null): string {
   return ip;
 }
 
+/** Canonical key for account-scoped login limits. */
+export function normalizeAccountIdentifier(identifier: string): string {
+  return identifier.trim().normalize('NFC').toLowerCase();
+}
+
 /** Read an IP from a standard web Request's forwarding headers. */
 function ipFromRequest(request: Request): string {
   const xff = request.headers.get('x-forwarded-for');
@@ -348,7 +353,7 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
           await check('login', { ip });
         // Per-account (identifier keyed as userId slot on the synthetic rule)
         if (loginCfg.maxPerAccount != null)
-          await check('login:account', { userId: email });
+          await check('login:account', { userId: normalizeAccountIdentifier(email) });
       },
 
       async beforeRegister(ctx) {

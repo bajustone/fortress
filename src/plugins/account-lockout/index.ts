@@ -53,7 +53,7 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
   const maxLockoutSeconds = config.maxLockoutSeconds ?? 3600;
 
   function normalizeIdentifier(identifier: string): string {
-    return identifier.trim().toLocaleLowerCase().normalize('NFC');
+    return identifier.trim().normalize('NFC').toLowerCase();
   }
 
   function calculateLockoutDuration(lockoutCount: number): number {

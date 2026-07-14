@@ -1,8 +1,8 @@
 import type { Fortress } from '../../core/fortress';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
-import { rateLimit } from './index';
+import { normalizeAccountIdentifier, rateLimit } from './index';
 import { createMemoryStore } from './memory-store';
 
 const SECRET = 'rate-limit-test-secret-32-chars!!!';
@@ -234,6 +234,12 @@ describe('rate-limit plugin', () => {
     });
   });
 
+  it('normalizes account-scoped keys across case, whitespace, and Unicode forms', () => {
+    expect(normalizeAccountIdentifier('  UsÉr@Example.COM ')).toBe(
+      normalizeAccountIdentifier('use\u0301r@example.com'),
+    );
+  });
+
   describe('memory store', () => {
     it('tracks request counts per key', async () => {
       const store = createMemoryStore();
@@ -253,6 +259,50 @@ describe('rate-limit plugin', () => {
       const store = createMemoryStore();
       const result = await store.get('nonexistent');
       expect(result).toBeNull();
+    });
+
+    it('retains counters for configured windows longer than one hour', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const store = createMemoryStore();
+        await store.increment('long-window', 7_200_000);
+        await vi.advanceTimersByTimeAsync(3_660_000);
+        expect(await store.get('long-window')).toMatchObject({ count: 1 });
+      }
+      finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('preserves long-window history when the same key also uses a short window', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const store = createMemoryStore();
+        await store.increment('mixed-window', 7_200_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await store.increment('mixed-window', 60_000);
+        await vi.advanceTimersByTimeAsync(61_000);
+        expect(await store.increment('mixed-window', 7_200_000)).toMatchObject({ count: 3 });
+      }
+      finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('returns null from get after the most recent window expires', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const store = createMemoryStore();
+        await store.increment('expired', 1);
+        await vi.advanceTimersByTimeAsync(2);
+        expect(await store.get('expired')).toBeNull();
+      }
+      finally {
+        vi.useRealTimers();
+      }
     });
 
     it('returns resetAt time', async () => {
