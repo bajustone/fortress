@@ -257,6 +257,8 @@ CREATE TABLE IF NOT EXISTS fortress_tenant_user (
   is_default INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (tenant_id, user_id)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS fortress_tenant_user_one_default_idx
+  ON fortress_tenant_user (user_id) WHERE is_default = 1;
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_client (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -672,6 +674,8 @@ CREATE TABLE IF NOT EXISTS fortress_tenant_user (
   is_default BOOLEAN NOT NULL DEFAULT false,
   PRIMARY KEY (tenant_id, user_id)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS fortress_tenant_user_one_default_idx
+  ON fortress_tenant_user (user_id) WHERE is_default = true;
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_client (
   id SERIAL PRIMARY KEY,
@@ -993,16 +997,57 @@ ALTER TABLE fortress_refresh_token DROP COLUMN successor_token_hash;
 ALTER TABLE fortress_refresh_token DROP COLUMN family_created_at;
 `.trim();
 
+const SQLITE_0004_UP = `
+UPDATE fortress_tenant_user
+SET is_default = 0
+WHERE is_default = 1
+  AND rowid NOT IN (
+    SELECT MIN(rowid)
+    FROM fortress_tenant_user
+    WHERE is_default = 1
+    GROUP BY user_id
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS fortress_tenant_user_one_default_idx
+  ON fortress_tenant_user (user_id)
+  WHERE is_default = 1;
+`.trim();
+
+const SQLITE_0004_DOWN = `
+DROP INDEX IF EXISTS fortress_tenant_user_one_default_idx;
+`.trim();
+
+const PG_0004_UP = `
+WITH ranked_defaults AS (
+  SELECT ctid, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY tenant_id) AS position
+  FROM fortress_tenant_user
+  WHERE is_default = true
+)
+UPDATE fortress_tenant_user AS membership
+SET is_default = false
+FROM ranked_defaults
+WHERE membership.ctid = ranked_defaults.ctid
+  AND ranked_defaults.position > 1;
+CREATE UNIQUE INDEX IF NOT EXISTS fortress_tenant_user_one_default_idx
+  ON fortress_tenant_user (user_id)
+  WHERE is_default = true;
+`.trim();
+
+const PG_0004_DOWN = `
+DROP INDEX IF EXISTS fortress_tenant_user_one_default_idx;
+`.trim();
+
 export const fortressMigrations: Record<MigrationDialect, FortressMigration[]> = {
   sqlite: [
     { version: 1, name: 'schema_version', dialect: 'sqlite', up: SQLITE_0001_UP, down: SQLITE_0001_DOWN },
     { version: 2, name: 'initial_schema', dialect: 'sqlite', up: SQLITE_0002_UP, down: SQLITE_0002_DOWN },
     { version: 3, name: 'auth_continuation', dialect: 'sqlite', up: SQLITE_0003_UP, down: SQLITE_0003_DOWN },
+    { version: 4, name: 'tenant_default_unique', dialect: 'sqlite', up: SQLITE_0004_UP, down: SQLITE_0004_DOWN },
   ],
   pg: [
     { version: 1, name: 'schema_version', dialect: 'pg', up: PG_0001_UP, down: PG_0001_DOWN },
     { version: 2, name: 'initial_schema', dialect: 'pg', up: PG_0002_UP, down: PG_0002_DOWN },
     { version: 3, name: 'auth_continuation', dialect: 'pg', up: PG_0003_UP, down: PG_0003_DOWN },
+    { version: 4, name: 'tenant_default_unique', dialect: 'pg', up: PG_0004_UP, down: PG_0004_DOWN },
   ],
 };
 

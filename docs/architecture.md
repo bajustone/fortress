@@ -1304,7 +1304,7 @@ Schema-per-tenant isolation — **PostgreSQL only**. Tenant schemas use the nume
 - `wrapAdapter` — Reads `tenantId` from the verified JWT custom claim, then uses a transaction-pinned `set_config('search_path', ?, true)` before each operation; with no claim or non-PG adapters it returns the adapter unchanged (fail closed/no-op)
 - `enrichTokenClaims` — Adds `tenantId` and `tenantCode` to JWT custom claims from the user's default `tenant_user` membership
 
-**Methods:** `createTenant(input)`, `deleteTenant(input)`, `addUserToTenant(userId, tenantId)`, `getUserTenants(userId)`, `getMyTenants(input, routeCtx?)`, `switchTenant(input, routeCtx?)`
+**Methods:** `createTenant(input)`, `deleteTenant(input)`, `addUserToTenant(userId, tenantId)`, `getUserTenants(userId)`, `getMyTenants(input, routeCtx?) → { tenants }`, `switchTenant(input, routeCtx?)`. Default-tenant switches are serialized, atomic, and backed by a partial unique index enforcing at most one default per user.
 
 **Gotcha:** Schema switching/creation requires PostgreSQL `rawQuery`; adapters without it pass through unchanged.
 

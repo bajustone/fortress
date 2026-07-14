@@ -98,10 +98,36 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
       ],
     );
 
+    // Simulate a real pre-v4 installation: v2 did not originally include the
+    // partial index and could contain multiple defaults for one user.
+    await db.rawQuery!('DROP INDEX IF EXISTS fortress_tenant_user_one_default_idx');
+    await db.rawQuery!(
+      `INSERT INTO fortress_tenant (name, tax_id) VALUES (?, ?), (?, ?)`,
+      ['Tenant A', 'tenant-a', 'Tenant B', 'tenant-b'],
+    );
+    const tenantRows = await db.rawQuery!<{ id: string }>(
+      `SELECT id FROM fortress_tenant WHERE tax_id IN (?, ?) ORDER BY tax_id`,
+      ['tenant-a', 'tenant-b'],
+    );
+    await db.rawQuery!(
+      `INSERT INTO fortress_tenant_user (tenant_id, user_id, is_default) VALUES (?, ?, true), (?, ?, true)`,
+      [tenantRows[0].id, legacyUser.id, tenantRows[1].id, legacyUser.id],
+    );
+
     const up = await migrateUp(db, 'pg');
     expect(up.fromVersion).toBe(2);
-    expect(up.toVersion).toBe(3);
-    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation']);
+    expect(up.toVersion).toBe(4);
+    expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique']);
+    const defaults = await db.rawQuery!<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM fortress_tenant_user WHERE user_id = ? AND is_default = true`,
+      [legacyUser.id],
+    );
+    expect(Number(defaults[0].count)).toBe(1);
+    const tenantIndexes = await db.rawQuery!<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes WHERE indexname = ?`,
+      ['fortress_tenant_user_one_default_idx'],
+    );
+    expect(tenantIndexes).toHaveLength(1);
 
     const familyRows = await db.rawQuery!<{ tokenHash: string; familyCreatedAt: string }>(
       `SELECT token_hash AS "tokenHash", family_created_at AS "familyCreatedAt"
@@ -129,7 +155,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(defaulted.recent).toBe(true);
 
     const after = await getMigrationStatus(db, 'pg');
-    expect(after.currentVersion).toBe(3);
+    expect(after.currentVersion).toBe(4);
     expect(after.upToDate).toBe(true);
 
     // Real-engine schema check: no missing tables, no missing columns.
@@ -155,7 +181,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
 
     // A targeted rollback preserves refresh rows while removing only v3.
     const rollback = await migrateDown(db, 'pg', 2);
-    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['auth_continuation']);
+    expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['tenant_default_unique', 'auth_continuation']);
     expect(await db.count({ model: 'refresh_token' })).toBe(3);
     const v3Columns = await db.rawQuery!<{ columnName: string }>(
       `SELECT column_name AS "columnName" FROM information_schema.columns
@@ -170,7 +196,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(continuationTables).toEqual([]);
 
     const restore = await migrateUp(db, 'pg');
-    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation']);
+    expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique']);
 
     // Roll back drops every Fortress table (FK-safe via CASCADE ordering).
     const down = await migrateDown(db, 'pg');

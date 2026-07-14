@@ -209,6 +209,8 @@ CREATE TABLE IF NOT EXISTS fortress_tenant_user (
   is_default BOOLEAN NOT NULL DEFAULT false,
   PRIMARY KEY (tenant_id, user_id)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS fortress_tenant_user_one_default_idx
+  ON fortress_tenant_user (user_id) WHERE is_default = true;
 
 CREATE TABLE IF NOT EXISTS fortress_oauth_client (
   id SERIAL PRIMARY KEY,

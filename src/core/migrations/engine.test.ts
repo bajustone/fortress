@@ -27,21 +27,21 @@ describe('migration engine', () => {
 
     const before = await getMigrationStatus(db, dialect);
     expect(before.currentVersion).toBe(0);
-    expect(before.latestVersion).toBe(3);
-    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3]);
+    expect(before.latestVersion).toBe(4);
+    expect(before.pending.map(migration => migration.version)).toEqual([1, 2, 3, 4]);
 
     const up = await migrateUp(db, dialect);
-    expect(up).toMatchObject({ fromVersion: 0, toVersion: 3 });
-    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation']);
+    expect(up).toMatchObject({ fromVersion: 0, toVersion: 4 });
+    expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique']);
 
     const after = await getMigrationStatus(db, dialect);
-    expect(after.currentVersion).toBe(3);
+    expect(after.currentVersion).toBe(4);
     expect(after.upToDate).toBe(true);
     expect(hasMigrationDrift(await detectMigrationDrift(db, dialect))).toBe(false);
 
     const down = await migrateDown(db, dialect);
-    expect(down).toMatchObject({ fromVersion: 3, toVersion: 0 });
-    expect(down.rolledBack.map(migration => migration.name)).toEqual(['auth_continuation', 'initial_schema', 'schema_version']);
+    expect(down).toMatchObject({ fromVersion: 4, toVersion: 0 });
+    expect(down.rolledBack.map(migration => migration.name)).toEqual(['tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
 
     const final = await getMigrationStatus(db, dialect);
     expect(final.hasVersionTable).toBe(false);

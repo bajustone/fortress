@@ -33,7 +33,7 @@ interface TenancyMethods {
   deleteTenant: (input: { id: string }) => Promise<{ ok: true }>;
   addUserToTenant: (userId: string, tenantId: string) => Promise<void>;
   getUserTenants: (userId: string) => Promise<{ id: string; name: string; taxId: string }[]>;
-  getMyTenants: (input: { userId?: string }, routeCtx?: { userId?: string }) => Promise<{ id: string; name: string; taxId: string }[]>;
+  getMyTenants: (input: { userId?: string }, routeCtx?: { userId?: string }) => Promise<{ tenants: { id: string; name: string; taxId: string }[] }>;
   switchTenant: (input: { taxId: string; userId?: string }, routeCtx?: { userId?: string }) => Promise<{ ok: true }>;
 }
 
@@ -106,6 +106,27 @@ describe('tenancy plugin', () => {
       expect(tenants[0].taxId).toBe('acme-001');
     });
 
+    it('assigns exactly one default under concurrent first memberships', async () => {
+      const [first, second] = await Promise.all([
+        methods.createTenant({ name: 'Acme', taxId: 'acme-001' }),
+        methods.createTenant({ name: 'Beta', taxId: 'beta-001' }),
+      ]);
+
+      await Promise.all([
+        methods.addUserToTenant(userId, first.id),
+        methods.addUserToTenant(userId, second.id),
+      ]);
+
+      const defaults = await fortress.config.database.findMany({
+        model: 'tenant_user',
+        where: [
+          { field: 'userId', operator: '=', value: userId },
+          { field: 'isDefault', operator: '=', value: true },
+        ],
+      });
+      expect(defaults).toHaveLength(1);
+    });
+
     it('is idempotent', async () => {
       const tenant = await methods.createTenant({ name: 'Acme', taxId: 'acme-001' });
       await methods.addUserToTenant(userId, tenant.id);
@@ -152,6 +173,39 @@ describe('tenancy plugin', () => {
       });
 
       expect(claims.tenantCode).toBe('beta-001');
+
+      // Reverse direction exercises the partial-unique-index case where the
+      // lower-id target row may be visited before the current default.
+      await methods.switchTenant({ taxId: 'acme-001', userId });
+      const reversedClaims = await plugin.enrichTokenClaims!(userId, {
+        db: fortress.config.database,
+        config: fortress.config,
+      });
+      expect(reversedClaims.tenantCode).toBe('acme-001');
+    });
+
+    it('keeps exactly one default under concurrent switches', async () => {
+      const tenants = await Promise.all([
+        methods.createTenant({ name: 'Acme', taxId: 'acme-001' }),
+        methods.createTenant({ name: 'Beta', taxId: 'beta-001' }),
+        methods.createTenant({ name: 'Gamma', taxId: 'gamma-001' }),
+      ]);
+      for (const tenant of tenants)
+        await methods.addUserToTenant(userId, tenant.id);
+
+      await Promise.all([
+        methods.switchTenant({ taxId: 'beta-001', userId }),
+        methods.switchTenant({ taxId: 'gamma-001', userId }),
+      ]);
+
+      const defaults = await fortress.config.database.findMany<{ isDefault: boolean }>({
+        model: 'tenant_user',
+        where: [
+          { field: 'userId', operator: '=', value: userId },
+          { field: 'isDefault', operator: '=', value: true },
+        ],
+      });
+      expect(defaults).toHaveLength(1);
     });
 
     it('rejects switching to non-member tenant', async () => {
@@ -177,8 +231,8 @@ describe('tenancy plugin', () => {
       // userId in body is ignored when a routeCtx is present.
       await methods.switchTenant({ taxId: 'beta-001', userId: '999999' }, { userId });
 
-      const tenants = await methods.getMyTenants({}, { userId });
-      expect(tenants.map(t => t.taxId).sort()).toEqual(['acme-001', 'beta-001']);
+      const result = await methods.getMyTenants({}, { userId });
+      expect(result.tenants.map(t => t.taxId).sort()).toEqual(['acme-001', 'beta-001']);
     });
 
     it('requires an authenticated caller via routeCtx', async () => {

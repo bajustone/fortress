@@ -95,7 +95,7 @@ export interface TenancyMethods {
   getMyTenants: (
     input: { userId?: string },
     routeCtx?: PluginRouteContext,
-  ) => Promise<TenantRecord[]>;
+  ) => Promise<{ tenants: TenantRecord[] }>;
   switchTenant: (
     input: { taxId: string; userId?: string },
     routeCtx?: PluginRouteContext,
@@ -375,6 +375,33 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
         return userId;
       };
 
+      const defaultTenantQueues = new Map<string, Promise<void>>();
+      const withDefaultTenantLock = async <T>(
+        userId: string,
+        operation: (tx: DatabaseAdapter) => Promise<T>,
+      ): Promise<T> => {
+        const previous = defaultTenantQueues.get(userId) ?? Promise.resolve();
+        let release!: () => void;
+        const current = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        defaultTenantQueues.set(userId, current);
+        await previous;
+        try {
+          return await ctx.db.transaction(async (tx) => {
+            if (tx.dialect === 'pg' && tx.rawQuery) {
+              await tx.rawQuery('SELECT pg_advisory_xact_lock(hashtext(?))', [`fortress:tenant-default:${userId}`]);
+            }
+            return operation(tx);
+          });
+        }
+        finally {
+          release();
+          if (defaultTenantQueues.get(userId) === current)
+            defaultTenantQueues.delete(userId);
+        }
+      };
+
       return {
         async createTenant(input: { name: string; taxId: string; description?: string }): Promise<TenantRecord> {
           const existing = await findTenantByTaxId(input.taxId);
@@ -435,31 +462,29 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
         },
 
         async addUserToTenant(userId: string, tenantId: string): Promise<void> {
-          // Check if user already belongs to this tenant
-          const existing = await ctx.db.findOne<TenantUserRecord>({
-            model: 'tenant_user',
-            where: [
-              { field: 'userId', operator: '=', value: userId },
-              { field: 'tenantId', operator: '=', value: tenantId },
-            ],
-          });
+          await withDefaultTenantLock(userId, async (tx) => {
+            const existing = await tx.findOne<TenantUserRecord>({
+              model: 'tenant_user',
+              where: [
+                { field: 'userId', operator: '=', value: userId },
+                { field: 'tenantId', operator: '=', value: tenantId },
+              ],
+            });
+            if (existing)
+              return;
 
-          if (existing)
-            return; // Already a member
-
-          // Check if user has any tenants — if not, make this the default
-          const memberships = await ctx.db.findMany<TenantUserRecord>({
-            model: 'tenant_user',
-            where: [{ field: 'userId', operator: '=', value: userId }],
-          });
-
-          await ctx.db.create({
-            model: 'tenant_user',
-            data: {
-              tenantId,
-              userId,
-              isDefault: memberships.length === 0, // First tenant becomes default
-            },
+            const memberships = await tx.findMany<TenantUserRecord>({
+              model: 'tenant_user',
+              where: [{ field: 'userId', operator: '=', value: userId }],
+            });
+            await tx.create({
+              model: 'tenant_user',
+              data: {
+                tenantId,
+                userId,
+                isDefault: memberships.length === 0,
+              },
+            });
           });
         },
 
@@ -467,8 +492,8 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
           return listUserTenants(userId);
         },
 
-        async getMyTenants(input: { userId?: string }, routeCtx?: PluginRouteContext): Promise<TenantRecord[]> {
-          return listUserTenants(requireUserId(input, routeCtx));
+        async getMyTenants(input: { userId?: string }, routeCtx?: PluginRouteContext): Promise<{ tenants: TenantRecord[] }> {
+          return { tenants: await listUserTenants(requireUserId(input, routeCtx)) };
         },
 
         async switchTenant(input: { taxId: string; userId?: string }, routeCtx?: PluginRouteContext): Promise<{ ok: true }> {
@@ -478,46 +503,37 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
           if (!tenant)
             throw Errors.notFound(`Tenant '${input.taxId}' not found`);
 
-          // Verify user belongs to this tenant
-          const membership = await ctx.db.findOne<TenantUserRecord>({
-            model: 'tenant_user',
-            where: [
-              { field: 'userId', operator: '=', value: userId },
-              { field: 'tenantId', operator: '=', value: tenant.id },
-            ],
-          });
-
-          if (!membership)
-            throw Errors.forbidden('User does not belong to this tenant');
-
-          // Unset current default(s)
-          const currentDefaults = await ctx.db.findMany<TenantUserRecord>({
-            model: 'tenant_user',
-            where: [
-              { field: 'userId', operator: '=', value: userId },
-              { field: 'isDefault', operator: '=', value: true },
-            ],
-          });
-
-          for (const m of currentDefaults) {
-            await ctx.db.update({
+          await withDefaultTenantLock(userId, async (tx) => {
+            const membership = await tx.findOne<TenantUserRecord>({
               model: 'tenant_user',
               where: [
                 { field: 'userId', operator: '=', value: userId },
-                { field: 'tenantId', operator: '=', value: m.tenantId },
+                { field: 'tenantId', operator: '=', value: tenant.id },
+              ],
+            });
+            if (!membership)
+              throw Errors.forbidden('User does not belong to this tenant');
+
+            // Partial unique indexes are checked during each row update on
+            // both SQLite and PostgreSQL, so a one-statement CASE flip can
+            // transiently collide when the target row is visited first. Two
+            // phases inside this serialized transaction avoid that hazard.
+            await tx.update({
+              model: 'tenant_user',
+              where: [
+                { field: 'userId', operator: '=', value: userId },
+                { field: 'isDefault', operator: '=', value: true },
               ],
               data: { isDefault: false },
             });
-          }
-
-          // Set new default
-          await ctx.db.update({
-            model: 'tenant_user',
-            where: [
-              { field: 'userId', operator: '=', value: userId },
-              { field: 'tenantId', operator: '=', value: tenant.id },
-            ],
-            data: { isDefault: true },
+            await tx.update({
+              model: 'tenant_user',
+              where: [
+                { field: 'userId', operator: '=', value: userId },
+                { field: 'tenantId', operator: '=', value: tenant.id },
+              ],
+              data: { isDefault: true },
+            });
           });
 
           return { ok: true };

@@ -270,7 +270,12 @@ const tenantUsers = sqliteTable(
     userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
     isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   },
-  table => [primaryKey({ columns: [table.tenantId, table.userId] })],
+  table => [
+    primaryKey({ columns: [table.tenantId, table.userId] }),
+    uniqueIndex('fortress_tenant_user_one_default_idx')
+      .on(table.userId)
+      .where(sql`${table.isDefault} = true`),
+  ],
 );
 
 // --- Plugins: OAuth ---

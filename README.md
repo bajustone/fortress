@@ -1938,8 +1938,10 @@ await fortress.plugins['tenancy'].addUserToTenant(userId, tenant.id);
 // List tenants
 const tenants = await fortress.plugins['tenancy'].getUserTenants(userId);
 const mine = await fortress.plugins['tenancy'].getMyTenants({ userId });
+// => { tenants: TenantRecord[] } (matches GET /tenancy/tenants/mine)
 
-// Switch the user's default tenant; token refresh/login picks it up
+// Switch the user's default tenant atomically; token refresh/login picks it up.
+// A database invariant permits at most one default membership per user.
 await fortress.plugins['tenancy'].switchTenant({ taxId: 'acme-corp', userId });
 
 // Delete tenant row/memberships; schema drop requires dropSchemaOnDelete

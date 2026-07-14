@@ -226,6 +226,8 @@ const CREATE_TABLES_SQL = `
     is_default BOOLEAN NOT NULL DEFAULT false,
     PRIMARY KEY (tenant_id, user_id)
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS fortress_tenant_user_one_default_idx
+    ON fortress_tenant_user (user_id) WHERE is_default = true;
 
   CREATE TABLE IF NOT EXISTS fortress_oauth_client (
     id SERIAL PRIMARY KEY,
@@ -964,6 +966,36 @@ describe('pg: tenancy plugin', () => {
     expect(tenants).toHaveLength(1);
     expect(tenants[0].taxId).toBe('acme');
     expect(tenants[0].createdAt).toBeInstanceOf(Date);
+  });
+
+  it('switches defaults in both directions under the partial unique index', async () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createPgAdapter(),
+      plugins: [tenancy()],
+    });
+    const user = await fortress.auth.createUser({
+      email: 'tenant-switch@test.com',
+      name: 'Tenant Switch',
+      password: 'password-123456',
+    });
+    const first = await fortress.plugins.tenancy.createTenant({ name: 'First', taxId: 'first' });
+    const second = await fortress.plugins.tenancy.createTenant({ name: 'Second', taxId: 'second' });
+    await fortress.plugins.tenancy.addUserToTenant(user.id, first.id);
+    await fortress.plugins.tenancy.addUserToTenant(user.id, second.id);
+
+    await fortress.plugins.tenancy.switchTenant({ taxId: 'second', userId: user.id });
+    await fortress.plugins.tenancy.switchTenant({ taxId: 'first', userId: user.id });
+
+    const defaults = await fortress.config.database.findMany<{ tenantId: string }>({
+      model: 'tenant_user',
+      where: [
+        { field: 'userId', operator: '=', value: user.id },
+        { field: 'isDefault', operator: '=', value: true },
+      ],
+    });
+    expect(defaults).toHaveLength(1);
+    expect(defaults[0].tenantId).toBe(first.id);
   });
 
   it('enriches JWT claims with tenant info after login', async () => {

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS fortress_tenant_user_one_default_idx;

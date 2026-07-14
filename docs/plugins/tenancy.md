@@ -70,7 +70,7 @@ Self-service routes ignore any `userId` in the body when a route context is pres
 | `deleteTenant` | `({ id })` | `Promise<{ ok: true }>` |
 | `addUserToTenant` | `(userId, tenantId)` | `Promise<void>` |
 | `getUserTenants` | `(userId)` | `Promise<TenantRecord[]>` |
-| `getMyTenants` | `({ userId? }, routeCtx?)` | `Promise<TenantRecord[]>` |
+| `getMyTenants` | `({ userId? }, routeCtx?)` | `Promise<{ tenants: TenantRecord[] }>` |
 | `switchTenant` | `({ taxId, userId? }, routeCtx?)` | `Promise<{ ok: true }>` |
 
 ### createTenant
@@ -94,7 +94,7 @@ await fortress.plugins.tenancy.deleteTenant({ id: tenant.id });
 
 ### switchTenant
 
-Sets the user's default tenant after verifying membership. The new tenant takes effect on the next login/token refresh because tenant data is stored in JWT custom claims.
+Sets the user's default tenant after verifying membership. The flip is serialized and performed as a two-phase update inside one transaction (clear, then set), while a partial unique index enforces at most one default membership per user. The new tenant takes effect on the next login/token refresh because tenant data is stored in JWT custom claims.
 
 ```ts
 await fortress.plugins.tenancy.switchTenant({ taxId: 'acme-corp', userId });
