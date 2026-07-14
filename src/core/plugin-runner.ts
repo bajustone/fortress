@@ -7,6 +7,7 @@ import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext } from './plugin';
 import { Errors } from './errors';
+import { canonicalizePath } from './http/match';
 
 /**
  * Process registered plugins and return their exposed methods.
@@ -211,7 +212,7 @@ export function collectPluginModels(
  * Supports `:param` (single segment) and `*` (wildcard).
  */
 function middlewarePathToRegex(pattern: string): RegExp {
-  const regexStr = pattern
+  const regexStr = canonicalizePath(pattern)
     .replace(/:[^/]+/g, '[^/]+')
     .replace(/\*/g, '.*')
     .replace(/\//g, '\\/');
@@ -253,8 +254,9 @@ export async function executePluginMiddleware(
   ctx: PluginContext,
   request: PluginRequestContext,
 ): Promise<void> {
+  const canonicalRequestPath = canonicalizePath(requestPath);
   const matching = collectPluginMiddleware(plugins, position)
-    .filter(({ middleware: mw }) => middlewarePathToRegex(mw.path).test(requestPath));
+    .filter(({ middleware: mw }) => middlewarePathToRegex(mw.path).test(canonicalRequestPath));
 
   if (matching.length === 0)
     return;

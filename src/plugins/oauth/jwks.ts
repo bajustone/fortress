@@ -68,7 +68,7 @@ export interface ActiveSigningKey {
 export async function getActiveSigningKey(db: DatabaseAdapter): Promise<ActiveSigningKey> {
   const existing = await db.findOne<SigningKeyRecord>({
     model: 'oauth_signing_key',
-    where: [{ field: 'rotatedAt', operator: '=', value: null }],
+    where: [{ field: 'rotatedAt', operator: 'isNull', value: null }],
   });
   if (existing)
     return hydrate(existing);

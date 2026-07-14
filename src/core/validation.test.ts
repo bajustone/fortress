@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { FortressError } from './errors';
-import { int, obj, str } from './schema-builder';
-import { validateRequest } from './validation';
+import { int, num, obj, str } from './schema-builder';
+import { coerceBySchema, validateRequest } from './validation';
+
+describe('coerceBySchema', () => {
+  it('coerces only canonical decimal URL numerics', () => {
+    const schema = obj({ integer: int(), number: num() });
+    expect(coerceBySchema(schema, { integer: '-12', number: '.5' })).toEqual({
+      integer: -12,
+      number: 0.5,
+    });
+    for (const value of ['', '0x10', '1e3', '+1', 'Infinity']) {
+      expect(coerceBySchema(schema, { integer: value, number: value })).toEqual({
+        integer: value,
+        number: value,
+      });
+    }
+  });
+});
 
 describe('validateRequest', () => {
   it('no-op when input is undefined', async () => {

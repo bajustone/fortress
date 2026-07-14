@@ -28,13 +28,19 @@ export interface RouteMatch<T extends RouteLike = EndpointDefinition> {
   params: Record<string, string>;
 }
 
+/** Normalize path separators so route and middleware matching share one form. */
+export function canonicalizePath(pathname: string): string {
+  const segments = pathname.split('/').filter(Boolean);
+  return segments.length === 0 ? '/' : `/${segments.join('/')}`;
+}
+
 /**
  * Pre-build a route table from endpoint definitions. Adapters call this once
  * at startup and hand the result to {@link matchRoute} on every request.
  */
 export function buildRouteTable<T extends RouteLike>(endpoints: readonly T[]): RouteEntry<T>[] {
   return endpoints.map((ep) => {
-    const segments = ep.path.split('/').filter(Boolean);
+    const segments = canonicalizePath(ep.path).split('/').filter(Boolean);
     const paramNames: string[] = [];
     for (const seg of segments) {
       if (seg.startsWith(':'))
@@ -65,7 +71,7 @@ export function matchRoute<T extends RouteLike>(
   pathname: string,
 ): RouteMatch<T> | null {
   const upperMethod = method.toUpperCase();
-  const pathSegments = pathname.split('/').filter(Boolean);
+  const pathSegments = canonicalizePath(pathname).split('/').filter(Boolean);
 
   for (const route of table) {
     if (route.method !== upperMethod)

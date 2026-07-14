@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   chainAdapterWrappers,
   collectScopeRules,
+  executePluginMiddleware,
   mergeTokenClaims,
   processPlugins,
   wrapAdapterWithScopeRules,
@@ -129,6 +130,27 @@ describe('mergeTokenClaims', () => {
 
     const result = await mergeTokenClaims(plugins, '1', { db: mockDb, config: mockConfig });
     expect(result.key).toBe('second');
+  });
+});
+
+describe('executePluginMiddleware', () => {
+  it('canonicalizes double and trailing slashes before path matching', async () => {
+    const handler = vi.fn(async (_ctx, _request, next) => next());
+    const plugin = testPlugin({
+      middleware: [{ position: 'before-auth', path: '/auth/login', handler }],
+    });
+    const request = {
+      request: new Request('http://localhost/auth//login/'),
+    };
+
+    await executePluginMiddleware(
+      [plugin],
+      'before-auth',
+      '/auth//login/',
+      { db: mockDb, config: mockConfig },
+      request,
+    );
+    expect(handler).toHaveBeenCalledOnce();
   });
 });
 

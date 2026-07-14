@@ -10,6 +10,9 @@ import type { JSONSchema } from './json-schema';
 import type { StandardSchemaV1 } from './standard-schema';
 import { Errors } from './errors';
 
+const DECIMAL_INTEGER_RE = /^-?\d+$/;
+const DECIMAL_NUMBER_RE = /^-?(?:\d+(?:\.\d+)?|\.\d+)$/;
+
 /**
  * Coerce URL-sourced query/params values to the types declared in a JSON
  * Schema before runtime validation. HTTP path and query parameters arrive
@@ -48,13 +51,18 @@ export function coerceBySchema(
 function coerceScalar(schema: JSONSchema, value: string): unknown {
   switch (schema.type) {
     case 'integer': {
-      // Reject values with a fractional part — keep integer strict.
+      // Only canonical base-10 integer text. Number('')/hex/exponent forms
+      // must not become URL parameter values implicitly.
+      if (!DECIMAL_INTEGER_RE.test(value))
+        return undefined;
       const n = Number(value);
       if (Number.isFinite(n) && Number.isInteger(n))
         return n;
       return undefined;
     }
     case 'number': {
+      if (!DECIMAL_NUMBER_RE.test(value))
+        return undefined;
       const n = Number(value);
       if (Number.isFinite(n))
         return n;
