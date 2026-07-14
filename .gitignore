@@ -3,4 +3,11 @@ dist/
 .env
 coverage/
 scratch/
+
+# Local editor/agent state and OS metadata
+.claude/
+.opencode/
+.pi-subagents/
+.DS_Store
+
 fortress-audit-report.html
