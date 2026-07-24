@@ -11,7 +11,7 @@
  */
 
 import type { EndpointDefinition } from '../core/endpoint';
-import type { Fortress } from '../core/fortress';
+import type { AnyFortress } from '../core/fortress';
 import type { JSONSchema } from '../core/json-schema';
 
 /**
@@ -162,7 +162,7 @@ export function buildRouteDefinition<T>(
  */
 export function mountFortressOpenAPI<T>(
   app: GenericOpenAPIApp & { openAPIRegistry?: { registerComponent: (type: string, name: string, schema: Record<string, unknown>) => void } },
-  fortress: Fortress,
+  fortress: AnyFortress,
   options: MountOptions<T>,
 ): void {
   const skipPaths = new Set(options.skipPaths ?? []);
@@ -205,7 +205,7 @@ export function mountFortressOpenAPI<T>(
  * Returns a map of `{ [handlerName]: routeDef }`.
  */
 export function getFortressRoutes<T>(
-  fortress: Fortress,
+  fortress: AnyFortress,
   schemaConverter: SchemaConverter<T>,
   createRoute: (def: Record<string, unknown>) => unknown,
 ): Record<string, unknown> {
@@ -221,7 +221,7 @@ export function getFortressRoutes<T>(
 
 // ── Auto-handler wiring ──────���──────────────────────────────────────
 
-function createAutoHandler(fortress: Fortress, _ep: EndpointDefinition): (c: any) => Promise<Response> {
+function createAutoHandler(fortress: AnyFortress, _ep: EndpointDefinition): (c: any) => Promise<Response> {
   return async (c: any) => {
     const raw = c.req?.raw as Request | undefined;
     if (raw)

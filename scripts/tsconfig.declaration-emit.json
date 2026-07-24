@@ -8,5 +8,8 @@
     "declaration": true,
     "noEmit": true
   },
-  "include": ["fixtures/error-response-declaration.ts"]
+  "include": [
+    "fixtures/consumer-boundary-declaration.ts",
+    "fixtures/error-response-declaration.ts"
+  ]
 }

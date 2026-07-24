@@ -9,7 +9,7 @@
  */
 
 import type { ResolvedCookieConfig } from '../core/config';
-import type { Fortress } from '../core/fortress';
+import type { AnyFortress } from '../core/fortress';
 import type { AuthCookiePayload } from '../core/http/cookie-serialize';
 import type { SvelteKitCookieOptions, SvelteKitRequestEvent } from './types';
 import { parseCookieHeader } from '../core/http/cookie-serialize';
@@ -21,7 +21,7 @@ import { parseCookieHeader } from '../core/http/cookie-serialize';
  */
 export function setAuthCookies(
   event: SvelteKitRequestEvent,
-  fortress: Fortress<any, any>,
+  fortress: AnyFortress,
   payload: AuthCookiePayload,
 ): void {
   const cookies = fortress.cookies;
@@ -35,7 +35,7 @@ export function setAuthCookies(
 }
 
 /** Clear both fortress auth cookies (logout). */
-export function clearAuthCookies(event: SvelteKitRequestEvent, fortress: Fortress<any, any>): void {
+export function clearAuthCookies(event: SvelteKitRequestEvent, fortress: AnyFortress): void {
   const cookies = fortress.cookies;
   event.cookies.delete(cookies.accessName, optsFor(cookies));
   event.cookies.delete(cookies.refreshName, optsFor(cookies));

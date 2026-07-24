@@ -1,5 +1,5 @@
 import type { EndpointDefinition, EndpointPermission, HttpMethod, SecurityRequirement } from '../endpoint';
-import type { Fortress } from '../fortress';
+import type { AnyFortress } from '../fortress';
 import type { FortressPlugin, MiddlewareDefinition } from '../plugin';
 import { authEndpoints } from '../auth/auth-endpoints';
 import { resolveCsrfConfig } from '../http/csrf';
@@ -89,7 +89,7 @@ function isRateLimited(endpoint: EndpointDefinition, plugins: readonly FortressP
   return false;
 }
 
-function csrfApplies(endpoint: EndpointDefinition, fortress: Pick<Fortress, 'config'>): boolean {
+function csrfApplies(endpoint: EndpointDefinition, fortress: Pick<AnyFortress, 'config'>): boolean {
   const csrf = resolveCsrfConfig(fortress.config.csrf);
   if (!csrf.enabled)
     return false;
@@ -102,7 +102,7 @@ function csrfApplies(endpoint: EndpointDefinition, fortress: Pick<Fortress, 'con
   return true;
 }
 
-function collectEndpointOrigins(fortress: Pick<Fortress, 'endpoints' | 'config'>): EndpointWithOrigin[] {
+function collectEndpointOrigins(fortress: Pick<AnyFortress, 'endpoints' | 'config'>): EndpointWithOrigin[] {
   const origins = new Map<string, EndpointWithOrigin>();
 
   const coreAuth = Object.values(authEndpoints) as EndpointDefinition[];
@@ -129,7 +129,7 @@ function collectEndpointOrigins(fortress: Pick<Fortress, 'endpoints' | 'config'>
   return [...byKey.values()];
 }
 
-export function buildRouteManifest(fortress: Pick<Fortress, 'endpoints' | 'config'>): RouteManifestEntry[] {
+export function buildRouteManifest(fortress: Pick<AnyFortress, 'endpoints' | 'config'>): RouteManifestEntry[] {
   const plugins = fortress.config.plugins ?? [];
   return collectEndpointOrigins(fortress)
     .map(({ endpoint, plugin }) => {

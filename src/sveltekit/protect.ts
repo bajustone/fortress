@@ -1,5 +1,5 @@
 import type { EndpointDefinition } from '../core/endpoint';
-import type { Fortress } from '../core/fortress';
+import type { AnyFortress } from '../core/fortress';
 import type {
   ProtectedRouteContext,
   ProtectedRouteHandler,
@@ -40,19 +40,19 @@ export function protectedRoute<
   E extends EndpointDefinition<any, any, any, any>,
   TResult = unknown,
 >(
-  fortress: Fortress<any, any>,
+  fortress: AnyFortress,
   target: E,
   handler: SvelteKitProtectedRouteHandler<E, TResult>,
   options?: ProtectOptions,
 ): (event: SvelteKitRequestEvent) => Promise<Response>;
 export function protectedRoute<TResult = unknown>(
-  fortress: Fortress<any, any>,
+  fortress: AnyFortress,
   target: string,
   handler: SvelteKitProtectedRouteHandler<EndpointDefinition, TResult>,
   options?: ProtectOptions,
 ): (event: SvelteKitRequestEvent) => Promise<Response>;
 export function protectedRoute(
-  fortress: Fortress<any, any>,
+  fortress: AnyFortress,
   target: ProtectedRouteTarget,
 
   handler: SvelteKitProtectedRouteHandler<any, unknown>,
@@ -61,7 +61,7 @@ export function protectedRoute(
   return async (event) => {
     // Cast: core `protect` overloads require a concrete branch; impl is loose.
     const protectedHandler = (protect as (
-      f: Fortress,
+      f: AnyFortress,
       t: ProtectedRouteTarget,
       h: ProtectedRouteHandler,
       o?: ProtectOptions,

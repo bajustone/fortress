@@ -21,7 +21,7 @@
  */
 
 import type { Context, MiddlewareHandler } from 'hono';
-import type { Fortress } from '../../core/fortress';
+import type { AnyFortress } from '../../core/fortress';
 
 export interface HonoRateLimitOptions {
   /**
@@ -50,11 +50,11 @@ function defaultExtractIp(c: Context): string | undefined {
  * defined in your `rateLimit({ rules: { ... } })` config.
  */
 export function honoRateLimit(
-  fortress: Fortress,
+  fortress: AnyFortress,
   ruleName: string,
   options: HonoRateLimitOptions = {},
 ): MiddlewareHandler {
-  const methods = fortress.plugins['rate-limit'] as unknown as RateLimitCheck | undefined;
+  const methods = (fortress.plugins as Record<string, unknown>)['rate-limit'] as RateLimitCheck | undefined;
   if (!methods?.check) {
     throw new Error(
       'rate-limit plugin is not registered — add rateLimit({...}) to your FortressConfig.plugins',

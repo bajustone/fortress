@@ -20,7 +20,7 @@
  * @module
  */
 
-import type { Fortress } from '../../core/fortress';
+import type { AnyFortress } from '../../core/fortress';
 
 // Minimal Express-compatible types so users bring their own express version.
 /** Shape fortress reads from; compatible with any modern Express request. */
@@ -62,11 +62,11 @@ function defaultExtractIp(req: MinimalExpressRequest): string | undefined {
  * rule defined in your `rateLimit({ rules: { ... } })` config.
  */
 export function expressRateLimit(
-  fortress: Fortress,
+  fortress: AnyFortress,
   ruleName: string,
   options: ExpressRateLimitOptions = {},
 ): (req: MinimalExpressRequest, _res: unknown, next: (err?: unknown) => void) => void {
-  const methods = fortress.plugins['rate-limit'] as unknown as RateLimitCheck | undefined;
+  const methods = (fortress.plugins as Record<string, unknown>)['rate-limit'] as RateLimitCheck | undefined;
   if (!methods?.check) {
     throw new Error(
       'rate-limit plugin is not registered — add rateLimit({...}) to your FortressConfig.plugins',

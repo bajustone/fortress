@@ -196,6 +196,14 @@ export interface Fortress<
   toOpenAPI: (opts?: FortressToOpenAPIOptions) => OpenAPISpec;
 }
 
+/**
+ * A Fortress instance whose plugin and call surfaces are intentionally
+ * erased. Public APIs that only consume an instance use this boundary so a
+ * precisely typed {@link createFortress} result remains assignable without
+ * giving up its plugin and call types at the creation site.
+ */
+export type AnyFortress = Fortress<unknown, unknown>;
+
 /** Options accepted by {@link Fortress.toOpenAPI}. */
 export interface FortressToOpenAPIOptions extends ToOpenAPIOptions {
   /** Override the endpoints to emit. Defaults to `fortress.endpoints`. */
@@ -246,8 +254,8 @@ export interface MigrateResult {
  * const result = await twoFactor.setup(userId); // fully typed
  * ```
  */
-export function getPluginMethods<T>(fortress: Fortress, pluginName: string): T {
-  const methods = fortress.plugins[pluginName];
+export function getPluginMethods<T>(fortress: AnyFortress, pluginName: string): T {
+  const methods = (fortress.plugins as Record<string, unknown>)[pluginName];
   if (!methods) {
     throw Errors.notFound(`Plugin '${pluginName}' is not registered`);
   }
