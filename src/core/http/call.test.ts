@@ -1,25 +1,64 @@
 import type { authEndpoints } from '../auth/auth-endpoints';
 import type { InferEndpointCallInput, InferEndpointSuccessResponse } from '../endpoint';
-import type { Fortress } from '../fortress';
+import type { FortressPlugin } from '../plugin';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { FortressError } from '../errors';
 import { createFortress } from '../fortress';
+import { endpoint, obj, str } from '../schema-builder';
 import { assertSuccess } from '../types';
 
 const SECRET = 'call-test-secret-at-least-32-bytes-long!!';
 
-function makeFortress(): Fortress {
+const literalRoutePlugin = {
+  name: 'literal-route',
+  routes: {
+    literalEcho: endpoint('POST', '/literal/echo')
+      .security('none')
+      .body(obj({ message: str() }, 'message'))
+      .response(200, 'Echo response', obj({ echoed: str() }, 'echoed'))
+      .handler('literalEcho')
+      .build(),
+  },
+  methods: () => ({
+    literalEcho: async (input: { message: string }) => ({ echoed: input.message }),
+  }),
+} as const satisfies FortressPlugin;
+
+const noRoutePlugin = {
+  name: 'no-route',
+  methods: () => ({ health: () => 'ok' }),
+} as const satisfies FortressPlugin;
+
+function makeFortress() {
   return createFortress({
     jwt: { key: SECRET, issuer: 'call-test' },
     database: createTestAdapter(),
-  }) as unknown as Fortress;
+    plugins: [literalRoutePlugin, noRoutePlugin] as const,
+  });
+}
+
+/** Compile-only negative coverage: this function is deliberately never invoked. */
+function rejectsInvalidCallInputs(fortress: ReturnType<typeof makeFortress>): void {
+  // @ts-expect-error -- login requires a password
+  fortress.call.login({ identifier: 'user@example.com' });
+  // @ts-expect-error -- login does not accept unrelated fields
+  fortress.call.login({ identifier: 'user@example.com', password: 'secret', extra: true });
+  // @ts-expect-error -- revokeSession requires its route parameter
+  fortress.call.revokeSession({});
+  // @ts-expect-error -- IAM permission effects are a closed literal union
+  fortress.call.createRole({ name: 'admin', permissions: [{ resource: 'app', action: 'read', effect: 'MAYBE' }] });
+  // @ts-expect-error -- the literal plugin route requires message
+  fortress.call.literalEcho({});
+  // @ts-expect-error -- no-route plugins do not add call names
+  fortress.call.health({});
+  // @ts-expect-error -- unknown handler names must not be callable
+  fortress.call.notRegistered({});
 }
 
 describe('fortress.call', () => {
   describe('type inference', () => {
     it('infers login input shape', () => {
-      // Compile-time only — verifies the generic flow.
       expectTypeOf<InferEndpointCallInput<typeof authEndpoints.login>>().toEqualTypeOf<{
         identifier: string;
         password: string;
@@ -35,44 +74,69 @@ describe('fortress.call', () => {
 
     it('infers login success response carries a tagged union', () => {
       type R = InferEndpointSuccessResponse<typeof authEndpoints.login>;
-      // The AuthResult oneOf collapses to a discriminated union — exercise
-      // that at least one variant has an accessToken string.
       expectTypeOf<R>().not.toBeNever();
       expectTypeOf<R>().not.toBeUnknown();
     });
 
     it('infers me endpoint takes no input', () => {
-      // `me` has no body/query/params, so the inferred call input collapses
-      // to the empty intersection — we assert it's not `never` and not `unknown`.
       expectTypeOf<InferEndpointCallInput<typeof authEndpoints.me>>().not.toBeNever();
       expectTypeOf<InferEndpointCallInput<typeof authEndpoints.me>>().not.toBeUnknown();
+    });
+
+    it('keeps invalid and unknown calls as compile errors', () => {
+      expectTypeOf(rejectsInvalidCallInputs).toBeFunction();
     });
   });
 
   describe('runtime: happy path', () => {
-    it('creates a user via call.createUser and logs in via call.login', async () => {
+    it('creates a user and logs in through the inferred core call surface', async () => {
       const fortress = makeFortress();
 
-      // Direct service call to create the user — createUser over HTTP uses
-      // a different password-policy path than we want to exercise here.
       await fortress.auth.createUser({
         email: 'call@example.com',
         name: 'Call Test',
         password: 'password-123456',
       });
 
-      const result = await (fortress.call as any).login({
+      const result = await fortress.call.login({
         identifier: 'call@example.com',
         password: 'password-123456',
       });
 
-      expect(result).toBeDefined();
+      expect(result.status).toBe('success');
+      if (result.status !== 'success')
+        throw new Error('expected successful login');
       expect(typeof result.accessToken).toBe('string');
       expect(typeof result.refreshToken).toBe('string');
       expect(result.user.email).toBe('call@example.com');
     });
 
-    it('substitutes :id from a params input', async () => {
+    it('calls IAM with its inferred input and response types', async () => {
+      const fortress = makeFortress();
+      const user = await fortress.auth.createUser({
+        email: 'iam-call@example.com',
+        name: 'IAM Call',
+        password: 'password-123456',
+      });
+      const role = await fortress.iam.createRole('iam-call-reader', [
+        { resource: 'fortress', action: 'viewRoles' },
+      ]);
+      await fortress.iam.bindRoleToUser(user.id, role.id);
+
+      const loginResult = await fortress.call.login({
+        identifier: 'iam-call@example.com',
+        password: 'password-123456',
+      });
+      if (loginResult.status !== 'success')
+        throw new Error('expected successful login');
+
+      const roles = await fortress.call.getRoles({}, {
+        headers: { authorization: `Bearer ${loginResult.accessToken}` },
+      });
+      expect(roles.some(item => item.name === 'iam-call-reader')).toBe(true);
+    });
+
+    it('substitutes :id from an inferred params input', async () => {
       const fortress = makeFortress();
       await fortress.auth.createUser({
         email: 'sessions@example.com',
@@ -89,21 +153,26 @@ describe('fortress.call', () => {
       if (accessToken === null)
         throw new Error('expected accessToken');
 
-      // Rotate so we have a sessions row to revoke. Then call.revokeSession
-      // using params substitution.
       const sessions = await fortress.auth.listSessions(
         (await fortress.auth.verifyToken(accessToken)).sub,
       );
       expect(sessions.length).toBeGreaterThan(0);
       const sessionId = sessions[0].id;
 
-      // revokeSession requires bearer auth. Pass it via options.headers.
       await expect(
-        (fortress.call as any).revokeSession(
+        fortress.call.revokeSession(
           { id: sessionId },
           { headers: { authorization: `Bearer ${accessToken}` } },
         ),
       ).resolves.toEqual({ ok: true });
+    });
+
+    it('calls an exact literal plugin route while ignoring a no-route plugin', async () => {
+      const fortress = makeFortress();
+
+      const result = await fortress.call.literalEcho({ message: 'hello' });
+
+      expect(result).toEqual({ echoed: 'hello' });
     });
   });
 
@@ -116,7 +185,7 @@ describe('fortress.call', () => {
         password: 'password-123456',
       });
 
-      await expect((fortress.call as any).login({
+      await expect(fortress.call.login({
         identifier: 'bad@example.com',
         password: 'wrong-password',
       })).rejects.toBeInstanceOf(FortressError);
@@ -131,7 +200,7 @@ describe('fortress.call', () => {
       });
 
       try {
-        await (fortress.call as any).login({
+        await fortress.call.login({
           identifier: 'coded@example.com',
           password: 'wrong',
         });
@@ -139,9 +208,10 @@ describe('fortress.call', () => {
       }
       catch (err) {
         expect(err).toBeInstanceOf(FortressError);
-        const fe = err as FortressError;
-        expect(fe.code).toBe('UNAUTHORIZED');
-        expect(fe.statusCode).toBe(401);
+        if (!(err instanceof FortressError))
+          throw err;
+        expect(err.code).toBe('UNAUTHORIZED');
+        expect(err.statusCode).toBe(401);
       }
     });
   });
