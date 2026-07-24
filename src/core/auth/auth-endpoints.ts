@@ -1,6 +1,7 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressSchema } from '../json-schema';
 import type { AuthMethod, PendingReason } from '../types';
+import { defineEndpoints } from '../define-endpoints';
 import { arr, bool, defineComponents, email, endpoint, enums, id, int, nullable, nullType, obj, oneOf, record, str, strFormat } from '../schema-builder';
 
 // Sentinel for "no body / query / params" that matches EndpointDefinition's
@@ -376,7 +377,7 @@ export interface AuthEndpointsMap {
  * `fortress.call.*` type inference still resolves because `typeof
  * authEndpoints.login` picks up the exact generics declared on the map.
  */
-export const authEndpoints: AuthEndpointsMap = {
+export const authEndpoints: AuthEndpointsMap = defineEndpoints({
   login: endpoint('POST', '/auth/login')
     .summary('Login with credentials')
     .tags('Auth')
@@ -555,4 +556,4 @@ export const authEndpoints: AuthEndpointsMap = {
     .response(404, 'Target user not found', authRef('ErrorResponse'))
     .handler('impersonate')
     .build() as AuthEndpointsMap['impersonate'],
-};
+});

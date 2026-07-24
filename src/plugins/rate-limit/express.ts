@@ -20,7 +20,7 @@
  * @module
  */
 
-import type { AnyFortress } from '../../core/fortress';
+import type { FortressPluginRuntime } from '../../core/capabilities';
 import { resolveRateLimitMethods } from './plugin-methods';
 
 // Minimal Express-compatible types so users bring their own express version.
@@ -59,7 +59,7 @@ function defaultExtractIp(req: MinimalExpressRequest): string | undefined {
  * rule defined in your `rateLimit({ rules: { ... } })` config.
  */
 export function expressRateLimit(
-  fortress: AnyFortress,
+  fortress: Pick<FortressPluginRuntime, 'plugins'>,
   ruleName: string,
   options: ExpressRateLimitOptions = {},
 ): (req: MinimalExpressRequest, _res: unknown, next: (err?: unknown) => void) => void {

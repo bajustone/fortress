@@ -11,7 +11,7 @@
  * supports `Response`.
  */
 
-import type { Fortress } from '../fortress';
+import type { FortressRuntime } from '../capabilities';
 import type { Subject, TokenClaims } from '../types';
 import type { RouteEntry } from './match';
 import { resolveCookieConfig } from '../config';
@@ -41,7 +41,7 @@ import { extractAccessToken } from './token-extraction';
  * recomputation.
  */
 export function buildHandleRequest(
-  fortress: Fortress,
+  fortress: FortressRuntime,
 ): (request: Request) => Promise<Response> {
   const mountedRoutes = new Set(
     fortress.manifest
@@ -289,7 +289,7 @@ export function buildHandleRequest(
 async function maybeBuildAuthCookies(
   handler: string,
   response: Response,
-  fortress: Fortress,
+  fortress: FortressRuntime,
   _request: Request,
 ): Promise<{ setCookies: string[]; response: Response; length: number }> {
   // Logout succeeds only after dispatch revokes the supplied refresh token;

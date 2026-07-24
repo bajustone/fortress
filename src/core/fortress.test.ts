@@ -1,7 +1,7 @@
 import type { DatabaseAdapter } from '../adapters/database';
 
 import { describe, expect, it } from 'vitest';
-import { createFortress, getPluginMethods } from './fortress';
+import { createFortress } from './fortress';
 import { definePlugin } from './plugin';
 
 // Minimal mock adapter — just enough for createFortress to wire up
@@ -15,7 +15,7 @@ const mockDb: DatabaseAdapter = {
   transaction: async fn => fn(mockDb),
 };
 
-describe('getPluginMethods', () => {
+describe('resolvePlugin', () => {
   const plugin = definePlugin({
     name: 'known',
     methods: () => ({ ping: () => 'pong' as const }),
@@ -27,13 +27,12 @@ describe('getPluginMethods', () => {
   });
 
   it('infers known keys and validates dynamic keys', () => {
-    expect(getPluginMethods(fortress, 'known').ping()).toBe('pong');
+    expect(fortress.plugins.known.ping()).toBe('pong');
     const dynamicName: string = 'known';
-    const dynamic = getPluginMethods(fortress, dynamicName);
-    // @ts-expect-error dynamic names return unknown without a validator
+    const dynamic = fortress.resolvePlugin(dynamicName);
+    // @ts-expect-error dynamic lookups return unknown without a validator
     dynamic.ping();
-    const validated = getPluginMethods(
-      fortress,
+    const validated = fortress.resolvePlugin(
       dynamicName,
       (value): value is { ping: () => 'pong' } => typeof value === 'object'
         && value !== null
@@ -43,8 +42,8 @@ describe('getPluginMethods', () => {
   });
 
   it('rejects missing and invalid dynamic plugins', () => {
-    expect(() => getPluginMethods(fortress, 'missing')).toThrow('Plugin \'missing\' is not registered');
-    expect(() => getPluginMethods(fortress, 'known', (_value): _value is { nope: true } => false))
+    expect(() => fortress.resolvePlugin('missing')).toThrow('Plugin \'missing\' is not registered');
+    expect(() => fortress.resolvePlugin('known', (_value): _value is { nope: true } => false))
       .toThrow('Plugin \'known\' methods failed runtime validation');
   });
 });
@@ -186,7 +185,8 @@ describe('createFortress', () => {
       // methods, so exposing them on fortress.call would create a runtime
       // NOT_FOUND footgun. Use a real plugin with routes+methods for custom
       // typed callables.
-      expect((fortress.call as Record<string, unknown>).getSchool).toBeUndefined();
+      expect((fortress.call as unknown as Record<string, unknown>).getSchool).toBeUndefined();
+      expect((fortress.call.plugins as Record<string, unknown>).__host).toBeUndefined();
     });
 
     it('keeps a top-level host override of a core route metadata-only', async () => {
@@ -316,19 +316,26 @@ describe('createFortress', () => {
       });
     });
 
-    it('rejects duplicate fortress.call keys across plugins', async () => {
+    it('namespaces shared call keys per plugin instead of colliding', async () => {
+      // v1 threw on two plugins reusing a call key. In the namespaced tree
+      // (ADR 0001 §5) each plugin owns its namespace, so shared keys coexist;
+      // duplicate method+path routes and duplicate plugin names are still
+      // rejected elsewhere.
       const { endpoint } = await import('./schema-builder');
       const first = endpoint('GET', '/first').summary('first').security('none').handler('shared').build();
       const second = endpoint('GET', '/second').summary('second').security('none').handler('shared').build();
 
-      expect(() => createFortress({
+      const fortress = createFortress({
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         plugins: [
           { name: 'first-plugin', routes: { shared: first } },
           { name: 'second-plugin', routes: { shared: second } },
         ],
-      })).toThrow(/Duplicate fortress\.call key "shared".*first-plugin.*second-plugin/);
+      });
+      const tree = fortress.call.plugins as Record<string, Record<string, unknown>>;
+      expect(typeof tree['first-plugin'].shared).toBe('function');
+      expect(typeof tree['second-plugin'].shared).toBe('function');
     });
   });
 

@@ -71,19 +71,19 @@ export function acceptsPreciseBuiltCallSurface(database: DatabaseAdapter): void 
     accessToken: string;
     refreshToken: null;
     pluginData?: Record<string, unknown>;
-  }> = fortress.call.login({ identifier: 'user@example.com', password: 'secret' });
+  }> = fortress.call.auth.login({ identifier: 'user@example.com', password: 'secret' });
   const iamResult: Promise<{
     id: string;
     name: string;
     description?: string | null;
     isSystem?: boolean;
-  }> = fortress.call.createRole({
+  }> = fortress.call.iam.createRole({
     name: 'reader',
     permissions: [{ resource: 'articles', action: 'read' }],
   });
-  const paramsResult: Promise<{ ok: boolean }> = fortress.call.revokeSession({ id: 'session-id' });
-  const literalEcho: ExpectedLiteralEcho = fortress.call.declarationLiteralEcho;
-  const literalResult: Promise<{ echoed: string }> = fortress.call.declarationLiteralEcho({ message: 'hello' });
+  const paramsResult: Promise<{ ok: boolean }> = fortress.call.auth.revokeSession({ id: 'session-id' });
+  const literalEcho: ExpectedLiteralEcho = fortress.call.plugins['declaration-literal-route'].declarationLiteralEcho;
+  const literalResult: Promise<{ echoed: string }> = fortress.call.plugins['declaration-literal-route'].declarationLiteralEcho({ message: 'hello' });
 
   void loginResult;
   void iamResult;
@@ -92,31 +92,33 @@ export function acceptsPreciseBuiltCallSurface(database: DatabaseAdapter): void 
   void literalResult;
 
   // @ts-expect-error -- built login input requires password
-  fortress.call.login({ identifier: 'user@example.com' });
+  fortress.call.auth.login({ identifier: 'user@example.com' });
   // @ts-expect-error -- built IAM input rejects invalid permission effects
-  fortress.call.createRole({ name: 'reader', permissions: [{ resource: 'articles', action: 'read', effect: 'MAYBE' }] });
+  fortress.call.iam.createRole({ name: 'reader', permissions: [{ resource: 'articles', action: 'read', effect: 'MAYBE' }] });
   // @ts-expect-error -- built params input requires id
-  fortress.call.revokeSession({});
+  fortress.call.auth.revokeSession({});
   // @ts-expect-error -- built literal route input requires message
-  fortress.call.declarationLiteralEcho({});
-  // @ts-expect-error -- a no-route plugin contributes no callable
-  fortress.call.health({});
+  fortress.call.plugins['declaration-literal-route'].declarationLiteralEcho({});
+  // @ts-expect-error -- a no-route plugin contributes no call namespace
+  void fortress.call.plugins['declaration-no-route'];
   // @ts-expect-error -- unknown call names remain errors in built declarations
-  fortress.call.notRegistered({});
+  fortress.call.plugins['declaration-literal-route'].notRegistered({});
+  // @ts-expect-error -- core callables are namespaced; login is not at the call root
+  fortress.call.login({ identifier: 'user@example.com', password: 'secret' });
   // @ts-expect-error -- built login response must not degrade to any/never
-  const incompatibleLoginResult: Promise<{ status: 'invalid' }> = fortress.call.login({
+  const incompatibleLoginResult: Promise<{ status: 'invalid' }> = fortress.call.auth.login({
     identifier: 'user@example.com',
     password: 'secret',
   });
   // @ts-expect-error -- built IAM response must not degrade to any/never
-  const incompatibleIamResult: Promise<{ id: number }> = fortress.call.createRole({
+  const incompatibleIamResult: Promise<{ id: number }> = fortress.call.iam.createRole({
     name: 'reader',
     permissions: [{ resource: 'articles', action: 'read' }],
   });
   // @ts-expect-error -- built params response must not degrade to any/never
-  const incompatibleParamsResult: Promise<{ ok: string }> = fortress.call.revokeSession({ id: 'session-id' });
+  const incompatibleParamsResult: Promise<{ ok: string }> = fortress.call.auth.revokeSession({ id: 'session-id' });
   // @ts-expect-error -- built literal response must not degrade to any/unknown
-  const incompatibleLiteralResult: Promise<{ echoed: number }> = fortress.call.declarationLiteralEcho({ message: 'hello' });
+  const incompatibleLiteralResult: Promise<{ echoed: number }> = fortress.call.plugins['declaration-literal-route'].declarationLiteralEcho({ message: 'hello' });
   void incompatibleLoginResult;
   void incompatibleIamResult;
   void incompatibleParamsResult;

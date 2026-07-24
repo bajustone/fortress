@@ -17,9 +17,9 @@ import type { InferPlugins } from './plugin-methods-map';
 import { describe, expect, it } from 'vitest';
 import { apiKey } from '../plugins/api-key';
 import { tenancy } from '../plugins/tenancy';
-import { createFortress, getPluginMethods } from './fortress';
+import { createFortress } from './fortress';
 import { definePlugin } from './plugin';
-import { endpoint, obj, str } from './schema-builder';
+import { bool, endpoint, obj, str } from './schema-builder';
 
 describe('plugin type contracts', () => {
   it('compile without runtime setup', () => {
@@ -114,12 +114,51 @@ export function compileAllBuiltIns(plugins: AllBuiltIns): void {
 
 const thirdParty = definePlugin({
   name: 'third-party',
-  methods: () => ({ greet: (name: string) => `Hello ${name}` }),
+  methods: () => ({
+    greet: (name: string) => `Hello ${name}`,
+    // Route handlers are correlated: this method's input/return must match
+    // the endpoint's declared body and success response.
+    thirdPartyGreeting: async (input: { name: string }): Promise<{ greeting: string }> => ({
+      greeting: `Hello ${input.name}`,
+    }),
+  }),
   routes: {
     thirdPartyGreeting: endpoint('POST', '/third-party/greet')
       .body(obj({ name: str() }, 'name'))
       .response(200, 'Greeting', obj({ greeting: str() }, 'greeting'))
       .handler('thirdPartyGreeting')
+      .build(),
+  },
+});
+
+// A route whose handler is not a plugin method is rejected at the
+// definition site (RouteHandlerMissing).
+definePlugin({
+  name: 'missing-handler',
+  methods: () => ({ realMethod: () => 'ok' }),
+  routes: {
+    // @ts-expect-error handler 'ghost' does not name a plugin method
+    ghost: endpoint('POST', '/ghost')
+      .body(obj({ name: str() }, 'name'))
+      .response(200, 'Ok', obj({ ok: str() }, 'ok'))
+      .handler('ghost')
+      .build(),
+  },
+});
+
+// A route whose handler exists but cannot accept the endpoint's input or
+// produce its declared success response is rejected (RouteHandlerIncompatible).
+definePlugin({
+  name: 'incompatible-handler',
+  methods: () => ({
+    echo: async (input: { message: string }): Promise<{ echo: number }> => ({ echo: input.message.length }),
+  }),
+  routes: {
+    // @ts-expect-error method returns { echo: number } but the route declares { echo: string }
+    echo: endpoint('POST', '/echo')
+      .body(obj({ message: str() }, 'message'))
+      .response(200, 'Echo', obj({ echo: str() }, 'echo'))
+      .handler('echo')
       .build(),
   },
 });
@@ -136,26 +175,52 @@ definePlugin({
 
 export function compilePluginContracts(database: DatabaseAdapter): void {
   const thirdFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [thirdParty] as const });
-  const greeting: Promise<{ greeting: string }> = thirdFortress.call.thirdPartyGreeting({ name: 'Ada' });
+  const greeting: Promise<{ greeting: string }> = thirdFortress.call.plugins['third-party'].thirdPartyGreeting({ name: 'Ada' });
   void greeting;
   thirdFortress.plugins['third-party'].greet('Ada');
-  // @ts-expect-error callers cannot select an invented result generic
-  getPluginMethods<{ invented: () => void }>(thirdFortress, 'third-party');
+  // @ts-expect-error callers cannot select an invented result generic without a validator
+  thirdFortress.resolvePlugin<{ invented: () => void }>('third-party');
   // @ts-expect-error unknown third-party method
   thirdFortress.plugins['third-party'].missing();
   // @ts-expect-error unknown third-party route
-  thirdFortress.call.missingRoute({});
+  thirdFortress.call.plugins['third-party'].missingRoute({});
   // @ts-expect-error route input requires name
-  thirdFortress.call.thirdPartyGreeting({});
+  thirdFortress.call.plugins['third-party'].thirdPartyGreeting({});
 
   const apiRoutes = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [apiKey({ routes: true })] as const });
-  apiRoutes.call.createKey({ name: 'key' });
+  apiRoutes.call.plugins['api-key'].createKey({ name: 'key' });
   const apiNoRoutes = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [apiKey()] as const });
-  // @ts-expect-error disabled API-key routes do not contribute calls
-  apiNoRoutes.call.createKey({ name: 'key' });
+  // @ts-expect-error disabled API-key routes contribute no call namespace
+  void apiNoRoutes.call.plugins['api-key'];
   const tenancyRoutesFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [tenancy({ routes: true })] as const });
-  tenancyRoutesFortress.call.createTenant({ name: 'Acme', taxId: 'acme' });
+  tenancyRoutesFortress.call.plugins.tenancy.createTenant({ name: 'Acme', taxId: 'acme' });
   const tenancyNoRoutes = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [tenancy()] as const });
-  // @ts-expect-error disabled tenancy routes do not contribute calls
-  tenancyNoRoutes.call.createTenant({ name: 'Acme', taxId: 'acme' });
+  // @ts-expect-error disabled tenancy routes contribute no call namespace
+  void tenancyNoRoutes.call.plugins.tenancy;
+
+  // Cross-plugin call collisions are impossible by construction: two plugins
+  // may reuse the same route key because each owns its namespace.
+  const first = definePlugin({
+    name: 'first',
+    methods: () => ({ status: async (): Promise<{ ok: boolean }> => ({ ok: true }) }),
+    routes: {
+      status: endpoint('GET', '/first/status')
+        .response(200, 'Status', obj({ ok: bool() }, 'ok'))
+        .handler('status')
+        .build(),
+    },
+  });
+  const second = definePlugin({
+    name: 'second',
+    methods: () => ({ status: async (): Promise<{ ok: boolean }> => ({ ok: false }) }),
+    routes: {
+      status: endpoint('GET', '/second/status')
+        .response(200, 'Status', obj({ ok: bool() }, 'ok'))
+        .handler('status')
+        .build(),
+    },
+  });
+  const both = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [first, second] as const });
+  void both.call.plugins.first.status({});
+  void both.call.plugins.second.status({});
 }

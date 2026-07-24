@@ -2,7 +2,12 @@ import type { DatabaseAdapter } from '../adapters/database';
 import type { ScopeRule } from '../adapters/database/types';
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
-import type { EndpointDefinition } from './endpoint';
+import type {
+  AnyEndpointDefinition,
+  InferEndpointCallInput,
+  InferEndpointHandler,
+  InferEndpointSuccessResponse,
+} from './endpoint';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
@@ -19,7 +24,7 @@ import type {
 
 export type PluginMethod = (...args: any[]) => any;
 export type LegacyPluginMethods = Record<string, PluginMethod>;
-export type PluginRoutes = Readonly<Record<string, EndpointDefinition<any, any, any, any>>>;
+export type PluginRoutes = Readonly<Record<string, AnyEndpointDefinition>>;
 
 export interface FortressPlugin<
   TName extends string = string,
@@ -107,16 +112,116 @@ export type PluginRoutesOf<P> = P extends { routes: infer TRoutes }
   : P extends FortressPlugin<any, any, infer TRoutes> ? TRoutes : undefined;
 
 /**
- * Preserve a plugin definition's literal name, exact methods, and exact routes.
- * This identity helper is the preferred authoring API for third-party plugins.
+ * The JSON-wire projection of a handler's return value: `Date`s serialize
+ * to ISO strings, everything else keeps its shape. Route success-response
+ * schemas describe the wire, so handler returns are compared through this
+ * mapping.
+ */
+export type JsonOf<T> = T extends Date ? string
+  : T extends (...args: any[]) => any ? never
+    : T extends readonly (infer U)[] ? JsonOf<U>[]
+      : T extends object ? { [K in keyof T]: JsonOf<T[K]> }
+        : T;
+
+/**
+ * Does the handler accept the endpoint's flat call input? Dispatch invokes
+ * `methods[handler]({ ...body, ...query, ...pathParams }, ctx)`, so the
+ * method's first parameter must accept the inferred input intersection.
+ * Parameterless methods accept anything by construction.
+ */
+type HandlerInputCompatible<M, E> = M extends (input: infer I, ...rest: any[]) => any
+  ? InferEndpointCallInput<E> extends I ? true : false
+  : false;
+
+/**
+ * Does the handler's resolved return value serialize to the endpoint's
+ * declared success response? Skipped when the endpoint declares no 2xx
+ * schema (`unknown` success).
+ */
+type HandlerReturnCompatible<M, E> = M extends (...args: any[]) => infer R
+  ? unknown extends InferEndpointSuccessResponse<E>
+    ? true
+    : JsonOf<Awaited<R>> extends InferEndpointSuccessResponse<E> ? true : false
+  : false;
+
+/** Compile-time diagnostic: a route names a handler that is not a plugin method. */
+export interface RouteHandlerMissing<THandler extends string> {
+  readonly 'fortress:route-error': `route handler '${THandler}' is not a plugin method — declare it in methods()`;
+}
+
+/** Compile-time diagnostic: a route's handler method does not match the endpoint's I/O. */
+export interface RouteHandlerIncompatible<THandler extends string> {
+  readonly 'fortress:route-error': `plugin method '${THandler}' does not accept this endpoint's input or return its declared success response`;
+}
+
+/**
+ * `true` when an endpoint declares no phantom contract at all — no inferred
+ * input keys and an `unknown` success response. Hand-authored JSON-schema
+ * route literals (not built with `endpoint()`) look like this; with nothing
+ * declared, there is nothing to correlate beyond handler existence.
+ */
+type ContractlessEndpoint<E> = keyof InferEndpointCallInput<E> extends never
+  ? unknown extends InferEndpointSuccessResponse<E> ? true : false
+  : false;
+
+type ValidatePluginRoute<E, TMethods> = E extends AnyEndpointDefinition
+  ? InferEndpointHandler<E> extends infer H extends string
+    ? H extends keyof TMethods
+      ? E extends { meta: { bearerKind: 'oauth' } }
+        ? E
+        : ContractlessEndpoint<E> extends true
+          ? E
+          : [HandlerInputCompatible<TMethods[H], E>, HandlerReturnCompatible<TMethods[H], E>] extends [true, true]
+              ? E
+              : RouteHandlerIncompatible<H>
+      : RouteHandlerMissing<H>
+    : never
+  : never;
+
+/**
+ * Definition-site validation of a plugin's route record against its method
+ * surface. Each route must (1) name an existing plugin method via its
+ * literal `handler`, and (2) — for routes that declare a phantom contract —
+ * be signature-compatible with how dispatch invokes it: the method must
+ * accept the flat call input, and its resolved return must serialize
+ * ({@link JsonOf}) to the declared success response.
+ *
+ * Two exemptions from the I/O check (handler existence is always enforced):
+ * - self-authenticating OAuth protocol routes (`meta.bearerKind: 'oauth'`)
+ *   use bespoke dispatch calling conventions (see `dispatchOAuth`); typing
+ *   that boundary is tracked by issue #27;
+ * - {@link ContractlessEndpoint contractless} routes declare nothing to
+ *   check against. Author routes with `endpoint()` to opt into full I/O
+ *   correlation.
+ */
+export type ValidatePluginRoutes<TRoutes, TMethods> = string extends keyof TRoutes
+  // Dynamically aggregated route records (string index signature) carry no
+  // per-property declarations to check statically; dispatch validates their
+  // handlers at runtime. They also contribute no typed call namespace.
+  ? TRoutes
+  : {
+      [K in keyof TRoutes]: undefined extends TRoutes[K]
+        ? ValidatePluginRoute<Exclude<TRoutes[K], undefined>, TMethods> | undefined
+        : ValidatePluginRoute<TRoutes[K], TMethods>;
+    };
+
+/**
+ * Canonical plugin authoring API. Preserves a plugin definition's literal
+ * name, exact methods, and exact routes, and statically verifies that every
+ * route's `handler` names an existing plugin method whose signature is
+ * compatible with the endpoint's declared input and success response.
+ *
+ * Third-party plugins get the full typed surface from inference alone — no
+ * central registry edit or module augmentation required.
  */
 export function definePlugin<
   const TDefinition,
   const TName extends string,
   TMethods extends object,
   const TRoutes extends PluginRoutes | undefined,
->(definition: TDefinition & FortressPlugin<TName, TMethods, TRoutes>): TDefinition
-  & Omit<FortressPlugin<TName, TMethods, TRoutes>, 'name' | 'methods' | 'routes'>;
+>(definition: TDefinition & FortressPlugin<TName, TMethods, TRoutes>
+  & { routes?: ValidatePluginRoutes<TRoutes, NoInfer<TMethods>> }): TDefinition
+    & Omit<FortressPlugin<TName, TMethods, TRoutes>, 'name' | 'methods' | 'routes'>;
 export function definePlugin(definition: FortressPlugin): FortressPlugin {
   return definition;
 }

@@ -5,7 +5,6 @@
  */
 
 import type { RequestEvent } from '@sveltejs/kit';
-import type { Fortress } from '../core/fortress';
 import type { Subject } from '../core/types';
 import type { FortressLocals, SvelteKitCookieOptions, SvelteKitCookies } from './types';
 import { isActionFailure, isRedirect } from '@sveltejs/kit';
@@ -603,7 +602,7 @@ describe('setAuthCookies', () => {
  */
 describe('createSvelteKitHandle: api-key on user routes', () => {
   async function setupWithApiKey() {
-    const fortress: Fortress<any> = createFortress({
+    const fortress = createFortress({
       jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [apiKey({ prefix: 'test' })],

@@ -192,14 +192,14 @@ export function openapi(config: OpenAPIConfig = {}) {
   const getSpecRoute = {
     method: 'GET',
     path: specPath,
-    handler: 'getSpec',
+    handler: 'getSpec' as const,
     meta: { summary: 'OpenAPI specification', tags: ['OpenAPI'], security: ['none'] },
     responses: { 200: { description: 'OpenAPI 3.1 JSON spec' } },
   } satisfies EndpointDefinition;
   const getUIRoute = {
     method: 'GET',
     path: uiPath,
-    handler: 'getUI',
+    handler: 'getUI' as const,
     meta: { summary: 'API reference (Scalar)', tags: ['OpenAPI'], security: ['none'] },
     responses: { 200: { description: 'Scalar API reference HTML' } },
   } satisfies EndpointDefinition;

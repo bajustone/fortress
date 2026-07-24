@@ -18,7 +18,7 @@
  * ```
  */
 
-import type { AnyFortress } from '../core/fortress';
+import type { FortressHttpRuntime } from '../core/capabilities';
 import type { ExpressMiddleware, ExpressNextFunction, ExpressRequest, ExpressResponse } from './middleware';
 import { buildRouteTable, matchRoute } from '../core/http/match';
 
@@ -42,7 +42,7 @@ export interface MountFortressOptions {
  */
 export function mountFortress(
   app: ExpressApp,
-  fortress: AnyFortress,
+  fortress: FortressHttpRuntime,
   options: MountFortressOptions = {},
 ): void {
   const prefix = options.prefix ?? '';

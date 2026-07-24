@@ -2,6 +2,7 @@ import type { ErrorResponseWire, OkResponseWire } from '../auth/auth-endpoints';
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressSchema } from '../json-schema';
 import { authRef } from '../auth/auth-endpoints';
+import { defineEndpoints } from '../define-endpoints';
 import { arr, bool, defineComponents, endpoint, enums, id, int, nullable, obj, record, recordOf, str } from '../schema-builder';
 
 // Sentinel for "no body / query / params" matching EndpointDefinition's default.
@@ -352,7 +353,7 @@ export interface IamEndpointsMap {
  * The explicit `IamEndpointsMap` annotation keeps JSR fast-check happy
  * without sacrificing per-handler inference for `fortress.call.*`.
  */
-export const iamEndpoints: IamEndpointsMap = {
+export const iamEndpoints: IamEndpointsMap = defineEndpoints({
   // ── Resources ──
 
   getResources: endpoint('GET', '/iam/resources')
@@ -776,4 +777,4 @@ export const iamEndpoints: IamEndpointsMap = {
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
     .handler('unbindPermissionFromServiceAccount')
     .build() as IamEndpointsMap['unbindPermissionFromServiceAccount'],
-};
+});

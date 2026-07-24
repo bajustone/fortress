@@ -16,7 +16,7 @@ import type { socialLogin } from '@bajustone/fortress/plugins/social-login';
 import type { twoFactor } from '@bajustone/fortress/plugins/two-factor';
 import type { webauthn } from '@bajustone/fortress/plugins/webauthn';
 import type { webhook } from '@bajustone/fortress/plugins/webhook';
-import { createFortress, definePlugin, endpoint, getPluginMethods, obj, str } from '@bajustone/fortress';
+import { createFortress, definePlugin, endpoint, obj, str } from '@bajustone/fortress';
 import { apiKey } from '@bajustone/fortress/plugins/api-key';
 import { tenancy } from '@bajustone/fortress/plugins/tenancy';
 
@@ -69,7 +69,14 @@ export type BuiltInUnknownMethodContracts = [
 
 const thirdParty = definePlugin({
   name: 'built-third-party',
-  methods: () => ({ greet: (name: string) => `Hello ${name}` }),
+  methods: () => ({
+    greet: (name: string) => `Hello ${name}`,
+    // Route handlers are correlated: this method's input/return must match
+    // the endpoint's declared body and success response.
+    builtGreeting: async (input: { name: string }): Promise<{ greeting: string }> => ({
+      greeting: `Hello ${input.name}`,
+    }),
+  }),
   routes: {
     builtGreeting: endpoint('POST', '/built/greeting')
       .body(obj({ name: str() }, 'name'))
@@ -86,26 +93,26 @@ export function declarationContract(database: DatabaseAdapter, dynamicName: stri
     plugins: [thirdParty, apiKey({ routes: true }), tenancy()] as const,
   });
   fortress.plugins['built-third-party'].greet('Ada');
-  fortress.call.builtGreeting({ name: 'Ada' });
-  fortress.call.createKey({ name: 'key' });
+  fortress.call.plugins['built-third-party'].builtGreeting({ name: 'Ada' });
+  fortress.call.plugins['api-key'].createKey({ name: 'key' });
   // @ts-expect-error unknown plugin keys are rejected
   void fortress.plugins.missing;
   // @ts-expect-error unknown methods are rejected
   fortress.plugins['built-third-party'].missing();
-  // @ts-expect-error disabled tenancy routes do not contribute calls
-  fortress.call.createTenant({ name: 'Acme', taxId: 'acme' });
+  // @ts-expect-error disabled tenancy routes contribute no call namespace
+  void fortress.call.plugins.tenancy;
 
-  getPluginMethods(fortress, 'built-third-party').greet('Ada');
-  const dynamic = getPluginMethods(fortress, dynamicName);
+  const dynamic = fortress.resolvePlugin(dynamicName);
   // @ts-expect-error dynamic lookup is unknown without validation
   dynamic.greet('Ada');
-  getPluginMethods(
-    fortress,
+  fortress.resolvePlugin(
     dynamicName,
     (value): value is { greet: (name: string) => string } => typeof value === 'object'
       && value !== null
       && typeof Reflect.get(value, 'greet') === 'function',
   ).greet('Ada');
+  // @ts-expect-error a caller-supplied generic without a validator must not compile
+  fortress.resolvePlugin<{ greet: (name: string) => string }>(dynamicName);
 }
 
 declare const _legacy: FortressPlugin<'legacy-built'>;

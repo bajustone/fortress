@@ -25,6 +25,7 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
+import { authRef } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
 import { definePlugin } from '../../core/plugin';
 import { bool, endpoint, id, obj, record, str } from '../../core/schema-builder';
@@ -140,7 +141,7 @@ const webauthnRoutes = {
     .security('bearer')
     .body(obj({}))
     .response(200, 'Registration options', obj({
-      options: record('PublicKeyCredentialCreationOptions JSON'),
+      options: record<PublicKeyCredentialCreationOptionsJSON>('PublicKeyCredentialCreationOptions JSON'),
     }, 'options'))
     .response(400, 'Bad request')
     .response(401, 'Not authenticated')
@@ -154,7 +155,7 @@ const webauthnRoutes = {
     .tags('WebAuthn')
     .security('bearer')
     .body(obj({
-      response: record('RegistrationResponseJSON from navigator.credentials.create()'),
+      response: record<RegistrationResponseJSON>('RegistrationResponseJSON from navigator.credentials.create()'),
     }, 'response'))
     .response(200, 'Registration verified', obj({
       verified: bool('Whether registration was successful'),
@@ -173,7 +174,7 @@ const webauthnRoutes = {
     .security('none')
     .body(obj({ userId: id('Optional user ID') }))
     .response(200, 'Authentication options', obj({
-      options: record('PublicKeyCredentialRequestOptions JSON'),
+      options: record<PublicKeyCredentialRequestOptionsJSON>('PublicKeyCredentialRequestOptions JSON'),
     }, 'options'))
     .handler('generateAuthenticationOptions')
     .build(),
@@ -184,14 +185,13 @@ const webauthnRoutes = {
     .tags('WebAuthn')
     .security('none')
     .body(obj({
-      response: record('AuthenticationResponseJSON from navigator.credentials.get()'),
+      response: record<AuthenticationResponseJSON>('AuthenticationResponseJSON from navigator.credentials.get()'),
     }, 'response'))
-    .response(200, 'Authentication verified', obj({
-      verified: bool('Whether authentication was successful'),
-      userId: id('Authenticated user ID'),
-      accessToken: str('JWT access token (if passwordless)'),
-      refreshToken: str('Refresh token (if passwordless)'),
-    }, 'verified', 'userId'))
+    // The handler returns the standard auth result from
+    // `auth.completePluginAuth` — the same wire shape as /auth/login —
+    // not a bespoke {verified, userId} envelope. definePlugin's handler
+    // correlation rejects any drift from the actual return type.
+    .response(200, 'Authentication verified', authRef('AuthResult'))
     .response(401, 'Authentication failed')
     .handler('verifyAuthentication')
     .build(),

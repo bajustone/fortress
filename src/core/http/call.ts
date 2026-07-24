@@ -42,8 +42,8 @@
  * middleware chain.
  */
 
+import type { FortressHttpRuntime } from '../capabilities';
 import type { EndpointDefinition } from '../endpoint';
-import type { AnyFortress } from '../fortress';
 import { Errors } from '../errors';
 
 /** Optional per-call options. */
@@ -68,12 +68,12 @@ function schemaKeys(schema: unknown): Set<string> {
  * `Request` and returns the parsed JSON body on success.
  *
  * The returned type is intentionally loose (`Record<string, ...>`). The
- * strong typing happens at the call site via the `TypedCall` helper in
- * `src/core/fortress.ts`, which layers a mapped type over the runtime
- * callable map to expose per-handler inferred I/O.
+ * strong typing happens at the call site via the `CallTree`/`CallClient`
+ * mapped types in `src/core/call-tree.ts`, which `createFortress` layers
+ * over the runtime callable maps to expose per-handler inferred I/O.
  */
 export function buildCall(
-  fortress: AnyFortress,
+  fortress: Pick<FortressHttpRuntime, 'handleRequest'>,
   endpoints: Record<string, EndpointDefinition>,
 ): Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> {
   const out: Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> = {};

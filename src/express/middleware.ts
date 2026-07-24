@@ -1,5 +1,5 @@
 import type { DatabaseAdapter } from '../adapters/database';
-import type { AnyFortress } from '../core/fortress';
+import type { FortressAuthRuntime, FortressObservabilityRuntime, FortressPluginRuntime } from '../core/capabilities';
 import type { PluginRequestContext } from '../core/http/plugin-middleware';
 import type { MiddlewareDefinition, PluginContext } from '../core/plugin';
 import type { Subject, TokenClaims } from '../core/types';
@@ -107,7 +107,7 @@ export interface RbacOptions {
  * second). Populates `fortressSubject`, `fortressUserId` (USER alias),
  * `fortressClaims`, `fortressDb`, and `fortressGetScopedDb` on the request.
  */
-export function createAuthMiddleware(fortress: AnyFortress): ExpressMiddleware {
+export function createAuthMiddleware(fortress: Pick<FortressAuthRuntime, 'resolvePrincipal' | 'config'>): ExpressMiddleware {
   return async (req, _res, next) => {
     try {
       // Adapt the Express request into a minimal web Request so
@@ -223,7 +223,7 @@ export function createCsrfMiddleware(config?: CsrfConfig): ExpressMiddleware {
  * plugin paths) are protected automatically inside `fortress.handleRequest`
  * — this middleware only handles routes the caller registered themselves.
  */
-export function createRbacMiddleware(fortress: AnyFortress, options?: RbacOptions): ExpressMiddleware {
+export function createRbacMiddleware(fortress: Pick<FortressAuthRuntime, 'iam'>, options?: RbacOptions): ExpressMiddleware {
   // Express's default router is case-insensitive and ignores one trailing slash.
   // Canonicalize configured paths once so exact and parameterized lookups share
   // those semantics with the request path below.
@@ -301,7 +301,7 @@ export function createRbacMiddleware(fortress: AnyFortress, options?: RbacOption
  * {@link FortressLogger}; otherwise they're silently swallowed (matching
  * the silent-by-default posture of the library).
  */
-export function createErrorHandler(fortress?: AnyFortress): (err: unknown, req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => void {
+export function createErrorHandler(fortress?: Pick<FortressObservabilityRuntime, 'logger'>): (err: unknown, req: ExpressRequest, res: ExpressResponse, next: ExpressNextFunction) => void {
   return (err, _req, res, _next) => {
     if (err instanceof FortressError) {
       if (err.code === 'RATE_LIMITED' && err.retryAfter) {
@@ -328,7 +328,7 @@ export function createErrorHandler(fortress?: AnyFortress): (err: unknown, req: 
  * middleware slots manually.
  */
 export function createExpressPluginMiddleware(
-  fortress: AnyFortress,
+  fortress: Pick<FortressPluginRuntime, 'config'>,
   position: MiddlewareDefinition['position'],
 ): ExpressMiddleware {
   const plugins = fortress.config.plugins ?? [];
@@ -403,7 +403,7 @@ export interface ExpressAdapterOptions extends RbacOptions {
  * handler, and the three plugin middleware slots (`beforeAuth`, `afterAuth`,
  * `afterRbac`). Mount each in the corresponding place in your Express app.
  */
-export function createExpressMiddleware(fortress: AnyFortress, options?: ExpressAdapterOptions): {
+export function createExpressMiddleware(fortress: FortressAuthRuntime & FortressPluginRuntime & FortressObservabilityRuntime, options?: ExpressAdapterOptions): {
   authMiddleware: ExpressMiddleware;
   csrfMiddleware: ExpressMiddleware;
   rbacMiddleware: ExpressMiddleware;

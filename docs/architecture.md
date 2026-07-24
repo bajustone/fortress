@@ -21,10 +21,10 @@ The pipeline runs in this order:
 9. endpoint dispatch
 10. auth-cookie serialization
 
-Use the same pipeline without an HTTP server:
+Use the same pipeline without an HTTP server through the namespaced call tree — `call.auth.*` and `call.iam.*` for core endpoints, `call.plugins.<name>.*` for plugin routes:
 
 ```typescript
-const result = await fortress.call.login({
+const result = await fortress.call.auth.login({
   identifier: 'alice@example.com',
   password: 'correct-horse-battery-staple',
 });
@@ -70,7 +70,7 @@ Startup rejects:
 - JWT keys shorter than 32 UTF-8 bytes;
 - non-positive `jwt.session` values;
 - duplicate plugin names;
-- duplicate routes or call keys between plugins;
+- duplicate routes between plugins;
 - `security: ['none']` combined with a permission;
 - use of the reserved `__host` plugin name when top-level `routes` are set.
 
@@ -103,7 +103,7 @@ const fortress = createFortress({
 });
 ```
 
-Top-level routes appear in `fortress.endpoints`, the manifest, OpenAPI, and protection helpers. The host router still dispatches them. They do not create `fortress.call` methods.
+Top-level routes appear in `fortress.endpoints`, the manifest, OpenAPI, and protection helpers. The host router still dispatches them. They do not appear in the `fortress.call` tree.
 
 To create a mounted and callable endpoint, define a plugin with matching `routes` and `methods` keys.
 
@@ -145,15 +145,16 @@ const fortress = createFortress({
   plugins: [greetings()] as const,
 });
 
-await fortress.call.createGreeting(
+await fortress.call.plugins.greetings.createGreeting(
   { name: 'Alice' },
   { headers: { authorization: `Bearer ${token}` } },
 );
 ```
 
-The route record key, endpoint handler, and method key must match. `definePlugin`
-preserves the literal name, method signatures, and endpoint schema generics without
-registry edits. For a widened legacy factory, `PluginMethodsMap` module augmentation
+The route record key, endpoint handler, and method key must match. Each plugin's
+callables live in their own `fortress.call.plugins.<name>` namespace, so call keys
+never collide across plugins. `definePlugin` preserves the literal name, method
+signatures, and endpoint schema generics without registry edits. For a widened legacy factory, `PluginMethodsMap` module augmentation
 remains available as a compatibility bridge; new plugins should prefer `definePlugin`.
 
 ## Add lifecycle hooks

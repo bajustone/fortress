@@ -1819,7 +1819,7 @@ export function oauth(config: OAuthConfig = {}) {
             handleAuthorizeRequest: {
               method: 'GET' as const,
               path: '/oauth/authorize',
-              handler: 'handleAuthorizeRequest',
+              handler: 'handleAuthorizeRequest' as const,
               meta: {
                 summary: 'Start an OAuth authorization-code flow',
                 tags: ['OAuth'],
@@ -1854,7 +1854,7 @@ export function oauth(config: OAuthConfig = {}) {
             handleGetFlow: {
               method: 'GET' as const,
               path: '/oauth/flows/:flowId',
-              handler: 'handleGetFlow',
+              handler: 'handleGetFlow' as const,
               meta: {
                 summary: 'Fetch pending OAuth flow metadata',
                 tags: ['OAuth'],
@@ -1887,7 +1887,7 @@ export function oauth(config: OAuthConfig = {}) {
             handleApproveFlow: {
               method: 'POST' as const,
               path: '/oauth/flows/:flowId/approve',
-              handler: 'handleApproveFlow',
+              handler: 'handleApproveFlow' as const,
               meta: {
                 summary: 'Approve a pending OAuth flow',
                 tags: ['OAuth'],
@@ -1908,7 +1908,7 @@ export function oauth(config: OAuthConfig = {}) {
             handleDenyFlow: {
               method: 'POST' as const,
               path: '/oauth/flows/:flowId/deny',
-              handler: 'handleDenyFlow',
+              handler: 'handleDenyFlow' as const,
               meta: {
                 summary: 'Deny a pending OAuth flow',
                 tags: ['OAuth'],
@@ -1931,7 +1931,7 @@ export function oauth(config: OAuthConfig = {}) {
       handleTokenRequest: {
         method: 'POST',
         path: '/oauth/token',
-        handler: 'handleTokenRequest',
+        handler: 'handleTokenRequest' as const,
         meta: { summary: 'Exchange credentials for tokens', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: {
           body: {
@@ -1958,7 +1958,7 @@ export function oauth(config: OAuthConfig = {}) {
       handleIntrospectRequest: {
         method: 'POST',
         path: '/oauth/introspect',
-        handler: 'handleIntrospectRequest',
+        handler: 'handleIntrospectRequest' as const,
         meta: { summary: 'Introspect a token (RFC 7662)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: {
@@ -1969,7 +1969,7 @@ export function oauth(config: OAuthConfig = {}) {
       handleRevokeRequest: {
         method: 'POST',
         path: '/oauth/revoke',
-        handler: 'handleRevokeRequest',
+        handler: 'handleRevokeRequest' as const,
         meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: { 200: { description: 'Token revoked' } },
@@ -1977,7 +1977,7 @@ export function oauth(config: OAuthConfig = {}) {
       handleUserInfoRequest: {
         method: 'GET',
         path: '/oauth/userinfo',
-        handler: 'handleUserInfoRequest',
+        handler: 'handleUserInfoRequest' as const,
         meta: { summary: 'Get user info (OIDC Core §5.3)', tags: ['OAuth'], security: ['bearer'], bearerKind: 'oauth' as const },
         responses: {
           200: {
@@ -2002,14 +2002,14 @@ export function oauth(config: OAuthConfig = {}) {
       handleDiscovery: {
         method: 'GET',
         path: '/oauth/.well-known/openid-configuration',
-        handler: 'handleDiscovery',
+        handler: 'handleDiscovery' as const,
         meta: { summary: 'OIDC discovery document', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         responses: { 200: { description: 'OIDC configuration', schema: { type: 'object', additionalProperties: true } } },
       },
       handleJwksRequest: {
         method: 'GET',
         path: '/oauth/.well-known/jwks.json',
-        handler: 'handleJwksRequest',
+        handler: 'handleJwksRequest' as const,
         meta: { summary: 'JSON Web Key Set (RFC 7517)', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         responses: {
           200: {

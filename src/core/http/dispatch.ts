@@ -19,8 +19,8 @@
  */
 
 import type { ClientAuth } from '../../plugins/oauth';
+import type { FortressRuntime } from '../capabilities';
 import type { EndpointDefinition } from '../endpoint';
-import type { Fortress } from '../fortress';
 import type { PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
 import type { RequestMeta, Subject, TokenClaims } from '../types';
 import { Errors, FortressError } from '../errors';
@@ -50,7 +50,7 @@ export type DispatchResult = Response;
  * verification, validation, and {@link enforceFortressPermission}.
  */
 export async function dispatchEndpoint(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   request: Request,
   endpoint: EndpointDefinition,
   pathParams: Record<string, string>,
@@ -148,7 +148,7 @@ function parseBearerToken(header: string | null): string | undefined {
 // ── Plugin dispatch (non-oauth) ─────────────────────────────────────
 
 /** Find the plugin (if any) that owns the given endpoint. */
-function findOwningPlugin(fortress: Fortress, endpoint: EndpointDefinition): RuntimeFortressPlugin | undefined {
+function findOwningPlugin(fortress: FortressRuntime, endpoint: EndpointDefinition): RuntimeFortressPlugin | undefined {
   const plugins = fortress.config.plugins ?? [];
   for (const plugin of plugins) {
     if (!plugin.routes)
@@ -162,7 +162,7 @@ function findOwningPlugin(fortress: Fortress, endpoint: EndpointDefinition): Run
 }
 
 async function dispatchPlugin(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   plugin: RuntimeFortressPlugin,
   endpoint: EndpointDefinition,
   body: Record<string, unknown>,
@@ -208,7 +208,7 @@ async function dispatchPlugin(
 // ── OAuth special case ──────────────────────────────────────────────
 
 async function dispatchOAuth(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   request: Request,
   endpoint: EndpointDefinition,
   auth: DispatchAuth,
@@ -370,7 +370,7 @@ function consentFlowIdFromUrl(url: string): string {
 // ── Auth / IAM hardcoded dispatch ────────────────────────────────────
 
 async function invokeAuthHandler(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   handler: string,
   body: Record<string, unknown>,
   params: Record<string, string>,
@@ -442,7 +442,7 @@ async function invokeAuthHandler(
 }
 
 async function invokeIamHandler(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   handler: string,
   body: Record<string, unknown>,
   params: Record<string, string>,

@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from 'hono';
-import type { AnyFortress } from '../../core/fortress';
+import type { FortressPluginRuntime } from '../../core/capabilities';
 import type { PluginRequestContext } from '../../core/http/plugin-middleware';
 import type { MiddlewareDefinition } from '../../core/plugin';
 import type { FortressEnv } from './auth';
@@ -13,7 +13,7 @@ import { executePluginMiddleware } from '../../core/plugin-runner';
  * fields under core, Hono, and Express.
  */
 export function createPluginMiddleware(
-  fortress: AnyFortress,
+  fortress: Pick<FortressPluginRuntime, 'config'>,
   position: MiddlewareDefinition['position'],
 ): MiddlewareHandler<FortressEnv> {
   const plugins = fortress.config.plugins ?? [];

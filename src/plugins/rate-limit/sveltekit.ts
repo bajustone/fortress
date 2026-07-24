@@ -22,7 +22,7 @@
  * @module
  */
 
-import type { AnyFortress } from '../../core/fortress';
+import type { FortressPluginRuntime } from '../../core/capabilities';
 import { resolveRateLimitMethods } from './plugin-methods';
 
 export interface SvelteKitRateLimitEvent {
@@ -43,7 +43,7 @@ function ipFromRequest(request: Request): string | undefined {
  * on exceed.
  */
 export async function svelteKitRateLimit(
-  fortress: AnyFortress,
+  fortress: Pick<FortressPluginRuntime, 'plugins'>,
   ruleName: string,
   event: SvelteKitRateLimitEvent,
   options: { keyByUser?: boolean } = {},

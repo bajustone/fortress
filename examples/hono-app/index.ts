@@ -972,11 +972,13 @@ async function seed(): Promise<void> {
   );
 
   // ── Typed in-process client ─────────────────────────────────────────
-  // `fortress.call.*` is the typed client surface. Each handler is
-  // inferred from its EndpointDefinition: input shape matches the body/
-  // query/params schemas, output matches the 2xx response schema.
+  // `fortress.call` is the namespaced typed client surface: `call.auth.*`
+  // and `call.iam.*` for core endpoints, `call.plugins.<name>.*` for plugin
+  // routes. Each callable is inferred from its EndpointDefinition: input
+  // shape matches the body/query/params schemas, output matches the 2xx
+  // response schema.
   //
-  //   const { accessToken, user } = await fortress.call.login({
+  //   const { accessToken, user } = await fortress.call.auth.login({
   //     identifier: 'admin@example.com',
   //     password: 'Password123!',
   //   });

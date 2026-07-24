@@ -1,8 +1,17 @@
 import type { DatabaseAdapter } from './adapters/database';
-import type { AnyFortress, Fortress, TypedCall } from './core/fortress';
+import type {
+  FortressAuthRuntime,
+  FortressHttpRuntime,
+  FortressManifestRuntime,
+  FortressMigrationRuntime,
+  FortressObservabilityRuntime,
+  FortressPluginRuntime,
+  FortressProtectRuntime,
+  FortressRuntime,
+} from './core/capabilities';
+import type { Fortress } from './core/fortress';
 import type { CallOptions } from './core/http/call';
 import type { FortressPlugin } from './core/plugin';
-import type { InferPlugins } from './core/plugin-methods-map';
 import type { ApiKeyMethods } from './plugins/api-key';
 import type { SvelteKitRequestEvent } from './sveltekit/types';
 import { Hono } from 'hono';
@@ -28,7 +37,6 @@ import {
   createFortress,
   detectRouteManifestDrift,
   endpoint,
-  getPluginMethods,
   obj,
   protect,
   resolveProtectedEndpoint,
@@ -75,18 +83,25 @@ function acceptsBrandedPluginAtEverySourceBoundary(
     plugins: [brandedPlugin],
   });
 
-  // The consumer boundary erases only the receiving API's view. The created
-  // instance keeps the plugin brand and precise built-in method surface.
-  expectTypeOf(fortress).toMatchTypeOf<AnyFortress>();
+  // The bare `Fortress` type is the erased supertype of every concrete
+  // instantiation; the created instance keeps the plugin brand and precise
+  // built-in method surface (ADR 0001 §1).
+  expectTypeOf(fortress).toMatchTypeOf<Fortress>();
   expectTypeOf(fortress.plugins['api-key']).toEqualTypeOf<ApiKeyMethods>();
-  expectTypeOf(fortress).toEqualTypeOf<
-    Fortress<InferPlugins<[typeof brandedPlugin]>, TypedCall<[typeof brandedPlugin]>>
-  >();
+  expectTypeOf(fortress).toEqualTypeOf<Fortress<readonly [typeof brandedPlugin]>>();
 
-  // Exercise a concrete plugin call without deriving the expected type from
-  // the instance itself. Inline routes retain their generics; built-in plugin
-  // factories currently erase conditional route records (#10/#11), so this
-  // intentionally does not claim api-key route inference is fixed here.
+  // Dynamic plugin access is `unknown` unless a runtime validator proves the
+  // surface; caller-selected generic assertions are not expressible.
+  expectTypeOf(fortress.resolvePlugin('api-key')).toBeUnknown();
+  const isApiKeyMethods = (value: unknown): value is ApiKeyMethods =>
+    typeof value === 'object' && value !== null;
+  expectTypeOf(fortress.resolvePlugin('api-key', isApiKeyMethods)).toEqualTypeOf<ApiKeyMethods>();
+  // @ts-expect-error -- a bare generic assertion without a validator must not compile
+  fortress.resolvePlugin<ApiKeyMethods>('api-key');
+
+  // Exercise a concrete plugin call through the namespaced tree without
+  // deriving the expected type from the instance itself. Ownership is
+  // explicit: plugin callables live under `call.plugins.<name>` (ADR 0001 §5).
   const callPlugin = {
     name: 'call-fixture',
     routes: {
@@ -96,18 +111,24 @@ function acceptsBrandedPluginAtEverySourceBoundary(
         .handler('fixtureEcho')
         .build(),
     },
+    methods: () => ({
+      fixtureEcho: async (input: { message: string }): Promise<{ echo: string }> => ({ echo: input.message }),
+    }),
   } as const satisfies FortressPlugin;
   const callFortress = createFortress({
     database,
     jwt: { key: 'x'.repeat(32) },
     plugins: [callPlugin] as const,
   });
-  expectTypeOf(callFortress.call.fixtureEcho).toEqualTypeOf<ExpectedFixtureCall>();
+  expectTypeOf(callFortress.call.plugins['call-fixture'].fixtureEcho).toEqualTypeOf<ExpectedFixtureCall>();
   expectTypeOf(
-    callFortress.call.fixtureEcho({ message: 'hello' }),
+    callFortress.call.plugins['call-fixture'].fixtureEcho({ message: 'hello' }),
   ).toEqualTypeOf<Promise<{ echo: string }>>();
   // @ts-expect-error -- fixtureEcho's concretely inferred input requires message
-  callFortress.call.fixtureEcho({});
+  callFortress.call.plugins['call-fixture'].fixtureEcho({});
+  // Core callables are namespaced too; there is no flat top-level surface.
+  // @ts-expect-error -- login lives under call.auth, not at the call root
+  void callFortress.call.login;
 
   const precisePlugins = fortress.plugins;
   const preciseCall = fortress.call;
@@ -116,21 +137,22 @@ function acceptsBrandedPluginAtEverySourceBoundary(
   // @ts-expect-error -- the created call surface is constructed once and readonly
   fortress.call = preciseCall;
 
-  const erased: AnyFortress = fortress;
+  const erased: Fortress = fortress;
   // @ts-expect-error -- an erased consumer must not replace a precise plugin surface
   erased.plugins = {};
   // @ts-expect-error -- an erased consumer must not replace a precise call surface
-  erased.call = {};
+  erased.call = preciseCall;
 
-  // A consumer can alias the erased facade back to its underlying generic
-  // interface, but those generic slots must remain readonly there as well.
-  const alias: Fortress<unknown, unknown> = erased;
-  const aliasedPlugins = alias.plugins;
-  const aliasedCall = alias.call;
-  // @ts-expect-error -- aliasing cannot recover a writable plugin slot
-  alias.plugins = aliasedPlugins;
-  // @ts-expect-error -- aliasing cannot recover a writable call slot
-  alias.call = aliasedCall;
+  // Every concrete instance satisfies every runtime capability (ADR 0001 §4).
+  const httpRuntime: FortressHttpRuntime = fortress;
+  const authRuntime: FortressAuthRuntime = fortress;
+  const pluginRuntime: FortressPluginRuntime = fortress;
+  const manifestRuntime: FortressManifestRuntime = fortress;
+  const migrationRuntime: FortressMigrationRuntime = fortress;
+  const observabilityRuntime: FortressObservabilityRuntime = fortress;
+  const protectRuntime: FortressProtectRuntime = fortress;
+  const fullRuntime: FortressRuntime = fortress;
+  void [httpRuntime, authRuntime, pluginRuntime, manifestRuntime, migrationRuntime, observabilityRuntime, protectRuntime, fullRuntime];
 
   const app = new Hono();
   mountHonoFortress(app, fortress);
@@ -164,7 +186,6 @@ function acceptsBrandedPluginAtEverySourceBoundary(
   buildCall(fortress, {});
   buildRouteManifest(fortress);
   detectRouteManifestDrift(fortress);
-  getPluginMethods(fortress, 'api-key');
 
   checkRouteManifestDrift(fortress);
   checkPublicRoutes(fortress);

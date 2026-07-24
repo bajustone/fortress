@@ -1,4 +1,3 @@
-import type { Fortress } from '../../core/fortress';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
@@ -7,7 +6,6 @@ import { emailVerification } from './index';
 const SECRET = 'email-verify-test-secret-32chars!';
 
 describe('email-verification plugin', () => {
-  let fortress: Fortress<any>;
   let capturedToken: string | null;
   let capturedEmail: string | null;
   const onSend = vi.fn(async (email: string, token: string, _userId: string) => {
@@ -15,16 +13,22 @@ describe('email-verification plugin', () => {
     capturedToken = token;
   });
 
+  function makeFortress() {
+    return createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [emailVerification({ onSendVerification: onSend })],
+    });
+  }
+
+  let fortress: ReturnType<typeof makeFortress>;
+
   beforeEach(() => {
     capturedToken = null;
     capturedEmail = null;
     onSend.mockClear();
 
-    fortress = createFortress({
-      jwt: { key: SECRET },
-      database: createTestAdapter(),
-      plugins: [emailVerification({ onSendVerification: onSend })],
-    });
+    fortress = makeFortress();
   });
 
   describe('afterRegister hook', () => {
@@ -49,7 +53,7 @@ describe('email-verification plugin', () => {
         password: 'password-123456',
       });
 
-      const result = await (fortress.plugins['email-verification'].verify as (token: string) => Promise<{ userId: string; email: string }>)(capturedToken!);
+      const result = await fortress.plugins['email-verification'].verify(capturedToken!);
 
       expect(result.email).toBe('alice@example.com');
       expect(result.userId).toBeDefined();
@@ -62,14 +66,14 @@ describe('email-verification plugin', () => {
         password: 'password-123456',
       });
 
-      const verify = fortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
+      const verify = fortress.plugins['email-verification'].verify;
       await verify(capturedToken!);
 
       await expect(verify(capturedToken!)).rejects.toThrow('Invalid or expired verification token');
     });
 
     it('rejects invalid token', async () => {
-      const verify = fortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
+      const verify = fortress.plugins['email-verification'].verify;
       await expect(verify('bogus-token')).rejects.toThrow('Invalid or expired verification token');
     });
 
@@ -87,7 +91,7 @@ describe('email-verification plugin', () => {
         password: 'password-123456',
       });
 
-      const verify = shortFortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
+      const verify = shortFortress.plugins['email-verification'].verify;
       await expect(verify(capturedToken!)).rejects.toThrow('Invalid or expired verification token');
     });
   });
@@ -107,10 +111,7 @@ describe('email-verification plugin', () => {
       if (result.status !== 'pending' || !result.pending)
         throw new Error('Expected email-verification continuation');
 
-      const complete = fortress.plugins['email-verification'].completeVerification as (
-        continuationToken: string,
-        verificationToken: string,
-      ) => Promise<unknown>;
+      const complete = fortress.plugins['email-verification'].completeVerification;
       await expect(complete(result.pending.continuationToken, capturedToken!)).resolves.toMatchObject({
         status: 'success',
       });
@@ -124,7 +125,7 @@ describe('email-verification plugin', () => {
       });
 
       // Verify email first
-      const verify = fortress.plugins['email-verification'].verify as (token: string) => Promise<unknown>;
+      const verify = fortress.plugins['email-verification'].verify;
       await verify(capturedToken!);
 
       // Login should succeed
@@ -145,7 +146,7 @@ describe('email-verification plugin', () => {
       });
 
       onSend.mockClear();
-      const sendVerification = fortress.plugins['email-verification'].sendVerification as (userId: string) => Promise<{ sent: true }>;
+      const sendVerification = fortress.plugins['email-verification'].sendVerification;
       const result = await sendVerification(user.id);
 
       expect(result).toEqual({ sent: true });

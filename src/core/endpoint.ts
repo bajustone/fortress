@@ -69,15 +69,18 @@ export interface EndpointResponse {
 /**
  * Declarative description of one HTTP endpoint.
  *
- * The four generic parameters are **phantom types** — they're populated by
- * the fluent {@link EndpointBuilder} as schemas are declared via `.body()`,
- * `.query()`, `.params()`, and `.response()`, and then extracted at the call
- * site by the `InferEndpoint*` helpers (and by the typed `fortress.call.*`
- * proxy). None of them exist at runtime.
+ * The generic parameters are **phantom types** — they're populated by the
+ * fluent {@link EndpointBuilder} as schemas are declared via `.body()`,
+ * `.query()`, `.params()`, `.response()`, and `.handler()`, and then
+ * extracted at the call site by the `InferEndpoint*` helpers (and by the
+ * typed `fortress.call.*` tree). None of them exist at runtime.
  *
- * The defaults are `{}` (empty object), not `unknown`, so that the
+ * The input defaults are `{}` (empty object), not `unknown`, so that the
  * intersection-based `InferEndpointCallInput` collapses cleanly for
- * endpoints that only declare one of the three input slots.
+ * endpoints that only declare one of the three input slots. `THandler`
+ * captures the literal handler name so `definePlugin` can statically check
+ * that every route dispatches to an existing, signature-compatible plugin
+ * method.
  */
 export interface EndpointDefinition<
   // eslint-disable-next-line ts/no-empty-object-type -- default must be {} so the input intersection collapses
@@ -88,10 +91,11 @@ export interface EndpointDefinition<
   TParams = {},
   // eslint-disable-next-line ts/no-empty-object-type
   TResponses extends Record<number, unknown> = {},
+  THandler extends string = string,
 > {
   method: HttpMethod;
   path: string;
-  handler: string;
+  handler: THandler;
   meta?: EndpointMeta;
   input?: EndpointInput;
   responses?: Record<number, EndpointResponse>;
@@ -104,16 +108,21 @@ export interface EndpointDefinition<
   };
 }
 
+/** Any endpoint definition, regardless of its inferred generics. */
+export type AnyEndpointDefinition = EndpointDefinition<any, any, any, any, any>;
+
 // ── Endpoint type inference helpers ────────────────────────────────
 
 /** Extract the request-body type from an {@link EndpointDefinition}. */
-export type InferEndpointBody<E> = E extends EndpointDefinition<infer B, any, any, any> ? B : never;
+export type InferEndpointBody<E> = E extends EndpointDefinition<infer B, any, any, any, any> ? B : never;
 /** Extract the query-string type from an {@link EndpointDefinition}. */
-export type InferEndpointQuery<E> = E extends EndpointDefinition<any, infer Q, any, any> ? Q : never;
+export type InferEndpointQuery<E> = E extends EndpointDefinition<any, infer Q, any, any, any> ? Q : never;
 /** Extract the path-params type from an {@link EndpointDefinition}. */
-export type InferEndpointParams<E> = E extends EndpointDefinition<any, any, infer P, any> ? P : never;
+export type InferEndpointParams<E> = E extends EndpointDefinition<any, any, infer P, any, any> ? P : never;
 /** Extract the full `Record<status, body>` response map from an {@link EndpointDefinition}. */
-export type InferEndpointResponses<E> = E extends EndpointDefinition<any, any, any, infer R> ? R : never;
+export type InferEndpointResponses<E> = E extends EndpointDefinition<any, any, any, infer R, any> ? R : never;
+/** Extract the literal handler name from an {@link EndpointDefinition}. */
+export type InferEndpointHandler<E> = E extends EndpointDefinition<any, any, any, any, infer H> ? H : never;
 
 /**
  * Extract the success-response body from an {@link EndpointDefinition}.

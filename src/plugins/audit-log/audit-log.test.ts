@@ -1,5 +1,4 @@
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { Fortress } from '../../core/fortress';
 import type { AuditLogEntry, AuditLogMethods, AuditLogQueryOptions, ChainVerificationResult } from './index';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
@@ -12,16 +11,20 @@ const SECRET = 'audit-log-test-secret-32chars!!x';
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 
 describe('audit-log plugin', () => {
-  let fortress: Fortress<any>;
-  let getAuditLog: (options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>;
-
-  beforeEach(() => {
-    fortress = createFortress({
+  function makeFortress() {
+    return createFortress({
       jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [auditLog()],
     });
-    getAuditLog = fortress.plugins['audit-log'].getAuditLog as typeof getAuditLog;
+  }
+
+  let fortress: ReturnType<typeof makeFortress>;
+  let getAuditLog: (options?: AuditLogQueryOptions) => Promise<AuditLogEntry[]>;
+
+  beforeEach(() => {
+    fortress = makeFortress();
+    getAuditLog = fortress.plugins['audit-log'].getAuditLog;
   });
 
   describe('afterLogin hook', () => {
@@ -535,7 +538,7 @@ describe('audit-log plugin', () => {
 
   describe('logCustomEvent method', () => {
     it('logs a custom event', async () => {
-      const logCustomEvent = fortress.plugins['audit-log'].logCustomEvent as (event: any) => Promise<void>;
+      const logCustomEvent = fortress.plugins['audit-log'].logCustomEvent;
 
       await logCustomEvent({
         eventType: 'ROLE_CREATED',
@@ -558,7 +561,7 @@ describe('audit-log plugin', () => {
     });
 
     it('defaults actorType to system when not provided', async () => {
-      const logCustomEvent = fortress.plugins['audit-log'].logCustomEvent as (event: any) => Promise<void>;
+      const logCustomEvent = fortress.plugins['audit-log'].logCustomEvent;
 
       await logCustomEvent({ eventType: 'PERMISSION_CHANGED' });
 
@@ -590,7 +593,7 @@ describe('audit-log plugin', () => {
     });
 
     it('reports empty chain as valid', async () => {
-      const verifyChain = fortress.plugins['audit-log'].verifyChain as () => Promise<ChainVerificationResult>;
+      const verifyChain = fortress.plugins['audit-log'].verifyChain;
       const result = await verifyChain();
       expect(result.valid).toBe(true);
       expect(result.totalEntries).toBe(0);

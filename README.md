@@ -259,15 +259,15 @@ Clients send `Authorization: ApiKey <key>` or `X-API-Key: <key>`.
 
 ## Call routes in process
 
-`fortress.call` infers request and success-response types from endpoint definitions. It enters the same HTTP pipeline as a network request.
+`fortress.call` is a namespaced tree — core auth callables under `call.auth`, IAM callables under `call.iam`, and plugin routes under `call.plugins.<name>` — with request and success-response types inferred from endpoint definitions. It enters the same HTTP pipeline as a network request.
 
 ```typescript
-const login = await fortress.call.login({
+const login = await fortress.call.auth.login({
   identifier: 'alice@example.com',
   password: 'correct-horse-battery-staple',
 });
 
-await fortress.call.revokeSession(
+await fortress.call.auth.revokeSession(
   { id: sessionId },
   { headers: { authorization: `Bearer ${login.accessToken}` } },
 );
@@ -279,7 +279,7 @@ Non-2xx responses throw `FortressError`:
 import { FortressError } from '@bajustone/fortress';
 
 try {
-  await fortress.call.login({ identifier: 'alice@example.com', password: 'wrong' });
+  await fortress.call.auth.login({ identifier: 'alice@example.com', password: 'wrong' });
 }
 catch (error) {
   if (error instanceof FortressError && error.code === 'UNAUTHORIZED') {

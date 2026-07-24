@@ -27,7 +27,7 @@ import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
 import { Errors } from '../../core/errors';
 import { definePlugin } from '../../core/plugin';
-import { arr, bool, endpoint, id, obj, ref, str } from '../../core/schema-builder';
+import { arr, bool, endpoint, id, nullable, obj, ref, str } from '../../core/schema-builder';
 
 /**
  * Callback invoked once, inside the creation transaction, after a tenant's
@@ -127,14 +127,17 @@ function assertSafeSchemaPrefix(prefix: string): void {
 
 const errorRef = ref('ErrorResponse');
 
+// Mirrors the JSON serialization of `TenantRecord` exactly (description is
+// null when unset; timestamps always present) — definePlugin's handler
+// correlation rejects any drift between this schema and the method returns.
 const tenantResponse = obj({
   id: id('Tenant id'),
   name: str('Tenant name'),
   taxId: str('Unique tenant tax id / external code'),
-  description: str('Optional description'),
+  description: nullable(str('Optional description')),
   createdAt: str('ISO 8601 creation timestamp'),
   updatedAt: str('ISO 8601 update timestamp'),
-}, 'id', 'name', 'taxId');
+}, 'id', 'name', 'taxId', 'description', 'createdAt', 'updatedAt');
 
 const tenancyRoutes = {
   createTenant: endpoint('POST', '/tenancy/tenants')

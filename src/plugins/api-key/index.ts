@@ -23,7 +23,7 @@ import type { Subject } from '../../core/types';
 import type { ApiKeyInfo, ApiKeyKnobs, CreateKeyOptions } from './core';
 import { Errors } from '../../core/errors';
 import { definePlugin } from '../../core/plugin';
-import { arr, bool, endpoint, id, int, obj, ref, str } from '../../core/schema-builder';
+import { arr, bool, endpoint, id, nullable, obj, ref, str } from '../../core/schema-builder';
 import {
   createKeyForSubject,
   deleteAllKeysForSubject,
@@ -89,7 +89,7 @@ const apiKeySelfServiceRoutes = {
     }, 'name'))
     .response(201, 'Key created', obj({
       key: str('Raw API key — shown exactly once, store it immediately'),
-      id: int('Database id of the key'),
+      id: str('Database id of the key'),
     }, 'key', 'id'))
     .response(400, 'Bad request', errorRef)
     .response(401, 'Not authenticated', errorRef)
@@ -101,17 +101,18 @@ const apiKeySelfServiceRoutes = {
     .description('Return the active (non-revoked) API keys belonging to the authenticated caller. Raw keys and hashes are never returned.')
     .tags('API Keys')
     .security('bearer')
-    .response(200, 'Keys', obj({
-      keys: arr(obj({
-        id: id('Database id'),
-        name: str('Key label'),
-        keyPrefix: str('First 12 characters of the key, for identification'),
-        scopes: arr(str()),
-        expiresAt: str('ISO 8601 expiry, if any'),
-        lastUsedAt: str('ISO 8601 timestamp of last successful resolve'),
-        createdAt: str('ISO 8601 creation timestamp'),
-      }, 'id', 'name', 'keyPrefix', 'createdAt')),
-    }, 'keys'))
+    // The handler returns a bare array of key summaries; nullable fields
+    // serialize as JSON null. The schema mirrors that wire shape exactly —
+    // definePlugin's handler correlation rejects any drift.
+    .response(200, 'Keys', arr(obj({
+      id: id('Database id'),
+      name: str('Key label'),
+      keyPrefix: str('First 12 characters of the key, for identification'),
+      scopes: nullable(arr(str('Permission scope'))),
+      expiresAt: nullable(str('ISO 8601 expiry')),
+      lastUsedAt: nullable(str('ISO 8601 timestamp of last successful resolve')),
+      createdAt: str('ISO 8601 creation timestamp'),
+    }, 'id', 'name', 'keyPrefix', 'scopes', 'expiresAt', 'lastUsedAt', 'createdAt')))
     .response(401, 'Not authenticated', errorRef)
     .handler('listKeys')
     .build(),
@@ -136,7 +137,7 @@ const apiKeySelfServiceRoutes = {
     .params(obj({ id: str('Key id to rotate') }, 'id'))
     .response(200, 'Rotated', obj({
       key: str('New raw API key — shown exactly once'),
-      id: int('Database id of the new key'),
+      id: str('Database id of the new key'),
     }, 'key', 'id'))
     .response(401, 'Not authenticated', errorRef)
     .response(404, 'Not found', errorRef)

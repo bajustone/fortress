@@ -53,8 +53,31 @@ export type {
   PasswordPolicyConfig,
   PasswordPolicyObserver,
 } from './core/auth/password-policy';
+/** Namespaced typed call tree derived from the configured plugin tuple (ADR 0001 §5). */
+export type { CallClient, CallTree, EndpointCall, PluginCallTree } from './core/call-tree';
+/**
+ * Minimal runtime capability interfaces (ADR 0001 §4). Framework adapters
+ * and utility boundaries accept these instead of a full instance; every
+ * `Fortress<TPlugins>` composes all of them.
+ */
+export type {
+  FortressAuthRuntime,
+  FortressHttpRuntime,
+  FortressManifestRuntime,
+  FortressMigrationRuntime,
+  FortressObservabilityRuntime,
+  FortressPluginRuntime,
+  FortressProtectRuntime,
+  FortressRuntime,
+} from './core/capabilities';
+
 /** Top-level fortress configuration and pluggable password-hasher contract. */
 export type { FortressConfig, PasswordHasher, SessionConfig } from './core/config';
+/** Definition-site validation and branding for exact endpoint collections (ADR 0001 §2). */
+export { defineEndpoints } from './core/define-endpoints';
+
+export type { DefinedEndpoints, ValidEndpointRecord } from './core/define-endpoints';
+
 /**
  * Endpoint definition primitives — declarative `EndpointDefinition` objects
  * carrying request/response schemas, OpenAPI metadata, and HTTP method info
@@ -65,6 +88,7 @@ export type { FortressConfig, PasswordHasher, SessionConfig } from './core/confi
  * `fortress.call.*` in-process client.
  */
 export type {
+  AnyEndpointDefinition,
   ComponentSchemas,
   EndpointDefinition,
   EndpointInput,
@@ -73,6 +97,7 @@ export type {
   HttpMethod,
   InferEndpointBody,
   InferEndpointCallInput,
+  InferEndpointHandler,
   InferEndpointParams,
   InferEndpointQuery,
   InferEndpointResponses,
@@ -84,11 +109,11 @@ export { Errors, FortressError } from './core/errors';
 /** Discriminated string unions for Fortress and OAuth errors. */
 export type { FortressErrorCode, OAuthErrorCode } from './core/errors';
 
-/** Factory that builds a configured fortress instance and the helper for type-safe plugin method access. */
-export { createFortress, getPluginMethods } from './core/fortress';
+/** Factory that builds a configured fortress instance. */
+export { createFortress } from './core/fortress';
 
-/** The fortress instance type returned by {@link createFortress}, plus the typed call-map helper. */
-export type { AnyFortress, Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, PluginMethodsValidator, TypedCall } from './core/fortress';
+/** The fortress instance type returned by {@link createFortress}. */
+export type { Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, PluginMethodsValidator } from './core/fortress';
 
 /** Typed in-process client builder and per-call options. */
 export { buildCall } from './core/http/call';
@@ -180,9 +205,13 @@ export type {
   PostAuthGateDecision,
   PostAuthGateProvider,
   PostAuthGateVerificationContext,
+  RouteHandlerIncompatible,
+  RouteHandlerMissing,
+  RuntimeFortressPlugin,
+  ValidatePluginRoutes,
 } from './core/plugin';
-/** Type-level mapping helpers used to expose plugin methods and typed call maps on the fortress instance. */
-export type { CallableForEndpoints, InferPluginCallMap, InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
+/** Plugin-methods inference plus the deprecated legacy augmentation bridge. */
+export type { InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
 /** Declarative policy-as-code: loader, diff, and apply primitives. */
 export { applyPolicyPlan, applyResourceOps } from './core/policy/apply';
 export type { ApplyPolicyResult } from './core/policy/apply';

@@ -21,7 +21,7 @@
  */
 
 import type { Context, MiddlewareHandler } from 'hono';
-import type { AnyFortress } from '../../core/fortress';
+import type { FortressPluginRuntime } from '../../core/capabilities';
 import { resolveRateLimitMethods } from './plugin-methods';
 
 export interface HonoRateLimitOptions {
@@ -47,7 +47,7 @@ function defaultExtractIp(c: Context): string | undefined {
  * defined in your `rateLimit({ rules: { ... } })` config.
  */
 export function honoRateLimit(
-  fortress: AnyFortress,
+  fortress: Pick<FortressPluginRuntime, 'plugins'>,
   ruleName: string,
   options: HonoRateLimitOptions = {},
 ): MiddlewareHandler {

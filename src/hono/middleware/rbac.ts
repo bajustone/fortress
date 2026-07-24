@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from 'hono';
-import type { AnyFortress } from '../../core/fortress';
+import type { FortressAuthRuntime } from '../../core/capabilities';
 import type { FortressEnv } from './auth';
 import { FortressError } from '../../core/errors';
 
@@ -41,7 +41,7 @@ export interface RbacOptions {
  * Throws {@link FortressError} on missing/insufficient permissions.
  */
 export function createRbacMiddleware(
-  fortress: AnyFortress,
+  fortress: Pick<FortressAuthRuntime, 'iam'>,
   options?: RbacOptions,
 ): MiddlewareHandler<FortressEnv> {
   const routeMap = options?.routeMap ?? {};

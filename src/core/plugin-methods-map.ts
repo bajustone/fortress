@@ -13,13 +13,15 @@ import type { TenancyMethods } from '../plugins/tenancy';
 import type { TwoFactorMethods } from '../plugins/two-factor';
 import type { WebAuthnMethods } from '../plugins/webauthn';
 import type { WebhookMethods } from '../plugins/webhook';
-import type { EndpointDefinition, InferEndpointCallInput, InferEndpointSuccessResponse } from './endpoint';
-import type { CallOptions } from './http/call';
-import type { LegacyPluginMethods, PluginMethodsOf, PluginRoutes, PluginRoutesOf, RuntimeFortressPlugin } from './plugin';
+import type { LegacyPluginMethods, PluginMethodsOf, RuntimeFortressPlugin } from './plugin';
 
 /**
- * Legacy augmentation bridge for widened plugin definitions. New plugins
- * should use `definePlugin`, which derives their surface from the definition.
+ * Legacy augmentation bridge for widened plugin definitions.
+ *
+ * @deprecated Author plugins with `definePlugin`, which derives the full
+ * typed surface from the definition itself — no central registry edit or
+ * module augmentation required. This interface remains only so pre-v2
+ * `declare module` augmentations keep resolving during migration.
  */
 export interface PluginMethodsMap {
   'account-lockout': AccountLockoutMethods;
@@ -39,56 +41,19 @@ export interface PluginMethodsMap {
   'webhook': WebhookMethods;
 }
 
-type MethodsForPlugin<P extends RuntimeFortressPlugin> = P extends { methods: (...args: any[]) => infer M extends object }
-  ? M
-  : keyof PluginMethodsOf<P> extends never
-    ? LegacyPluginMethods
-    : LegacyPluginMethods extends PluginMethodsOf<P>
-      ? P['name'] extends keyof PluginMethodsMap ? PluginMethodsMap[P['name']] : PluginMethodsOf<P>
-      : PluginMethodsOf<P>;
+type MethodsForPlugin<P extends RuntimeFortressPlugin> = string extends P['name']
+  // Erased tuple (non-literal name): claim nothing about the surface so the
+  // bare `Fortress` type stays a supertype of every concrete instantiation.
+  ? object
+  : P extends { methods: (...args: any[]) => infer M extends object }
+    ? M
+    : keyof PluginMethodsOf<P> extends never
+      ? LegacyPluginMethods
+      : LegacyPluginMethods extends PluginMethodsOf<P>
+        ? P['name'] extends keyof PluginMethodsMap ? PluginMethodsMap[P['name']] : PluginMethodsOf<P>
+        : PluginMethodsOf<P>;
 
 /** Infer the typed plugin-methods record from a `plugins` tuple passed to createFortress. */
 export type InferPlugins<T extends readonly RuntimeFortressPlugin[]> = {
   [P in T[number] as P['name']]: MethodsForPlugin<P>;
 };
-
-/** Distributes a union into an intersection, using `unknown` as the empty intersection identity. */
-type UnionToIntersection<U> = [U] extends [never]
-  ? unknown
-  : (U extends any ? (x: U) => void : never) extends ((x: infer I) => void) ? I : never;
-
-/** Convert endpoint records to their in-process callable surface. */
-export type CallableForEndpoints<E> = {
-  [K in keyof E as E[K] extends EndpointDefinition<any, any, any, any> ? K : never]:
-  E[K] extends EndpointDefinition<any, any, any, any>
-    ? (
-        input: InferEndpointCallInput<E[K]>,
-        options?: CallOptions,
-      ) => Promise<InferEndpointSuccessResponse<E[K]>>
-    : never;
-};
-
-type ConcreteRoutes<R> = [R] extends [PluginRoutes]
-  ? undefined extends R
-    ? never
-    : string extends keyof R ? never : R
-  : never;
-
-type PluginCallContributorMember<P> = 'routes' extends keyof P
-  ? Record<never, never> extends Pick<P, 'routes' & keyof P>
-    ? never
-    : P extends { routes: infer R }
-      ? R extends PluginRoutes
-        ? string extends keyof R ? never : CallableForEndpoints<R>
-        : never
-      : never
-  : ConcreteRoutes<PluginRoutesOf<P>> extends infer R
-    ? [R] extends [never] ? never : CallableForEndpoints<R>
-    : never;
-
-type PluginCallContributor<P> = P extends any ? PluginCallContributorMember<P> : never;
-
-/** Infer the flat typed call surface contributed by concrete plugin routes. */
-export type InferPluginCallMap<T extends readonly RuntimeFortressPlugin[]> = UnionToIntersection<
-  PluginCallContributor<T[number]>
->;
