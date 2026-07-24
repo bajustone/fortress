@@ -54,6 +54,13 @@ export interface OpenAPIMethods {
   getUI: () => string;
 }
 
+/* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- alias preserves Record compatibility; these routes declare no phantom I/O contract */
+type OpenAPIRoutes = {
+  getSpec: EndpointDefinition<{}, {}, {}, {}, 'getSpec'>;
+  getUI?: EndpointDefinition<{}, {}, {}, {}, 'getUI'>;
+};
+/* eslint-enable ts/consistent-type-definitions, ts/no-empty-object-type */
+
 function computeRelativeUrl(fromPath: string, toPath: string): string {
   const fromParts = fromPath.split('/').slice(0, -1);
   const toParts = toPath.split('/');
@@ -180,8 +187,7 @@ function enrichIamSchemas(
  * registered endpoint definition and emits a complete OpenAPI 3.1 spec,
  * pairable with Scalar UI for interactive documentation.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function openapi(config: OpenAPIConfig = {}) {
+export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes> & { routes: OpenAPIRoutes } {
   const specPath = config.specPath ?? '/openapi.json';
   const uiPath = config.uiPath ?? '/openapi';
   const title = config.title ?? 'Fortress Auth API';
@@ -192,18 +198,18 @@ export function openapi(config: OpenAPIConfig = {}) {
   const getSpecRoute = {
     method: 'GET',
     path: specPath,
-    handler: 'getSpec',
+    handler: 'getSpec' as const,
     meta: { summary: 'OpenAPI specification', tags: ['OpenAPI'], security: ['none'] },
     responses: { 200: { description: 'OpenAPI 3.1 JSON spec' } },
   } satisfies EndpointDefinition;
   const getUIRoute = {
     method: 'GET',
     path: uiPath,
-    handler: 'getUI',
+    handler: 'getUI' as const,
     meta: { summary: 'API reference (Scalar)', tags: ['OpenAPI'], security: ['none'] },
     responses: { 200: { description: 'Scalar API reference HTML' } },
   } satisfies EndpointDefinition;
-  const routes = {
+  const routes: OpenAPIRoutes = {
     getSpec: getSpecRoute,
     ...(!config.disableUI ? { getUI: getUIRoute } : {}),
   };
@@ -294,5 +300,5 @@ export function openapi(config: OpenAPIConfig = {}) {
         },
       };
     },
-  } satisfies FortressPlugin<'openapi', OpenAPIMethods>);
+  } satisfies FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes>);
 }

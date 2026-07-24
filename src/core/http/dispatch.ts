@@ -95,20 +95,22 @@ export async function dispatchEndpoint(
  * body — handlers tolerate missing fields.
  */
 async function parseBodyOrQuery(request: Request): Promise<Record<string, unknown>> {
+  const query = Object.fromEntries(new URL(request.url).searchParams);
   if (request.method === 'GET' || request.method === 'HEAD') {
-    return Object.fromEntries(new URL(request.url).searchParams);
+    return query;
   }
   // Some requests have no body at all (e.g. DELETE without payload).
   const contentType = request.headers.get('content-type') ?? '';
   if (!contentType.includes('json')) {
-    // No body or non-JSON body for write methods — try query params.
-    return Object.fromEntries(new URL(request.url).searchParams);
+    // No body or non-JSON body for write methods — use query params.
+    return query;
   }
   try {
-    return (await request.json()) as Record<string, unknown>;
+    const body = (await request.json()) as Record<string, unknown>;
+    return { ...body, ...query };
   }
   catch {
-    return {};
+    return query;
   }
 }
 
@@ -170,8 +172,9 @@ async function dispatchPlugin(
   request: Request,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)[plugin.name];
-  if (!methods?.[endpoint.handler]) {
+  const methods = (fortress.plugins as Record<string, Record<string, unknown>>)[plugin.name];
+  const method = methods?.[endpoint.handler];
+  if (typeof method !== 'function') {
     throw Errors.notFound(`Plugin handler '${plugin.name}.${endpoint.handler}' not found`);
   }
 
@@ -179,7 +182,7 @@ async function dispatchPlugin(
   // some plugin methods reference sibling helpers via `this`.
   // OpenAPI Scalar UI returns HTML, not JSON.
   if (plugin.name === 'openapi' && endpoint.handler === 'getUI') {
-    const html = methods.getUI() as string;
+    const html = method.call(methods) as string;
     return new Response(html, {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -194,7 +197,7 @@ async function dispatchPlugin(
     meta: auth.meta,
     request,
   };
-  const result = await methods[endpoint.handler]({ ...body, ...pathParams }, ctx);
+  const result = await method.call(methods, { ...body, ...pathParams }, ctx);
   // Allow handlers to opt into HTML by returning a string starting with `<!`.
   if (typeof result === 'string' && result.trimStart().startsWith('<!')) {
     return new Response(result, {
@@ -213,18 +216,18 @@ async function dispatchOAuth(
   endpoint: EndpointDefinition,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>).oauth;
+  const methods = (fortress.plugins as Record<string, Record<string, unknown>>).oauth;
   if (!methods)
     throw Errors.notFound(`OAuth plugin not registered`);
   const handlerName = endpoint.handler;
-  if (!methods[handlerName])
+  if (typeof methods[handlerName] !== 'function')
     throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
 
   // IMPORTANT: invoke as `methods.<name>(...)` so the `this` binding is the
   // methods object — the OAuth plugin's `handleTokenRequest` calls
   // `this.clientCredentialsGrant(...)` and friends, which would otherwise
   // throw "Cannot read properties of undefined" if called bare.
-  const m = methods as Record<string, (...args: unknown[]) => Promise<unknown> | unknown>;
+  const m = methods as Record<string, (...args: any[]) => Promise<unknown> | unknown>;
   const authHeader = request.headers.get('authorization');
 
   switch (handlerName) {

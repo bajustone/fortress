@@ -455,11 +455,11 @@ export function nullType(): FortressSchema<null> {
 }
 
 /** An object {@link FortressSchema} with unknown additional properties (e.g. plugin data, metadata). */
-export function record(description?: string): FortressSchema<Record<string, unknown>> {
+export function record<T extends object = Record<string, unknown>>(description?: string): FortressSchema<T> {
   const s: JSONSchema = { type: 'object', additionalProperties: true };
   if (description)
     s.description = description;
-  return toFortressSchema<Record<string, unknown>>(s);
+  return toFortressSchema<T>(s);
 }
 
 /** An object {@link FortressSchema} where every property value matches the supplied schema. */
@@ -697,6 +697,7 @@ export class EndpointBuilder<
   TParams = {},
   // eslint-disable-next-line ts/no-empty-object-type
   TResponses extends Record<number, unknown> = {},
+  THandler extends string = string,
 > {
   private _method: HttpMethod;
   private _path: string;
@@ -749,23 +750,23 @@ export class EndpointBuilder<
 
   body<T extends StandardSchemaV1>(
     schema: T,
-  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses> {
+  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler> {
     this._body = schema;
-    return this as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses>;
+    return this as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler>;
   }
 
   query<T extends StandardSchemaV1>(
     schema: T,
-  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses> {
+  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler> {
     this._query = schema;
-    return this as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses>;
+    return this as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler>;
   }
 
   params<T extends StandardSchemaV1>(
     schema: T,
-  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses> {
+  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler> {
     this._params = schema;
-    return this as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses>;
+    return this as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler>;
   }
 
   /**
@@ -782,22 +783,22 @@ export class EndpointBuilder<
     status: S,
     description: string,
     schema: T,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }>;
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }, THandler>;
   response<S extends number>(
     status: S,
     description: string,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }>;
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }, THandler>;
   response<S extends number>(
     status: S,
     description: string,
     schema?: StandardSchemaV1 | JSONSchema,
-  ): EndpointBuilder<TBody, TQuery, TParams, any> {
+  ): EndpointBuilder<TBody, TQuery, TParams, any, THandler> {
     const stored: EndpointResponse = { description };
     if (schema !== undefined) {
       stored.schema = isStandardSchema(schema) ? extractJsonSchema(schema as FortressSchema<any>) : schema as JSONSchema;
     }
     this._responses[status] = stored;
-    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, any>;
+    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, any, THandler>;
   }
 
   /**
@@ -820,20 +821,21 @@ export class EndpointBuilder<
   errorResponse<S extends number>(
     status: S,
     description: string,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }> {
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }, THandler> {
     return this.response(status, description, ErrorEnvelope);
   }
 
-  handler(name: string): this {
+  /** Capture the literal method name used by plugin route dispatch. */
+  handler<H extends string>(name: H): EndpointBuilder<TBody, TQuery, TParams, TResponses, H> {
     this._handler = name;
-    return this;
+    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, TResponses, H>;
   }
 
-  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses> {
-    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses> = {
+  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler> {
+    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler> = {
       method: this._method,
       path: this._path,
-      handler: this._handler,
+      handler: this._handler as THandler,
     };
 
     if (this._summary || this._tags.length > 0 || this._security.length > 0 || this._description || this._deprecated || this._permission) {

@@ -102,8 +102,7 @@ function redact(endpoint: WebhookEndpoint): RedactedWebhookEndpoint {
 /**
  * Webhook plugin factory. See the module docs for the full feature set.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function webhook(config: WebhookConfig = {}) {
+export function webhook(config: WebhookConfig = {}): FortressPlugin<'webhook', WebhookMethods, undefined> {
   const registry = createEventRegistry(config.events ?? builtinEvents());
   const queue = config.queue ?? inMemoryQueue();
   const retryMode = config.delivery?.retry ?? 'pluginScheduled';

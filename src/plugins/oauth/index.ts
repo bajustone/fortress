@@ -10,6 +10,7 @@
  */
 
 import type { WhereClause } from '../../adapters/database/types';
+import type { EndpointDefinition, EndpointMeta } from '../../core/endpoint';
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, generateTokenFamily, hashToken } from '../../core/auth/refresh-token';
@@ -358,8 +359,26 @@ export interface OAuthMethods {
  * grant, persists clients and tokens, and exposes `/authorize` and `/token`
  * endpoints when mounted on a framework adapter.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function oauth(config: OAuthConfig = {}) {
+/* eslint-disable ts/consistent-type-definitions -- route aliases preserve Record compatibility */
+type OAuthProtocolRoute<H extends string> = EndpointDefinition<any, any, any, any, H> & {
+  meta: EndpointMeta & { bearerKind: 'oauth' };
+};
+
+type OAuthRoutes = {
+  handleAuthorizeRequest?: OAuthProtocolRoute<'handleAuthorizeRequest'>;
+  handleGetFlow?: EndpointDefinition<any, any, any, any, 'handleGetFlow'>;
+  handleApproveFlow?: EndpointDefinition<any, any, any, any, 'handleApproveFlow'>;
+  handleDenyFlow?: EndpointDefinition<any, any, any, any, 'handleDenyFlow'>;
+  handleTokenRequest: OAuthProtocolRoute<'handleTokenRequest'>;
+  handleIntrospectRequest: OAuthProtocolRoute<'handleIntrospectRequest'>;
+  handleRevokeRequest: OAuthProtocolRoute<'handleRevokeRequest'>;
+  handleUserInfoRequest: OAuthProtocolRoute<'handleUserInfoRequest'>;
+  handleDiscovery: OAuthProtocolRoute<'handleDiscovery'>;
+  handleJwksRequest: OAuthProtocolRoute<'handleJwksRequest'>;
+};
+/* eslint-enable ts/consistent-type-definitions */
+
+export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes> & { routes: OAuthRoutes } {
   const authCodeExpiry = config.authCodeExpirySeconds ?? 600;
   const pendingFlowExpiry = config.pendingFlowExpirySeconds ?? 600;
   const accessTokenExpiry = config.accessTokenExpirySeconds ?? 3600;
@@ -2028,7 +2047,7 @@ export function oauth(config: OAuthConfig = {}) {
         },
       },
     },
-  } satisfies FortressPlugin<'oauth', OAuthMethods>);
+  } satisfies FortressPlugin<'oauth', OAuthMethods, OAuthRoutes>);
 }
 
 /**

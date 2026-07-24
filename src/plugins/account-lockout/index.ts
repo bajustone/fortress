@@ -52,8 +52,7 @@ interface LockoutRecord {
  * tracks failed sign-in attempts per identifier and applies a progressive
  * lockout (each successive lockout extends the cooldown window).
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function accountLockout(config: AccountLockoutConfig = {}) {
+export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugin<'account-lockout', AccountLockoutMethods, undefined> {
   const maxFailedAttempts = config.maxFailedAttempts ?? 5;
   const lockoutDurationSeconds = config.lockoutDurationSeconds ?? 900;
   const escalation = config.escalation ?? true;

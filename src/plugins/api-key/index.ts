@@ -17,13 +17,15 @@
  * @module
  */
 
+import type { EndpointDefinition } from '../../core/endpoint';
 import type { IamEvent, IamEventListener } from '../../core/iam/iam-service';
-import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
+import type { FortressSchema } from '../../core/json-schema';
+import type { FortressPlugin, JsonOf, PluginContext, PluginRouteContext } from '../../core/plugin';
 import type { Subject } from '../../core/types';
 import type { ApiKeyInfo, ApiKeyKnobs, CreateKeyOptions } from './core';
 import { Errors } from '../../core/errors';
 import { definePlugin } from '../../core/plugin';
-import { arr, bool, endpoint, id, int, obj, ref, str } from '../../core/schema-builder';
+import { arr, bool, endpoint, id, nullable, obj, ref, str } from '../../core/schema-builder';
 import {
   createKeyForSubject,
   deleteAllKeysForSubject,
@@ -74,9 +76,24 @@ export interface ApiKeyMethods {
 
 // ── Routes ──────────────────────────────────────────────────────────
 
-const errorRef = ref('ErrorResponse');
+const errorRef: FortressSchema<unknown> = ref('ErrorResponse');
 
-const apiKeySelfServiceRoutes = {
+/* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- alias preserves Record compatibility; empty endpoint phantom slots are intentional */
+type ApiKeySelfServiceRoutes = {
+  readonly createKey: EndpointDefinition<
+    { name: string; scopes?: string[]; expiresAt?: string },
+    {},
+    {},
+    { 201: { key: string; id: string } },
+    'createKey'
+  >;
+  readonly listKeys: EndpointDefinition<{}, {}, {}, { 200: JsonOf<ApiKeyInfo>[] }, 'listKeys'>;
+  readonly revokeKey: EndpointDefinition<{}, {}, { id: string }, { 200: { ok: boolean } }, 'revokeKey'>;
+  readonly rotateKey: EndpointDefinition<{}, {}, { id: string }, { 200: { key: string; id: string } }, 'rotateKey'>;
+};
+/* eslint-enable ts/consistent-type-definitions, ts/no-empty-object-type */
+
+const apiKeySelfServiceRoutes: ApiKeySelfServiceRoutes = {
   createKey: endpoint('POST', '/api-key/keys')
     .summary('Create an API key')
     .description('Create a new API key for the authenticated caller. The raw key is returned exactly once — it cannot be retrieved later.')
@@ -89,7 +106,7 @@ const apiKeySelfServiceRoutes = {
     }, 'name'))
     .response(201, 'Key created', obj({
       key: str('Raw API key — shown exactly once, store it immediately'),
-      id: int('Database id of the key'),
+      id: id('Database id of the key'),
     }, 'key', 'id'))
     .response(400, 'Bad request', errorRef)
     .response(401, 'Not authenticated', errorRef)
@@ -101,17 +118,15 @@ const apiKeySelfServiceRoutes = {
     .description('Return the active (non-revoked) API keys belonging to the authenticated caller. Raw keys and hashes are never returned.')
     .tags('API Keys')
     .security('bearer')
-    .response(200, 'Keys', obj({
-      keys: arr(obj({
-        id: id('Database id'),
-        name: str('Key label'),
-        keyPrefix: str('First 12 characters of the key, for identification'),
-        scopes: arr(str()),
-        expiresAt: str('ISO 8601 expiry, if any'),
-        lastUsedAt: str('ISO 8601 timestamp of last successful resolve'),
-        createdAt: str('ISO 8601 creation timestamp'),
-      }, 'id', 'name', 'keyPrefix', 'createdAt')),
-    }, 'keys'))
+    .response(200, 'Keys', arr(obj({
+      id: id('Database id'),
+      name: str('Key label'),
+      keyPrefix: str('First 12 characters of the key, for identification'),
+      scopes: nullable(arr(str('Permission scope'))),
+      expiresAt: nullable(str('ISO 8601 expiry')),
+      lastUsedAt: nullable(str('ISO 8601 timestamp of last successful resolve')),
+      createdAt: str('ISO 8601 creation timestamp'),
+    }, 'id', 'name', 'keyPrefix', 'scopes', 'expiresAt', 'lastUsedAt', 'createdAt')))
     .response(401, 'Not authenticated', errorRef)
     .handler('listKeys')
     .build(),
@@ -136,7 +151,7 @@ const apiKeySelfServiceRoutes = {
     .params(obj({ id: str('Key id to rotate') }, 'id'))
     .response(200, 'Rotated', obj({
       key: str('New raw API key — shown exactly once'),
-      id: int('Database id of the new key'),
+      id: id('Database id of the new key'),
     }, 'key', 'id'))
     .response(401, 'Not authenticated', errorRef)
     .response(404, 'Not found', errorRef)
@@ -153,8 +168,9 @@ const apiKeySelfServiceRoutes = {
  * methods on the fortress instance. Pass `{ routes: true }` to mount the
  * self-service HTTP routes under `/api-key/keys/*`.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-function createApiKeyPlugin(config: ApiKeyConfig = {}) {
+type ApiKeyPlugin = FortressPlugin<'api-key', ApiKeyMethods, ApiKeySelfServiceRoutes | undefined>;
+
+function createApiKeyPlugin(config: ApiKeyConfig = {}): ApiKeyPlugin {
   const knobs: ApiKeyKnobs = {
     prefix: config.prefix ?? 'fortress',
     defaultExpirySeconds: config.defaultExpirySeconds ?? null,
@@ -271,14 +287,12 @@ function createApiKeyPlugin(config: ApiKeyConfig = {}) {
         },
       };
     },
-  } satisfies FortressPlugin<'api-key', ApiKeyMethods>);
+  } satisfies FortressPlugin<'api-key', ApiKeyMethods, ApiKeySelfServiceRoutes | undefined>);
 }
 
-type ApiKeyPlugin = ReturnType<typeof createApiKeyPlugin>;
-
-export function apiKey(config: ApiKeyConfig & { routes: true }): ApiKeyPlugin & { routes: typeof apiKeySelfServiceRoutes };
+export function apiKey(config: ApiKeyConfig & { routes: true }): ApiKeyPlugin & { routes: ApiKeySelfServiceRoutes };
 export function apiKey(config?: ApiKeyConfig & { routes?: false | undefined }): ApiKeyPlugin;
-export function apiKey(config: ApiKeyConfig): ApiKeyPlugin;
+export function apiKey(config: ApiKeyConfig | undefined): ApiKeyPlugin;
 export function apiKey(config: ApiKeyConfig = {}): ApiKeyPlugin {
   return createApiKeyPlugin(config);
 }

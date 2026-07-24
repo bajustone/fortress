@@ -12,7 +12,7 @@
 
 import type { EndpointDefinition, EndpointPermission } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
-import type { PluginContext, PluginMethodsOf, PluginRouteContext } from '../../core/plugin';
+import type { FortressPlugin, PluginContext, PluginRouteContext, PluginRoutes } from '../../core/plugin';
 import type { FortressUser, Group, Permission, PermissionInput, Role, SubjectType } from '../../core/types';
 import type { ApiKeyInfo } from '../api-key/core';
 import type { ApiKeyMethods } from '../api-key/index';
@@ -932,8 +932,60 @@ const adminApiKeyEndpoints: EndpointDefinition[] = [
  * });
  * ```
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function admin(options: AdminPluginOptions = {}) {
+export interface AdminMethods {
+  getResources: () => Promise<ResourceFile>;
+  bootstrap: (body: { userId?: string; secret?: string }, routeCtx?: PluginRouteContext) => Promise<{ ok: boolean; role: Role }>;
+  listUsers: (body: Record<string, string>) => Promise<{ users: FortressUser[]; total: number }>;
+  getUserById: (body: Record<string, string>) => Promise<FortressUser>;
+  createUser: (body: Record<string, unknown>) => Promise<FortressUser>;
+  updateUser: (body: Record<string, unknown>) => Promise<FortressUser>;
+  deleteUser: (body: Record<string, string>) => Promise<{ ok: boolean }>;
+  getRole: (body: Record<string, string>) => Promise<Role & { permissions: Permission[] }>;
+  updateRole: (body: Record<string, unknown>) => Promise<Role>;
+  listGroups: (body: Record<string, string>) => Promise<{ groups: Group[]; total: number }>;
+  getGroup: (body: Record<string, string>) => Promise<Group & { users: FortressUser[] }>;
+  updateGroup: (body: Record<string, unknown>) => Promise<Group>;
+  deleteGroup: (body: Record<string, string>) => Promise<{ ok: boolean }>;
+  getGroupUsers: (body: Record<string, string>) => Promise<FortressUser[]>;
+  listPermissions: (body: Record<string, string>) => Promise<Permission[]>;
+  createPermission: (body: PermissionInput) => Promise<Permission>;
+  deletePermission: (body: Record<string, string>) => Promise<{ ok: boolean }>;
+  addPermissionToRole: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  getRoles: () => Promise<Role[]>;
+  createRole: (body: Record<string, unknown>) => Promise<Role>;
+  deleteRole: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  bindRoleToUser: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  bindRoleToGroup: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  unbindRole: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  createGroup: (body: Record<string, unknown>) => Promise<Group>;
+  addUserToGroup: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  removeUserFromGroup: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  getUserPermissions: (body: Record<string, unknown>) => Promise<Permission[]>;
+  checkPermission: (body: Record<string, unknown>) => Promise<{ allowed: boolean }>;
+  bindPermissionToUser: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  bindPermissionToGroup: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  unbindPermissionFromUser: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  unbindPermissionFromGroup: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  createServiceAccount: (body: Record<string, unknown>) => Promise<unknown>;
+  listServiceAccounts: (body: Record<string, unknown>) => Promise<unknown>;
+  getServiceAccount: (body: Record<string, unknown>) => Promise<unknown>;
+  updateServiceAccount: (body: Record<string, unknown>) => Promise<unknown>;
+  deleteServiceAccount: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  getServiceAccountPermissions: (body: Record<string, unknown>) => Promise<Permission[]>;
+  bindRoleToServiceAccount: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  unbindRoleFromServiceAccount: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  bindPermissionToServiceAccount: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  unbindPermissionFromServiceAccount: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  adminCreateUserApiKey: (body: Record<string, unknown>) => Promise<{ key: string; id: string }>;
+  adminListUserApiKeys: (body: Record<string, unknown>) => Promise<{ keys: ApiKeyInfo[] }>;
+  adminRevokeUserApiKey: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  adminCreateServiceAccountApiKey: (body: Record<string, unknown>) => Promise<{ key: string; id: string }>;
+  adminListServiceAccountApiKeys: (body: Record<string, unknown>) => Promise<{ keys: ApiKeyInfo[] }>;
+  adminRevokeServiceAccountApiKey: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  syncResources: (body: Record<string, unknown>) => Promise<{ ok: boolean }>;
+}
+
+export function admin(options: AdminPluginOptions = {}): FortressPlugin<'admin', AdminMethods, PluginRoutes> {
   const mountApiKeyRoutes = options.apiKeyRoutes === true;
   const mountBootstrap = options.bootstrap?.enabled === true;
   const bootstrapSecret = options.bootstrap?.secret ?? process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET;
@@ -1606,8 +1658,6 @@ export function admin(options: AdminPluginOptions = {}) {
  * `observerRegistered` flag prevents the IAM cascade observer from
  * being attached twice.
  */
-export type AdminMethods = PluginMethodsOf<ReturnType<typeof admin>>;
-
 function getApiKeyMethods(ctx: PluginContext): ApiKeyMethods {
   const apiKeyPlugin = (ctx.config.plugins ?? []).find(p => p.name === 'api-key');
   if (!apiKeyPlugin?.methods)

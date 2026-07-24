@@ -12,6 +12,8 @@ import type { socialLogin } from '../plugins/social-login';
 import type { twoFactor } from '../plugins/two-factor';
 import type { webauthn } from '../plugins/webauthn';
 import type { webhook } from '../plugins/webhook';
+import type { FortressConfig } from './config';
+import type { InferEndpointSuccessResponse } from './endpoint';
 import type { FortressPlugin } from './plugin';
 import type { InferPlugins } from './plugin-methods-map';
 import { describe, expect, it } from 'vitest';
@@ -19,7 +21,7 @@ import { apiKey } from '../plugins/api-key';
 import { tenancy } from '../plugins/tenancy';
 import { createFortress, getPluginMethods } from './fortress';
 import { definePlugin } from './plugin';
-import { endpoint, obj, str } from './schema-builder';
+import { bool, endpoint, obj, str } from './schema-builder';
 
 describe('plugin type contracts', () => {
   it('compile without runtime setup', () => {
@@ -114,7 +116,12 @@ export function compileAllBuiltIns(plugins: AllBuiltIns): void {
 
 const thirdParty = definePlugin({
   name: 'third-party',
-  methods: () => ({ greet: (name: string) => `Hello ${name}` }),
+  methods: () => ({
+    greet: (name: string) => `Hello ${name}`,
+    thirdPartyGreeting: async ({ name }: { name: string }): Promise<{ greeting: string }> => ({
+      greeting: `Hello ${name}`,
+    }),
+  }),
   routes: {
     thirdPartyGreeting: endpoint('POST', '/third-party/greet')
       .body(obj({ name: str() }, 'name'))
@@ -124,8 +131,130 @@ const thirdParty = definePlugin({
   },
 });
 
+definePlugin({
+  name: 'missing-handler',
+  methods: () => ({ real: () => 'ok' }),
+  routes: {
+    // @ts-expect-error every literal route handler must exist in methods
+    missing: endpoint('GET', '/missing').handler('missing').build(),
+  },
+});
+
+definePlugin({
+  name: 'mismatched-route-key',
+  methods: () => ({ actual: () => 'ok' }),
+  routes: {
+    // @ts-expect-error concrete route keys must match their literal handlers
+    alias: endpoint('GET', '/alias').handler('actual').build(),
+  },
+});
+
+definePlugin({
+  name: 'incompatible-input',
+  methods: () => ({ echo: ({ count }: { count: number }) => ({ echoed: String(count) }) }),
+  routes: {
+    // @ts-expect-error the method cannot accept the route's inferred string input
+    echo: endpoint('POST', '/echo')
+      .body(obj({ value: str() }, 'value'))
+      .response(200, 'Echo', obj({ echoed: str() }, 'echoed'))
+      .handler('echo')
+      .build(),
+  },
+});
+
+definePlugin({
+  name: 'incompatible-response',
+  methods: () => ({ status: () => ({ ok: 'yes' }) }),
+  routes: {
+    // @ts-expect-error the method return does not match the declared boolean response
+    status: endpoint('GET', '/status')
+      .response(200, 'Status', obj({ ok: bool() }, 'ok'))
+      .handler('status')
+      .build(),
+  },
+});
+
+definePlugin({
+  name: 'incompatible-accepted-response',
+  methods: () => ({ accepted: () => ({ wrong: 42 }) }),
+  routes: {
+    // @ts-expect-error every declared 2xx response participates in return correlation
+    accepted: endpoint('POST', '/accepted')
+      .response(202, 'Accepted', obj({ ok: str() }, 'ok'))
+      .handler('accepted')
+      .build(),
+  },
+});
+
+const _acceptedRoute = endpoint('POST', '/valid-accepted')
+  .response(202, 'Accepted', obj({ ok: str() }, 'ok'))
+  .handler('accepted')
+  .build();
+export type AcceptedResponseContract = Assert<Equal<
+  InferEndpointSuccessResponse<typeof _acceptedRoute>,
+  { ok: string }
+>>;
+
+const _multiSuccessRoute = endpoint('POST', '/multi-success')
+  .response(200, 'Immediate', obj({ ok: bool() }, 'ok'))
+  .response(202, 'Queued', obj({ queued: str() }, 'queued'))
+  .handler('multiSuccess')
+  .build();
+export type MultiSuccessResponseContract = Assert<Equal<
+  InferEndpointSuccessResponse<typeof _multiSuccessRoute>,
+  { ok: boolean } | { queued: string }
+>>;
+
+definePlugin({
+  name: 'contractless',
+  methods: () => ({ raw: () => ({ anything: true }) }),
+  routes: {
+    raw: { method: 'GET', path: '/raw', handler: 'raw' as const },
+  },
+});
+
+definePlugin({
+  name: 'contractless-missing',
+  methods: () => ({ real: () => 'ok' }),
+  routes: {
+    // @ts-expect-error contractless routes skip I/O checks, not handler existence
+    raw: { method: 'GET', path: '/raw-missing', handler: 'missing' as const },
+  },
+});
+
+const widenedRoutes: Record<string, ReturnType<ReturnType<typeof endpoint>['build']>> = {};
+definePlugin({
+  name: 'dynamic-routes',
+  methods: () => ({ dynamic: () => 'ok' }),
+  routes: widenedRoutes,
+});
+
+definePlugin({
+  name: 'non-callable-method',
+  // @ts-expect-error every inferred method property must be callable
+  methods: () => ({
+    callable: () => 'ok',
+    value: 42,
+  }),
+});
+
+interface ConcreteMethods { run: () => void }
+// @ts-expect-error concrete FortressPlugin method contracts require an implementation
+const _missingConcreteMethods: FortressPlugin<'concrete', ConcreteMethods> = { name: 'concrete' };
+void _missingConcreteMethods;
+
+interface InterfaceMethods { run: (value: string) => number }
+const _interfacePlugin: FortressPlugin<'interface-methods', InterfaceMethods> = {
+  name: 'interface-methods',
+  methods: () => ({ run: value => value.length }),
+};
+void _interfacePlugin;
+
 declare const _legacyPlugin: FortressPlugin<'legacy'>;
 export type LegacyContract = Assert<Equal<InferPlugins<readonly [typeof _legacyPlugin]>['legacy'], LegacyMethods>>;
+
+const exactLegacyName = definePlugin({ name: 'legacy' });
+export type ExactEmptyContract = Assert<Equal<keyof InferPlugins<readonly [typeof exactLegacyName]>['legacy'], never>>;
 
 interface ExpectedMethods { ok: () => number }
 definePlugin({
@@ -135,6 +264,32 @@ definePlugin({
 } satisfies FortressPlugin<'broken', ExpectedMethods>);
 
 export function compilePluginContracts(database: DatabaseAdapter): void {
+  const noPlugins = createFortress({ database, jwt: { key: 'x'.repeat(32) } });
+  // @ts-expect-error omitted plugins infer an exact empty plugin record
+  void noPlugins.plugins.arbitrary;
+  // @ts-expect-error omitted plugins have no known key for static helper lookup
+  getPluginMethods(noPlugins, 'arbitrary');
+
+  const erasedConfig: FortressConfig = { database, jwt: { key: 'x'.repeat(32) } };
+  const erased = createFortress(erasedConfig);
+  void erased.plugins.arbitrary;
+  void getPluginMethods(erased, 'arbitrary');
+
+  const emptyFortress = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [exactLegacyName] as const,
+  });
+  // @ts-expect-error exact methodless definitions expose an empty surface, even for augmented names
+  emptyFortress.plugins.legacy.ping();
+
+  const maybeApiConfig: import('../plugins/api-key').ApiKeyConfig | undefined = undefined;
+  const maybeApi = apiKey(maybeApiConfig);
+  void maybeApi.name;
+  const maybeTenancyConfig: import('../plugins/tenancy').TenancyConfig | undefined = undefined;
+  const maybeTenancy = tenancy(maybeTenancyConfig);
+  void maybeTenancy.name;
+
   const thirdFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [thirdParty] as const });
   const greeting: Promise<{ greeting: string }> = thirdFortress.call.thirdPartyGreeting({ name: 'Ada' });
   void greeting;

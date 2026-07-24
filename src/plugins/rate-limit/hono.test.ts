@@ -51,14 +51,27 @@ describe('honoRateLimit (framework wrapper)', () => {
     expect(b.status).toBe(200); // different IP, still in budget
   });
 
-  it('rejects a malformed rate-limit method surface', () => {
+  it('accepts the check-only surface consumed by the framework helper', async () => {
+    const check = async (): Promise<void> => {};
     const fortress = createFortress({
       jwt: { key: SECRET },
       database: createTestAdapter(),
       plugins: [definePlugin({
         name: 'rate-limit',
-        methods: () => ({ check: async (): Promise<void> => {} }),
+        methods: () => ({ check }),
       })],
+    });
+    const app = new Hono();
+    app.use('/api/*', honoRateLimit(fortress, 'api'));
+    app.get('/api/things', c => c.json({ ok: true }));
+    expect((await app.request('/api/things')).status).toBe(200);
+  });
+
+  it('rejects a surface without the consumed check method', () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [definePlugin({ name: 'rate-limit' })],
     });
     expect(() => honoRateLimit(fortress, 'api')).toThrow(/rate-limit plugin is not registered/);
   });

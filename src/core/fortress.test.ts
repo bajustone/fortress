@@ -1,4 +1,5 @@
 import type { DatabaseAdapter } from '../adapters/database';
+import type { RuntimeFortressPlugin } from './plugin';
 
 import { describe, expect, it } from 'vitest';
 import { createFortress, getPluginMethods } from './fortress';
@@ -43,13 +44,40 @@ describe('getPluginMethods', () => {
   });
 
   it('rejects missing and invalid dynamic plugins', () => {
-    expect(() => getPluginMethods(fortress, 'missing')).toThrow('Plugin \'missing\' is not registered');
+    const missingName: string = 'missing';
+    expect(() => getPluginMethods(fortress, missingName)).toThrow('Plugin \'missing\' is not registered');
     expect(() => getPluginMethods(fortress, 'known', (_value): _value is { nope: true } => false))
       .toThrow('Plugin \'known\' methods failed runtime validation');
   });
 });
 
 describe('createFortress', () => {
+  it('guards against non-function handlers on runtime-widened plugins', async () => {
+    const unsafe = {
+      name: 'unsafe-runtime',
+      methods: () => ({ handle: 'not callable' }),
+      routes: {
+        handle: {
+          method: 'GET',
+          path: '/unsafe-runtime',
+          handler: 'handle',
+          meta: { summary: 'Unsafe', security: ['none'] },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [unsafe] as const,
+    });
+
+    const response = await fortress.handleRequest(new Request('http://localhost/unsafe-runtime'));
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      message: 'Plugin handler \'unsafe-runtime.handle\' not found',
+    });
+  });
+
   it('creates a fortress instance with auth and iam services', () => {
     const fortress = createFortress({
       jwt: { key: 'fortress-test-secret-at-least-32!' },

@@ -41,11 +41,11 @@ export interface PluginMethodsMap {
 
 type MethodsForPlugin<P extends RuntimeFortressPlugin> = P extends { methods: (...args: any[]) => infer M extends object }
   ? M
-  : keyof PluginMethodsOf<P> extends never
-    ? LegacyPluginMethods
-    : LegacyPluginMethods extends PluginMethodsOf<P>
+  : 'methods' extends keyof P
+    ? LegacyPluginMethods extends PluginMethodsOf<P>
       ? P['name'] extends keyof PluginMethodsMap ? PluginMethodsMap[P['name']] : PluginMethodsOf<P>
-      : PluginMethodsOf<P>;
+      : PluginMethodsOf<P>
+    : Record<never, never>;
 
 /** Infer the typed plugin-methods record from a `plugins` tuple passed to createFortress. */
 export type InferPlugins<T extends readonly RuntimeFortressPlugin[]> = {

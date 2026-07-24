@@ -65,6 +65,7 @@ export type { FortressConfig, PasswordHasher, SessionConfig } from './core/confi
  * `fortress.call.*` in-process client.
  */
 export type {
+  AnyEndpointDefinition,
   ComponentSchemas,
   EndpointDefinition,
   EndpointInput,
@@ -73,6 +74,7 @@ export type {
   HttpMethod,
   InferEndpointBody,
   InferEndpointCallInput,
+  InferEndpointHandler,
   InferEndpointParams,
   InferEndpointQuery,
   InferEndpointResponses,
@@ -164,8 +166,10 @@ export type {
   AfterHookContext,
   FieldDefinition,
   FortressPlugin,
+  FortressPluginDefinition,
   HookContext,
   HookResult,
+  JsonOf,
   LegacyPluginMethods,
   MiddlewareDefinition,
   ModelConstraint,
@@ -180,6 +184,10 @@ export type {
   PostAuthGateDecision,
   PostAuthGateProvider,
   PostAuthGateVerificationContext,
+  RouteHandlerIncompatible,
+  RouteHandlerKeyMismatch,
+  RouteHandlerMissing,
+  ValidatePluginRoutes,
 } from './core/plugin';
 /** Type-level mapping helpers used to expose plugin methods and typed call maps on the fortress instance. */
 export type { CallableForEndpoints, InferPluginCallMap, InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';

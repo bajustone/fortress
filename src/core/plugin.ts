@@ -2,7 +2,12 @@ import type { DatabaseAdapter } from '../adapters/database';
 import type { ScopeRule } from '../adapters/database/types';
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
-import type { EndpointDefinition } from './endpoint';
+import type {
+  AnyEndpointDefinition,
+  InferEndpointCallInput,
+  InferEndpointHandler,
+  InferEndpointSuccessResponse,
+} from './endpoint';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
@@ -19,12 +24,15 @@ import type {
 
 export type PluginMethod = (...args: any[]) => any;
 export type LegacyPluginMethods = Record<string, PluginMethod>;
-export type PluginRoutes = Readonly<Record<string, EndpointDefinition<any, any, any, any>>>;
+export type PluginRoutes = Readonly<Record<string, AnyEndpointDefinition>>;
 
-export interface FortressPlugin<
-  TName extends string = string,
-  TMethods extends object = LegacyPluginMethods,
-  TRoutes extends PluginRoutes | undefined = PluginRoutes | undefined,
+type CallableMethodSurface<TMethods extends object> = {
+  [K in keyof TMethods]: TMethods[K] extends PluginMethod ? TMethods[K] : never;
+};
+
+export interface FortressPluginDefinition<
+  TName extends string,
+  TRoutes extends PluginRoutes | undefined,
 > {
   /** Unique plugin identifier */
   name: TName;
@@ -34,9 +42,6 @@ export interface FortressPlugin<
 
   /** Hooks into auth lifecycle (executed in plugin registration order) */
   hooks?: PluginHooks;
-
-  /** Extra function-valued methods exposed on fortress.plugins.<name>. */
-  methods?: (ctx: PluginContext) => TMethods;
 
   /**
    * HTTP routes this plugin adds, keyed by handler name.
@@ -93,30 +98,128 @@ export interface FortressPlugin<
   ) => Promise<{ subject: Subject; claims?: TokenClaims; scopes?: string[] | null } | null>;
 }
 
+/**
+ * Plugin definition contract. Concrete method surfaces require a methods
+ * implementation and every property must be callable. The default legacy
+ * surface and the erased runtime shape keep methods optional.
+ */
+export type FortressPlugin<
+  TName extends string = string,
+  TMethods extends object = LegacyPluginMethods,
+  TRoutes extends PluginRoutes | undefined = PluginRoutes | undefined,
+> = FortressPluginDefinition<TName, TRoutes>
+  & (LegacyPluginMethods extends TMethods
+    ? { methods?: (ctx: PluginContext) => CallableMethodSurface<TMethods> }
+    : { methods: (ctx: PluginContext) => CallableMethodSurface<TMethods> });
+
 /** Internal broad shape used at runtime while preserving object method surfaces. */
 export type RuntimeFortressPlugin = FortressPlugin<string, object, PluginRoutes | undefined>;
 
 /** Extract the method surface carried by a plugin definition. */
 export type PluginMethodsOf<P> = P extends { methods: (...args: any[]) => infer TMethods extends object }
   ? TMethods
-  : P extends FortressPlugin<any, infer TMethods, any> ? TMethods : Record<never, never>;
+  : 'methods' extends keyof P
+    ? P extends { methods?: (...args: any[]) => infer TMethods extends object } ? TMethods : Record<never, never>
+    : Record<never, never>;
 
 /** Extract the route record carried by a plugin definition. */
-export type PluginRoutesOf<P> = P extends { routes: infer TRoutes }
+export type PluginRoutesOf<P> = 'routes' extends keyof P
+  ? P extends { routes: infer TRoutes }
+    ? TRoutes
+    : P extends { routes?: infer TRoutes } ? TRoutes : undefined
+  : undefined;
+
+/** JSON-wire projection used to compare handler returns with response schemas. */
+export type JsonOf<T> = T extends Date ? string
+  : T extends (...args: any[]) => any ? never
+    : T extends readonly (infer U)[] ? JsonOf<U>[]
+      : T extends object ? { [K in keyof T]: JsonOf<T[K]> }
+        : T;
+
+type ContainsNonJsonValue<T> = T extends Date ? false
+  : T extends ((...args: any[]) => any) | bigint | symbol | undefined ? true
+    : T extends readonly (infer U)[]
+      ? true extends ContainsNonJsonValue<U> ? true : false
+      : T extends object
+        ? true extends {
+          [K in keyof T]-?: ContainsNonJsonValue<Exclude<T[K], undefined>>;
+        }[keyof T] ? true : false
+        : false;
+
+type HandlerInputCompatible<M, E> = M extends (input: infer I, ...rest: any[]) => any
+  ? InferEndpointCallInput<E> extends I ? true : false
+  : false;
+
+type HandlerReturnCompatible<M, E> = M extends (...args: any[]) => infer R
+  ? unknown extends InferEndpointSuccessResponse<E>
+    ? true
+    : true extends ContainsNonJsonValue<Awaited<R>>
+      ? false
+      : JsonOf<Awaited<R>> extends infer J
+        ? [J] extends [never]
+            ? false
+            : [J] extends [InferEndpointSuccessResponse<E>] ? true : false
+        : false
+  : false;
+
+/** Compile-time diagnostic for a route key that differs from its handler. */
+export interface RouteHandlerKeyMismatch<TKey extends string, THandler extends string> {
+  readonly 'fortress:route-error': `route key '${TKey}' must match handler '${THandler}'`;
+}
+
+/** Compile-time diagnostic for a route that names no plugin method. */
+export interface RouteHandlerMissing<THandler extends string> {
+  readonly 'fortress:route-error': `route handler '${THandler}' is not a plugin method — declare it in methods()`;
+}
+
+/** Compile-time diagnostic for a route whose method does not match its I/O. */
+export interface RouteHandlerIncompatible<THandler extends string> {
+  readonly 'fortress:route-error': `plugin method '${THandler}' does not accept this endpoint's input or return its declared success response`;
+}
+
+type ContractlessEndpoint<E> = keyof InferEndpointCallInput<E> extends never
+  ? unknown extends InferEndpointSuccessResponse<E> ? true : false
+  : false;
+
+type ValidatePluginRoute<K extends string, E, TMethods> = E extends AnyEndpointDefinition
+  ? InferEndpointHandler<E> extends infer H extends string
+    ? [K, H] extends [H, K]
+        ? H extends keyof TMethods
+          ? E extends { meta: { bearerKind: 'oauth' } }
+            ? E
+            : ContractlessEndpoint<E> extends true
+              ? E
+              : [HandlerInputCompatible<TMethods[H], E>, HandlerReturnCompatible<TMethods[H], E>] extends [true, true]
+                  ? E
+                  : RouteHandlerIncompatible<H>
+          : RouteHandlerMissing<H>
+        : RouteHandlerKeyMismatch<K, H>
+    : never
+  : never;
+
+/** Validate concrete route records; widened records remain runtime-checked. */
+export type ValidatePluginRoutes<TRoutes, TMethods> = string extends keyof TRoutes
   ? TRoutes
-  : P extends FortressPlugin<any, any, infer TRoutes> ? TRoutes : undefined;
+  : {
+      [K in keyof TRoutes as K extends string ? K : never]: K extends string
+        ? undefined extends TRoutes[K]
+          ? ValidatePluginRoute<K, Exclude<TRoutes[K], undefined>, TMethods> | undefined
+          : ValidatePluginRoute<K, TRoutes[K], TMethods>
+        : never;
+    };
 
 /**
- * Preserve a plugin definition's literal name, exact methods, and exact routes.
- * This identity helper is the preferred authoring API for third-party plugins.
+ * Preserve a plugin definition's literals while validating callable methods
+ * and correlating every concrete route handler with its method contract.
  */
 export function definePlugin<
   const TDefinition,
   const TName extends string,
   TMethods extends object,
   const TRoutes extends PluginRoutes | undefined,
->(definition: TDefinition & FortressPlugin<TName, TMethods, TRoutes>): TDefinition
-  & Omit<FortressPlugin<TName, TMethods, TRoutes>, 'name' | 'methods' | 'routes'>;
+>(definition: TDefinition & FortressPlugin<TName, TMethods, TRoutes>
+  & { routes?: ValidatePluginRoutes<TRoutes, NoInfer<TMethods>> }): TDefinition
+    & Omit<FortressPlugin<TName, TMethods, TRoutes>, 'name' | 'methods' | 'routes'>;
 export function definePlugin(definition: FortressPlugin): FortressPlugin {
   return definition;
 }

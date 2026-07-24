@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (breaking)
+- Removed the unchecked two-argument `getPluginMethods<T>(fortress, name)` assertion. Use inferred known-key lookup, or pass a runtime validator as the third argument for dynamic plugin names.
+- Concrete `FortressPlugin<Name, Methods>` contracts now require a `methods` implementation, and every exposed method property must be callable.
+- `definePlugin()` now rejects concrete routes whose key and handler differ, whose handler is absent from `methods`, or whose inferred input/success response is incompatible with that method.
+
 ## [1.0.2] - 2026-07-14
 
 ### Fixed

@@ -249,7 +249,10 @@ export function getPluginMethods<T>(
   pluginName: string,
   validator: PluginMethodsValidator<T>,
 ): T;
-export function getPluginMethods(fortress: AnyFortress, pluginName: string): unknown;
+export function getPluginMethods<K extends string>(
+  fortress: AnyFortress,
+  pluginName: K & (string extends K ? unknown : never),
+): unknown;
 export function getPluginMethods<T>(
   fortress: AnyFortress,
   pluginName: string,
@@ -275,6 +278,14 @@ const MIN_SECRET_BYTES = 32;
  * list, wires up auth/IAM services, and returns the assembled instance with
  * type-safe plugin method access for any plugins listed in the config.
  */
+export function createFortress(
+  config: FortressConfig & { plugins?: undefined },
+): Fortress<InferPlugins<readonly []>, TypedCall<readonly []>>;
+export function createFortress<const T extends readonly RuntimeFortressPlugin[]>(
+  config: FortressConfig & { plugins: T },
+): Fortress<InferPlugins<T>, TypedCall<T>>;
+/** Preserve broad plugin access only when the input config is genuinely erased. */
+export function createFortress(config: FortressConfig): Fortress;
 export function createFortress<const T extends readonly RuntimeFortressPlugin[]>(
   config: FortressConfig & { plugins?: T },
 ): Fortress<InferPlugins<T>, TypedCall<T>> {

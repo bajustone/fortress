@@ -78,8 +78,7 @@ export interface DataIsolationMethods {
  * read and write access to a database row by per-user scope assignments,
  * enforcing isolation through the core `scopeRules` capability.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function dataIsolation(config: DataIsolationConfig) {
+export function dataIsolation(config: DataIsolationConfig): FortressPlugin<'data-isolation', DataIsolationMethods, undefined> & { methods: () => DataIsolationMethods } {
   return definePlugin({
     name: 'data-isolation',
 

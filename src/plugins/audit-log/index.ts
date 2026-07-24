@@ -363,8 +363,7 @@ async function queryAuditLog(
  * auth and IAM lifecycle events into an append-only table with a
  * tamper-evident hash chain, plus a query API for compliance reads.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function auditLog(config: AuditLogConfig = {}) {
+export function auditLog(config: AuditLogConfig = {}): FortressPlugin<'audit-log', AuditLogMethods, undefined> {
   const allowedEvents = config.events ?? null;
   const hashChain = config.hashChain ?? false;
 

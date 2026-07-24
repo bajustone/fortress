@@ -47,8 +47,7 @@ export interface EmailVerificationMethods {
  * issues hashed verification tokens, exposes `requestVerification` /
  * `verifyEmail` methods, and (when mounted) the corresponding HTTP routes.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function emailVerification(config: EmailVerificationConfig = {}) {
+export function emailVerification(config: EmailVerificationConfig = {}): FortressPlugin<'email-verification', EmailVerificationMethods, undefined> {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 86400;
   const requireVerification = config.requireVerification ?? true;
 

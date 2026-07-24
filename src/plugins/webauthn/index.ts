@@ -17,7 +17,8 @@ import type {
   RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { FortressPlugin, PluginRouteContext } from '../../core/plugin';
+import type { EndpointDefinition } from '../../core/endpoint';
+import type { FortressPlugin, JsonOf, PluginRouteContext } from '../../core/plugin';
 import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import {
   generateAuthenticationOptions as generateAuthOptions,
@@ -25,6 +26,7 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
+import { authRef } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
 import { definePlugin } from '../../core/plugin';
 import { bool, endpoint, id, obj, record, str } from '../../core/schema-builder';
@@ -132,7 +134,40 @@ function uint8ArrayToBase64url(bytes: Uint8Array): string {
 
 // ── Routes ──────────────────────────────────────────────────────────
 
-const webauthnRoutes = {
+/* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- alias preserves Record compatibility; empty endpoint phantom slots are intentional */
+type WebAuthnRoutes = {
+  readonly generateRegistrationOptions: EndpointDefinition<
+    {},
+    {},
+    {},
+    { 200: { options: PublicKeyCredentialCreationOptionsJSON } },
+    'generateRegistrationOptions'
+  >;
+  readonly verifyRegistration: EndpointDefinition<
+    { response: RegistrationResponseJSON },
+    {},
+    {},
+    { 200: { verified: boolean; credentialId?: string; credentialDeviceType?: string; credentialBackedUp?: boolean } },
+    'verifyRegistration'
+  >;
+  readonly generateAuthenticationOptions: EndpointDefinition<
+    { userId?: string },
+    {},
+    {},
+    { 200: { options: PublicKeyCredentialRequestOptionsJSON } },
+    'generateAuthenticationOptions'
+  >;
+  readonly verifyAuthentication: EndpointDefinition<
+    { response: AuthenticationResponseJSON },
+    {},
+    {},
+    { 200: JsonOf<AuthResult> },
+    'verifyAuthentication'
+  >;
+};
+/* eslint-enable ts/consistent-type-definitions, ts/no-empty-object-type */
+
+const webauthnRoutes: WebAuthnRoutes = {
   generateRegistrationOptions: endpoint('POST', '/webauthn/register/options')
     .summary('Generate WebAuthn registration options')
     .description('Generate public key credential creation options for registering a new passkey against the authenticated caller.')
@@ -140,7 +175,7 @@ const webauthnRoutes = {
     .security('bearer')
     .body(obj({}))
     .response(200, 'Registration options', obj({
-      options: record('PublicKeyCredentialCreationOptions JSON'),
+      options: record<PublicKeyCredentialCreationOptionsJSON>('PublicKeyCredentialCreationOptions JSON'),
     }, 'options'))
     .response(400, 'Bad request')
     .response(401, 'Not authenticated')
@@ -154,7 +189,7 @@ const webauthnRoutes = {
     .tags('WebAuthn')
     .security('bearer')
     .body(obj({
-      response: record('RegistrationResponseJSON from navigator.credentials.create()'),
+      response: record<RegistrationResponseJSON>('RegistrationResponseJSON from navigator.credentials.create()'),
     }, 'response'))
     .response(200, 'Registration verified', obj({
       verified: bool('Whether registration was successful'),
@@ -173,7 +208,7 @@ const webauthnRoutes = {
     .security('none')
     .body(obj({ userId: id('Optional user ID') }))
     .response(200, 'Authentication options', obj({
-      options: record('PublicKeyCredentialRequestOptions JSON'),
+      options: record<PublicKeyCredentialRequestOptionsJSON>('PublicKeyCredentialRequestOptions JSON'),
     }, 'options'))
     .handler('generateAuthenticationOptions')
     .build(),
@@ -184,14 +219,9 @@ const webauthnRoutes = {
     .tags('WebAuthn')
     .security('none')
     .body(obj({
-      response: record('AuthenticationResponseJSON from navigator.credentials.get()'),
+      response: record<AuthenticationResponseJSON>('AuthenticationResponseJSON from navigator.credentials.get()'),
     }, 'response'))
-    .response(200, 'Authentication verified', obj({
-      verified: bool('Whether authentication was successful'),
-      userId: id('Authenticated user ID'),
-      accessToken: str('JWT access token (if passwordless)'),
-      refreshToken: str('Refresh token (if passwordless)'),
-    }, 'verified', 'userId'))
+    .response(200, 'Authentication verified', authRef('AuthResult'))
     .response(401, 'Authentication failed')
     .handler('verifyAuthentication')
     .build(),
@@ -204,8 +234,7 @@ const webauthnRoutes = {
  * implements passkey registration, passwordless authentication, and a
  * second-factor mode using `@simplewebauthn/server`.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function webauthn(config: WebAuthnConfig) {
+export function webauthn(config: WebAuthnConfig): FortressPlugin<'webauthn', WebAuthnMethods, WebAuthnRoutes> & { routes: WebAuthnRoutes } {
   const rpName = config.rpName;
   const rpID = config.rpID;
   const origin = config.origin;
@@ -552,5 +581,5 @@ export function webauthn(config: WebAuthnConfig) {
         return ctx.auth.completePluginAuth(userId, 'webauthn', meta);
       },
     }),
-  } satisfies FortressPlugin<'webauthn', WebAuthnMethods>);
+  } satisfies FortressPlugin<'webauthn', WebAuthnMethods, WebAuthnRoutes>);
 }
