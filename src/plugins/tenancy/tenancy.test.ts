@@ -49,7 +49,7 @@ describe('tenancy plugin', () => {
       plugins: [tenancy()],
     });
 
-    methods = fortress.plugins.tenancy as unknown as TenancyMethods;
+    methods = fortress.resolvePlugin('tenancy') as TenancyMethods;
 
     const user = await fortress.auth.createUser({
       email: 'alice@example.com',

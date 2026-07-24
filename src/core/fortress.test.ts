@@ -2,6 +2,8 @@ import type { DatabaseAdapter } from '../adapters/database';
 import type { RuntimeFortressPlugin } from './plugin';
 
 import { describe, expect, it } from 'vitest';
+import { oauth } from '../plugins/oauth';
+import { openapi } from '../plugins/openapi';
 import { createFortress } from './fortress';
 import { definePlugin } from './plugin';
 
@@ -50,6 +52,24 @@ describe('resolvePlugin', () => {
 });
 
 describe('createFortress', () => {
+  it('matches optional built-in call routes to runtime configuration', () => {
+    const configured = (plugins: readonly RuntimeFortressPlugin[]) => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins,
+    });
+    const calls = (plugins: readonly RuntimeFortressPlugin[]): Record<string, Record<string, unknown>> =>
+      configured(plugins).call.plugins as Record<string, Record<string, unknown>>;
+    expect(calls([oauth()]).oauth).not.toHaveProperty('handleGetFlow');
+    expect(calls([oauth({ enableConsentApi: true })]).oauth).toHaveProperty('handleGetFlow');
+    expect(calls([oauth({ enableConsentApi: true })]).oauth).toHaveProperty('handleApproveFlow');
+    expect(calls([oauth({ enableConsentApi: true })]).oauth).toHaveProperty('handleDenyFlow');
+
+    expect(calls([openapi()]).openapi).toHaveProperty('getUI');
+    expect(calls([openapi({ disableUI: false })]).openapi).toHaveProperty('getUI');
+    expect(calls([openapi({ disableUI: true })]).openapi).not.toHaveProperty('getUI');
+  });
+
   it.each([
     {
       name: 'unsafe-runtime',
@@ -65,7 +85,7 @@ describe('createFortress', () => {
       meta: { summary: 'Unsafe OAuth', security: ['none'] as const, bearerKind: 'oauth' as const },
       expected: 'OAuth handler \'handleDiscovery\' not found',
     },
-  ])('guards $name dispatch against truthy non-function handlers', async ({ name, path, handler, meta, expected }) => {
+  ])('fails startup for $name routes with non-function handlers', ({ name, path, handler, meta }) => {
     const unsafe = {
       name,
       methods: () => ({ [handler]: 'not callable' }),
@@ -73,15 +93,68 @@ describe('createFortress', () => {
         [handler]: { method: 'GET', path, handler, meta },
       },
     } as unknown as RuntimeFortressPlugin;
-    const fortress = createFortress({
+    expect(() => createFortress({
       jwt: { key: 'fortress-test-secret-at-least-32!' },
       database: mockDb,
       plugins: [unsafe] as const,
+    })).toThrow(`Plugin "${name}" route handler "${handler}" must be an own callable method`);
+  });
+
+  it('fails startup for route-only and inherited handlers', () => {
+    const routeOnly = {
+      name: 'route-only-runtime',
+      routes: { missing: { method: 'GET', path: '/missing', handler: 'missing' } },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [routeOnly],
+    })).toThrow('must be an own callable method');
+
+    const inherited = {
+      name: 'inherited-runtime',
+      methods: () => Object.create({ toString: () => ({ unsafe: true }) }) as object,
+      routes: { toString: { method: 'GET', path: '/inherited', handler: 'toString' } },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [inherited],
+    })).toThrow('must be an own callable method');
+  });
+
+  it('safely supports poisoned own plugin and handler names', async () => {
+    const methods = Object.create(null) as Record<string, () => { value: string }>;
+    methods.constructor = function (this: typeof methods) {
+      return { value: Reflect.get(this, '__proto__').call(this).value };
+    };
+    Reflect.set(methods, '__proto__', () => ({ value: 'safe' }));
+    const poisoned = {
+      name: '__proto__',
+      methods: () => methods,
+      routes: {
+        constructor: {
+          method: 'GET',
+          path: '/poisoned',
+          handler: 'constructor',
+          meta: { summary: 'Poisoned', security: ['none'] },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [poisoned] as const,
     });
 
-    const response = await fortress.handleRequest(new Request(`http://localhost${path}`));
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toMatchObject({ message: expected });
+    expect(fortress.resolvePlugin('__proto__')).toBe(methods);
+    expect(Object.getPrototypeOf(fortress.call.plugins)).toBeNull();
+    const poisonedCalls = Reflect.get(fortress.call.plugins, '__proto__') as Record<string, (input: object) => Promise<unknown>>;
+    expect(Object.getPrototypeOf(poisonedCalls)).toBeNull();
+    await expect(poisonedCalls.constructor({})).resolves.toEqual({ value: 'safe' });
+    const response = await fortress.handleRequest(new Request('http://localhost/poisoned'));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ value: 'safe' });
   });
 
   it('preserves plugin method this binding during route dispatch', async () => {
@@ -354,8 +427,8 @@ describe('createFortress', () => {
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         plugins: [
-          { name: 'first-plugin', routes: { first } },
-          { name: 'second-plugin', routes: { second } },
+          { name: 'first-plugin', routes: { first }, methods: () => ({ first: () => ({ ok: true }) }) },
+          { name: 'second-plugin', routes: { second }, methods: () => ({ second: () => ({ ok: true }) }) },
         ],
       })).toThrow(/Duplicate endpoint GET \/duplicate.*first-plugin.*second-plugin/);
     });
@@ -369,8 +442,8 @@ describe('createFortress', () => {
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         plugins: [
-          { name: 'first-plugin', routes: { first } },
-          { name: 'second-plugin', routes: { second } },
+          { name: 'first-plugin', routes: { first }, methods: () => ({ first: () => ({ ok: true }) }) },
+          { name: 'second-plugin', routes: { second }, methods: () => ({ second: () => ({ ok: true }) }) },
         ],
       })).toThrow(/Duplicate endpoint GET \/duplicate\/path/);
     });
@@ -489,8 +562,8 @@ describe('createFortress', () => {
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         plugins: [
-          { name: 'first-plugin', routes: { first } },
-          { name: 'second-plugin', routes: { second } },
+          { name: 'first-plugin', routes: { first }, methods: () => ({ first: () => ({ ok: true }) }) },
+          { name: 'second-plugin', routes: { second }, methods: () => ({ second: () => ({ ok: true }) }) },
         ],
       })).toThrow(/Duplicate endpoint DELETE \/items\/:/);
     });
@@ -508,8 +581,8 @@ describe('createFortress', () => {
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         plugins: [
-          { name: 'first-plugin', routes: { shared: first } },
-          { name: 'second-plugin', routes: { shared: second } },
+          { name: 'first-plugin', routes: { shared: first }, methods: () => ({ shared: () => ({ source: 'first' }) }) },
+          { name: 'second-plugin', routes: { shared: second }, methods: () => ({ shared: () => ({ source: 'second' }) }) },
         ],
       });
       const tree = fortress.call.plugins as Record<string, Record<string, unknown>>;

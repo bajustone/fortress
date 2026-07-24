@@ -3,7 +3,11 @@
 ## [Unreleased]
 
 ### Changed (breaking)
-- **Plugin contracts are now definition-derived and fail closed.** `FortressPlugin<Name, Methods>` requires a callable `methods` implementation for concrete method surfaces; exact methodless `definePlugin()` definitions expose an empty surface, while the deprecated augmentation bridge remains only for explicitly widened legacy plugin types. Concrete route keys must match literal handlers, handler input/output correlation covers every declared 2xx response, and runtime plugin/OAuth dispatch rejects non-function handlers. Optional API-key/tenancy config variables and check-only rate-limit framework capabilities remain supported.
+- **Calls are definition-derived and namespaced.** Core calls move to `fortress.call.auth.*` / `fortress.call.iam.*`; plugin calls move to `fortress.call.plugins[pluginName].*`. Top-level host routes remain metadata-only and are not in-process callables.
+- **The public Fortress type is now one-generic and capability-oriented.** `Fortress<TPlugins>` derives plugin methods and calls from one configured tuple. `AnyFortress` and `TypedCall` are removed; adapters/helpers accept focused capability `Pick`s instead of an erased full instance.
+- **Plugin authoring is definition-derived and fail closed.** `definePlugin()` and `defineEndpoints()` preserve literal names/routes and validate callable method implementations, full dispatch-call arguments, and the body correlated with the lowest numeric exact 2xx status. Exact methodless plugins expose no method or call namespace, route-only plugins fail startup, widened names use `resolvePlugin()`, and prototype-poisoned/inherited handlers are rejected safely.
+- **Legacy call/plugin helpers are removed.** `getPluginMethods`, `CallableForEndpoints`, and `InferPluginCallMap` no longer ship; use inferred `fortress.plugins`, the namespaced `fortress.call` tree, and `resolvePlugin(name, validator)` for dynamic names.
+- **Built-in route capabilities reflect configuration.** OAuth consent calls exist only with literal `enableConsentApi: true`; OpenAPI `getUI` exists unless UI is literally disabled, without promising callables for widened configurations that may omit them.
 
 ## [1.0.2] - 2026-07-14
 

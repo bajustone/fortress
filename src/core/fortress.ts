@@ -191,6 +191,23 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   const iam = createIamService(db, config, { logger, telemetry });
   const pluginMethods = processPlugins(plugins, db, config, auth, iam, logger);
 
+  // A Fortress-mounted plugin route is executable only when its handler is
+  // an own callable method. Fail at startup rather than publishing a call
+  // namespace whose first request would 404; top-level host routes remain
+  // metadata-only and are intentionally exempt.
+  for (const plugin of plugins) {
+    if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
+      continue;
+    const methods = pluginMethods[plugin.name];
+    for (const endpoint of Object.values(plugin.routes)) {
+      if (!Object.hasOwn(methods, endpoint.handler) || typeof methods[endpoint.handler] !== 'function') {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" route handler "${endpoint.handler}" must be an own callable method`,
+        );
+      }
+    }
+  }
+
   // --- Wire built-in telemetry observers ------------------------------
   //
   // Translate AuthEvent / IamEvent / PermissionCheckEvent into metric
@@ -242,7 +259,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   });
 
   // Wire IAM events → audit log if the plugin is registered
-  if (pluginMethods['audit-log']?.logCustomEvent) {
+  if (Object.hasOwn(pluginMethods, 'audit-log') && Object.hasOwn(pluginMethods['audit-log'], 'logCustomEvent')) {
     const logCustomEvent = pluginMethods['audit-log'].logCustomEvent as (event: IamEvent) => Promise<void>;
     iam.addIamObserver(event => logCustomEvent(event));
   }
@@ -351,9 +368,9 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   const resolvePlugin = (<TMethods>(name: string, validator?: PluginMethodsValidator<TMethods>): TMethods | unknown => {
     // Dynamic lookup is erased by design: without a runtime validator the
     // caller gets `unknown`. Static access goes through `fortress.plugins`.
-    const methods = (pluginMethods as Record<string, unknown>)[name];
-    if (!methods)
+    if (!Object.hasOwn(pluginMethods, name))
       throw Errors.notFound(`Plugin '${name}' is not registered`);
+    const methods = (pluginMethods as Record<string, unknown>)[name];
     if (validator && !validator(methods))
       throw Errors.badRequest(`Plugin '${name}' methods failed runtime validation`);
     return methods;
@@ -363,7 +380,11 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     auth,
     iam,
     plugins: pluginMethods as InferPlugins<T>,
-    call: { auth: {}, iam: {}, plugins: {} } as Fortress<T>['call'],
+    call: Object.assign(Object.create(null), {
+      auth: Object.create(null),
+      iam: Object.create(null),
+      plugins: Object.create(null),
+    }) as Fortress<T>['call'],
     resolvePlugin,
     config,
     endpoints,
@@ -413,30 +434,35 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // metadata for manifest/OpenAPI/protected host routes; they carry no
   // plugin methods, so exposing them as callables would create a runtime
   // `NOT_FOUND` footgun — the `__host` virtual plugin is skipped.
-  const pluginCallTree: Record<string, Record<string, unknown>> = {};
+  const pluginCallTree: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
   for (const plugin of plugins) {
     if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
       continue;
-    const genericRoutes = Object.fromEntries(
-      Object.entries(plugin.routes).filter(([, ep]) => ep.meta?.bearerKind !== 'oauth'),
-    ) as Record<string, EndpointDefinition>;
+    const genericRoutes = Object.create(null) as Record<string, EndpointDefinition>;
+    for (const [name, endpoint] of Object.entries(plugin.routes)) {
+      if (endpoint.meta?.bearerKind !== 'oauth')
+        genericRoutes[name] = endpoint;
+    }
     pluginCallTree[plugin.name] = buildCall(instance, genericRoutes);
   }
   // `call` is readonly on the returned public surface, but is populated once
   // here after `handleRequest` has been bound.
   const effectiveCoreRoutes = (
     routes: Record<string, EndpointDefinition>,
-  ): Record<string, EndpointDefinition> => Object.fromEntries(
-    Object.entries(routes).filter(([, ep]) => {
-      const key = `${ep.method.toUpperCase()} ${canonicalizeRouteShape(ep.path)}`;
-      return endpointOwners.get(key) === 'core';
-    }),
-  );
-  (instance as { call: unknown }).call = {
+  ): Record<string, EndpointDefinition> => {
+    const effective = Object.create(null) as Record<string, EndpointDefinition>;
+    for (const [name, endpoint] of Object.entries(routes)) {
+      const key = `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
+      if (endpointOwners.get(key) === 'core')
+        effective[name] = endpoint;
+    }
+    return effective;
+  };
+  (instance as { call: unknown }).call = Object.assign(Object.create(null), {
     auth: buildCall(instance, effectiveCoreRoutes(authEndpoints as unknown as Record<string, EndpointDefinition>)),
     iam: buildCall(instance, effectiveCoreRoutes(iamEndpoints as unknown as Record<string, EndpointDefinition>)),
     plugins: pluginCallTree,
-  };
+  });
 
   return instance;
 }

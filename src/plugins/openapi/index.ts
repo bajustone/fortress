@@ -55,10 +55,19 @@ export interface OpenAPIMethods {
 }
 
 /* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- alias preserves Record compatibility; these routes declare no phantom contract */
-type OpenAPIRoutes = {
+type OpenAPIBaseRoutes = {
   getSpec: EndpointDefinition<{}, {}, {}, {}, 'getSpec', 'GET', string>;
-  getUI?: EndpointDefinition<{}, {}, {}, {}, 'getUI', 'GET', string>;
 };
+type OpenAPIUIRoute = {
+  getUI: EndpointDefinition<{}, {}, {}, {}, 'getUI', 'GET', string>;
+};
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+type OpenAPIRoutes<C extends OpenAPIConfig> = OpenAPIBaseRoutes
+  & (IsAny<C> extends true
+    ? Record<never, never>
+    : 'disableUI' extends keyof C
+      ? true extends C['disableUI'] ? Record<never, never> : OpenAPIUIRoute
+      : OpenAPIUIRoute);
 /* eslint-enable ts/consistent-type-definitions, ts/no-empty-object-type */
 
 function computeRelativeUrl(fromPath: string, toPath: string): string {
@@ -187,7 +196,11 @@ function enrichIamSchemas(
  * registered endpoint definition and emits a complete OpenAPI 3.1 spec,
  * pairable with Scalar UI for interactive documentation.
  */
-export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes> & { routes: OpenAPIRoutes } {
+export function openapi(): FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes<Record<never, never>>> & { routes: OpenAPIRoutes<Record<never, never>> };
+export function openapi(config: undefined): FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes<Record<never, never>>> & { routes: OpenAPIRoutes<Record<never, never>> };
+export function openapi<const C extends OpenAPIConfig>(config: C): FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes<C>> & { routes: OpenAPIRoutes<C> };
+export function openapi(config: OpenAPIConfig | undefined): FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes<OpenAPIConfig>> & { routes: OpenAPIRoutes<OpenAPIConfig> };
+export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes<OpenAPIConfig>> & { routes: OpenAPIRoutes<OpenAPIConfig> } {
   const specPath = config.specPath ?? '/openapi.json';
   const uiPath = config.uiPath ?? '/openapi';
   const title = config.title ?? 'Fortress Auth API';
@@ -209,7 +222,7 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', O
     meta: { summary: 'API reference (Scalar)', tags: ['OpenAPI'], security: ['none'] },
     responses: { 200: { description: 'Scalar API reference HTML' } },
   } satisfies EndpointDefinition;
-  const routes: OpenAPIRoutes = {
+  const routes = {
     getSpec: getSpecRoute,
     ...(!config.disableUI ? { getUI: getUIRoute } : {}),
   };
@@ -300,5 +313,5 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', O
         },
       };
     },
-  } satisfies FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes>);
+  } satisfies FortressPlugin<'openapi', OpenAPIMethods>) as unknown as FortressPlugin<'openapi', OpenAPIMethods, OpenAPIRoutes<OpenAPIConfig>> & { routes: OpenAPIRoutes<OpenAPIConfig> };
 }

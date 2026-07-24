@@ -1,5 +1,5 @@
 import type { CallOptions, DatabaseAdapter, FortressPlugin } from '@bajustone/fortress';
-import { createFortress, endpoint, obj, str } from '@bajustone/fortress';
+import { createFortress, definePlugin, endpoint, obj, str } from '@bajustone/fortress';
 
 type ExpectedLiteralEcho = (
   input: { message: string },
@@ -8,8 +8,11 @@ type ExpectedLiteralEcho = (
 
 /** Compiled against package self-reference after `tsup` emits declarations. */
 export function acceptsPreciseBuiltCallSurface(database: DatabaseAdapter): void {
-  const literalRoutePlugin = {
+  const literalRoutePlugin = definePlugin({
     name: 'declaration-literal-route',
+    methods: () => ({
+      declarationLiteralEcho: async ({ message }: { message: string }): Promise<{ echoed: string }> => ({ echoed: message }),
+    }),
     routes: {
       declarationLiteralEcho: endpoint('POST', '/declaration/literal-echo')
         .security('none')
@@ -18,7 +21,7 @@ export function acceptsPreciseBuiltCallSurface(database: DatabaseAdapter): void 
         .handler('declarationLiteralEcho')
         .build(),
     },
-  } as const satisfies FortressPlugin;
+  });
   const noRoutePlugin = { name: 'declaration-no-route' } as const satisfies FortressPlugin;
   const fortress = createFortress({
     database,

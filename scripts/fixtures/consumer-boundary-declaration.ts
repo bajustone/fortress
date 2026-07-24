@@ -17,13 +17,14 @@ import type { SvelteKitRequestEvent } from '@bajustone/fortress/sveltekit';
 import {
   buildCall,
   createFortress,
+  definePlugin,
   endpoint,
   obj,
   protect,
   str,
 } from '@bajustone/fortress';
 import { mountFortress as mountExpressFortress } from '@bajustone/fortress/express';
-import { mountFortress as mountHonoFortress } from '@bajustone/fortress/hono';
+import { createHonoMiddleware, mountFortress as mountHonoFortress } from '@bajustone/fortress/hono';
 import { apiKey } from '@bajustone/fortress/plugins/api-key';
 import { expressRateLimit } from '@bajustone/fortress/plugins/rate-limit/express';
 import { honoRateLimit } from '@bajustone/fortress/plugins/rate-limit/hono';
@@ -61,7 +62,7 @@ export function acceptsBrandedPluginFromBuiltDeclarations(
   const fortress = createFortress({
     database,
     jwt: { key: 'x'.repeat(32) },
-    plugins: [brandedPlugin],
+    plugins: [brandedPlugin] as const,
   });
 
   const methods: ApiKeyMethods = fortress.plugins['api-key'];
@@ -85,8 +86,11 @@ export function acceptsBrandedPluginFromBuiltDeclarations(
   // Exercise a concrete plugin call through the namespaced tree without
   // deriving the expected type from the instance itself. Ownership is
   // explicit: plugin callables live under `call.plugins.<name>`.
-  const callPlugin = {
+  const callPlugin = definePlugin({
     name: 'call-fixture',
+    methods: () => ({
+      fixtureEcho: async ({ message }: { message: string }): Promise<{ echo: string }> => ({ echo: message }),
+    }),
     routes: {
       fixtureEcho: endpoint('POST', '/fixture/echo')
         .body(obj({ message: str() }, 'message'))
@@ -94,7 +98,7 @@ export function acceptsBrandedPluginFromBuiltDeclarations(
         .handler('fixtureEcho')
         .build(),
     },
-  } as const satisfies FortressPlugin;
+  });
   const callFortress = createFortress({
     database,
     jwt: { key: 'x'.repeat(32) },
@@ -146,10 +150,28 @@ export function acceptsBrandedPluginFromBuiltDeclarations(
   void [httpRuntime, authRuntime, pluginRuntime, manifestRuntime, migrationRuntime, observabilityRuntime, protectRuntime, fullRuntime];
 
   mountHonoFortress(new Hono(), fortress);
+  mountHonoFortress(new Hono(), { manifest: fortress.manifest, handleRequest: fortress.handleRequest });
+  createHonoMiddleware({
+    config: fortress.config,
+    iam: fortress.iam,
+    resolvePrincipal: fortress.resolvePrincipal,
+  });
+  // @ts-expect-error -- mount boundary requires the manifest it actually reads
+  mountHonoFortress(new Hono(), { handleRequest: fortress.handleRequest });
   honoRateLimit(fortress, 'api');
-  mountExpressFortress(expressApp, fortress);
+  mountExpressFortress(expressApp, { manifest: fortress.manifest, handleRequest: fortress.handleRequest });
   expressRateLimit(fortress, 'api');
   createSvelteKitHandle(fortress);
+  createSvelteKitHandle({
+    manifest: fortress.manifest,
+    handleRequest: fortress.handleRequest,
+    auth: fortress.auth,
+    iam: fortress.iam,
+    config: fortress.config,
+    extractAccessToken: fortress.extractAccessToken,
+    cookies: fortress.cookies,
+    runPluginMiddleware: fortress.runPluginMiddleware,
+  });
   toSvelteKitHandler(fortress);
   fortressActions.login(fortress);
   svelteKitProtectedRoute(fortress, 'login', () => ({ ok: true }));

@@ -368,11 +368,7 @@ type OAuthProtocolRoute<
 };
 
 /* eslint-disable ts/consistent-type-definitions -- alias preserves Record compatibility */
-type OAuthRoutes = {
-  handleAuthorizeRequest?: OAuthProtocolRoute<'handleAuthorizeRequest', 'GET', '/oauth/authorize'>;
-  handleGetFlow?: EndpointDefinition<any, any, any, any, 'handleGetFlow', 'GET', '/oauth/flows/:flowId'>;
-  handleApproveFlow?: EndpointDefinition<any, any, any, any, 'handleApproveFlow', 'POST', '/oauth/flows/:flowId/approve'>;
-  handleDenyFlow?: EndpointDefinition<any, any, any, any, 'handleDenyFlow', 'POST', '/oauth/flows/:flowId/deny'>;
+type OAuthBaseRoutes = {
   handleTokenRequest: OAuthProtocolRoute<'handleTokenRequest', 'POST', '/oauth/token'>;
   handleIntrospectRequest: OAuthProtocolRoute<'handleIntrospectRequest', 'POST', '/oauth/introspect'>;
   handleRevokeRequest: OAuthProtocolRoute<'handleRevokeRequest', 'POST', '/oauth/revoke'>;
@@ -380,9 +376,24 @@ type OAuthRoutes = {
   handleDiscovery: OAuthProtocolRoute<'handleDiscovery', 'GET', '/oauth/.well-known/openid-configuration'>;
   handleJwksRequest: OAuthProtocolRoute<'handleJwksRequest', 'GET', '/oauth/.well-known/jwks.json'>;
 };
+type OAuthAuthorizeRoute = {
+  handleAuthorizeRequest: OAuthProtocolRoute<'handleAuthorizeRequest', 'GET', '/oauth/authorize'>;
+};
+type OAuthConsentRoutes = {
+  handleGetFlow: EndpointDefinition<any, any, any, any, 'handleGetFlow', 'GET', '/oauth/flows/:flowId'>;
+  handleApproveFlow: EndpointDefinition<any, any, any, any, 'handleApproveFlow', 'POST', '/oauth/flows/:flowId/approve'>;
+  handleDenyFlow: EndpointDefinition<any, any, any, any, 'handleDenyFlow', 'POST', '/oauth/flows/:flowId/deny'>;
+};
+type OAuthRoutes<C extends OAuthConfig> = OAuthBaseRoutes
+  & (C extends { enableAuthorizeEndpoint: true } ? OAuthAuthorizeRoute : Record<never, never>)
+  & (C extends { enableConsentApi: true } ? OAuthConsentRoutes : Record<never, never>);
 /* eslint-enable ts/consistent-type-definitions */
 
-export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes> & { routes: OAuthRoutes } {
+export function oauth(): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<Record<never, never>>> & { routes: OAuthRoutes<Record<never, never>> };
+export function oauth(config: undefined): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<Record<never, never>>> & { routes: OAuthRoutes<Record<never, never>> };
+export function oauth<const C extends OAuthConfig>(config: C): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<C>> & { routes: OAuthRoutes<C> };
+export function oauth(config: OAuthConfig | undefined): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<OAuthConfig>> & { routes: OAuthRoutes<OAuthConfig> };
+export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<OAuthConfig>> & { routes: OAuthRoutes<OAuthConfig> } {
   const authCodeExpiry = config.authCodeExpirySeconds ?? 600;
   const pendingFlowExpiry = config.pendingFlowExpirySeconds ?? 600;
   const accessTokenExpiry = config.accessTokenExpirySeconds ?? 3600;
@@ -1882,6 +1893,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
                 summary: 'Fetch pending OAuth flow metadata',
                 tags: ['OAuth'],
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+                dispatchKind: 'oauth' as const,
               },
               responses: {
                 200: {
@@ -1915,6 +1927,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
                 summary: 'Approve a pending OAuth flow',
                 tags: ['OAuth'],
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+                dispatchKind: 'oauth' as const,
               },
               responses: {
                 200: {
@@ -1936,6 +1949,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
                 summary: 'Deny a pending OAuth flow',
                 tags: ['OAuth'],
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+                dispatchKind: 'oauth' as const,
               },
               responses: {
                 200: {
@@ -2051,7 +2065,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         },
       },
     },
-  } satisfies FortressPlugin<'oauth', OAuthMethods>);
+  } satisfies FortressPlugin<'oauth', OAuthMethods>) as unknown as FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<OAuthConfig>> & { routes: OAuthRoutes<OAuthConfig> };
 }
 
 /**

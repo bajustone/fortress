@@ -24,12 +24,13 @@ export function processPlugins(
 ): Record<string, Record<string, Function>> {
   const ctx: PluginContext = { db, config, auth, iam, logger };
   // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
-  const result: Record<string, Record<string, Function>> = {};
+  const result: Record<string, Record<string, Function>> = Object.create(null) as Record<string, Record<string, Function>>;
 
   for (const plugin of plugins) {
-    const methods = plugin.methods?.(ctx) ?? {};
-    // The runtime dictionary cannot prove that every property of the generic
-    // method object is callable; plugin authors uphold that public contract.
+    const methods = plugin.methods?.(ctx) ?? Object.create(null) as object;
+    // Keep each surface's own properties and `this` identity intact. Dispatch
+    // performs own-property checks, so inherited names can never become route
+    // handlers accidentally.
     // eslint-disable-next-line ts/no-unsafe-function-type -- normalized at the runtime dictionary boundary
     result[plugin.name] = methods as Record<string, Function>;
   }

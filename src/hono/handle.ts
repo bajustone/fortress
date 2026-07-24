@@ -43,7 +43,7 @@ export interface MountFortressOptions {
  */
 export function mountFortress<E extends Env = Env>(
   app: Hono<E>,
-  fortress: FortressHttpRuntime,
+  fortress: Pick<FortressHttpRuntime, 'manifest' | 'handleRequest'>,
   options: MountFortressOptions = {},
 ): void {
   const prefix = options.prefix ?? '';

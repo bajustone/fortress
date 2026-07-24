@@ -35,6 +35,8 @@ export type CallClient<E> = {
   readonly [K in keyof E & string]: EndpointCall<E[K]>;
 };
 
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+
 type GenericCallableRoutes<E> = {
   [K in keyof E as Exclude<E[K], undefined> extends { meta: { bearerKind: 'oauth' } } ? never : K]: E[K];
 };
@@ -81,7 +83,11 @@ type ConcretePluginRoutes<P> = 'routes' extends keyof P
  * that require form/basic/bearer semantics are intentionally excluded.
  */
 export type PluginCallTree<TPlugins extends readonly RuntimeFortressPlugin[]> = {
-  readonly [P in TPlugins[number] as [ConcretePluginRoutes<P>] extends [never] ? never : P['name']]:
+  readonly [P in TPlugins[number] as P extends { methods: (...args: any[]) => object }
+    ? IsAny<P['name']> extends true
+      ? never
+      : string extends P['name'] ? never : [ConcretePluginRoutes<P>] extends [never] ? never : P['name']
+    : never]:
   CallClient<GenericCallableRoutes<ConcretePluginRoutes<P>>>;
 };
 

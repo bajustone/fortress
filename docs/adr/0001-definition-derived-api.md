@@ -93,12 +93,14 @@ authoring API, introduced by #11, extended here) statically verifies:
 - **every route's `handler` names an existing plugin method** — a route whose
   handler doesn't exist on the methods surface is a compile error on that route
   property (`RouteHandlerMissing`);
-- **the handler's first parameter accepts the endpoint's inferred
-  body+query+params input, and its resolved return value serializes to the
-  declared success response** (`RouteHandlerIncompatible`). Dispatch calls
+- **the handler accepts the full dispatched function call and its resolved
+  return value serializes to the body declared for the lowest numeric exact
+  2xx response key** (`RouteHandlerIncompatible`). Dispatch calls
   `methods[handler]({...body, ...query, ...params}, ctx)` with validated,
-  schema-transformed values and JSON-serializes the result, so the return check
-  compares through a `JsonOf` wire projection
+  schema-transformed values; zero/one-argument handlers and a compatible
+  optional context remain valid, while incompatible optional/rest parameters
+  and required trailing arguments fail. The return check compares through a
+  `JsonOf` wire projection
   (`Date` → ISO string) — schemas describe the wire, methods describe the
   runtime;
 - third-party plugins get all of this from inference alone — no central
@@ -141,7 +143,7 @@ composes them (§1):
 
 | Capability | Members | Consumers (measured) |
 |---|---|---|
-| `FortressHttpRuntime` | `endpoints`, `manifest`, `config`, `handleRequest` | `mountFortress` (Hono/Express), `toSvelteKitHandler`, Hono OpenAPI helpers, `buildCall` |
+| `FortressHttpRuntime` | `endpoints`, `manifest`, `config`, `handleRequest` | HTTP consumers use exact `Pick` slices: Hono/Express `mountFortress` need `manifest` + `handleRequest`; `buildCall` needs only `handleRequest`; other helpers select their measured members |
 | `FortressAuthRuntime` | `auth`, `iam`, `cookies`, `config`, `extractAccessToken`, `resolvePrincipal`, `serializeAuthCookies` | auth + RBAC middleware (Hono/Express/SvelteKit), SvelteKit actions/cookies, `smokeTestAuth` |
 | `FortressPluginRuntime` | `config`, `plugins` (erased `object`), `runPluginMiddleware`, `resolvePlugin` | plugin-middleware slots, rate-limit framework adapters, principal chain |
 | `FortressManifestRuntime` | `endpoints`, `manifest`, `config`, `toOpenAPI` | manifest drift/route checks, OpenAPI emission (already `Pick`-shaped today) |
@@ -156,8 +158,8 @@ the composition of all six. Narrow internal helpers use `Pick` slices of a
 capability (e.g. `Pick<FortressHttpRuntime, 'handleRequest'>` for
 `buildCall`).
 
-Adapter signatures become e.g. `mountFortress(app: Hono, fortress:
-FortressHttpRuntime)`. Every concrete `Fortress<TPlugins>` satisfies every
+Adapter signatures use exact slices, e.g. `mountFortress(app: Hono, fortress:
+Pick<FortressHttpRuntime, 'manifest' | 'handleRequest'>)`. Every concrete `Fortress<TPlugins>` satisfies every
 capability automatically, so consumers never cast; and a test can hand-roll a
 capability object without building a full instance. Member sets are fixed by
 the usage audit, not by guesswork — a capability never carries a member no

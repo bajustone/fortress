@@ -9,8 +9,8 @@ import type { socialLogin } from '../plugins/social-login';
 import type { twoFactor } from '../plugins/two-factor';
 import type { webauthn } from '../plugins/webauthn';
 import type { webhook } from '../plugins/webhook';
-import type { InferEndpointSuccessResponse } from './endpoint';
-import type { FortressPlugin } from './plugin';
+import type { InferEndpointResponses, InferEndpointSuccessResponse } from './endpoint';
+import type { FortressPlugin, PluginRouteContext } from './plugin';
 import type { InferPlugins } from './plugin-methods-map';
 import { describe, expect, it } from 'vitest';
 import { admin } from '../plugins/admin';
@@ -210,6 +210,15 @@ export type AcceptedResponseContract = Assert<Equal<
   InferEndpointSuccessResponse<typeof _acceptedRoute>,
   { ok: string }
 >>;
+type Empty = Record<never, never>;
+type StatusResponse<S extends number> = InferEndpointSuccessResponse<import('./endpoint').EndpointDefinition<Empty, Empty, Empty, { [K in S]: K }>>;
+export type ExactTwoXxContracts = [
+  Assert<Equal<StatusResponse<199>, unknown>>,
+  Assert<Equal<StatusResponse<200>, 200>>,
+  Assert<Equal<StatusResponse<299>, 299>>,
+  Assert<Equal<StatusResponse<300>, unknown>>,
+  Assert<Equal<StatusResponse<2000>, unknown>>,
+];
 
 const _multiSuccessRoute = endpoint('POST', '/multi-success')
   .response(200, 'Immediate', obj({ ok: bool() }, 'ok'))
@@ -218,8 +227,43 @@ const _multiSuccessRoute = endpoint('POST', '/multi-success')
   .build();
 export type MultiSuccessResponseContract = Assert<Equal<
   InferEndpointSuccessResponse<typeof _multiSuccessRoute>,
+  { ok: boolean }
+>>;
+export type MultiSuccessInformationContract = Assert<Equal<
+  InferEndpointResponses<typeof _multiSuccessRoute>[200 | 202],
   { ok: boolean } | { queued: string }
 >>;
+const _reorderedSuccessRoute = endpoint('POST', '/reordered-success')
+  .response(202, 'Queued', obj({ queued: str() }, 'queued'))
+  .response(200, 'Immediate', obj({ ok: bool() }, 'ok'))
+  .handler('reorderedSuccess')
+  .build();
+export type ReorderedSuccessResponseContract = Assert<Equal<
+  InferEndpointSuccessResponse<typeof _reorderedSuccessRoute>,
+  { ok: boolean }
+>>;
+function widenedSuccessStatusContract(status: number): void {
+  const _widenedFirst = endpoint('GET', '/widened-success')
+    .response(status, 'Dynamic', obj({ dynamic: str() }, 'dynamic'))
+    .response(202, 'Queued', obj({ queued: str() }, 'queued'))
+    .handler('widenedSuccess')
+    .build();
+  const _conservative: Assert<Equal<InferEndpointSuccessResponse<typeof _widenedFirst>, unknown>> = true;
+  void _conservative;
+}
+void widenedSuccessStatusContract;
+definePlugin({
+  name: 'mismatched-lowest-success',
+  methods: () => ({ result: () => ({ queued: 'later' }) }),
+  routes: {
+    // @ts-expect-error dispatch labels the handler result with the lowest declared 200 status
+    result: endpoint('POST', '/mismatched-lowest-success')
+      .response(202, 'Queued', obj({ queued: str() }, 'queued'))
+      .response(200, 'Immediate', obj({ ok: bool() }, 'ok'))
+      .handler('result')
+      .build(),
+  },
+});
 
 definePlugin({
   name: 'function-return',
@@ -269,6 +313,77 @@ export type LegacyContract = Assert<Equal<InferPlugins<readonly [typeof _legacyP
 const exactLegacyName = definePlugin({ name: 'legacy' });
 export type ExactEmptyContract = Assert<Equal<keyof InferPlugins<readonly [typeof exactLegacyName]>['legacy'], never>>;
 
+const exactUndefinedMethods = definePlugin({ name: 'legacy', methods: undefined });
+export type ExactUndefinedMethodsContract = Assert<Equal<keyof InferPlugins<readonly [typeof exactUndefinedMethods]>['legacy'], never>>;
+
+const _routeOnly = {
+  name: 'route-only',
+  routes: { ping: endpoint('GET', '/route-only').handler('ping').build() },
+} as const satisfies FortressPlugin;
+type RouteOnlyCalls = import('./call-tree').PluginCallTree<readonly [typeof _routeOnly]>;
+export type RouteOnlyCallContract = Assert<Equal<keyof RouteOnlyCalls, never>>;
+
+void definePlugin({
+  name: 'invalid-route-only',
+  routes: {
+    // @ts-expect-error definePlugin route declarations require matching methods
+    ping: endpoint('GET', '/invalid-route-only').handler('ping').build(),
+  },
+});
+
+const acceptsDispatchShape = definePlugin({
+  name: 'dispatch-shape',
+  methods: () => ({
+    noArguments: () => ({ ok: true }),
+    withoutContext: (_input: { value: string }) => ({ ok: true }),
+    withContext: (_input: { value: string }, _ctx: PluginRouteContext) => ({ ok: true }),
+    withOptionalContext: (_input: { value: string }, _ctx?: PluginRouteContext) => ({ ok: true }),
+  }),
+  routes: {
+    noArguments: endpoint('POST', '/no-arguments').body(obj({ value: str() }, 'value')).response(200, 'ok', obj({ ok: bool() }, 'ok')).handler('noArguments').build(),
+    withoutContext: endpoint('POST', '/without-context').body(obj({ value: str() }, 'value')).response(200, 'ok', obj({ ok: bool() }, 'ok')).handler('withoutContext').build(),
+    withContext: endpoint('POST', '/with-context').body(obj({ value: str() }, 'value')).response(200, 'ok', obj({ ok: bool() }, 'ok')).handler('withContext').build(),
+    withOptionalContext: endpoint('POST', '/with-optional-context').body(obj({ value: str() }, 'value')).response(200, 'ok', obj({ ok: bool() }, 'ok')).handler('withOptionalContext').build(),
+  },
+});
+void acceptsDispatchShape;
+
+definePlugin({
+  name: 'bad-dispatch-context',
+  methods: () => ({ bad: (_input: { value: string }, _ctx: { request: string }) => ({ ok: true }) }),
+  routes: {
+    // @ts-expect-error required context must accept PluginRouteContext
+    bad: endpoint('POST', '/bad-context').body(obj({ value: str() }, 'value')).response(200, 'ok', obj({ ok: bool() }, 'ok')).handler('bad').build(),
+  },
+});
+
+definePlugin({
+  name: 'bad-optional-dispatch-context',
+  methods: () => ({ bad: (_input: { value: string }, _ctx?: { request: string }) => ({ ok: true }) }),
+  routes: {
+    // @ts-expect-error optional incompatible context is still unsafe for the dispatched second argument
+    bad: endpoint('POST', '/bad-optional-context').body(obj({ value: str() }, 'value')).response(200, 'ok', obj({ ok: bool() }, 'ok')).handler('bad').build(),
+  },
+});
+
+definePlugin({
+  name: 'bad-rest-dispatch-context',
+  methods: () => ({ bad: (_input: { value: string }, ..._rest: string[]) => ({ ok: true }) }),
+  routes: {
+    // @ts-expect-error incompatible rest parameters cannot receive PluginRouteContext
+    bad: endpoint('POST', '/bad-rest-context').body(obj({ value: str() }, 'value')).response(200, 'ok', obj({ ok: bool() }, 'ok')).handler('bad').build(),
+  },
+});
+
+definePlugin({
+  name: 'bad-dispatch-trailing',
+  methods: () => ({ bad: (_input: { value: string }, _ctx: PluginRouteContext, _required: string) => ({ ok: true }) }),
+  routes: {
+    // @ts-expect-error dispatch never supplies required trailing arguments
+    bad: endpoint('POST', '/bad-trailing').body(obj({ value: str() }, 'value')).response(200, 'ok', obj({ ok: bool() }, 'ok')).handler('bad').build(),
+  },
+});
+
 interface ExpectedMethods { ok: () => number }
 definePlugin({
   name: 'broken',
@@ -276,7 +391,7 @@ definePlugin({
   methods: () => ({ ok: () => 'wrong' }),
 } satisfies FortressPlugin<'broken', ExpectedMethods>);
 
-export function compilePluginContracts(database: DatabaseAdapter): void {
+export function compilePluginContracts(database: DatabaseAdapter, dynamicName: string): void {
   const noPlugins = createFortress({ database, jwt: { key: 'x'.repeat(32) } });
   // @ts-expect-error omitted plugins produce an exact empty static plugin surface
   void noPlugins.plugins.arbitrary;
@@ -298,6 +413,28 @@ export function compilePluginContracts(database: DatabaseAdapter): void {
   });
   // @ts-expect-error exact methodless definitions do not use legacy augmentation
   emptyFortress.plugins.legacy.ping();
+  const undefinedMethodsFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [exactUndefinedMethods] as const });
+  // @ts-expect-error exact methods:undefined is methodless
+  undefinedMethodsFortress.plugins.legacy.ping();
+
+  const dynamicPlugin = definePlugin({ name: dynamicName, methods: () => ({ ping: () => 'pong' }) });
+  const dynamicFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [dynamicPlugin] as const });
+  // @ts-expect-error widened names do not create a static string index
+  dynamicFortress.plugins.anyName.ping();
+  const anyName: any = dynamicName;
+  const anyNamedPlugin = definePlugin({
+    name: anyName,
+    methods: () => ({ ping: () => ({ value: 'pong' }) }),
+    routes: {
+      ping: endpoint('GET', '/any-name').response(200, 'ok', obj({ value: str() }, 'value')).handler('ping').build(),
+    },
+  });
+  const anyNamedFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [anyNamedPlugin] as const });
+  // @ts-expect-error any plugin names do not create a static methods index
+  anyNamedFortress.plugins.anyName.ping();
+  // @ts-expect-error any plugin names do not create a static call index
+  anyNamedFortress.call.plugins.anyName.ping({});
+  void dynamicFortress.resolvePlugin(dynamicName);
 
   const maybeApiConfig: import('../plugins/api-key').ApiKeyConfig | undefined = undefined;
   void apiKey(maybeApiConfig);
@@ -422,9 +559,17 @@ export function compilePluginContracts(database: DatabaseAdapter): void {
   void oauthFortress.call.plugins.oauth.handleDiscovery;
   // @ts-expect-error excluded OAuth protocol callable
   void oauthFortress.call.plugins.oauth.handleJwksRequest;
-  // JWT-backed consent-flow routes remain generic callables, and unrelated
-  // core calls remain available because OAuth route identities stay exact.
+  // Consent-flow routes are absent unless the API is literally enabled.
+  // @ts-expect-error consent API omitted at runtime and in the call surface
   void oauthFortress.call.plugins.oauth.handleGetFlow;
+  const consentFortress = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [oauth({ enableConsentApi: true })] as const,
+  });
+  void consentFortress.call.plugins.oauth.handleGetFlow;
+  void consentFortress.call.plugins.oauth.handleApproveFlow;
+  void consentFortress.call.plugins.oauth.handleDenyFlow;
   void oauthFortress.call.auth.login;
   void oauthFortress.call.auth.me;
   void oauthFortress.call.iam.getRoles;
@@ -434,10 +579,53 @@ export function compilePluginContracts(database: DatabaseAdapter): void {
     jwt: { key: 'x'.repeat(32) },
     plugins: [openapi()] as const,
   });
+  void openapiFortress.call.plugins.openapi.getSpec;
+  void openapiFortress.call.plugins.openapi.getUI;
   // Configurable OpenAPI paths cannot erase unrelated core callables; a
   // runtime collision must use the matching core route key/handler instead.
   void openapiFortress.call.auth.me;
   void openapiFortress.call.iam.getRoles;
+  const undefinedOpenapi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(undefined)] as const });
+  void undefinedOpenapi.call.plugins.openapi.getUI;
+  const titledOpenapi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi({ title: 'x' })] as const });
+  void titledOpenapi.call.plugins.openapi.getUI;
+  const omittedDisableUiConfig: Omit<import('../plugins/openapi').OpenAPIConfig, 'disableUI'> = { title: 'x' };
+  const omittedDisableUi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(omittedDisableUiConfig)] as const });
+  void omittedDisableUi.call.plugins.openapi.getUI;
+  const falseUi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi({ disableUI: false })] as const });
+  void falseUi.call.plugins.openapi.getUI;
+  const optionalFalseConfig: { disableUI?: false } = {};
+  const optionalFalseUi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(optionalFalseConfig)] as const });
+  void optionalFalseUi.call.plugins.openapi.getUI;
+  const noUiFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi({ disableUI: true })] as const });
+  // @ts-expect-error disabled UI is absent at runtime and in types
+  void noUiFortress.call.plugins.openapi.getUI;
+  const widenedOpenapiConfig: import('../plugins/openapi').OpenAPIConfig = {};
+  const widenedOpenapi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(widenedOpenapiConfig)] as const });
+  // @ts-expect-error widened config cannot guarantee getUI exists
+  void widenedOpenapi.call.plugins.openapi.getUI;
+  const checkWidenedOpenapiBoolean = (disableUI: boolean): void => {
+    const widenedBooleanOpenapi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi({ disableUI })] as const });
+    // @ts-expect-error widened boolean cannot guarantee getUI exists
+    void widenedBooleanOpenapi.call.plugins.openapi.getUI;
+  };
+  void checkWidenedOpenapiBoolean;
+  const widenedOAuthConfig: import('../plugins/oauth').OAuthConfig = { enableConsentApi: true };
+  const widenedOAuth = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [oauth(widenedOAuthConfig)] as const });
+  // @ts-expect-error widened config cannot guarantee consent routes exist
+  void widenedOAuth.call.plugins.oauth.handleGetFlow;
+  const maybeEnabledOAuthConfig: { enableConsentApi: true } | undefined = Math.random() > 0.5
+    ? { enableConsentApi: true }
+    : undefined;
+  const maybeEnabledOAuth = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [oauth(maybeEnabledOAuthConfig)] as const });
+  // @ts-expect-error undefined may omit consent routes at runtime
+  void maybeEnabledOAuth.call.plugins.oauth.handleGetFlow;
+  const maybeOpenapiConfig: import('../plugins/openapi').OpenAPIConfig | undefined = Math.random() > 0.5
+    ? { disableUI: false }
+    : undefined;
+  const maybeOpenapi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(maybeOpenapiConfig)] as const });
+  // @ts-expect-error a widened union cannot guarantee getUI exists
+  void maybeOpenapi.call.plugins.openapi.getUI;
 
   const adminFortress = createFortress({
     database,

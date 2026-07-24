@@ -5,7 +5,7 @@ import { createTestAdapter } from '../../testing';
 import { FortressError } from '../errors';
 import { createFortress } from '../fortress';
 import { definePlugin } from '../plugin';
-import { endpoint, obj, str } from '../schema-builder';
+import { bool, endpoint, obj, str } from '../schema-builder';
 import { assertSuccess } from '../types';
 
 const SECRET = 'call-test-secret-at-least-32-bytes-long!!';
@@ -30,11 +30,24 @@ const noRoutePlugin = definePlugin({
   methods: () => ({ health: () => 'ok' }),
 });
 
+const correlatedSuccessPlugin = definePlugin({
+  name: 'correlated-success',
+  methods: () => ({ first: () => ({ kind: 'A' as const }) }),
+  routes: {
+    first: endpoint('GET', '/correlated-success')
+      .security('none')
+      .response(202, 'Queued', obj({ queued: bool() }, 'queued'))
+      .response(200, 'Immediate', obj({ kind: str() }, 'kind'))
+      .handler('first')
+      .build(),
+  },
+});
+
 function makeFortress() {
   return createFortress({
     jwt: { key: SECRET, issuer: 'call-test' },
     database: createTestAdapter(),
-    plugins: [literalRoutePlugin, noRoutePlugin] as const,
+    plugins: [literalRoutePlugin, noRoutePlugin, correlatedSuccessPlugin] as const,
   });
 }
 
@@ -57,6 +70,15 @@ function rejectsInvalidCallInputs(fortress: ReturnType<typeof makeFortress>): vo
 }
 
 describe('fortress.call', () => {
+  it('correlates the lowest numeric success body with the dispatched status', async () => {
+    const fortress = makeFortress();
+    const result: { kind: string } = await fortress.call.plugins['correlated-success'].first({});
+    expect(result).toEqual({ kind: 'A' });
+    const response = await fortress.handleRequest(new Request('http://localhost/correlated-success'));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ kind: 'A' });
+  });
+
   describe('type inference', () => {
     it('infers login input shape', () => {
       expectTypeOf<InferEndpointCallInput<typeof authEndpoints.login>>().toEqualTypeOf<{

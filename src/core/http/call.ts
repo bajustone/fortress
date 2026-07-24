@@ -76,7 +76,7 @@ export function buildCall(
   fortress: Pick<FortressHttpRuntime, 'handleRequest'>,
   endpoints: Record<string, EndpointDefinition>,
 ): Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> {
-  const out: Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> = {};
+  const out = Object.create(null) as Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>>;
 
   for (const [key, ep] of Object.entries(endpoints)) {
     const bodyKeys = schemaKeys(ep.input?.body);
@@ -86,9 +86,9 @@ export function buildCall(
     out[key] = async (input: Record<string, unknown> = {}, options: CallOptions = {}): Promise<unknown> => {
       // Split the flat input into body/query/params by schema membership.
       // Params take priority (path substitution), then query, then body.
-      const body: Record<string, unknown> = {};
-      const query: Record<string, unknown> = {};
-      const params: Record<string, unknown> = {};
+      const body = Object.create(null) as Record<string, unknown>;
+      const query = Object.create(null) as Record<string, unknown>;
+      const params = Object.create(null) as Record<string, unknown>;
       for (const [k, v] of Object.entries(input)) {
         if (paramsKeys.has(k))
           params[k] = v;

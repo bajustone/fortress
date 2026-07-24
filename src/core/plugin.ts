@@ -160,14 +160,14 @@ type ContainsNonJsonValue<T> = T extends Date ? false
         : false;
 
 /**
- * Does the handler accept the endpoint's flat call input? Dispatch invokes
- * `methods[handler]({ ...body, ...query, ...pathParams }, ctx)`, so the
- * method's first parameter must accept the inferred input intersection.
- * Parameterless methods accept anything by construction.
+ * Does the handler accept the exact call dispatch performs? Function
+ * assignability permits handlers that ignore either argument, while still
+ * checking optional/rest parameters and rejecting required trailing ones.
  */
-type HandlerInputCompatible<M, E> = M extends (input: infer I, ...rest: any[]) => any
-  ? InferEndpointCallInput<E> extends I ? true : false
-  : false;
+type HandlerInvocationCompatible<M, E> = M extends (
+  input: InferEndpointCallInput<E>,
+  context: PluginRouteContext,
+) => any ? true : false;
 
 /**
  * Does the handler's resolved return value serialize to the endpoint's
@@ -215,13 +215,15 @@ type ValidatePluginRoute<K extends string, E, TMethods> = E extends AnyEndpointD
   ? InferEndpointHandler<E> extends infer H extends string
     ? [K, H] extends [H, K]
         ? H extends keyof TMethods
-          ? E extends { meta: { bearerKind: 'oauth' } }
+          ? E extends { meta: { bearerKind: 'oauth' } | { dispatchKind: 'oauth' } }
             ? E
-            : ContractlessEndpoint<E> extends true
-              ? E
-              : [HandlerInputCompatible<TMethods[H], E>, HandlerReturnCompatible<TMethods[H], E>] extends [true, true]
+            : HandlerInvocationCompatible<TMethods[H], E> extends true
+              ? ContractlessEndpoint<E> extends true
+                ? E
+                : HandlerReturnCompatible<TMethods[H], E> extends true
                   ? E
                   : RouteHandlerIncompatible<H>
+              : RouteHandlerIncompatible<H>
           : RouteHandlerMissing<H>
         : RouteHandlerKeyMismatch<K, H>
     : never
@@ -265,13 +267,16 @@ export type ValidatePluginRoutes<TRoutes, TMethods> = string extends keyof TRout
  * Third-party plugins get the full typed surface from inference alone — no
  * central registry edit or module augmentation required.
  */
+/** Package-owned inference blocker compatible with the advertised TypeScript 5.0 floor. */
+type NoInferCompat<T> = [T][T extends any ? 0 : never];
+
 export function definePlugin<
   const TDefinition,
   const TName extends string,
   TMethods extends object,
   const TRoutes extends PluginRoutes | undefined,
 >(definition: TDefinition & FortressPlugin<TName, TMethods, TRoutes>
-  & { routes?: ValidatePluginRoutes<TRoutes, NoInfer<TMethods>> }): TDefinition
+  & { routes?: ValidatePluginRoutes<TRoutes, NoInferCompat<TMethods>> }): TDefinition
     & Omit<FortressPlugin<TName, TMethods, TRoutes>, 'name' | 'methods' | 'routes' | 'coreOverrides'>;
 export function definePlugin(definition: FortressPlugin): FortressPlugin {
   return definition;

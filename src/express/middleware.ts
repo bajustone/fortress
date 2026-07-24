@@ -403,7 +403,12 @@ export interface ExpressAdapterOptions extends RbacOptions {
  * handler, and the three plugin middleware slots (`beforeAuth`, `afterAuth`,
  * `afterRbac`). Mount each in the corresponding place in your Express app.
  */
-export function createExpressMiddleware(fortress: FortressAuthRuntime & FortressPluginRuntime & FortressObservabilityRuntime, options?: ExpressAdapterOptions): {
+export function createExpressMiddleware(
+  fortress: Pick<FortressAuthRuntime, 'resolvePrincipal' | 'config' | 'iam'>
+    & Pick<FortressPluginRuntime, 'config'>
+    & Pick<FortressObservabilityRuntime, 'logger'>,
+  options?: ExpressAdapterOptions,
+): {
   authMiddleware: ExpressMiddleware;
   csrfMiddleware: ExpressMiddleware;
   rbacMiddleware: ExpressMiddleware;

@@ -52,10 +52,20 @@ during migration, the runtime builder is still exported:
 ```ts
 import { buildCall } from '@bajustone/fortress';
 
-// For endpoint records your application owns. Core auth/IAM definitions stay
-// behind the canonical namespaced tree.
-const flat = buildCall(fortress, { ...myPluginRoutes, ...myHostEndpoints });
+// Only Fortress-mounted endpoint records with matching handlers are callable.
+// Core auth/IAM stay behind the canonical namespaced tree; top-level host
+// endpoints are metadata-only and must be invoked through the host router.
+const flat = buildCall(fortress, myPluginRoutes);
 ```
+
+### Success responses are status-correlated
+
+For every endpoint, the lowest numeric exact 2xx response key is the status/body
+contract used by ordinary dispatch, `protect()`, and `EndpointCall`. Declaration
+order does not change the selection. Every status remains available through
+`InferEndpointResponses`; when the response map has a widened numeric index,
+body correlation stays conservatively `unknown` because no exact lowest status
+can be proven.
 
 ## 2. `AnyFortress` is gone — accept a capability instead
 

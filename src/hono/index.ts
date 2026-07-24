@@ -78,7 +78,11 @@ export interface HonoAdapterOptions extends RbacOptions {}
  *   app.use('/api/*', rbacMiddleware);
  *   app.use('/api/*', pluginMiddleware.afterRbac);
  */
-export function createHonoMiddleware(fortress: FortressAuthRuntime & FortressPluginRuntime, options?: HonoAdapterOptions): {
+export function createHonoMiddleware(
+  fortress: Pick<FortressAuthRuntime, 'resolvePrincipal' | 'config' | 'iam'>
+    & Pick<FortressPluginRuntime, 'config'>,
+  options?: HonoAdapterOptions,
+): {
   authMiddleware: ReturnType<typeof createAuthMiddleware>;
   rbacMiddleware: ReturnType<typeof createRbacMiddleware>;
   errorHandler: ReturnType<typeof createErrorHandler>;

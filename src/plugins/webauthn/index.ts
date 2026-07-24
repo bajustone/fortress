@@ -75,7 +75,7 @@ export interface WebAuthnMethods {
   generateAuthenticationOptions: (input: { userId?: string }) => Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>;
   verifyAuthentication: (
     input: { response: AuthenticationResponseJSON },
-    meta?: RequestMeta,
+    context?: RequestMeta | PluginRouteContext,
   ) => Promise<AuthResult>;
   completeAuthentication: (
     continuationToken: string,
@@ -583,13 +583,14 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin<'webauthn', Web
 
       async verifyAuthentication(
         input: { response: AuthenticationResponseJSON },
-        meta?: RequestMeta,
+        context?: RequestMeta | PluginRouteContext,
       ): Promise<AuthResult> {
         const userId = await verifyAuthenticationProof(ctx.db, input.response);
         if (!supportPasswordless)
           throw Errors.badRequest('Use completeAuthentication for second-factor WebAuthn');
         if (!ctx.auth)
           throw Errors.badRequest('Auth service is unavailable');
+        const meta = context && 'request' in context ? context.meta : context;
         return ctx.auth.completePluginAuth(userId, 'webauthn', meta);
       },
     }),

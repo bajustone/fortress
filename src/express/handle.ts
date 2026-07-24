@@ -42,7 +42,7 @@ export interface MountFortressOptions {
  */
 export function mountFortress(
   app: ExpressApp,
-  fortress: FortressHttpRuntime,
+  fortress: Pick<FortressHttpRuntime, 'manifest' | 'handleRequest'>,
   options: MountFortressOptions = {},
 ): void {
   const prefix = options.prefix ?? '';

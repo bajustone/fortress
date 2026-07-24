@@ -100,7 +100,7 @@ describe('webauthn plugin', () => {
       plugins: [webauthn({ rpName: 'Test', rpID: 'localhost', origin: 'http://localhost:3000' })],
     });
 
-    methods = fortress.plugins.webauthn as unknown as WebAuthnMethods;
+    methods = fortress.resolvePlugin('webauthn') as WebAuthnMethods;
 
     const user = await fortress.auth.createUser({
       email: 'alice@example.com',

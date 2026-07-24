@@ -24,6 +24,7 @@ import type { EndpointDefinition } from '../endpoint';
 import type { PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
 import type { RequestMeta, Subject, TokenClaims } from '../types';
 import type { ValidatedRequestData } from '../validation';
+import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
 
 /** Auth context resolved by `handleRequest` before dispatch. */
@@ -77,11 +78,11 @@ export async function dispatchEndpoint(
   const bodyAndQuery = { ...body, ...query };
   if (endpoint.path.startsWith('/auth/')) {
     const result = await invokeAuthHandler(fortress, endpoint.handler, bodyAndQuery, params as Record<string, string>, auth);
-    return jsonResponse(result, successStatus(endpoint));
+    return jsonResponse(result, endpointSuccessStatus(endpoint));
   }
   if (endpoint.path.startsWith('/iam/')) {
     const result = await invokeIamHandler(fortress, endpoint.handler, bodyAndQuery, params as Record<string, string>);
-    return jsonResponse(result, successStatus(endpoint));
+    return jsonResponse(result, endpointSuccessStatus(endpoint));
   }
 
   // Top-level host routes are metadata-only and have no Fortress handler.
@@ -102,7 +103,7 @@ function objectOrEmpty(value: unknown): Record<string, unknown> {
 async function parseFormBody(request: Request): Promise<Record<string, string>> {
   const text = await request.text();
   const params = new URLSearchParams(text);
-  const out: Record<string, string> = {};
+  const out = Object.create(null) as Record<string, string>;
   for (const [k, v] of params) out[k] = v;
   return out;
 }
@@ -158,8 +159,9 @@ async function dispatchPlugin(
   request: Request,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const methods = (fortress.plugins as Record<string, Record<string, unknown>>)[plugin.name];
-  const method = methods?.[endpoint.handler];
+  const registry = fortress.plugins as Record<string, Record<string, unknown>>;
+  const methods = Object.hasOwn(registry, plugin.name) ? registry[plugin.name] : undefined;
+  const method = methods && Object.hasOwn(methods, endpoint.handler) ? methods[endpoint.handler] : undefined;
   if (typeof method !== 'function') {
     throw Errors.notFound(`Plugin handler '${plugin.name}.${endpoint.handler}' not found`);
   }
@@ -191,7 +193,7 @@ async function dispatchPlugin(
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   }
-  return jsonResponse(result ?? { ok: true }, successStatus(endpoint));
+  return jsonResponse(result ?? { ok: true }, endpointSuccessStatus(endpoint));
 }
 
 // ── OAuth special case ──────────────────────────────────────────────
@@ -202,11 +204,12 @@ async function dispatchOAuth(
   endpoint: EndpointDefinition,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const methods = (fortress.plugins as Record<string, Record<string, unknown>>).oauth;
+  const registry = fortress.plugins as Record<string, Record<string, unknown>>;
+  const methods = Object.hasOwn(registry, 'oauth') ? registry.oauth : undefined;
   if (!methods)
     throw Errors.notFound(`OAuth plugin not registered`);
   const handlerName = endpoint.handler;
-  if (typeof methods[handlerName] !== 'function')
+  if (!Object.hasOwn(methods, handlerName) || typeof methods[handlerName] !== 'function')
     throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
 
   // IMPORTANT: invoke as `methods.<name>(...)` so the `this` binding is the
@@ -337,7 +340,7 @@ async function dispatchOAuth(
       // `this` binding survives.
       const body = (await request.json().catch(() => ({}))) as unknown;
       const result = await m[handlerName](body);
-      return jsonResponse(result ?? { ok: true }, successStatus(endpoint));
+      return jsonResponse(result ?? { ok: true }, endpointSuccessStatus(endpoint));
     }
   }
 }
@@ -616,21 +619,6 @@ function requireUserId(auth: DispatchAuth): string {
 }
 
 // ── Response helpers ────────────────────────────────────────────────
-
-/**
- * Pick the first 2xx status declared in `endpoint.responses` (e.g. `201`
- * for `POST /auth/register`), defaulting to `200`.
- */
-function successStatus(endpoint: EndpointDefinition): number {
-  if (!endpoint.responses)
-    return 200;
-  for (const code of Object.keys(endpoint.responses)) {
-    const num = Number(code);
-    if (num >= 200 && num < 300)
-      return num;
-  }
-  return 200;
-}
 
 /** Build a JSON `Response` with the right `Content-Type`. */
 export function jsonResponse(body: unknown, status: number): Response {

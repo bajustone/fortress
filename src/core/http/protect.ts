@@ -18,6 +18,7 @@ import type {
 } from '../endpoint';
 import type { RouteManifestEntry } from '../manifest/route-manifest';
 import type { Subject, TokenClaims } from '../types';
+import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
 import { coerceBySchema, validateRequest } from '../validation';
 import { enforceCsrf, resolveCsrfConfig } from './csrf';
@@ -202,13 +203,6 @@ function objectOrEmpty(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function successStatus(endpoint: EndpointDefinition): number {
-  const status = Object.keys(endpoint.responses ?? {})
-    .map(Number)
-    .find(code => code >= 200 && code < 300);
-  return status ?? 200;
-}
-
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body ?? { ok: true }), {
     status,
@@ -374,7 +368,7 @@ export function protect(
         // loose `ProtectedRouteContext<EndpointDefinition>`.
       } as ProtectedRouteContext);
 
-      response = result instanceof Response ? result : jsonResponse(result, successStatus(endpoint));
+      response = result instanceof Response ? result : jsonResponse(result, endpointSuccessStatus(endpoint));
       if (options.attachAuthCookies ?? true)
         response = maybeAttachAuthCookies(fortress, result, response);
       return response;

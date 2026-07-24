@@ -200,6 +200,7 @@ export type {
   PluginHooks,
   PluginMethod,
   PluginMethodsOf,
+  PluginRouteContext,
   PluginRoutes,
   PluginRoutesOf,
   PostAuthGateContext,

@@ -56,9 +56,14 @@ import { replayCookies, setAuthCookies } from './cookies';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+type SvelteKitHandleRuntime
+  = & Pick<FortressHttpRuntime, 'manifest' | 'handleRequest'>
+    & Pick<FortressAuthRuntime, 'auth' | 'iam' | 'config' | 'extractAccessToken' | 'cookies'>
+    & Pick<FortressPluginRuntime, 'runPluginMiddleware'>;
+
 /** Build the SvelteKit `handle` hook for a Fortress instance. */
 export function createSvelteKitHandle(
-  fortress: FortressHttpRuntime & FortressAuthRuntime & FortressPluginRuntime,
+  fortress: SvelteKitHandleRuntime,
   options: SvelteKitAdapterOptions = {},
 ): SvelteKitHandle {
   const basePath = options.basePath ?? '';
@@ -268,7 +273,7 @@ function requestMeta(request: Request): RequestMeta {
  */
 function populateLocals(
   event: SvelteKitRequestEvent<FortressLocals>,
-  fortress: FortressHttpRuntime & FortressAuthRuntime & FortressPluginRuntime,
+  fortress: Pick<FortressAuthRuntime, 'config'>,
   subject: Subject,
   claims: TokenClaims | undefined,
   scopes: string[] | null | undefined,

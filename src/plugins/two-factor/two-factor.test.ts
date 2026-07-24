@@ -27,7 +27,7 @@ describe('two-factor plugin', () => {
       plugins: [twoFactor({ secretEncryptionKey: TOTP_ENCRYPTION_KEY, totp: { issuer: 'TestApp' }, backupCodes: { count: 5 } })],
     });
 
-    methods = fortress.plugins['two-factor'] as unknown as TwoFactorMethods;
+    methods = fortress.resolvePlugin('two-factor') as TwoFactorMethods;
 
     const user = await fortress.auth.createUser({
       email: 'alice@example.com',

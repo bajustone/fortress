@@ -35,17 +35,19 @@ function testEndpoint(): EndpointDefinition {
       params: obj({ id: id() }, 'id'),
       paramsSchema: obj({ id: id() }, 'id'),
     },
-    responses: { 201: { description: 'Created', schema: obj({ ok: str() }, 'ok') } },
+    responses: {
+      202: { description: 'Queued', schema: obj({ queued: str() }, 'queued') },
+      201: { description: 'Created', schema: obj({ ok: str() }, 'ok') },
+    },
   };
 }
 
 describe('protect()', () => {
-  it('runs plugin middleware, validates/coerces input, and calls the host handler', async () => {
+  it('runs the pipeline and aligns the handler body with the lowest numeric success status', async () => {
     const calls: string[] = [];
     const ep = testEndpoint();
     const plugin: FortressPlugin = {
-      name: 'host-routes',
-      routes: { createHostThing: ep },
+      name: 'host-middleware',
       middleware: [
         {
           path: '/host/things/:id',
@@ -77,6 +79,7 @@ describe('protect()', () => {
       database: createTestAdapter(),
       jwt: { key: secret },
       csrf: { enabled: false },
+      routes: { createHostThing: ep },
       plugins: [plugin],
     });
 
@@ -161,7 +164,7 @@ describe('protect()', () => {
       database: createTestAdapter(),
       jwt: { key: secret },
       csrf: { enabled: false },
-      plugins: [{ name: 'host-routes', routes: { createHostThing: ep } }],
+      routes: { createHostThing: ep },
       cookies: { secure: false },
     });
 
@@ -181,7 +184,7 @@ describe('protect()', () => {
       database: createTestAdapter(),
       jwt: { key: secret },
       csrf: { enabled: false },
-      plugins: [{ name: 'host-routes', routes: { createHostThing: ep } }],
+      routes: { createHostThing: ep },
       cookies: { secure: false },
     });
 
