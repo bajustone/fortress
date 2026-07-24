@@ -204,7 +204,9 @@ function objectOrEmpty(value: unknown): Record<string, unknown> {
 }
 
 function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body ?? { ok: true }), {
+  if (status === 204 || status === 205)
+    return new Response(null, { status });
+  return new Response(JSON.stringify(body === undefined ? { ok: true } : body), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });

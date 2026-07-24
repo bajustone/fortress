@@ -1,12 +1,14 @@
 import type { authEndpoints } from '../auth/auth-endpoints';
 import type { InferEndpointCallInput, InferEndpointSuccessResponse } from '../endpoint';
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { oauth } from '../../plugins/oauth';
 import { createTestAdapter } from '../../testing';
 import { FortressError } from '../errors';
 import { createFortress } from '../fortress';
 import { definePlugin } from '../plugin';
 import { bool, endpoint, obj, str } from '../schema-builder';
 import { assertSuccess } from '../types';
+import { buildCall } from './call';
 
 const SECRET = 'call-test-secret-at-least-32-bytes-long!!';
 
@@ -72,7 +74,7 @@ function rejectsInvalidCallInputs(fortress: ReturnType<typeof makeFortress>): vo
 describe('fortress.call', () => {
   it('correlates the lowest numeric success body with the dispatched status', async () => {
     const fortress = makeFortress();
-    const result: { kind: string } = await fortress.call.plugins['correlated-success'].first({});
+    const result: { kind: string } = await fortress.call.plugins['correlated-success'].first();
     expect(result).toEqual({ kind: 'A' });
     const response = await fortress.handleRequest(new Request('http://localhost/correlated-success'));
     expect(response.status).toBe(200);
@@ -195,6 +197,26 @@ describe('fortress.call', () => {
       const result = await fortress.call.plugins['literal-route'].literalEcho({ message: 'hello' });
 
       expect(result).toEqual({ echoed: 'hello' });
+    });
+
+    it('substitutes OAuth consent flowId parameters', async () => {
+      const route = oauth({ enableConsentApi: true }).routes.handleGetFlow;
+      let seenPath = '';
+      const client = buildCall({
+        handleRequest: (request: Request): Promise<Response> => {
+          seenPath = new URL(request.url).pathname;
+          return Promise.resolve(Response.json({
+            flowId: 'flow/one',
+            client: { clientId: 'client', name: 'Client' },
+            redirectUri: 'https://client.example/callback',
+            scopes: ['openid'],
+            state: 'state',
+          }));
+        },
+      }, { handleGetFlow: route });
+
+      await client.handleGetFlow({ flowId: 'flow/one' });
+      expect(seenPath).toBe('/oauth/flows/flow%2Fone');
     });
   });
 

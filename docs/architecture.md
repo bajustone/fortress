@@ -71,6 +71,7 @@ Startup rejects:
 - non-positive `jwt.session` values;
 - duplicate plugin names;
 - duplicate routes between plugins;
+- top-level host routes that collide with core routes;
 - `security: ['none']` combined with a permission;
 - use of the reserved `__host` plugin name when top-level `routes` are set.
 

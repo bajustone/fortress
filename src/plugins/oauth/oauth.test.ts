@@ -33,6 +33,10 @@ describe('oauth plugin', () => {
     userId = user.id;
   });
 
+  it('keeps bearer lookup private to the plugin implementation', () => {
+    expect(Object.hasOwn(methods, '_lookupBearer')).toBe(false);
+  });
+
   describe('createClient', () => {
     it('creates a client with id and secret', async () => {
       const client = await methods.createClient({

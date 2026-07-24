@@ -23,7 +23,7 @@ describe('defineEndpoints', () => {
     expect(collection.greet.handler).toBe('greet');
   });
 
-  it('rejects non-endpoint members at runtime as defense in depth', () => {
+  it('rejects non-endpoint members and unsupported methods', () => {
     const notAnEndpoint = { summary: 'not an endpoint' };
     expect(() =>
       defineEndpoints({
@@ -31,6 +31,14 @@ describe('defineEndpoints', () => {
         broken: notAnEndpoint,
       }),
     ).toThrowError(/property 'broken' is not an endpoint definition/);
+
+    const unsupported = { method: 'TRACE', path: '/trace', handler: 'trace' } as const;
+    expect(() =>
+      defineEndpoints({
+        // @ts-expect-error -- TRACE is outside the supported HttpMethod union
+        trace: unsupported,
+      }),
+    ).toThrowError(/property 'trace' is not an endpoint definition/);
   });
 
   it('preserves exact keys, generics, and handler literals', () => {
@@ -45,7 +53,10 @@ describe('defineEndpoints', () => {
     expectTypeOf<Client['greet']>().toEqualTypeOf<
       (input: { name: string }, options?: CallOptions) => Promise<{ greeting: string }>
     >();
-    expectTypeOf<Client['ping']>().returns.toEqualTypeOf<Promise<{ pong: string }>>();
+    expectTypeOf<Client['ping']>().toEqualTypeOf<
+      // eslint-disable-next-line ts/no-empty-object-type -- exact no-input endpoint phantom
+      (input?: {}, options?: CallOptions) => Promise<{ pong: string }>
+    >();
     expectTypeOf<keyof Client>().toEqualTypeOf<'greet' | 'ping'>();
   });
 });

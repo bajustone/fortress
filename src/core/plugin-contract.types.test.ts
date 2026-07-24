@@ -48,6 +48,7 @@ export type IsolationContract = Assert<Has<Surface<typeof dataIsolation>, 'data-
 export type EmailContract = Assert<Has<Surface<typeof emailVerification>, 'email-verification', 'verify'>>;
 export type MagicContract = Assert<Has<Surface<typeof magicLink>, 'magic-link', 'sendMagicLink'>>;
 export type OAuthContract = Assert<Has<Surface<typeof oauth>, 'oauth', 'createClient'>>;
+export type OAuthInternalContract = Assert<Lacks<Surface<typeof oauth>, 'oauth', '_lookupBearer'>>;
 export type OpenAPIContract = Assert<Has<Surface<typeof openapi>, 'openapi', 'generateSpec'>>;
 export type RateContract = Assert<Has<Surface<typeof rateLimit>, 'rate-limit', 'check'>>;
 export type SocialContract = Assert<Has<Surface<typeof socialLogin>, 'social-login', 'getProviders'>>;
@@ -567,9 +568,24 @@ export function compilePluginContracts(database: DatabaseAdapter, dynamicName: s
     jwt: { key: 'x'.repeat(32) },
     plugins: [oauth({ enableConsentApi: true })] as const,
   });
-  void consentFortress.call.plugins.oauth.handleGetFlow;
-  void consentFortress.call.plugins.oauth.handleApproveFlow;
-  void consentFortress.call.plugins.oauth.handleDenyFlow;
+  const flowCall: Promise<{
+    flowId: string;
+    client: { clientId: string; name: string };
+    redirectUri: string;
+    scopes: string[];
+    state: string;
+  }> = consentFortress.call.plugins.oauth.handleGetFlow({ flowId: 'flow' });
+  const approveCall: Promise<{ redirectUrl: string }> = consentFortress.call.plugins.oauth.handleApproveFlow({ flowId: 'flow' });
+  const denyCall: Promise<{ redirectUrl: string }> = consentFortress.call.plugins.oauth.handleDenyFlow({ flowId: 'flow' });
+  void flowCall;
+  void approveCall;
+  void denyCall;
+  // @ts-expect-error consent calls require the route parameter
+  consentFortress.call.plugins.oauth.handleGetFlow({});
+  // @ts-expect-error consent flow ids are URL strings
+  consentFortress.call.plugins.oauth.handleApproveFlow({ flowId: 1 });
+  // @ts-expect-error the private bearer lookup is not part of the plugin surface
+  consentFortress.plugins.oauth._lookupBearer('token');
   void oauthFortress.call.auth.login;
   void oauthFortress.call.auth.me;
   void oauthFortress.call.iam.getRoles;

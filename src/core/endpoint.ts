@@ -4,6 +4,13 @@ import type { StandardSchemaV1 } from './standard-schema';
 /** HTTP method an {@link EndpointDefinition} can declare. */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
+const HTTP_METHODS = new Set<HttpMethod>(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']);
+
+/** Runtime guard matching the public {@link HttpMethod} union. */
+export function isHttpMethod(value: unknown): value is HttpMethod {
+  return typeof value === 'string' && HTTP_METHODS.has(value as HttpMethod);
+}
+
 /** Authentication scheme required to call an endpoint. */
 export type SecurityRequirement = 'bearer' | 'basic' | 'apiKey' | 'none';
 
@@ -113,8 +120,12 @@ export interface EndpointDefinition<
   };
 }
 
-/** Any endpoint definition, regardless of its inferred generics. */
-export type AnyEndpointDefinition = EndpointDefinition<any, any, any, any, any, any, any>;
+/**
+ * Any endpoint definition, regardless of its inferred phantom contract.
+ * Runtime fields retain their real constraints so wildcard consumers cannot
+ * accidentally admit unsupported methods or non-string handlers/paths.
+ */
+export type AnyEndpointDefinition = EndpointDefinition<any, any, any, any, string, HttpMethod, string>;
 
 /** Select the lowest numeric 2xx response key, defaulting to 200. */
 export function endpointSuccessStatus(endpoint: EndpointDefinition): number {

@@ -85,15 +85,19 @@ export function acceptsPreciseBuiltCallSurface(database: DatabaseAdapter): void 
     permissions: [{ resource: 'articles', action: 'read' }],
   });
   const paramsResult: Promise<{ ok: boolean }> = fortress.call.auth.revokeSession({ id: 'session-id' });
+  const noInputResult = fortress.call.auth.me();
   const literalEcho: ExpectedLiteralEcho = fortress.call.plugins['declaration-literal-route'].declarationLiteralEcho;
   const literalResult: Promise<{ echoed: string }> = fortress.call.plugins['declaration-literal-route'].declarationLiteralEcho({ message: 'hello' });
 
   void loginResult;
   void iamResult;
   void paramsResult;
+  void noInputResult;
   void literalEcho;
   void literalResult;
 
+  // @ts-expect-error -- built login input cannot be omitted
+  fortress.call.auth.login();
   // @ts-expect-error -- built login input requires password
   fortress.call.auth.login({ identifier: 'user@example.com' });
   // @ts-expect-error -- built IAM input rejects invalid permission effects

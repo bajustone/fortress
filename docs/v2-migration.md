@@ -46,6 +46,11 @@ the core call key in `coreOverrides` and reuse it as the route key and handler
 name; the declaration removes the conflicting `call.auth`/`call.iam` member
 and exposes the accurate callable under that plugin's namespace.
 
+Top-level `config.routes` are metadata for host-owned handlers and can no
+longer overlap a Fortress core method/path. Move an intentional core override
+to an explicit plugin with matching `coreOverrides`, route key, and handler;
+otherwise `createFortress()` rejects the collision at startup.
+
 No flattened compatibility client ships in core; if you need a flat map
 during migration, the runtime builder is still exported:
 
@@ -166,6 +171,12 @@ registry edit and no augmentation.
   every slot should add three trailing `any` arguments.
 - `buildCall()` now accepts `Pick<FortressHttpRuntime, 'handleRequest'>`
   instead of `AnyFortress` — strictly wider.
-- `record()` in the schema builder accepts an optional generic
-  (`record<RegistrationResponseJSON>(...)`) to type a permissive object
-  schema's wire shape precisely.
+- `record()` remains an honestly typed `Record<string, unknown>` schema and
+  no longer accepts a caller-selected generic. Use `obj(...)` or a Standard
+  Schema that performs the external library's runtime validation before
+  claiming a narrower payload type.
+- Endpoint builder operations that refine request/response/handler types are
+  copy-on-write. Retain their return value as normal fluent code does; calling
+  `.body()`, `.query()`, `.params()`, `.response()`, or `.handler()` only for
+  side effects is no longer supported, because it made aliased phantom types
+  diverge from runtime definitions.

@@ -188,15 +188,13 @@ export interface FortressObservabilityRuntime {
 }
 
 /**
- * Composition consumed by the `protect()` pipeline — the widest adapter
- * boundary: route lookup, CSRF, principal resolution, RBAC, cookie
- * attachment, plugin middleware, and error logging.
+ * Exact capability consumed by the `protect()` pipeline: route lookup,
+ * CSRF, principal resolution, RBAC, cookie attachment, and error logging.
  */
 export type FortressProtectRuntime
-  = & FortressManifestRuntime
-    & FortressAuthRuntime
-    & FortressPluginRuntime
-    & FortressObservabilityRuntime;
+  = & Pick<FortressManifestRuntime, 'endpoints' | 'manifest' | 'config'>
+    & Pick<FortressAuthRuntime, 'auth' | 'iam' | 'cookies' | 'extractAccessToken' | 'serializeAuthCookies'>
+    & Pick<FortressObservabilityRuntime, 'logger'>;
 
 /**
  * Every capability composed — the erased shape of a complete instance.

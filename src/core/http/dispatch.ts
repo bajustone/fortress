@@ -193,7 +193,7 @@ async function dispatchPlugin(
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   }
-  return jsonResponse(result ?? { ok: true }, endpointSuccessStatus(endpoint));
+  return jsonResponse(result, endpointSuccessStatus(endpoint));
 }
 
 // ── OAuth special case ──────────────────────────────────────────────
@@ -340,7 +340,7 @@ async function dispatchOAuth(
       // `this` binding survives.
       const body = (await request.json().catch(() => ({}))) as unknown;
       const result = await m[handlerName](body);
-      return jsonResponse(result ?? { ok: true }, endpointSuccessStatus(endpoint));
+      return jsonResponse(result, endpointSuccessStatus(endpoint));
     }
   }
 }
@@ -622,7 +622,9 @@ function requireUserId(auth: DispatchAuth): string {
 
 /** Build a JSON `Response` with the right `Content-Type`. */
 export function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body ?? { ok: true }), {
+  if (status === 204 || status === 205)
+    return new Response(null, { status });
+  return new Response(JSON.stringify(body === undefined ? { ok: true } : body), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });

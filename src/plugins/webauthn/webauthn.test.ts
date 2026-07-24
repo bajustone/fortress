@@ -110,6 +110,64 @@ describe('webauthn plugin', () => {
     userId = user.id;
   });
 
+  it('validates upstream credential shapes at the HTTP boundary', async () => {
+    const routes = webauthn({ rpName: 'Test', rpID: 'localhost', origin: 'http://localhost:3000' }).routes;
+    const registrationSchema = routes.verifyRegistration.input?.bodySchema;
+    const authenticationSchema = routes.verifyAuthentication.input?.bodySchema;
+    expect(registrationSchema).toBeDefined();
+    expect(authenticationSchema).toBeDefined();
+
+    expect(await registrationSchema!['~standard'].validate({ response: {} })).toHaveProperty('issues');
+    expect(await authenticationSchema!['~standard'].validate({ response: {} })).toHaveProperty('issues');
+    expect(await registrationSchema!['~standard'].validate({
+      response: {
+        id: 'credential',
+        rawId: 'credential',
+        type: 'public-key',
+        authenticatorAttachment: 1,
+        clientExtensionResults: { credProps: { rk: 'yes' } },
+        response: {
+          clientDataJSON: 'client',
+          attestationObject: 'attestation',
+          transports: [1],
+          publicKeyAlgorithm: '-7',
+        },
+      },
+    })).toHaveProperty('issues');
+    expect(await authenticationSchema!['~standard'].validate({
+      response: {
+        id: 'credential',
+        rawId: 'credential',
+        type: 'public-key',
+        clientExtensionResults: { appid: 'yes' },
+        response: {
+          clientDataJSON: 'client',
+          authenticatorData: 'auth',
+          signature: 'signature',
+          userHandle: 1,
+        },
+      },
+    })).toHaveProperty('issues');
+    expect(await registrationSchema!['~standard'].validate({
+      response: {
+        id: 'credential',
+        rawId: 'credential',
+        type: 'public-key',
+        clientExtensionResults: {},
+        response: { clientDataJSON: 'client', attestationObject: 'attestation' },
+      },
+    })).not.toHaveProperty('issues');
+    expect(await authenticationSchema!['~standard'].validate({
+      response: {
+        id: 'credential',
+        rawId: 'credential',
+        type: 'public-key',
+        clientExtensionResults: {},
+        response: { clientDataJSON: 'client', authenticatorData: 'auth', signature: 'signature' },
+      },
+    })).not.toHaveProperty('issues');
+  });
+
   describe('generateRegistrationOptions', () => {
     it('returns registration options', async () => {
       const result = await methods.generateRegistrationOptions({}, httpCtx(userId));

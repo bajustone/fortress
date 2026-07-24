@@ -11,7 +11,7 @@
 
 import type { WhereClause } from '../../adapters/database/types';
 import type { EndpointDefinition, EndpointMeta } from '../../core/endpoint';
-import type { FortressPlugin } from '../../core/plugin';
+import type { FortressPlugin, PluginContext } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, generateTokenFamily, hashToken } from '../../core/auth/refresh-token';
 import { timingSafeEqualHex } from '../../core/auth/timing-safe';
@@ -279,8 +279,6 @@ export interface OAuthMethods {
   /** Read and delete a pending flow (single-use). Throws if not found or expired. */
   resumePendingFlow: (flowId: string | number, context?: { userId?: string }) => Promise<PendingFlowRecord>;
   getUserInfo: (token: string) => Promise<FortressUser | null>;
-  /** Internal bearer lookup shared by the public user-info methods. */
-  _lookupBearer: (token: string) => Promise<{ user: FortressUser; scope: string | null } | null>;
   /** Rotate the RS256 id-token signing key and prune expired retired keys. */
   rotateSigningKey: () => Promise<{ kid: string }>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
@@ -367,7 +365,7 @@ type OAuthProtocolRoute<
   meta: EndpointMeta & { bearerKind: 'oauth' };
 };
 
-/* eslint-disable ts/consistent-type-definitions -- alias preserves Record compatibility */
+/* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- route phantoms intentionally use empty object slots */
 type OAuthBaseRoutes = {
   handleTokenRequest: OAuthProtocolRoute<'handleTokenRequest', 'POST', '/oauth/token'>;
   handleIntrospectRequest: OAuthProtocolRoute<'handleIntrospectRequest', 'POST', '/oauth/introspect'>;
@@ -379,10 +377,13 @@ type OAuthBaseRoutes = {
 type OAuthAuthorizeRoute = {
   handleAuthorizeRequest: OAuthProtocolRoute<'handleAuthorizeRequest', 'GET', '/oauth/authorize'>;
 };
+type OAuthConsentParams = { flowId: string };
+type OAuthFlowDetails = Awaited<ReturnType<OAuthMethods['handleGetFlow']>>;
+type OAuthRedirect = Awaited<ReturnType<OAuthMethods['handleApproveFlow']>>;
 type OAuthConsentRoutes = {
-  handleGetFlow: EndpointDefinition<any, any, any, any, 'handleGetFlow', 'GET', '/oauth/flows/:flowId'>;
-  handleApproveFlow: EndpointDefinition<any, any, any, any, 'handleApproveFlow', 'POST', '/oauth/flows/:flowId/approve'>;
-  handleDenyFlow: EndpointDefinition<any, any, any, any, 'handleDenyFlow', 'POST', '/oauth/flows/:flowId/deny'>;
+  handleGetFlow: EndpointDefinition<{}, {}, OAuthConsentParams, { 200: OAuthFlowDetails }, 'handleGetFlow', 'GET', '/oauth/flows/:flowId'>;
+  handleApproveFlow: EndpointDefinition<{}, {}, OAuthConsentParams, { 200: OAuthRedirect }, 'handleApproveFlow', 'POST', '/oauth/flows/:flowId/approve'>;
+  handleDenyFlow: EndpointDefinition<{}, {}, OAuthConsentParams, { 200: OAuthRedirect }, 'handleDenyFlow', 'POST', '/oauth/flows/:flowId/deny'>;
 };
 type OAuthRoutes<C extends OAuthConfig> = OAuthBaseRoutes
   & (C extends { enableAuthorizeEndpoint: true } ? OAuthAuthorizeRoute : Record<never, never>)
@@ -418,6 +419,26 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
       `[fortress/oauth] issuerUrl must use https:// in production (got: ${issuerUrl})`,
     );
   }
+
+  const lookupBearer = async (
+    ctx: PluginContext,
+    token: string,
+  ): Promise<{ user: FortressUser; scope: string | null } | null> => {
+    const tokenHash = await hashToken(token);
+    const record = await ctx.db.findOne<AccessTokenRecord>({
+      model: 'oauth_access_token',
+      where: [{ field: 'token', operator: '=', value: tokenHash }],
+    });
+
+    if (!record || !record.userId || record.expiresAt < new Date())
+      return null;
+
+    const user = await ctx.db.findOne<FortressUser>({
+      model: 'user',
+      where: [{ field: 'id', operator: '=', value: record.userId }],
+    });
+    return user ? { user, scope: record.scope } : null;
+  };
 
   return definePlugin({
     name: 'oauth',
@@ -1516,32 +1537,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
       },
 
       async getUserInfo(token: string): Promise<FortressUser | null> {
-        const result = await this._lookupBearer(token);
+        const result = await lookupBearer(ctx, token);
         return result?.user ?? null;
-      },
-
-      /**
-       * Internal: resolve a bearer token to its access-token row + user.
-       * Shared by `getUserInfo` (returns the raw user) and
-       * `handleUserInfoRequest` (maps to OIDC claims).
-       */
-      async _lookupBearer(token: string): Promise<{ user: FortressUser; scope: string | null } | null> {
-        const tokenHash = await hashToken(token);
-        const record = await ctx.db.findOne<AccessTokenRecord>({
-          model: 'oauth_access_token',
-          where: [{ field: 'token', operator: '=', value: tokenHash }],
-        });
-
-        if (!record || !record.userId || record.expiresAt < new Date())
-          return null;
-
-        const user = await ctx.db.findOne<FortressUser>({
-          model: 'user',
-          where: [{ field: 'id', operator: '=', value: record.userId }],
-        });
-        if (!user)
-          return null;
-        return { user, scope: record.scope };
       },
 
       // --- HTTP handler methods (RFC 6749 / 7662 / 7009) ---
@@ -1733,7 +1730,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
        * {@link OAuthConfig.userinfoClaims}.
        */
       async handleUserInfoRequest(bearerToken: string): Promise<Record<string, unknown>> {
-        const result = await this._lookupBearer(bearerToken);
+        const result = await lookupBearer(ctx, bearerToken);
         if (!result)
           throw Errors.unauthorized('Invalid or expired access token');
 
@@ -1895,6 +1892,14 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
                 dispatchKind: 'oauth' as const,
               },
+              input: {
+                params: {
+                  type: 'object' as const,
+                  properties: { flowId: { type: 'string' as const } },
+                  required: ['flowId'],
+                  additionalProperties: false,
+                },
+              },
               responses: {
                 200: {
                   description: 'Flow metadata',
@@ -1908,11 +1913,13 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
                           clientId: { type: 'string' as const },
                           name: { type: 'string' as const },
                         },
+                        required: ['clientId', 'name'],
                       },
                       redirectUri: { type: 'string' as const },
                       scopes: { type: 'array' as const, items: { type: 'string' as const } },
                       state: { type: 'string' as const },
                     },
+                    required: ['flowId', 'client', 'redirectUri', 'scopes', 'state'],
                   },
                 },
                 401: { description: 'Authentication required' },
@@ -1929,12 +1936,21 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
                 dispatchKind: 'oauth' as const,
               },
+              input: {
+                params: {
+                  type: 'object' as const,
+                  properties: { flowId: { type: 'string' as const } },
+                  required: ['flowId'],
+                  additionalProperties: false,
+                },
+              },
               responses: {
                 200: {
                   description: 'Authorization code issued',
                   schema: {
                     type: 'object' as const,
                     properties: { redirectUrl: { type: 'string' as const } },
+                    required: ['redirectUrl'],
                   },
                 },
                 401: { description: 'Authentication required' },
@@ -1951,12 +1967,21 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
                 dispatchKind: 'oauth' as const,
               },
+              input: {
+                params: {
+                  type: 'object' as const,
+                  properties: { flowId: { type: 'string' as const } },
+                  required: ['flowId'],
+                  additionalProperties: false,
+                },
+              },
               responses: {
                 200: {
                   description: 'Flow denied',
                   schema: {
                     type: 'object' as const,
                     properties: { redirectUrl: { type: 'string' as const } },
+                    required: ['redirectUrl'],
                   },
                 },
                 401: { description: 'Authentication required' },

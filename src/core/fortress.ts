@@ -25,6 +25,7 @@ import type { InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
 import { createAuthService } from './auth/auth-service';
 import { resolveCookieConfig } from './config';
+import { isHttpMethod } from './endpoint';
 import { Errors } from './errors';
 import { buildCall } from './http/call';
 import { serializeAuthCookies as serializeAuthCookiesFn } from './http/cookie-serialize';
@@ -176,6 +177,18 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
       throw Errors.badRequest(`Duplicate plugin name: '${plugin.name}'`);
     }
     pluginNames.add(plugin.name);
+    for (const [routeName, endpoint] of Object.entries(plugin.routes ?? {})) {
+      if (
+        !endpoint || typeof endpoint !== 'object'
+        || !isHttpMethod(endpoint.method)
+        || typeof endpoint.path !== 'string'
+        || typeof endpoint.handler !== 'string'
+      ) {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" route "${routeName}" is not a valid endpoint definition`,
+        );
+      }
+    }
   }
 
   // Token-verify histogram is built before the auth service so it can be

@@ -3,6 +3,7 @@ import type { FortressSchema, Infer, JSONSchema, Simplify } from './json-schema'
 import type { StandardSchemaV1 } from './standard-schema';
 import { fromJSONSchema } from '@bajustone/fetcher/openapi';
 import { date as fDate, datetime as fDatetime, email as fEmail, time as fTime, url as fUrl, uuid as fUuid } from '@bajustone/fetcher/schema';
+import { isHttpMethod } from './endpoint';
 
 /** Shorthand for the Standard Schema inferred output type. */
 type InferSchema<T extends StandardSchemaV1> = StandardSchemaV1.InferOutput<T>;
@@ -455,14 +456,11 @@ export function nullType(): FortressSchema<null> {
 }
 
 /** An object {@link FortressSchema} with unknown additional properties (e.g. plugin data, metadata). */
-export function record<T extends object = Record<string, unknown>>(description?: string): FortressSchema<T> {
+export function record(description?: string): FortressSchema<Record<string, unknown>> {
   const s: JSONSchema = { type: 'object', additionalProperties: true };
   if (description)
     s.description = description;
-  // Runtime validation stays permissive (any object); the generic types the
-  // wire for endpoint phantom inference when the payload's shape is enforced
-  // downstream (e.g. by a verification library).
-  return toFortressSchema<T>(s);
+  return toFortressSchema<Record<string, unknown>>(s);
 }
 
 /** An object {@link FortressSchema} where every property value matches the supplied schema. */
@@ -723,6 +721,30 @@ export class EndpointBuilder<
     this._path = path;
   }
 
+  /**
+   * Clone the builder before any operation that changes its phantom type.
+   * This prevents an aliased builder from mutating the runtime definition
+   * behind a previously inferred body/query/params/response/handler type.
+   */
+  private clone(): EndpointBuilder<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
+    const next = new EndpointBuilder<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath>(
+      this._method,
+      this._path,
+    );
+    next._handler = this._handler;
+    next._summary = this._summary;
+    next._description = this._description;
+    next._tags = [...this._tags];
+    next._security = [...this._security];
+    next._deprecated = this._deprecated;
+    next._permission = this._permission ? { ...this._permission } : undefined;
+    next._body = this._body;
+    next._query = this._query;
+    next._params = this._params;
+    next._responses = { ...this._responses };
+    return next;
+  }
+
   summary(s: string): this {
     this._summary = s;
     return this;
@@ -756,22 +778,25 @@ export class EndpointBuilder<
   body<T extends StandardSchemaV1>(
     schema: T,
   ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
-    this._body = schema;
-    return this as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath>;
+    const next = this.clone();
+    next._body = schema;
+    return next as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath>;
   }
 
   query<T extends StandardSchemaV1>(
     schema: T,
   ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath> {
-    this._query = schema;
-    return this as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath>;
+    const next = this.clone();
+    next._query = schema;
+    return next as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath>;
   }
 
   params<T extends StandardSchemaV1>(
     schema: T,
   ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath> {
-    this._params = schema;
-    return this as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath>;
+    const next = this.clone();
+    next._params = schema;
+    return next as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath>;
   }
 
   /**
@@ -798,12 +823,13 @@ export class EndpointBuilder<
     description: string,
     schema?: StandardSchemaV1 | JSONSchema,
   ): EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath> {
+    const next = this.clone();
     const stored: EndpointResponse = { description };
     if (schema !== undefined) {
       stored.schema = isStandardSchema(schema) ? extractJsonSchema(schema as FortressSchema<any>) : schema as JSONSchema;
     }
-    this._responses[status] = stored;
-    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath>;
+    next._responses[status] = stored;
+    return next as unknown as EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath>;
   }
 
   /**
@@ -836,8 +862,9 @@ export class EndpointBuilder<
    * statically verify the handler exists and matches the endpoint's I/O.
    */
   handler<H extends string>(name: H): EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath> {
-    this._handler = name;
-    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath>;
+    const next = this.clone();
+    next._handler = name;
+    return next as unknown as EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath>;
   }
 
   build(): EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
@@ -891,6 +918,8 @@ export function endpoint<const TMethod extends HttpMethod, const TPath extends s
   method: TMethod,
   path: TPath,
 ): EndpointBuilder<{}, {}, {}, {}, string, TMethod, TPath> {
+  if (!isHttpMethod(method))
+    throw new TypeError(`Unsupported endpoint method: ${String(method)}`);
   return new EndpointBuilder(method, path);
 }
 /* eslint-enable ts/no-empty-object-type */

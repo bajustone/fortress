@@ -3,6 +3,8 @@ import type { FortressPlugin, PluginRouteContext } from '../plugin';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
+import { definePlugin } from '../plugin';
+import { endpoint, nullType } from '../schema-builder';
 
 const SECRET = 'fortress-test-secret-at-least-32-bytes-long!';
 
@@ -199,6 +201,55 @@ describe('fortress.handleRequest', () => {
       expect(res.status).toBe(422);
       const body = await res.json() as { code: string };
       expect(body.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('plugin success serialization', () => {
+    const responseShapes = definePlugin({
+      name: 'response-shapes',
+      methods: () => ({
+        explicitNull: () => null,
+        noContent: () => undefined,
+      }),
+      routes: {
+        explicitNull: endpoint('GET', '/response-shapes/null')
+          .security('none')
+          .response(200, 'Explicit null', nullType())
+          .handler('explicitNull')
+          .build(),
+        noContent: endpoint('GET', '/response-shapes/no-content')
+          .security('none')
+          .response(204, 'No content')
+          .handler('noContent')
+          .build(),
+      },
+    });
+
+    it('preserves explicit null through dispatch and the typed call client', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [responseShapes] as const,
+      });
+
+      const result: null = await local.call.plugins['response-shapes'].explicitNull();
+      expect(result).toBeNull();
+      const response = await local.handleRequest(new Request('http://localhost/response-shapes/null'));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toBeNull();
+    });
+
+    it('emits bodyless 204 responses', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [responseShapes] as const,
+      });
+
+      const response = await local.handleRequest(new Request('http://localhost/response-shapes/no-content'));
+      expect(response.status).toBe(204);
+      expect(response.headers.has('content-type')).toBe(false);
+      expect(await response.text()).toBe('');
     });
   });
 

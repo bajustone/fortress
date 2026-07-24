@@ -121,6 +121,17 @@ describe('createFortress', () => {
       database: mockDb,
       plugins: [inherited],
     })).toThrow('must be an own callable method');
+
+    const invalidMethod = {
+      name: 'invalid-method-runtime',
+      methods: () => ({ trace: () => ({ ok: true }) }),
+      routes: { trace: { method: 'TRACE', path: '/trace', handler: 'trace' } },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [invalidMethod],
+    })).toThrow('route "trace" is not a valid endpoint definition');
   });
 
   it('safely supports poisoned own plugin and handler names', async () => {

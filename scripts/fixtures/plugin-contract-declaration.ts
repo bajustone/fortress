@@ -288,7 +288,21 @@ export function declarationContract(database: DatabaseAdapter, dynamicName: stri
   // The standalone enabled definition proves the positive conditional route
   // projection without introducing a duplicate runtime plugin name.
   type EnabledConsentCalls = import('@bajustone/fortress').PluginCallTree<readonly [typeof _enabledOAuth]>;
-  void (null as unknown as EnabledConsentCalls).oauth.handleGetFlow;
+  const enabledConsentCalls = (null as unknown as EnabledConsentCalls).oauth;
+  const flow: Promise<{
+    flowId: string;
+    client: { clientId: string; name: string };
+    redirectUri: string;
+    scopes: string[];
+    state: string;
+  }> = enabledConsentCalls.handleGetFlow({ flowId: 'flow' });
+  const approved: Promise<{ redirectUrl: string }> = enabledConsentCalls.handleApproveFlow({ flowId: 'flow' });
+  void flow;
+  void approved;
+  // @ts-expect-error enabled consent calls require flowId
+  enabledConsentCalls.handleGetFlow({});
+  // @ts-expect-error bearer lookup remains implementation-private
+  optionalRoutes.plugins.oauth._lookupBearer('token');
   void optionalRoutes.call.plugins.openapi.getUI;
   const undefinedOpenapi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(undefined)] as const });
   void undefinedOpenapi.call.plugins.openapi.getUI;

@@ -19,10 +19,13 @@ import type { CallOptions } from './http/call';
 import type { IamEndpointsMap } from './iam/iam-endpoints';
 import type { PluginRoutesOf, RuntimeFortressPlugin } from './plugin';
 
+type EndpointCallArgs<E> = keyof InferEndpointCallInput<E> extends never
+  ? [input?: InferEndpointCallInput<E>, options?: CallOptions]
+  : [input: InferEndpointCallInput<E>, options?: CallOptions];
+
 /** One typed in-process callable derived from an endpoint definition. */
 export type EndpointCall<E> = (
-  input: InferEndpointCallInput<E>,
-  options?: CallOptions,
+  ...args: EndpointCallArgs<E>
 ) => Promise<InferEndpointSuccessResponse<E>>;
 
 /**

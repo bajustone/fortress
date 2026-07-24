@@ -218,11 +218,14 @@ describe('schema builders', () => {
     expect(nullType().type).toBe('null');
   });
 
-  it('record() returns object with additionalProperties', () => {
+  it('record() returns an honestly typed open object schema', () => {
     const s = record('Some data');
     expect(s.type).toBe('object');
     expect(s.additionalProperties).toBe(true);
     expect(s.description).toBe('Some data');
+    void (0 as unknown as Infer<typeof s> satisfies Record<string, unknown>);
+    // @ts-expect-error -- record() cannot claim properties it does not validate
+    void record<{ id: string }>('unsafe');
   });
 
   it('recordOf() returns object with typed additionalProperties', () => {
@@ -448,13 +451,14 @@ describe('schema detection (Zod-like Standard Schema)', () => {
 });
 
 describe('endpoint builder', () => {
-  it('builds a minimal endpoint', () => {
+  it('builds a minimal endpoint and rejects unsupported runtime methods', () => {
     const ep = endpoint('GET', '/health').handler('healthCheck').build();
     expect(ep).toEqual({
       method: 'GET',
       path: '/health',
       handler: 'healthCheck',
     });
+    expect(() => endpoint('TRACE' as any, '/trace')).toThrow('Unsupported endpoint method: TRACE');
   });
 
   it('builds a full endpoint with all fields', () => {
@@ -516,6 +520,23 @@ describe('endpoint builder', () => {
   it('supports multiple tags', () => {
     const ep = endpoint('GET', '/test').summary('Test').tags('Auth', 'Admin').handler('test').build();
     expect(ep.meta?.tags).toEqual(['Auth', 'Admin']);
+  });
+
+  it('keeps type-changing builder branches immutable', () => {
+    const base = endpoint('POST', '/aliased').security('none');
+    const withId = base.body(obj({ id: str() }, 'id'));
+    const withName = base.body(obj({ name: str() }, 'name'));
+    const handlerA = withId.handler('handlerA');
+    const handlerB = withId.handler('handlerB');
+    const responseA = handlerA.response(200, 'A', obj({ a: str() }, 'a'));
+    const responseB = handlerA.response(200, 'B', obj({ b: str() }, 'b'));
+
+    expect(withId.build().input?.body?.properties).toHaveProperty('id');
+    expect(withName.build().input?.body?.properties).toHaveProperty('name');
+    expect(handlerA.build().handler).toBe('handlerA');
+    expect(handlerB.build().handler).toBe('handlerB');
+    expect(responseA.build().responses?.[200]?.schema?.properties).toHaveProperty('a');
+    expect(responseB.build().responses?.[200]?.schema?.properties).toHaveProperty('b');
   });
 });
 

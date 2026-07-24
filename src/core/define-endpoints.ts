@@ -13,6 +13,7 @@
  */
 
 import type { AnyEndpointDefinition } from './endpoint';
+import { isHttpMethod } from './endpoint';
 import { Errors } from './errors';
 
 declare const DEFINED_ENDPOINTS: unique symbol;
@@ -59,7 +60,7 @@ export function defineEndpoints<const T extends Record<string, AnyEndpointDefini
   for (const [key, ep] of Object.entries(endpoints)) {
     if (
       !ep || typeof ep !== 'object'
-      || typeof ep.method !== 'string'
+      || !isHttpMethod(ep.method)
       || typeof ep.path !== 'string'
       || typeof ep.handler !== 'string'
     ) {

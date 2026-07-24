@@ -150,10 +150,11 @@ composes them (§1):
 | `FortressMigrationRuntime` | `migrate`, `syncPermissionsFromManifest` | bootstrap and CLI paths |
 | `FortressObservabilityRuntime` | `logger`, `telemetry` | error handlers, `protect()` logging |
 
-`protect()` — the widest measured consumer — takes the composition
-`FortressProtectRuntime = FortressManifestRuntime & FortressAuthRuntime &
-FortressPluginRuntime & FortressObservabilityRuntime`; internal core
-machinery (request dispatch, instance assembly) consumes `FortressRuntime`,
+`protect()` takes an exact member-level composition: manifest
+`endpoints`/`manifest`/`config`, auth `auth`/`iam`/`cookies`/
+`extractAccessToken`/`serializeAuthCookies`, and the observability `logger`.
+It does not require unused plugin-runtime, OpenAPI, or telemetry members.
+Internal core machinery (request dispatch, instance assembly) consumes `FortressRuntime`,
 the composition of all six. Narrow internal helpers use `Pick` slices of a
 capability (e.g. `Pick<FortressHttpRuntime, 'handleRequest'>` for
 `buildCall`).

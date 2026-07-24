@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 import { buildRouteManifest } from '../manifest/route-manifest';
-import { endpoint, id, int, obj, str } from '../schema-builder';
+import { endpoint, id, int, nullType, obj, str } from '../schema-builder';
 import { protect } from './protect';
 
 /** Compile-time assertion that two types are identical. */
@@ -176,6 +176,38 @@ describe('protect()', () => {
     }));
 
     expect(res.headers.getSetCookie().length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('preserves explicit null and emits bodyless 205 responses', async () => {
+    const nullable = endpoint('GET', '/host/nullable')
+      .security('none')
+      .response(200, 'Null', nullType())
+      .handler('nullable')
+      .build();
+    const reset = endpoint('POST', '/host/reset')
+      .security('none')
+      .response(205, 'Reset content')
+      .handler('reset')
+      .build();
+    const fortress = createFortress({
+      database: createTestAdapter(),
+      jwt: { key: secret },
+      csrf: { enabled: false },
+      routes: { nullable, reset },
+    });
+
+    const nullResponse = await protect(fortress, nullable, () => null)(
+      new Request('http://localhost/host/nullable'),
+    );
+    expect(nullResponse.status).toBe(200);
+    expect(await nullResponse.json()).toBeNull();
+
+    const resetResponse = await protect(fortress, reset, () => undefined)(
+      new Request('http://localhost/host/reset', { method: 'POST' }),
+    );
+    expect(resetResponse.status).toBe(205);
+    expect(resetResponse.headers.has('content-type')).toBe(false);
+    expect(await resetResponse.text()).toBe('');
   });
 
   it('exposes ctx.respond for typed non-success status returns', async () => {
