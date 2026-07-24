@@ -103,7 +103,22 @@ export function acceptsPreciseBuiltCallSurface(database: DatabaseAdapter): void 
   fortress.call.health({});
   // @ts-expect-error -- unknown call names remain errors in built declarations
   fortress.call.notRegistered({});
+  // @ts-expect-error -- built login response must not degrade to any/never
+  const incompatibleLoginResult: Promise<{ status: 'invalid' }> = fortress.call.login({
+    identifier: 'user@example.com',
+    password: 'secret',
+  });
+  // @ts-expect-error -- built IAM response must not degrade to any/never
+  const incompatibleIamResult: Promise<{ id: number }> = fortress.call.createRole({
+    name: 'reader',
+    permissions: [{ resource: 'articles', action: 'read' }],
+  });
+  // @ts-expect-error -- built params response must not degrade to any/never
+  const incompatibleParamsResult: Promise<{ ok: string }> = fortress.call.revokeSession({ id: 'session-id' });
   // @ts-expect-error -- built literal response must not degrade to any/unknown
   const incompatibleLiteralResult: Promise<{ echoed: number }> = fortress.call.declarationLiteralEcho({ message: 'hello' });
+  void incompatibleLoginResult;
+  void incompatibleIamResult;
+  void incompatibleParamsResult;
   void incompatibleLiteralResult;
 }
