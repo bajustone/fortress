@@ -47,11 +47,14 @@ type MethodsForPlugin<P extends RuntimeFortressPlugin> = string extends P['name'
   ? object
   : P extends { methods: (...args: any[]) => infer M extends object }
     ? M
-    : keyof PluginMethodsOf<P> extends never
-      ? LegacyPluginMethods
-      : LegacyPluginMethods extends PluginMethodsOf<P>
+    : 'methods' extends keyof P
+      // Keep the deprecated augmentation bridge only for explicitly widened
+      // FortressPlugin types. Exact methodless definePlugin results have no
+      // `methods` key and therefore expose an empty surface.
+      ? LegacyPluginMethods extends PluginMethodsOf<P>
         ? P['name'] extends keyof PluginMethodsMap ? PluginMethodsMap[P['name']] : PluginMethodsOf<P>
-        : PluginMethodsOf<P>;
+        : PluginMethodsOf<P>
+      : Record<never, never>;
 
 /** Infer the typed plugin-methods record from a `plugins` tuple passed to createFortress. */
 export type InferPlugins<T extends readonly RuntimeFortressPlugin[]> = {

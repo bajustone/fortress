@@ -5,6 +5,7 @@ import type {
 } from '@bajustone/fortress';
 import type { accountLockout } from '@bajustone/fortress/plugins/account-lockout';
 import type { admin } from '@bajustone/fortress/plugins/admin';
+import type { ApiKeyConfig } from '@bajustone/fortress/plugins/api-key';
 import type { auditLog } from '@bajustone/fortress/plugins/audit-log';
 import type { dataIsolation } from '@bajustone/fortress/plugins/data-isolation';
 import type { emailVerification } from '@bajustone/fortress/plugins/email-verification';
@@ -13,6 +14,7 @@ import type { oauth } from '@bajustone/fortress/plugins/oauth';
 import type { openapi } from '@bajustone/fortress/plugins/openapi';
 import type { rateLimit } from '@bajustone/fortress/plugins/rate-limit';
 import type { socialLogin } from '@bajustone/fortress/plugins/social-login';
+import type { TenancyConfig } from '@bajustone/fortress/plugins/tenancy';
 import type { twoFactor } from '@bajustone/fortress/plugins/two-factor';
 import type { webauthn } from '@bajustone/fortress/plugins/webauthn';
 import type { webhook } from '@bajustone/fortress/plugins/webhook';
@@ -75,6 +77,9 @@ const builtRoutes = defineEndpoints({
     .build(),
 });
 
+const exactLegacyName = definePlugin({ name: 'legacy-built' });
+export type ExactBuiltEmptyContract = Assert<Lacks<InferPlugins<readonly [typeof exactLegacyName]>, 'legacy-built', 'ping'>>;
+
 const thirdParty = definePlugin({
   name: 'built-third-party',
   methods: () => ({
@@ -88,7 +93,63 @@ const thirdParty = definePlugin({
   routes: builtRoutes,
 });
 
+definePlugin({
+  name: 'built-missing-handler',
+  methods: () => ({ real: () => 'ok' }),
+  routes: {
+    // @ts-expect-error built declarations retain literal handler existence checks
+    missing: endpoint('GET', '/built-missing').handler('missing').build(),
+  },
+});
+
+definePlugin({
+  name: 'built-mismatched-route-key',
+  methods: () => ({ actual: () => 'ok' }),
+  routes: {
+    // @ts-expect-error built declarations retain route-key/handler-key correlation
+    alias: endpoint('GET', '/built-alias').handler('actual').build(),
+  },
+});
+
+definePlugin({
+  name: 'built-incompatible-accepted-handler',
+  methods: () => ({ accepted: () => ({ wrong: 1 }) }),
+  routes: {
+    // @ts-expect-error built declarations correlate every declared 2xx response
+    accepted: endpoint('POST', '/built-accepted')
+      .response(202, 'Accepted', obj({ ok: str() }, 'ok'))
+      .handler('accepted')
+      .build(),
+  },
+});
+
+definePlugin({
+  name: 'built-non-callable',
+  // @ts-expect-error built declarations reject non-function method properties
+  methods: () => ({ value: 1 }),
+});
+
+interface BuiltConcreteMethods { run: () => void }
+// @ts-expect-error concrete FortressPlugin contracts require methods
+const _missingBuiltMethods: FortressPlugin<'built-concrete', BuiltConcreteMethods> = { name: 'built-concrete' };
+void _missingBuiltMethods;
+
 export function declarationContract(database: DatabaseAdapter, dynamicName: string): void {
+  const noPlugins = createFortress({ database, jwt: { key: 'x'.repeat(32) } });
+  // @ts-expect-error omitted plugins expose no arbitrary static keys
+  void noPlugins.plugins.arbitrary;
+  // @ts-expect-error omitted plugins expose no arbitrary call namespaces
+  void noPlugins.call.plugins.arbitrary;
+
+  const empty = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [exactLegacyName] as const });
+  // @ts-expect-error exact methodless plugins do not use legacy augmentation
+  empty.plugins['legacy-built'].ping();
+
+  const maybeApiConfig: ApiKeyConfig | undefined = undefined;
+  void apiKey(maybeApiConfig);
+  const maybeTenancyConfig: TenancyConfig | undefined = undefined;
+  void tenancy(maybeTenancyConfig);
+
   const fortress = createFortress({
     database,
     jwt: { key: 'x'.repeat(32) },

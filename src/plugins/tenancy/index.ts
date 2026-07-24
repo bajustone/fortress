@@ -570,7 +570,7 @@ function createTenancyPlugin(config: TenancyConfig = {}): TenancyPlugin {
 
 export function tenancy(config: TenancyConfig & { routes: true }): TenancyPlugin & { routes: typeof tenancyRoutes };
 export function tenancy(config?: TenancyConfig & { routes?: false | undefined }): TenancyPlugin;
-export function tenancy(config: TenancyConfig): TenancyPlugin;
+export function tenancy(config: TenancyConfig | undefined): TenancyPlugin;
 export function tenancy(config: TenancyConfig = {}): TenancyPlugin {
   return createTenancyPlugin(config);
 }

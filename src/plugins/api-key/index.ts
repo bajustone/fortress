@@ -299,7 +299,7 @@ function createApiKeyPlugin(config: ApiKeyConfig = {}): ApiKeyPlugin {
 
 export function apiKey(config: ApiKeyConfig & { routes: true }): ApiKeyPlugin & { routes: typeof apiKeySelfServiceRoutes };
 export function apiKey(config?: ApiKeyConfig & { routes?: false | undefined }): ApiKeyPlugin;
-export function apiKey(config: ApiKeyConfig): ApiKeyPlugin;
+export function apiKey(config: ApiKeyConfig | undefined): ApiKeyPlugin;
 export function apiKey(config: ApiKeyConfig = {}): ApiKeyPlugin {
   return createApiKeyPlugin(config);
 }

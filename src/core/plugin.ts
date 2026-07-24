@@ -26,10 +26,14 @@ export type PluginMethod = (...args: any[]) => any;
 export type LegacyPluginMethods = Record<string, PluginMethod>;
 export type PluginRoutes = Readonly<Record<string, AnyEndpointDefinition>>;
 
-export interface FortressPlugin<
-  TName extends string = string,
-  TMethods extends object = LegacyPluginMethods,
-  TRoutes extends PluginRoutes | undefined = PluginRoutes | undefined,
+type CallableMethodSurface<TMethods extends object> = {
+  [K in keyof TMethods]: TMethods[K] extends PluginMethod ? TMethods[K] : never;
+};
+
+/** Plugin fields shared by concrete and runtime-widened definitions. */
+export interface FortressPluginDefinition<
+  TName extends string,
+  TRoutes extends PluginRoutes | undefined,
 > {
   /** Unique plugin identifier */
   name: TName;
@@ -39,9 +43,6 @@ export interface FortressPlugin<
 
   /** Hooks into auth lifecycle (executed in plugin registration order) */
   hooks?: PluginHooks;
-
-  /** Extra function-valued methods exposed on fortress.plugins.<name>. */
-  methods?: (ctx: PluginContext) => TMethods;
 
   /**
    * HTTP routes this plugin adds, keyed by handler name.
@@ -105,13 +106,29 @@ export interface FortressPlugin<
   ) => Promise<{ subject: Subject; claims?: TokenClaims; scopes?: string[] | null } | null>;
 }
 
+/**
+ * Plugin contract. Concrete method surfaces require an implementation and
+ * every exposed property must be callable. Runtime-widened and legacy
+ * surfaces keep `methods` optional.
+ */
+export type FortressPlugin<
+  TName extends string = string,
+  TMethods extends object = LegacyPluginMethods,
+  TRoutes extends PluginRoutes | undefined = PluginRoutes | undefined,
+> = FortressPluginDefinition<TName, TRoutes>
+  & (LegacyPluginMethods extends TMethods
+    ? { methods?: (ctx: PluginContext) => CallableMethodSurface<TMethods> }
+    : { methods: (ctx: PluginContext) => CallableMethodSurface<TMethods> });
+
 /** Internal broad shape used at runtime while preserving object method surfaces. */
 export type RuntimeFortressPlugin = FortressPlugin<string, object, PluginRoutes | undefined>;
 
 /** Extract the method surface carried by a plugin definition. */
 export type PluginMethodsOf<P> = P extends { methods: (...args: any[]) => infer TMethods extends object }
   ? TMethods
-  : P extends FortressPlugin<any, infer TMethods, any> ? TMethods : Record<never, never>;
+  : 'methods' extends keyof P
+    ? P extends { methods?: (...args: any[]) => infer TMethods extends object } ? TMethods : Record<never, never>
+    : Record<never, never>;
 
 /** Extract the route record carried by a plugin definition. */
 export type PluginRoutesOf<P> = 'routes' extends keyof P
@@ -169,6 +186,11 @@ type HandlerReturnCompatible<M, E> = M extends (...args: any[]) => infer R
         : false
   : false;
 
+/** Compile-time diagnostic: a concrete route key differs from its handler. */
+export interface RouteHandlerKeyMismatch<TKey extends string, THandler extends string> {
+  readonly 'fortress:route-error': `route key '${TKey}' must match handler '${THandler}'`;
+}
+
 /** Compile-time diagnostic: a route names a handler that is not a plugin method. */
 export interface RouteHandlerMissing<THandler extends string> {
   readonly 'fortress:route-error': `route handler '${THandler}' is not a plugin method — declare it in methods()`;
@@ -189,17 +211,19 @@ type ContractlessEndpoint<E> = keyof InferEndpointCallInput<E> extends never
   ? unknown extends InferEndpointSuccessResponse<E> ? true : false
   : false;
 
-type ValidatePluginRoute<E, TMethods> = E extends AnyEndpointDefinition
+type ValidatePluginRoute<K extends string, E, TMethods> = E extends AnyEndpointDefinition
   ? InferEndpointHandler<E> extends infer H extends string
-    ? H extends keyof TMethods
-      ? E extends { meta: { bearerKind: 'oauth' } }
-        ? E
-        : ContractlessEndpoint<E> extends true
-          ? E
-          : [HandlerInputCompatible<TMethods[H], E>, HandlerReturnCompatible<TMethods[H], E>] extends [true, true]
+    ? [K, H] extends [H, K]
+        ? H extends keyof TMethods
+          ? E extends { meta: { bearerKind: 'oauth' } }
+            ? E
+            : ContractlessEndpoint<E> extends true
               ? E
-              : RouteHandlerIncompatible<H>
-      : RouteHandlerMissing<H>
+              : [HandlerInputCompatible<TMethods[H], E>, HandlerReturnCompatible<TMethods[H], E>] extends [true, true]
+                  ? E
+                  : RouteHandlerIncompatible<H>
+          : RouteHandlerMissing<H>
+        : RouteHandlerKeyMismatch<K, H>
     : never
   : never;
 
@@ -225,9 +249,11 @@ export type ValidatePluginRoutes<TRoutes, TMethods> = string extends keyof TRout
   // handlers at runtime. They also contribute no typed call namespace.
   ? TRoutes
   : {
-      [K in keyof TRoutes as K extends string ? K : never]: undefined extends TRoutes[K]
-        ? ValidatePluginRoute<Exclude<TRoutes[K], undefined>, TMethods> | undefined
-        : ValidatePluginRoute<TRoutes[K], TMethods>;
+      [K in keyof TRoutes as K extends string ? K : never]: K extends string
+        ? undefined extends TRoutes[K]
+          ? ValidatePluginRoute<K, Exclude<TRoutes[K], undefined>, TMethods> | undefined
+          : ValidatePluginRoute<K, TRoutes[K], TMethods>
+        : never;
     };
 
 /**

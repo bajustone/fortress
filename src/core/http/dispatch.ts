@@ -158,8 +158,9 @@ async function dispatchPlugin(
   request: Request,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)[plugin.name];
-  if (!methods?.[endpoint.handler]) {
+  const methods = (fortress.plugins as Record<string, Record<string, unknown>>)[plugin.name];
+  const method = methods?.[endpoint.handler];
+  if (typeof method !== 'function') {
     throw Errors.notFound(`Plugin handler '${plugin.name}.${endpoint.handler}' not found`);
   }
 
@@ -167,7 +168,7 @@ async function dispatchPlugin(
   // some plugin methods reference sibling helpers via `this`.
   // OpenAPI Scalar UI returns HTML, not JSON.
   if (plugin.name === 'openapi' && endpoint.handler === 'getUI') {
-    const html = methods.getUI() as string;
+    const html = method.call(methods) as string;
     return new Response(html, {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -182,7 +183,7 @@ async function dispatchPlugin(
     meta: auth.meta,
     request,
   };
-  const result = await methods[endpoint.handler]({ ...body, ...query, ...pathParams }, ctx);
+  const result = await method.call(methods, { ...body, ...query, ...pathParams }, ctx);
   // Allow handlers to opt into HTML by returning a string starting with `<!`.
   if (typeof result === 'string' && result.trimStart().startsWith('<!')) {
     return new Response(result, {
@@ -201,11 +202,11 @@ async function dispatchOAuth(
   endpoint: EndpointDefinition,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>).oauth;
+  const methods = (fortress.plugins as Record<string, Record<string, unknown>>).oauth;
   if (!methods)
     throw Errors.notFound(`OAuth plugin not registered`);
   const handlerName = endpoint.handler;
-  if (!methods[handlerName])
+  if (typeof methods[handlerName] !== 'function')
     throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
 
   // IMPORTANT: invoke as `methods.<name>(...)` so the `this` binding is the

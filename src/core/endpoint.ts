@@ -130,16 +130,20 @@ export type InferEndpointHandler<E> = E extends EndpointDefinition<any, any, any
 /**
  * Extract the success-response body from an {@link EndpointDefinition}.
  *
- * Tries `200`, then `201`, then `204`, then falls back to `unknown`.
- * This matches the behavior of the `fortress.call.*` proxy, which always
- * resolves to the first successful status declared.
+ * Produces the union of every declared `2xx` response body, then falls back
+ * to `unknown` when the endpoint declares no successful response. A union is
+ * required because endpoint records do not encode which success status a
+ * handler will choose at runtime.
  */
+type TwoXxResponse<R> = {
+  [K in keyof R]: K extends number
+    ? `${K}` extends `2${number}${number}` ? R[K] : never
+    : never;
+}[keyof R];
+
 export type InferEndpointSuccessResponse<E>
   = InferEndpointResponses<E> extends infer R
-    ? R extends { 200: infer T } ? T
-      : R extends { 201: infer T } ? T
-        : R extends { 204: infer T } ? T
-          : unknown
+    ? [TwoXxResponse<R>] extends [never] ? unknown : TwoXxResponse<R>
     : never;
 
 /**

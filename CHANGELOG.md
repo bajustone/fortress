@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (breaking)
+- **Plugin contracts are now definition-derived and fail closed.** `FortressPlugin<Name, Methods>` requires a callable `methods` implementation for concrete method surfaces; exact methodless `definePlugin()` definitions expose an empty surface, while the deprecated augmentation bridge remains only for explicitly widened legacy plugin types. Concrete route keys must match literal handlers, handler input/output correlation covers every declared 2xx response, and runtime plugin/OAuth dispatch rejects non-function handlers. Optional API-key/tenancy config variables and check-only rate-limit framework capabilities remain supported.
+
 ## [1.0.2] - 2026-07-14
 
 ### Fixed

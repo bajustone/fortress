@@ -1,4 +1,5 @@
 import type { DatabaseAdapter } from '../adapters/database';
+import type { RuntimeFortressPlugin } from './plugin';
 
 import { describe, expect, it } from 'vitest';
 import { createFortress } from './fortress';
@@ -49,6 +50,98 @@ describe('resolvePlugin', () => {
 });
 
 describe('createFortress', () => {
+  it.each([
+    {
+      name: 'unsafe-runtime',
+      path: '/unsafe-runtime',
+      handler: 'handle',
+      meta: { summary: 'Unsafe', security: ['none'] as const },
+      expected: 'Plugin handler \'unsafe-runtime.handle\' not found',
+    },
+    {
+      name: 'oauth',
+      path: '/oauth/.well-known/openid-configuration',
+      handler: 'handleDiscovery',
+      meta: { summary: 'Unsafe OAuth', security: ['none'] as const, bearerKind: 'oauth' as const },
+      expected: 'OAuth handler \'handleDiscovery\' not found',
+    },
+  ])('guards $name dispatch against truthy non-function handlers', async ({ name, path, handler, meta, expected }) => {
+    const unsafe = {
+      name,
+      methods: () => ({ [handler]: 'not callable' }),
+      routes: {
+        [handler]: { method: 'GET', path, handler, meta },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [unsafe] as const,
+    });
+
+    const response = await fortress.handleRequest(new Request(`http://localhost${path}`));
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ message: expected });
+  });
+
+  it('preserves plugin method this binding during route dispatch', async () => {
+    const bound = {
+      name: 'bound-runtime',
+      methods: () => ({
+        prefix: () => 'bound',
+        handle(this: { prefix: () => string }) {
+          return { value: this.prefix() };
+        },
+      }),
+      routes: {
+        handle: {
+          method: 'GET',
+          path: '/bound-runtime',
+          handler: 'handle',
+          meta: { summary: 'Bound', security: ['none'] },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [bound] as const,
+    });
+
+    const response = await fortress.handleRequest(new Request('http://localhost/bound-runtime'));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ value: 'bound' });
+  });
+
+  it('preserves OAuth method this binding during protocol dispatch', async () => {
+    const boundOAuth = {
+      name: 'oauth',
+      methods: () => ({
+        issuer: () => 'https://issuer.example',
+        handleDiscovery(this: { issuer: () => string }) {
+          return { issuer: this.issuer() };
+        },
+      }),
+      routes: {
+        handleDiscovery: {
+          method: 'GET',
+          path: '/oauth/.well-known/openid-configuration',
+          handler: 'handleDiscovery',
+          meta: { summary: 'Discovery', security: ['none'], bearerKind: 'oauth' },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [boundOAuth] as const,
+    });
+
+    const response = await fortress.handleRequest(new Request('http://localhost/oauth/.well-known/openid-configuration'));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ issuer: 'https://issuer.example' });
+  });
+
   it('creates a fortress instance with auth and iam services', () => {
     const fortress = createFortress({
       jwt: { key: 'fortress-test-secret-at-least-32!' },

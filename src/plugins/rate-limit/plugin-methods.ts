@@ -1,14 +1,16 @@
 import type { FortressPluginRuntime } from '../../core/capabilities';
 import type { RateLimitMethods } from './index';
 
-export function isRateLimitMethods(value: unknown): value is RateLimitMethods {
+/** Minimal plugin surface consumed by the framework wrappers. */
+export type RateLimitCheckMethods = Pick<RateLimitMethods, 'check'>;
+
+export function isRateLimitMethods(value: unknown): value is RateLimitCheckMethods {
   return typeof value === 'object'
     && value !== null
-    && typeof Reflect.get(value, 'check') === 'function'
-    && typeof Reflect.get(value, 'listRules') === 'function';
+    && typeof Reflect.get(value, 'check') === 'function';
 }
 
-export function resolveRateLimitMethods(fortress: Pick<FortressPluginRuntime, 'plugins'>): RateLimitMethods {
+export function resolveRateLimitMethods(fortress: Pick<FortressPluginRuntime, 'plugins'>): RateLimitCheckMethods {
   const plugins = fortress.plugins;
   const methods = typeof plugins === 'object' && plugins !== null
     ? Reflect.get(plugins, 'rate-limit')
