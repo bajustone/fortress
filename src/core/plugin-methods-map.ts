@@ -41,8 +41,10 @@ export type InferPlugins<T extends readonly FortressPlugin[]> = {
 
 // ── Typed call map helpers ──────────────────────────────────────────
 
-/** Distributes a union into an intersection — the classic TS trick. Used by {@link InferPluginCallMap}. */
-type UnionToIntersection<U> = (U extends any ? (x: U) => void : never) extends ((x: infer I) => void) ? I : never;
+/** Distributes a union into an intersection, using `unknown` as the empty intersection identity. */
+type UnionToIntersection<U> = [U] extends [never]
+  ? unknown
+  : (U extends any ? (x: U) => void : never) extends ((x: infer I) => void) ? I : never;
 
 /**
  * Turn a record of {@link EndpointDefinition}s into a record of typed
@@ -50,26 +52,26 @@ type UnionToIntersection<U> = (U extends any ? (x: U) => void : never) extends (
  * inferred body+query+params intersection and whose output is the inferred
  * success-response body.
  */
-export type CallableForEndpoints<E> = E extends Record<string, EndpointDefinition<any, any, any, any>>
-  ? {
-      [K in keyof E]: (
+export type CallableForEndpoints<E> = {
+  [K in keyof E as E[K] extends EndpointDefinition<any, any, any, any> ? K : never]:
+  E[K] extends EndpointDefinition<any, any, any, any>
+    ? (
         input: InferEndpointCallInput<E[K]>,
         options?: CallOptions,
-      ) => Promise<InferEndpointSuccessResponse<E[K]>>;
-    }
-  : Record<string, never>;
+      ) => Promise<InferEndpointSuccessResponse<E[K]>>
+    : never;
+};
+
+/** A plugin without a concrete routes property contributes nothing to the call intersection. */
+type PluginCallContributor<P> = P extends { routes: infer R }
+  ? CallableForEndpoints<R>
+  : never;
 
 /**
  * Infer the typed call surface contributed by a plugins tuple. Walks every
- * plugin's `routes` record (if present) and unions the callables into one
+ * plugin's `routes` record (if present) and intersects the callables into one
  * flat object keyed by handler name.
  */
 export type InferPluginCallMap<T extends readonly FortressPlugin[]> = UnionToIntersection<
-  T[number] extends infer P
-    ? P extends { routes?: infer R }
-      ? R extends Record<string, EndpointDefinition<any, any, any, any>>
-        ? CallableForEndpoints<R>
-        : Record<string, never>
-      : Record<string, never>
-    : Record<string, never>
+  PluginCallContributor<T[number]>
 >;
