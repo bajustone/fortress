@@ -22,6 +22,7 @@ import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../co
 import type { Subject } from '../../core/types';
 import type { ApiKeyInfo, ApiKeyKnobs, CreateKeyOptions } from './core';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 import { arr, bool, endpoint, id, int, obj, ref, str } from '../../core/schema-builder';
 import {
   createKeyForSubject,
@@ -152,7 +153,8 @@ const apiKeySelfServiceRoutes = {
  * methods on the fortress instance. Pass `{ routes: true }` to mount the
  * self-service HTTP routes under `/api-key/keys/*`.
  */
-export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly name: 'api-key' } {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+function createApiKeyPlugin(config: ApiKeyConfig = {}) {
   const knobs: ApiKeyKnobs = {
     prefix: config.prefix ?? 'fortress',
     defaultExpirySeconds: config.defaultExpirySeconds ?? null,
@@ -161,7 +163,7 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
   const mountRoutes = config.routes === true;
   let observerRegistered = false;
 
-  return {
+  return definePlugin({
     name: 'api-key',
 
     models: [{
@@ -269,7 +271,16 @@ export function apiKey(config: ApiKeyConfig = {}): FortressPlugin & { readonly n
         },
       };
     },
-  };
+  } satisfies FortressPlugin<'api-key', ApiKeyMethods>);
+}
+
+type ApiKeyPlugin = ReturnType<typeof createApiKeyPlugin>;
+
+export function apiKey(config: ApiKeyConfig & { routes: true }): ApiKeyPlugin & { routes: typeof apiKeySelfServiceRoutes };
+export function apiKey(config?: ApiKeyConfig & { routes?: false | undefined }): ApiKeyPlugin;
+export function apiKey(config: ApiKeyConfig): ApiKeyPlugin;
+export function apiKey(config: ApiKeyConfig = {}): ApiKeyPlugin {
+  return createApiKeyPlugin(config);
 }
 
 /**

@@ -12,7 +12,7 @@
 
 import type { EndpointDefinition, EndpointPermission } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
-import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
+import type { PluginContext, PluginMethodsOf, PluginRouteContext } from '../../core/plugin';
 import type { FortressUser, Group, Permission, PermissionInput, Role, SubjectType } from '../../core/types';
 import type { ApiKeyInfo } from '../api-key/core';
 import type { ApiKeyMethods } from '../api-key/index';
@@ -20,6 +20,7 @@ import { authEndpoints } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
 import { iamEndpoints } from '../../core/iam/iam-endpoints';
 import { pullResources } from '../../core/iam/resource-sync';
+import { definePlugin } from '../../core/plugin';
 import { listKeysForSubject, revokeKeyAsAdmin } from '../api-key/core';
 
 export interface AdminPluginOptions {
@@ -931,12 +932,13 @@ const adminApiKeyEndpoints: EndpointDefinition[] = [
  * });
  * ```
  */
-export function admin(options: AdminPluginOptions = {}): FortressPlugin {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+export function admin(options: AdminPluginOptions = {}) {
   const mountApiKeyRoutes = options.apiKeyRoutes === true;
   const mountBootstrap = options.bootstrap?.enabled === true;
   const bootstrapSecret = options.bootstrap?.secret ?? process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET;
 
-  return {
+  return definePlugin({
     name: 'admin',
 
     // Admin routes are aggregated from several internal arrays into a
@@ -1587,7 +1589,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
         return { ok: true };
       },
     }),
-  };
+  });
 }
 
 // --- Helpers ---
@@ -1604,6 +1606,8 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin {
  * `observerRegistered` flag prevents the IAM cascade observer from
  * being attached twice.
  */
+export type AdminMethods = PluginMethodsOf<ReturnType<typeof admin>>;
+
 function getApiKeyMethods(ctx: PluginContext): ApiKeyMethods {
   const apiKeyPlugin = (ctx.config.plugins ?? []).find(p => p.name === 'api-key');
   if (!apiKeyPlugin?.methods)

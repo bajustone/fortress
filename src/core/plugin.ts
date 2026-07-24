@@ -17,9 +17,17 @@ import type {
   TokenClaims,
 } from './types';
 
-export interface FortressPlugin {
+export type PluginMethod = (...args: any[]) => any;
+export type LegacyPluginMethods = Record<string, PluginMethod>;
+export type PluginRoutes = Readonly<Record<string, EndpointDefinition<any, any, any, any>>>;
+
+export interface FortressPlugin<
+  TName extends string = string,
+  TMethods extends object = LegacyPluginMethods,
+  TRoutes extends PluginRoutes | undefined = PluginRoutes | undefined,
+> {
   /** Unique plugin identifier */
-  name: string;
+  name: TName;
 
   /** DB models this plugin needs */
   models?: ModelDefinition[];
@@ -27,9 +35,8 @@ export interface FortressPlugin {
   /** Hooks into auth lifecycle (executed in plugin registration order) */
   hooks?: PluginHooks;
 
-  /** Extra methods exposed on fortress.plugins.<name> */
-  // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
-  methods?: (ctx: PluginContext) => Record<string, Function>;
+  /** Extra function-valued methods exposed on fortress.plugins.<name>. */
+  methods?: (ctx: PluginContext) => TMethods;
 
   /**
    * HTTP routes this plugin adds, keyed by handler name.
@@ -41,7 +48,7 @@ export interface FortressPlugin {
    * so the keyed shape is already the natural fit at dispatch time — the
    * key just needs to match the `EndpointDefinition.handler` string.
    */
-  routes?: Record<string, EndpointDefinition>;
+  routes?: TRoutes;
 
   /** Middleware to inject into the request pipeline */
   middleware?: MiddlewareDefinition[];
@@ -84,6 +91,34 @@ export interface FortressPlugin {
     request: Request,
     ctx: PluginContext,
   ) => Promise<{ subject: Subject; claims?: TokenClaims; scopes?: string[] | null } | null>;
+}
+
+/** Internal broad shape used at runtime while preserving object method surfaces. */
+export type RuntimeFortressPlugin = FortressPlugin<string, object, PluginRoutes | undefined>;
+
+/** Extract the method surface carried by a plugin definition. */
+export type PluginMethodsOf<P> = P extends { methods: (...args: any[]) => infer TMethods extends object }
+  ? TMethods
+  : P extends FortressPlugin<any, infer TMethods, any> ? TMethods : Record<never, never>;
+
+/** Extract the route record carried by a plugin definition. */
+export type PluginRoutesOf<P> = P extends { routes: infer TRoutes }
+  ? TRoutes
+  : P extends FortressPlugin<any, any, infer TRoutes> ? TRoutes : undefined;
+
+/**
+ * Preserve a plugin definition's literal name, exact methods, and exact routes.
+ * This identity helper is the preferred authoring API for third-party plugins.
+ */
+export function definePlugin<
+  const TDefinition,
+  const TName extends string,
+  TMethods extends object,
+  const TRoutes extends PluginRoutes | undefined,
+>(definition: TDefinition & FortressPlugin<TName, TMethods, TRoutes>): TDefinition
+  & Omit<FortressPlugin<TName, TMethods, TRoutes>, 'name' | 'methods' | 'routes'>;
+export function definePlugin(definition: FortressPlugin): FortressPlugin {
+  return definition;
 }
 
 // --- Hooks ---

@@ -968,7 +968,7 @@ async function seed(): Promise<void> {
   await fortress.plugins.webhook.registerEndpoint(
     'https://example.com/webhooks',
     ['LOGIN_SUCCESS', 'REGISTER'],
-    'webhook-signing-secret',
+    { secret: 'webhook-signing-secret' },
   );
 
   // ── Typed in-process client ─────────────────────────────────────────

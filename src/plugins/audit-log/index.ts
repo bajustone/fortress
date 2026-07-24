@@ -10,6 +10,7 @@
 
 import type { WhereClause } from '../../adapters/database/types';
 import type { FortressPlugin } from '../../core/plugin';
+import { definePlugin } from '../../core/plugin';
 
 export interface AuditLogConfig {
   /** Events to capture. Default: all. */
@@ -362,7 +363,8 @@ async function queryAuditLog(
  * auth and IAM lifecycle events into an append-only table with a
  * tamper-evident hash chain, plus a query API for compliance reads.
  */
-export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readonly name: 'audit-log' } {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+export function auditLog(config: AuditLogConfig = {}) {
   const allowedEvents = config.events ?? null;
   const hashChain = config.hashChain ?? false;
 
@@ -450,7 +452,7 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
     }
   }
 
-  return {
+  return definePlugin({
     name: 'audit-log',
 
     models: [{
@@ -676,5 +678,5 @@ export function auditLog(config: AuditLogConfig = {}): FortressPlugin & { readon
         });
       },
     }),
-  };
+  } satisfies FortressPlugin<'audit-log', AuditLogMethods>);
 }

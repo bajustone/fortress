@@ -1,16 +1,16 @@
 import type { authEndpoints } from '../auth/auth-endpoints';
 import type { InferEndpointCallInput, InferEndpointSuccessResponse } from '../endpoint';
-import type { FortressPlugin } from '../plugin';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { FortressError } from '../errors';
 import { createFortress } from '../fortress';
+import { definePlugin } from '../plugin';
 import { endpoint, obj, str } from '../schema-builder';
 import { assertSuccess } from '../types';
 
 const SECRET = 'call-test-secret-at-least-32-bytes-long!!';
 
-const literalRoutePlugin = {
+const literalRoutePlugin = definePlugin({
   name: 'literal-route',
   routes: {
     literalEcho: endpoint('POST', '/literal/echo')
@@ -23,12 +23,12 @@ const literalRoutePlugin = {
   methods: () => ({
     literalEcho: async (input: { message: string }) => ({ echoed: input.message }),
   }),
-} as const satisfies FortressPlugin;
+});
 
-const noRoutePlugin = {
+const noRoutePlugin = definePlugin({
   name: 'no-route',
   methods: () => ({ health: () => 'ok' }),
-} as const satisfies FortressPlugin;
+});
 
 function makeFortress() {
   return createFortress({

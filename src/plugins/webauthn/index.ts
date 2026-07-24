@@ -26,6 +26,7 @@ import {
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 import { bool, endpoint, id, obj, record, str } from '../../core/schema-builder';
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -203,7 +204,8 @@ const webauthnRoutes = {
  * implements passkey registration, passwordless authentication, and a
  * second-factor mode using `@simplewebauthn/server`.
  */
-export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly name: 'webauthn' } {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+export function webauthn(config: WebAuthnConfig) {
   const rpName = config.rpName;
   const rpID = config.rpID;
   const origin = config.origin;
@@ -294,7 +296,7 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
     return credentialRecord.userId;
   }
 
-  return {
+  return definePlugin({
     name: 'webauthn',
 
     models: [
@@ -550,5 +552,5 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
         return ctx.auth.completePluginAuth(userId, 'webauthn', meta);
       },
     }),
-  };
+  } satisfies FortressPlugin<'webauthn', WebAuthnMethods>);
 }

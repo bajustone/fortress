@@ -13,7 +13,7 @@
  */
 
 import type { FortressConfig } from '../config';
-import type { FortressPlugin, MiddlewareDefinition, PluginContext } from '../plugin';
+import type { MiddlewareDefinition, PluginContext, RuntimeFortressPlugin } from '../plugin';
 import type { Subject, TokenClaims } from '../types';
 import { executePluginMiddleware } from '../plugin-runner';
 
@@ -53,7 +53,7 @@ export interface PluginRequestContext {
  * caller.
  */
 export async function runPluginMiddleware(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   config: FortressConfig,
   phase: MiddlewareDefinition['position'],
   ctx: PluginRequestContext,

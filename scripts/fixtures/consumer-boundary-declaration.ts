@@ -128,7 +128,7 @@ export function acceptsBrandedPluginFromBuiltDeclarations(
   void svelteKitRateLimit(fortress, 'api', event);
   protect(fortress, 'login', () => ({ ok: true }));
   buildCall(fortress, {});
-  getPluginMethods<ApiKeyMethods>(fortress, 'api-key');
+  getPluginMethods(fortress, 'api-key');
   checkRouteManifestDrift(fortress);
   checkPublicRoutes(fortress);
   void smokeTestAuth(fortress);

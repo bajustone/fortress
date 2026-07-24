@@ -26,6 +26,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 import { arr, bool, endpoint, id, obj, ref, str } from '../../core/schema-builder';
 
 /**
@@ -200,7 +201,8 @@ const tenancyRoutes = {
  * verified `tenantId` JWT claim, providing schema-level isolation between
  * tenants. Pass `{ routes: true }` to mount the HTTP routes under `/tenancy/*`.
  */
-export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly name: 'tenancy' } {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+function createTenancyPlugin(config: TenancyConfig = {}) {
   const schemaPrefix = config.schemaPrefix ?? 'tenant_';
   assertSafeSchemaPrefix(schemaPrefix);
   const mountRoutes = config.routes === true;
@@ -211,7 +213,7 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
    */
   const tenantSchemaName = (id: string): string => `${schemaPrefix}${id}`;
 
-  return {
+  return definePlugin({
     name: 'tenancy',
 
     models: [
@@ -540,5 +542,14 @@ export function tenancy(config: TenancyConfig = {}): FortressPlugin & { readonly
         },
       };
     },
-  };
+  } satisfies FortressPlugin<'tenancy', TenancyMethods>);
+}
+
+type TenancyPlugin = ReturnType<typeof createTenancyPlugin>;
+
+export function tenancy(config: TenancyConfig & { routes: true }): TenancyPlugin & { routes: typeof tenancyRoutes };
+export function tenancy(config?: TenancyConfig & { routes?: false | undefined }): TenancyPlugin;
+export function tenancy(config: TenancyConfig): TenancyPlugin;
+export function tenancy(config: TenancyConfig = {}): TenancyPlugin {
+  return createTenancyPlugin(config);
 }

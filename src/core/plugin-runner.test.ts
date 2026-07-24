@@ -4,6 +4,7 @@ import type { FortressConfig } from './config';
 import type { FortressPlugin } from './plugin';
 
 import { describe, expect, it, vi } from 'vitest';
+import { definePlugin } from './plugin';
 import {
   chainAdapterWrappers,
   collectScopeRules,
@@ -41,6 +42,20 @@ describe('processPlugins', () => {
     const methodsFn = vi.fn(() => ({}));
     processPlugins([testPlugin({ methods: methodsFn })], mockDb, mockConfig);
     expect(methodsFn).toHaveBeenCalledWith({ db: mockDb, config: mockConfig });
+  });
+
+  it('accepts definePlugin and interface-shaped method surfaces', () => {
+    interface GreeterMethods {
+      greet: (name: string) => string;
+    }
+    const plugin = definePlugin({
+      name: 'defined',
+      methods: (ctx): GreeterMethods => ({
+        greet: name => `${ctx.config.jwt.key}:${name}`,
+      }),
+    });
+    const result = processPlugins([plugin], mockDb, mockConfig);
+    expect((result.defined.greet as Function)('Ada')).toBe(`${mockConfig.jwt.key}:Ada`);
   });
 
   it('handles multiple plugins', () => {

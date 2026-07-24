@@ -164,7 +164,7 @@ function acceptsBrandedPluginAtEverySourceBoundary(
   buildCall(fortress, {});
   buildRouteManifest(fortress);
   detectRouteManifestDrift(fortress);
-  getPluginMethods<ApiKeyMethods>(fortress, 'api-key');
+  getPluginMethods(fortress, 'api-key');
 
   checkRouteManifestDrift(fortress);
   checkPublicRoutes(fortress);

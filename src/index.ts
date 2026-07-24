@@ -88,7 +88,7 @@ export type { FortressErrorCode, OAuthErrorCode } from './core/errors';
 export { createFortress, getPluginMethods } from './core/fortress';
 
 /** The fortress instance type returned by {@link createFortress}, plus the typed call-map helper. */
-export type { AnyFortress, Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, TypedCall } from './core/fortress';
+export type { AnyFortress, Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, PluginMethodsValidator, TypedCall } from './core/fortress';
 
 /** Typed in-process client builder and per-call options. */
 export { buildCall } from './core/http/call';
@@ -159,17 +159,23 @@ export type { ToOpenAPIOptions } from './core/openapi';
  * with new models, hooks, methods, routes, middleware, scope rules, or
  * adapter wrappers.
  */
+export { definePlugin } from './core/plugin';
 export type {
   AfterHookContext,
   FieldDefinition,
   FortressPlugin,
   HookContext,
   HookResult,
+  LegacyPluginMethods,
   MiddlewareDefinition,
   ModelConstraint,
   ModelDefinition,
   PluginContext,
   PluginHooks,
+  PluginMethod,
+  PluginMethodsOf,
+  PluginRoutes,
+  PluginRoutesOf,
   PostAuthGateContext,
   PostAuthGateDecision,
   PostAuthGateProvider,
@@ -276,6 +282,12 @@ export { assertSuccess, isImpersonation, isPending, isSuccess } from './core/typ
  */
 export { validateRequest } from './core/validation';
 
+/** Type-safe method surface contributed by the account lockout plugin. */
+export type { AccountLockoutMethods } from './plugins/account-lockout';
+
+/** Type-safe method surface contributed by the admin plugin. */
+export type { AdminMethods } from './plugins/admin';
+
 /** Type-safe method surface contributed by the API key plugin. */
 export type { ApiKeyMethods } from './plugins/api-key';
 
@@ -296,6 +308,9 @@ export type { AuthorizeRequestParams, ClientAuth, OAuthMethods, PendingFlowRecor
 
 export type { OpenAPISpec, SpecBuilderOptions } from './plugins/openapi/spec-builder';
 
+/** Type-safe method surface contributed by the rate-limit plugin. */
+export type { RateLimitMethods } from './plugins/rate-limit';
+
 /** Type-safe method surface contributed by the social login plugin. */
 export type { SocialLoginMethods } from './plugins/social-login';
 
@@ -307,3 +322,6 @@ export type { TwoFactorMethods } from './plugins/two-factor';
 
 /** Type-safe method surface contributed by the WebAuthn plugin. */
 export type { WebAuthnMethods } from './plugins/webauthn';
+
+/** Type-safe method surface contributed by the webhook plugin. */
+export type { WebhookMethods } from './plugins/webhook';

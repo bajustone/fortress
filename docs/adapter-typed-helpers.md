@@ -187,6 +187,21 @@ await fortress.plugins['api-key'].createKey({
 });
 ```
 
-For dynamic plugin lookup (e.g. a plugin loaded by name at runtime),
-use `getPluginMethods<T>(fortress, name)` to attach a known interface
-without casting.
+Known plugin keys are inferred directly with `getPluginMethods(fortress, 'api-key')`.
+A dynamic string returns `unknown`; provide a runtime type guard when the name is
+loaded at runtime:
+
+```ts
+const methods = getPluginMethods(
+  fortress,
+  pluginName,
+  (value): value is { ping: () => Promise<void> } =>
+    typeof value === 'object'
+    && value !== null
+    && typeof Reflect.get(value, 'ping') === 'function',
+);
+await methods.ping();
+```
+
+The former caller-selected `getPluginMethods<T>(...)` assertion is no longer
+supported because it could manufacture a type without runtime validation.

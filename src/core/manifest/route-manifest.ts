@@ -1,6 +1,6 @@
 import type { EndpointDefinition, EndpointPermission, HttpMethod, SecurityRequirement } from '../endpoint';
 import type { AnyFortress } from '../fortress';
-import type { FortressPlugin, MiddlewareDefinition } from '../plugin';
+import type { MiddlewareDefinition, RuntimeFortressPlugin } from '../plugin';
 import { authEndpoints } from '../auth/auth-endpoints';
 import { resolveCsrfConfig } from '../http/csrf';
 import { iamEndpoints } from '../iam/iam-endpoints';
@@ -65,7 +65,7 @@ function middlewareMatchesEndpoint(middleware: MiddlewareDefinition, endpoint: E
   return true;
 }
 
-function isRateLimited(endpoint: EndpointDefinition, plugins: readonly FortressPlugin[]): boolean {
+function isRateLimited(endpoint: EndpointDefinition, plugins: readonly RuntimeFortressPlugin[]): boolean {
   for (const plugin of plugins) {
     if (plugin.name !== 'rate-limit')
       continue;

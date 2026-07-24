@@ -13,6 +13,7 @@ import type { FortressPlugin } from '../../core/plugin';
 import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 
 export interface TwoFactorConfig {
   /**
@@ -285,7 +286,8 @@ export interface TwoFactorMethods {
  * that adds TOTP enrolment and verification, hashed backup codes, and
  * trusted-device opt-out for the sign-in flow.
  */
-export function twoFactor(config: TwoFactorConfig): FortressPlugin & { readonly name: 'two-factor' } {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+export function twoFactor(config: TwoFactorConfig) {
   if (!config?.secretEncryptionKey)
     throw Errors.badRequest('twoFactor requires secretEncryptionKey');
   const keyBytes = decodeEncryptionKey(config.secretEncryptionKey);
@@ -388,7 +390,7 @@ export function twoFactor(config: TwoFactorConfig): FortressPlugin & { readonly 
     return undefined;
   }
 
-  return {
+  return definePlugin({
     name: 'two-factor',
 
     models: [
@@ -562,7 +564,7 @@ export function twoFactor(config: TwoFactorConfig): FortressPlugin & { readonly 
         },
       };
     },
-  };
+  } satisfies FortressPlugin<'two-factor', TwoFactorMethods>);
 }
 
 // Export TOTP utilities for testing

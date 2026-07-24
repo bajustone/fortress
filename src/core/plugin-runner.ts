@@ -5,7 +5,7 @@ import type { FortressConfig } from './config';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
-import type { FortressPlugin, MiddlewareDefinition, PluginContext } from './plugin';
+import type { FortressPlugin, MiddlewareDefinition, PluginContext, RuntimeFortressPlugin } from './plugin';
 import { Errors } from './errors';
 import { canonicalizePath } from './http/match';
 
@@ -14,7 +14,7 @@ import { canonicalizePath } from './http/match';
  */
 
 export function processPlugins(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   db: DatabaseAdapter,
   config: FortressConfig,
   auth?: AuthService,
@@ -27,7 +27,11 @@ export function processPlugins(
   const result: Record<string, Record<string, Function>> = {};
 
   for (const plugin of plugins) {
-    result[plugin.name] = plugin.methods?.(ctx) ?? {};
+    const methods = plugin.methods?.(ctx) ?? {};
+    // The runtime dictionary cannot prove that every property of the generic
+    // method object is callable; plugin authors uphold that public contract.
+    // eslint-disable-next-line ts/no-unsafe-function-type -- normalized at the runtime dictionary boundary
+    result[plugin.name] = methods as Record<string, Function>;
   }
 
   return result;
@@ -38,7 +42,7 @@ export function processPlugins(
  * Each wrapper receives the result of the previous.
  */
 export function chainAdapterWrappers(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   baseAdapter: DatabaseAdapter,
   requestContext: Record<string, unknown>,
 ): DatabaseAdapter {
@@ -58,7 +62,7 @@ export function chainAdapterWrappers(
  * Later plugins override earlier ones on key conflicts.
  */
 export async function mergeTokenClaims(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   userId: string,
   ctx: PluginContext,
 ): Promise<Record<string, unknown>> {
@@ -89,7 +93,7 @@ export async function mergeTokenClaims(
  * All filters are AND'd together. All defaults are merged.
  */
 export async function collectScopeRules(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   userId: string,
   model: string,
   ctx: PluginContext,
@@ -200,7 +204,7 @@ export function wrapAdapterWithScopeRules(
  * Get all model definitions declared by plugins.
  */
 export function collectPluginModels(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
 ): { pluginName: string; models: FortressPlugin['models'] }[] {
   return plugins
     .filter(p => p.models && p.models.length > 0)
@@ -225,10 +229,10 @@ function middlewarePathToRegex(pattern: string): RegExp {
  * Returns them in plugin registration order.
  */
 export function collectPluginMiddleware(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   position: MiddlewareDefinition['position'],
-): { plugin: FortressPlugin; middleware: MiddlewareDefinition }[] {
-  const result: { plugin: FortressPlugin; middleware: MiddlewareDefinition }[] = [];
+): { plugin: RuntimeFortressPlugin; middleware: MiddlewareDefinition }[] {
+  const result: { plugin: RuntimeFortressPlugin; middleware: MiddlewareDefinition }[] = [];
   for (const plugin of plugins) {
     if (!plugin.middleware)
       continue;
@@ -249,7 +253,7 @@ export function collectPluginMiddleware(
  * handlers so each `next()` invokes the next matching middleware.
  */
 export async function executePluginMiddleware(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   position: MiddlewareDefinition['position'],
   requestPath: string,
   ctx: PluginContext,

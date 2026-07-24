@@ -121,7 +121,7 @@ describe('data-isolation plugin', () => {
       });
 
       const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-      const methods = plugin.methods!(ctx) as { withoutScope: <T>(name: string, fn: () => Promise<T>) => Promise<T> };
+      const methods = plugin.methods!();
 
       const rules = await methods.withoutScope('site', async () => {
         return plugin.scopeRules!('1', 'sale', ctx);
@@ -137,7 +137,7 @@ describe('data-isolation plugin', () => {
         scopes: [{ name: 'site', field: 'siteId', models: ['sale'], resolveValue: async () => null }],
       });
       const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-      const methods = plugin.methods!(ctx) as { withoutScope: <T>(name: string, fn: () => Promise<T>) => Promise<T> };
+      const methods = plugin.methods!();
 
       await expect(
         methods.withoutScope('site', () => plugin.scopeRules!('1', 'sale', ctx)),
@@ -154,7 +154,7 @@ describe('data-isolation plugin', () => {
       });
 
       const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-      const methods = plugin.methods!(ctx) as { unscoped: <T>(fn: () => Promise<T>) => Promise<T> };
+      const methods = plugin.methods!();
 
       const rules = await methods.unscoped(async () => {
         return plugin.scopeRules!('1', 'sale', ctx);
@@ -174,7 +174,7 @@ describe('data-isolation plugin', () => {
         ],
       });
       const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
-      const methods = plugin.methods!(ctx) as { unscoped: <T>(fn: () => Promise<T>) => Promise<T> };
+      const methods = plugin.methods!();
 
       // Flow A holds an unscoped window open across an await.
       // Flow B asks for scope rules in the middle.

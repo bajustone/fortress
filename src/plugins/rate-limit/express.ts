@@ -21,6 +21,7 @@
  */
 
 import type { AnyFortress } from '../../core/fortress';
+import { resolveRateLimitMethods } from './plugin-methods';
 
 // Minimal Express-compatible types so users bring their own express version.
 /** Shape fortress reads from; compatible with any modern Express request. */
@@ -39,10 +40,6 @@ export interface ExpressRateLimitOptions {
   keyByUser?: boolean;
   /** Override IP extraction. Default uses `req.ip` then forwarding headers. */
   extractIp?: (req: MinimalExpressRequest) => string | undefined;
-}
-
-interface RateLimitCheck {
-  check: (rule: string, keys: { ip?: string; userId?: string }) => Promise<void>;
 }
 
 function defaultExtractIp(req: MinimalExpressRequest): string | undefined {
@@ -66,12 +63,7 @@ export function expressRateLimit(
   ruleName: string,
   options: ExpressRateLimitOptions = {},
 ): (req: MinimalExpressRequest, _res: unknown, next: (err?: unknown) => void) => void {
-  const methods = (fortress.plugins as Record<string, unknown>)['rate-limit'] as RateLimitCheck | undefined;
-  if (!methods?.check) {
-    throw new Error(
-      'rate-limit plugin is not registered — add rateLimit({...}) to your FortressConfig.plugins',
-    );
-  }
+  const methods = resolveRateLimitMethods(fortress);
   const extractIp = options.extractIp ?? defaultExtractIp;
   const keyByUser = options.keyByUser ?? true;
 

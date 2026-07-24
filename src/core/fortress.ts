@@ -12,7 +12,7 @@ import type { MigrationApplyResult } from './migrations/engine';
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
 import type { ToOpenAPIOptions } from './openapi';
-import type { FortressPlugin, MiddlewareDefinition } from './plugin';
+import type { FortressPlugin, MiddlewareDefinition, RuntimeFortressPlugin } from './plugin';
 import type { CallableForEndpoints, InferPluginCallMap, InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
 import { createAuthService } from './auth/auth-service';
@@ -45,7 +45,7 @@ import { processPlugins } from './plugin-runner';
  * query, and params schemas, and the output is the inferred 2xx response
  * type. Non-2xx responses throw a `FortressError`.
  */
-export type TypedCall<T extends readonly FortressPlugin[]>
+export type TypedCall<T extends readonly RuntimeFortressPlugin[]>
   = & CallableForEndpoints<typeof authEndpoints>
     & CallableForEndpoints<typeof iamEndpoints>
     & InferPluginCallMap<T>;
@@ -237,29 +237,33 @@ export interface MigrateResult {
   appRan: boolean;
 }
 
-/**
- * Type-safe helper to retrieve a plugin's methods from a Fortress instance.
- *
- * Since plugin methods are dynamically typed at runtime, this helper lets
- * consumers provide a known interface for type-safe access without casting.
- *
- * @example
- * ```ts
- * interface TwoFactorMethods {
- *   setup: (userId: string) => Promise<{ secret: string; qrCode: string }>;
- *   verify: (userId: string, code: string) => Promise<boolean>;
- * }
- *
- * const twoFactor = getPluginMethods<TwoFactorMethods>(fortress, 'two-factor');
- * const result = await twoFactor.setup(userId); // fully typed
- * ```
- */
-export function getPluginMethods<T>(fortress: AnyFortress, pluginName: string): T {
-  const methods = (fortress.plugins as Record<string, unknown>)[pluginName];
-  if (!methods) {
+export type PluginMethodsValidator<T> = (value: unknown) => value is T;
+
+/** Retrieve inferred plugin methods, or validate a dynamically named plugin. */
+export function getPluginMethods<TPlugins, K extends keyof TPlugins & string>(
+  fortress: Fortress<TPlugins, unknown>,
+  pluginName: K,
+): TPlugins[K];
+export function getPluginMethods<T>(
+  fortress: AnyFortress,
+  pluginName: string,
+  validator: PluginMethodsValidator<T>,
+): T;
+export function getPluginMethods(fortress: AnyFortress, pluginName: string): unknown;
+export function getPluginMethods<T>(
+  fortress: AnyFortress,
+  pluginName: string,
+  validator?: PluginMethodsValidator<T>,
+): T | unknown {
+  // Runtime plugin dictionaries cannot prove their tuple-correlated keys;
+  // keep the erased lookup localized to this boundary.
+  const plugins = fortress.plugins as Record<string, unknown>;
+  const methods = plugins[pluginName];
+  if (!methods)
     throw Errors.notFound(`Plugin '${pluginName}' is not registered`);
-  }
-  return methods as T;
+  if (validator && !validator(methods))
+    throw Errors.badRequest(`Plugin '${pluginName}' methods failed runtime validation`);
+  return methods;
 }
 
 const MIN_SECRET_BYTES = 32;
@@ -271,7 +275,7 @@ const MIN_SECRET_BYTES = 32;
  * list, wires up auth/IAM services, and returns the assembled instance with
  * type-safe plugin method access for any plugins listed in the config.
  */
-export function createFortress<const T extends readonly FortressPlugin[]>(
+export function createFortress<const T extends readonly RuntimeFortressPlugin[]>(
   config: FortressConfig & { plugins?: T },
 ): Fortress<InferPlugins<T>, TypedCall<T>> {
   // Validate JWT key strength (HS256 shared-secret bytes).

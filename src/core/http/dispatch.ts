@@ -21,7 +21,7 @@
 import type { ClientAuth } from '../../plugins/oauth';
 import type { EndpointDefinition } from '../endpoint';
 import type { Fortress } from '../fortress';
-import type { FortressPlugin, PluginRouteContext } from '../plugin';
+import type { PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
 import type { RequestMeta, Subject, TokenClaims } from '../types';
 import { Errors, FortressError } from '../errors';
 
@@ -148,7 +148,7 @@ function parseBearerToken(header: string | null): string | undefined {
 // ── Plugin dispatch (non-oauth) ─────────────────────────────────────
 
 /** Find the plugin (if any) that owns the given endpoint. */
-function findOwningPlugin(fortress: Fortress, endpoint: EndpointDefinition): FortressPlugin | undefined {
+function findOwningPlugin(fortress: Fortress, endpoint: EndpointDefinition): RuntimeFortressPlugin | undefined {
   const plugins = fortress.config.plugins ?? [];
   for (const plugin of plugins) {
     if (!plugin.routes)
@@ -163,7 +163,7 @@ function findOwningPlugin(fortress: Fortress, endpoint: EndpointDefinition): For
 
 async function dispatchPlugin(
   fortress: Fortress,
-  plugin: FortressPlugin,
+  plugin: RuntimeFortressPlugin,
   endpoint: EndpointDefinition,
   body: Record<string, unknown>,
   pathParams: Record<string, string>,

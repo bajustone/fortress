@@ -114,7 +114,7 @@ import {
   endpoint,
   obj,
   str,
-  type FortressPlugin,
+  definePlugin,
 } from '@bajustone/fortress';
 
 const greetingEndpoint = endpoint('POST', '/greetings')
@@ -126,7 +126,7 @@ const greetingEndpoint = endpoint('POST', '/greetings')
   .build();
 
 export function greetings() {
-  return {
+  return definePlugin({
     name: 'greetings',
     routes: { createGreeting: greetingEndpoint },
     methods: () => ({
@@ -134,7 +134,7 @@ export function greetings() {
         return { message: `Hello ${input.name}` };
       },
     }),
-  } as const satisfies FortressPlugin;
+  });
 }
 ```
 
@@ -151,7 +151,10 @@ await fortress.call.createGreeting(
 );
 ```
 
-The route record key, endpoint handler, and method key must match.
+The route record key, endpoint handler, and method key must match. `definePlugin`
+preserves the literal name, method signatures, and endpoint schema generics without
+registry edits. For a widened legacy factory, `PluginMethodsMap` module augmentation
+remains available as a compatibility bridge; new plugins should prefer `definePlugin`.
 
 ## Add lifecycle hooks
 

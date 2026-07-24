@@ -1,3 +1,4 @@
+import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin, PluginRouteContext } from '../plugin';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
@@ -363,7 +364,7 @@ describe('fortress.handleRequest', () => {
   describe('bearerKind: \'jwt\' default for /oauth/* routes', () => {
     function makeOauthBearerPlugin(includeForbiddenSelfAuth = false): { plugin: FortressPlugin; received: PluginRouteContext[] } {
       const received: PluginRouteContext[] = [];
-      const routes: NonNullable<FortressPlugin['routes']> = {
+      const routes: Record<string, EndpointDefinition> = {
         jwtRoute: {
           method: 'POST',
           path: '/oauth/host-app/jwt-route',

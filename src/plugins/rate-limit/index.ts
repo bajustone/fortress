@@ -16,6 +16,7 @@ import type { PluginRequestContext } from '../../core/http/plugin-middleware';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext } from '../../core/plugin';
 import type { RateLimitStore } from './memory-store';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 import { createMemoryStore } from './memory-store';
 
 export type { RateLimitStore } from './memory-store';
@@ -153,16 +154,21 @@ function ipFromRequest(request: Request): string {
   return request.headers.get('x-real-ip') ?? '';
 }
 
-interface CheckKeys {
+export interface RateLimitCheckKeys {
   ip?: string | null;
   userId?: string | null;
+}
+
+export interface RateLimitMethods {
+  check: (ruleName: string, keys: RateLimitCheckKeys) => Promise<void>;
+  listRules: () => string[];
 }
 
 async function runRule(
   store: RateLimitStore,
   ruleName: string,
   rule: RateLimitRule,
-  keys: CheckKeys,
+  keys: RateLimitCheckKeys,
 ): Promise<void> {
   const windowMs = rule.windowSeconds * 1000;
   const prefix = rule.keyPrefix ?? ruleName;
@@ -220,7 +226,8 @@ function isDisabled(
   return !!block && 'disabled' in block && block.disabled === true;
 }
 
-export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+export function rateLimit(config: RateLimitConfig = {}) {
   const store = config.store ?? createMemoryStore();
 
   // Gate blocks — always on with defaults; `{ disabled: true }` opts out.
@@ -269,7 +276,7 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
     };
   }
 
-  async function check(ruleName: string, keys: CheckKeys): Promise<void> {
+  async function check(ruleName: string, keys: RateLimitCheckKeys): Promise<void> {
     const rule = rules[ruleName];
     if (!rule)
       throw new Error(`rate-limit: unknown rule '${ruleName}' — declare it in config.rules or add the matching endpoint config block`);
@@ -337,7 +344,7 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
     });
   }
 
-  return {
+  return definePlugin({
     name: 'rate-limit',
 
     ...(middleware.length > 0 ? { middleware } : {}),
@@ -379,5 +386,5 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin {
       /** Read-only view of the resolved rule registry (debug / introspection). */
       listRules: (): string[] => Object.keys(rules),
     }),
-  };
+  } satisfies FortressPlugin<'rate-limit', RateLimitMethods>);
 }

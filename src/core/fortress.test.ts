@@ -1,7 +1,8 @@
 import type { DatabaseAdapter } from '../adapters/database';
 
 import { describe, expect, it } from 'vitest';
-import { createFortress } from './fortress';
+import { createFortress, getPluginMethods } from './fortress';
+import { definePlugin } from './plugin';
 
 // Minimal mock adapter — just enough for createFortress to wire up
 const mockDb: DatabaseAdapter = {
@@ -13,6 +14,40 @@ const mockDb: DatabaseAdapter = {
   count: async () => 0,
   transaction: async fn => fn(mockDb),
 };
+
+describe('getPluginMethods', () => {
+  const plugin = definePlugin({
+    name: 'known',
+    methods: () => ({ ping: () => 'pong' as const }),
+  });
+  const fortress = createFortress({
+    jwt: { key: 'fortress-test-secret-at-least-32!' },
+    database: mockDb,
+    plugins: [plugin] as const,
+  });
+
+  it('infers known keys and validates dynamic keys', () => {
+    expect(getPluginMethods(fortress, 'known').ping()).toBe('pong');
+    const dynamicName: string = 'known';
+    const dynamic = getPluginMethods(fortress, dynamicName);
+    // @ts-expect-error dynamic names return unknown without a validator
+    dynamic.ping();
+    const validated = getPluginMethods(
+      fortress,
+      dynamicName,
+      (value): value is { ping: () => 'pong' } => typeof value === 'object'
+        && value !== null
+        && typeof Reflect.get(value, 'ping') === 'function',
+    );
+    expect(validated.ping()).toBe('pong');
+  });
+
+  it('rejects missing and invalid dynamic plugins', () => {
+    expect(() => getPluginMethods(fortress, 'missing')).toThrow('Plugin \'missing\' is not registered');
+    expect(() => getPluginMethods(fortress, 'known', (_value): _value is { nope: true } => false))
+      .toThrow('Plugin \'known\' methods failed runtime validation');
+  });
+});
 
 describe('createFortress', () => {
   it('creates a fortress instance with auth and iam services', () => {

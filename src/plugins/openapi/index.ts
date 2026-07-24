@@ -16,6 +16,7 @@ import type { FortressPlugin, PluginContext } from '../../core/plugin';
 import type { OpenAPISpec, SpecBuilderOptions } from './spec-builder';
 import { authComponentSchemas, authEndpoints } from '../../core/auth/auth-endpoints';
 import { iamComponentSchemas, iamEndpoints } from '../../core/iam/iam-endpoints';
+import { definePlugin } from '../../core/plugin';
 import { buildOpenAPISpec } from './spec-builder';
 
 export interface OpenAPIConfig {
@@ -48,7 +49,6 @@ export interface OpenAPIConfig {
 }
 
 export interface OpenAPIMethods {
-  [key: string]: (...args: any[]) => any;
   generateSpec: () => Promise<OpenAPISpec>;
   getSpec: () => Promise<Record<string, unknown>>;
   getUI: () => string;
@@ -180,7 +180,8 @@ function enrichIamSchemas(
  * registered endpoint definition and emits a complete OpenAPI 3.1 spec,
  * pairable with Scalar UI for interactive documentation.
  */
-export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly name: 'openapi' } {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+export function openapi(config: OpenAPIConfig = {}) {
   const specPath = config.specPath ?? '/openapi.json';
   const uiPath = config.uiPath ?? '/openapi';
   const title = config.title ?? 'Fortress Auth API';
@@ -188,27 +189,26 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
 
   let cachedSpec: OpenAPISpec | null = null;
 
-  const routes: FortressPlugin['routes'] = {
-    getSpec: {
-      method: 'GET',
-      path: specPath,
-      handler: 'getSpec',
-      meta: { summary: 'OpenAPI specification', tags: ['OpenAPI'], security: ['none'] },
-      responses: { 200: { description: 'OpenAPI 3.1 JSON spec' } },
-    },
+  const getSpecRoute = {
+    method: 'GET',
+    path: specPath,
+    handler: 'getSpec',
+    meta: { summary: 'OpenAPI specification', tags: ['OpenAPI'], security: ['none'] },
+    responses: { 200: { description: 'OpenAPI 3.1 JSON spec' } },
+  } satisfies EndpointDefinition;
+  const getUIRoute = {
+    method: 'GET',
+    path: uiPath,
+    handler: 'getUI',
+    meta: { summary: 'API reference (Scalar)', tags: ['OpenAPI'], security: ['none'] },
+    responses: { 200: { description: 'Scalar API reference HTML' } },
+  } satisfies EndpointDefinition;
+  const routes = {
+    getSpec: getSpecRoute,
+    ...(!config.disableUI ? { getUI: getUIRoute } : {}),
   };
 
-  if (!config.disableUI) {
-    routes.getUI = {
-      method: 'GET',
-      path: uiPath,
-      handler: 'getUI',
-      meta: { summary: 'API reference (Scalar)', tags: ['OpenAPI'], security: ['none'] },
-      responses: { 200: { description: 'Scalar API reference HTML' } },
-    };
-  }
-
-  return {
+  return definePlugin({
     name: 'openapi',
 
     routes,
@@ -294,5 +294,5 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin & { readonly
         },
       };
     },
-  };
+  } satisfies FortressPlugin<'openapi', OpenAPIMethods>);
 }

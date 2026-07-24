@@ -12,6 +12,7 @@ import type { ScopeRule } from '../../adapters/database/types';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 
 export interface DataIsolationScope {
   /** Scope name for identification and bypass control */
@@ -77,8 +78,9 @@ export interface DataIsolationMethods {
  * read and write access to a database row by per-user scope assignments,
  * enforcing isolation through the core `scopeRules` capability.
  */
-export function dataIsolation(config: DataIsolationConfig): FortressPlugin & { readonly name: 'data-isolation' } {
-  return {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+export function dataIsolation(config: DataIsolationConfig) {
+  return definePlugin({
     name: 'data-isolation',
 
     models: [{
@@ -153,5 +155,5 @@ export function dataIsolation(config: DataIsolationConfig): FortressPlugin & { r
         return bypassStore.run(next, fn);
       },
     }),
-  };
+  } satisfies FortressPlugin<'data-isolation', DataIsolationMethods>);
 }

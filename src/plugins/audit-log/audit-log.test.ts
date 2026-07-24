@@ -282,8 +282,8 @@ describe('audit-log plugin', () => {
     it('declares string identifiers consistently with the public entry type', () => {
       const model = auditLog().models?.find(candidate => candidate.name === 'audit_log');
       expect(model?.fields.id.type).toBe('string');
-      expect(model?.fields.actorId.type).toBe('string');
-      expect(model?.fields.targetId.type).toBe('string');
+      expect(model?.fields.actorId?.type).toBe('string');
+      expect(model?.fields.targetId?.type).toBe('string');
     });
 
     it('creates previousHash entries when enabled', async () => {

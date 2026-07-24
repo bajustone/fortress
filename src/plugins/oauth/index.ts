@@ -15,6 +15,7 @@ import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, generateTokenFamily, hashToken } from '../../core/auth/refresh-token';
 import { timingSafeEqualHex } from '../../core/auth/timing-safe';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 import { issueIdToken } from './id-token';
 import { getActiveSigningKey, listJwks, rotateSigningKey } from './jwks';
 import { verifyCodeChallenge } from './pkce';
@@ -277,6 +278,8 @@ export interface OAuthMethods {
   /** Read and delete a pending flow (single-use). Throws if not found or expired. */
   resumePendingFlow: (flowId: string | number, context?: { userId?: string }) => Promise<PendingFlowRecord>;
   getUserInfo: (token: string) => Promise<FortressUser | null>;
+  /** Internal bearer lookup shared by the public user-info methods. */
+  _lookupBearer: (token: string) => Promise<{ user: FortressUser; scope: string | null } | null>;
   /** Rotate the RS256 id-token signing key and prune expired retired keys. */
   rotateSigningKey: () => Promise<{ kid: string }>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
@@ -355,7 +358,8 @@ export interface OAuthMethods {
  * grant, persists clients and tokens, and exposes `/authorize` and `/token`
  * endpoints when mounted on a framework adapter.
  */
-export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly name: 'oauth' } {
+// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
+export function oauth(config: OAuthConfig = {}) {
   const authCodeExpiry = config.authCodeExpirySeconds ?? 600;
   const pendingFlowExpiry = config.pendingFlowExpirySeconds ?? 600;
   const accessTokenExpiry = config.accessTokenExpirySeconds ?? 3600;
@@ -381,7 +385,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
     );
   }
 
-  return {
+  return definePlugin({
     name: 'oauth',
 
     models: [
@@ -2024,7 +2028,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         },
       },
     },
-  };
+  } satisfies FortressPlugin<'oauth', OAuthMethods>);
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressConfig } from '../config';
 import type { StoredContinuation } from '../internal-adapter';
-import type { FortressPlugin, PostAuthGateDecision } from '../plugin';
+import type { PostAuthGateDecision, RuntimeFortressPlugin } from '../plugin';
 import type { AuthChallenge, FortressUser, PendingReason, RequestMeta } from '../types';
 import { Errors } from '../errors';
 import { generateRefreshToken, hashToken } from './refresh-token';
@@ -152,7 +152,7 @@ export async function consumeAuthContinuation(
 
 /** Run post-credential gates in registration order and mint the first hold. */
 export async function runPostAuthGates(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   db: DatabaseAdapter,
   config: FortressConfig,
   user: FortressUser,
@@ -198,7 +198,7 @@ export async function runPostAuthGates(
 
 /** Dispatch completion proof to the provider that created this continuation. */
 export async function verifyAuthContinuation(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   db: DatabaseAdapter,
   config: FortressConfig,
   user: FortressUser,

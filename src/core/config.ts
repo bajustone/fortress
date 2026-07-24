@@ -5,7 +5,7 @@ import type { EndpointDefinition } from './endpoint';
 import type { CsrfConfig } from './http/csrf';
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
-import type { FortressPlugin } from './plugin';
+import type { FortressPlugin, RuntimeFortressPlugin } from './plugin';
 
 /** Pluggable password hashing contract — implement to swap fortress's default Argon2id WASM hasher. */
 export interface PasswordHasher {
@@ -95,7 +95,7 @@ export interface FortressConfig {
      */
     maxTtlSeconds?: number;
   };
-  plugins?: readonly FortressPlugin[];
+  plugins?: readonly RuntimeFortressPlugin[];
   /**
    * Host-application endpoint definitions to register with the manifest,
    * OpenAPI generation, and `protect()` / adapter `protectedRoute()` helpers

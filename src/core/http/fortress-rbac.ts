@@ -15,7 +15,7 @@
  */
 
 import type { EndpointDefinition } from '../endpoint';
-import type { FortressPlugin } from '../plugin';
+import type { RuntimeFortressPlugin } from '../plugin';
 import type { Subject } from '../types';
 import { Errors } from '../errors';
 
@@ -28,12 +28,12 @@ const PLUGIN_PREFIX_REGEX = /^(\/[^/]+\/)/;
  * registered plugin routes. Adapters call this once at startup to feed
  * {@link isFortressPath}.
  */
-export function getPluginPathPrefixes(plugins: readonly FortressPlugin[]): string[] {
+export function getPluginPathPrefixes(plugins: readonly RuntimeFortressPlugin[]): string[] {
   const prefixes = new Set<string>();
   for (const plugin of plugins) {
     if (!plugin.routes)
       continue;
-    for (const route of Object.values(plugin.routes)) {
+    for (const route of Object.values(plugin.routes) as EndpointDefinition[]) {
       const match = PLUGIN_PREFIX_REGEX.exec(route.path);
       if (match)
         prefixes.add(match[1]);
