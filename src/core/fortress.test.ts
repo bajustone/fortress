@@ -189,27 +189,19 @@ describe('createFortress', () => {
       expect((fortress.call.plugins as Record<string, unknown>).__host).toBeUndefined();
     });
 
-    it('keeps a top-level host override of a core route metadata-only', async () => {
+    it('rejects top-level metadata routes that collide with core routes', async () => {
       const { endpoint } = await import('./schema-builder');
       const hostMe = endpoint('GET', '/auth/me')
         .summary('Host-owned me')
         .security('none')
         .handler('hostMe')
         .build();
-      const fortress = createFortress({
+
+      expect(() => createFortress({
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         routes: { hostMe },
-      });
-
-      expect(fortress.manifest.find(route => route.path === '/auth/me')).toMatchObject({
-        handler: 'hostMe',
-        plugin: null,
-        mounted: false,
-      });
-      await expect(fortress.handleRequest(new Request('http://localhost/auth/me')))
-        .resolves
-        .toMatchObject({ status: 404 });
+      })).toThrow(/collides with a Fortress core route/);
     });
 
     it('returns 404 before auth/RBAC for protected metadata-only host routes', async () => {
@@ -290,6 +282,52 @@ describe('createFortress', () => {
       })).toThrow(/Duplicate endpoint GET \/duplicate\/path/);
     });
 
+    it('rejects core overrides whose route key or handler does not match the core callable', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const alternate = endpoint('GET', '/auth/me')
+        .summary('Unsafe override')
+        .security('none')
+        .handler('alternateMe')
+        .build();
+
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'undeclared-override',
+          routes: { alternateMe: alternate },
+          methods: () => ({ alternateMe: () => ({ source: 'plugin' }) }),
+        }],
+      })).toThrow(/declare "me" in coreOverrides/);
+
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'unsafe-override',
+          coreOverrides: ['me'] as const,
+          routes: { alternateMe: alternate },
+          methods: () => ({ alternateMe: () => ({ source: 'plugin' }) }),
+        }],
+      })).toThrow(/route key and handler must both be "me"/);
+
+      const unrelatedMe = endpoint('GET', '/custom/me')
+        .summary('Not an override')
+        .security('none')
+        .handler('me')
+        .build();
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'unused-override',
+          coreOverrides: ['me'] as const,
+          routes: { me: unrelatedMe },
+          methods: () => ({ me: () => ({ source: 'plugin' }) }),
+        }],
+      })).toThrow(/declares unused core override "me"/);
+    });
+
     it('preserves intentional plugin overrides of core route and call keys', async () => {
       const { endpoint } = await import('./schema-builder');
       const me = endpoint('GET', '/auth/me')
@@ -302,6 +340,7 @@ describe('createFortress', () => {
         database: mockDb,
         plugins: [{
           name: 'core-override',
+          coreOverrides: ['me'] as const,
           routes: { me },
           methods: () => ({ me: () => ({ source: 'plugin' }) }),
         }],
@@ -314,6 +353,53 @@ describe('createFortress', () => {
         plugin: 'core-override',
         mounted: true,
       });
+      expect((fortress.call.auth as Record<string, unknown>).me).toBeUndefined();
+      await expect(fortress.call.plugins['core-override'].me({})).resolves.toEqual({ source: 'plugin' });
+    });
+
+    it('excludes OAuth protocol routes from the generic runtime call tree', async () => {
+      const protocol = {
+        method: 'POST' as const,
+        path: '/oauth/token',
+        handler: 'handleTokenRequest',
+        meta: { summary: 'Token', bearerKind: 'oauth' as const, security: ['basic' as const] },
+      };
+      const consent = {
+        method: 'GET' as const,
+        path: '/oauth/flows/:flowId',
+        handler: 'handleGetFlow',
+        meta: { summary: 'Consent', security: ['bearer' as const] },
+      };
+      const fortress = createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'oauth',
+          routes: { handleTokenRequest: protocol, handleGetFlow: consent },
+          methods: () => ({
+            handleTokenRequest: () => ({}),
+            handleGetFlow: () => ({ flowId: 'flow' }),
+          }),
+        }],
+      });
+
+      expect((fortress.call.plugins.oauth as Record<string, unknown>).handleTokenRequest).toBeUndefined();
+      expect(Object.keys(fortress.call.plugins.oauth)).toContain('handleGetFlow');
+    });
+
+    it('treats differently named path parameters as the same route shape', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const first = endpoint('DELETE', '/items/:id').summary('first').security('none').handler('first').build();
+      const second = endpoint('DELETE', '/items/:itemId').summary('second').security('none').handler('second').build();
+
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [
+          { name: 'first-plugin', routes: { first } },
+          { name: 'second-plugin', routes: { second } },
+        ],
+      })).toThrow(/Duplicate endpoint DELETE \/items\/:/);
     });
 
     it('namespaces shared call keys per plugin instead of colliding', async () => {

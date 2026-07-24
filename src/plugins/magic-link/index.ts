@@ -41,8 +41,7 @@ interface MagicLinkTokenRecord {
  * delivered out-of-band (email) and exchanged for fortress access/refresh
  * tokens via the verify endpoint.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function magicLink(config: MagicLinkConfig = {}) {
+export function magicLink(config: MagicLinkConfig = {}): FortressPlugin<'magic-link', MagicLinkMethods, undefined> {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 600;
 
   return definePlugin({

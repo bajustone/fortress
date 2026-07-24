@@ -352,8 +352,7 @@ export interface SocialLoginMethods {
  * the OAuth/OIDC authorization-code flow against the configured providers,
  * links provider accounts to fortress users, and issues fortress tokens.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function socialLogin(config: SocialLoginConfig) {
+export function socialLogin(config: SocialLoginConfig): FortressPlugin<'social-login', SocialLoginMethods, undefined> {
   const autoRegister = config.autoRegister ?? true;
   const linkAccounts = config.linkAccounts ?? true;
   // Default OFF: persisting provider tokens requires an explicit

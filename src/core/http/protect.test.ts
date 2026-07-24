@@ -21,7 +21,15 @@ function testEndpoint(): EndpointDefinition {
     meta: { summary: 'Create host thing', security: ['none'] },
     input: {
       body: obj({ name: str() }, 'name'),
-      bodySchema: obj({ name: str() }, 'name'),
+      bodySchema: {
+        '~standard': {
+          version: 1,
+          vendor: 'test',
+          validate: (value: unknown) => ({
+            value: { name: String((value as { name?: unknown }).name).toUpperCase() },
+          }),
+        },
+      },
       query: obj({ draft: str() }),
       querySchema: obj({ draft: str() }),
       params: obj({ id: id() }, 'id'),
@@ -74,7 +82,7 @@ describe('protect()', () => {
 
     const handler = protect(fortress, 'createHostThing', (ctx) => {
       expect(ctx.manifest.classification).toBe('public');
-      expect(ctx.input).toEqual({ name: 'alpha', draft: 'true', id: '123' });
+      expect(ctx.input).toEqual({ name: 'ALPHA', draft: 'true', id: '123' });
       expect(ctx.params).toEqual({ id: '123' });
       return { ok: 'yes' };
     });

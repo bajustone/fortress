@@ -23,6 +23,7 @@ import type { FortressRuntime } from '../capabilities';
 import type { EndpointDefinition } from '../endpoint';
 import type { PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
 import type { RequestMeta, Subject, TokenClaims } from '../types';
+import type { ValidatedRequestData } from '../validation';
 import { Errors, FortressError } from '../errors';
 
 /** Auth context resolved by `handleRequest` before dispatch. */
@@ -53,7 +54,7 @@ export async function dispatchEndpoint(
   fortress: FortressRuntime,
   request: Request,
   endpoint: EndpointDefinition,
-  pathParams: Record<string, string>,
+  input: ValidatedRequestData,
   auth: DispatchAuth,
 ): Promise<DispatchResult> {
   // OAuth endpoints get form-encoded body parsing + Basic auth handling.
@@ -62,21 +63,24 @@ export async function dispatchEndpoint(
     return dispatchOAuth(fortress, request, endpoint, auth);
   }
 
-  // Parse body / query into a generic object.
-  const body = await parseBodyOrQuery(request);
+  const body = objectOrEmpty(input.body);
+  const query = objectOrEmpty(input.query);
+  const params = objectOrEmpty(input.params);
 
   // Plugin route (non-oauth)
   if (owningPlugin) {
-    return dispatchPlugin(fortress, owningPlugin, endpoint, body, pathParams, request, auth);
+    return dispatchPlugin(fortress, owningPlugin, endpoint, body, query, params, request, auth);
   }
 
-  // Core auth / IAM dispatch
+  // Core auth / IAM dispatch. Query values are available on every method;
+  // params remain separate for the existing positional service calls.
+  const bodyAndQuery = { ...body, ...query };
   if (endpoint.path.startsWith('/auth/')) {
-    const result = await invokeAuthHandler(fortress, endpoint.handler, body, pathParams, auth);
+    const result = await invokeAuthHandler(fortress, endpoint.handler, bodyAndQuery, params as Record<string, string>, auth);
     return jsonResponse(result, successStatus(endpoint));
   }
   if (endpoint.path.startsWith('/iam/')) {
-    const result = await invokeIamHandler(fortress, endpoint.handler, body, pathParams);
+    const result = await invokeIamHandler(fortress, endpoint.handler, bodyAndQuery, params as Record<string, string>);
     return jsonResponse(result, successStatus(endpoint));
   }
 
@@ -89,27 +93,10 @@ export async function dispatchEndpoint(
 
 // ── Body parsing ─────────────────────────────────────────────────────
 
-/**
- * Parse the request body as JSON for write methods, or fall back to query
- * params for GET. Returns an empty object if parsing fails or there is no
- * body — handlers tolerate missing fields.
- */
-async function parseBodyOrQuery(request: Request): Promise<Record<string, unknown>> {
-  if (request.method === 'GET' || request.method === 'HEAD') {
-    return Object.fromEntries(new URL(request.url).searchParams);
-  }
-  // Some requests have no body at all (e.g. DELETE without payload).
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!contentType.includes('json')) {
-    // No body or non-JSON body for write methods — try query params.
-    return Object.fromEntries(new URL(request.url).searchParams);
-  }
-  try {
-    return (await request.json()) as Record<string, unknown>;
-  }
-  catch {
-    return {};
-  }
+function objectOrEmpty(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 async function parseFormBody(request: Request): Promise<Record<string, string>> {
@@ -166,7 +153,8 @@ async function dispatchPlugin(
   plugin: RuntimeFortressPlugin,
   endpoint: EndpointDefinition,
   body: Record<string, unknown>,
-  pathParams: Record<string, string>,
+  query: Record<string, unknown>,
+  pathParams: Record<string, unknown>,
   request: Request,
   auth: DispatchAuth,
 ): Promise<Response> {
@@ -194,7 +182,7 @@ async function dispatchPlugin(
     meta: auth.meta,
     request,
   };
-  const result = await methods[endpoint.handler]({ ...body, ...pathParams }, ctx);
+  const result = await methods[endpoint.handler]({ ...body, ...query, ...pathParams }, ctx);
   // Allow handlers to opt into HTML by returning a string starting with `<!`.
   if (typeof result === 'string' && result.trimStart().startsWith('<!')) {
     return new Response(result, {

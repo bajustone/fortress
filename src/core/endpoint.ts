@@ -80,7 +80,8 @@ export interface EndpointResponse {
  * endpoints that only declare one of the three input slots. `THandler`
  * captures the literal handler name so `definePlugin` can statically check
  * that every route dispatches to an existing, signature-compatible plugin
- * method.
+ * method. `TMethod` and `TPath` preserve route identity so an intentional
+ * plugin override can remove the conflicting core callable.
  */
 export interface EndpointDefinition<
   // eslint-disable-next-line ts/no-empty-object-type -- default must be {} so the input intersection collapses
@@ -92,9 +93,11 @@ export interface EndpointDefinition<
   // eslint-disable-next-line ts/no-empty-object-type
   TResponses extends Record<number, unknown> = {},
   THandler extends string = string,
+  TMethod extends HttpMethod = HttpMethod,
+  TPath extends string = string,
 > {
-  method: HttpMethod;
-  path: string;
+  method: TMethod;
+  path: TPath;
   handler: THandler;
   meta?: EndpointMeta;
   input?: EndpointInput;

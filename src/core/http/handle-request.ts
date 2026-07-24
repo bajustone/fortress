@@ -13,6 +13,7 @@
 
 import type { FortressRuntime } from '../capabilities';
 import type { Subject, TokenClaims } from '../types';
+import type { ValidatedRequestData } from '../validation';
 import type { RouteEntry } from './match';
 import { resolveCookieConfig } from '../config';
 import { Errors, FortressError } from '../errors';
@@ -192,12 +193,10 @@ export function buildHandleRequest(
             fortressScopes: scopes,
           });
 
-          // 7. Body parse + validation. Validation reads the body via clone()
-          //    so dispatch can re-read it. We sniff the content-type to know
-          //    whether validateRequest can parse JSON. Skipped for routes
-          //    flagged `bearerKind: 'oauth'` — their bodies are
-          //    `application/x-www-form-urlencoded` and the OAuth dispatcher
-          //    does its own parsing/validation per RFC 6749.
+          // 7. Parse and validate once, retaining schema-coerced/transformed
+          //    outputs for dispatch. OAuth protocol routes keep their bespoke
+          //    form/basic/bearer parsing in dispatchOAuth.
+          let dispatchInput: ValidatedRequestData = {};
           if (!selfManagedBearer) {
             let parsedBody: unknown;
             if (
@@ -208,12 +207,13 @@ export function buildHandleRequest(
               parsedBody = await request.clone().json().catch(() => undefined);
             }
             const query = Object.fromEntries(url.searchParams);
-            // URL-sourced data is always strings. Coerce query/params to the
-            // types declared in the endpoint's JSON Schema before validation
-            // so `:id`/`?limit=2` don't trip integer/number/boolean checks.
-            const coercedQuery = coerceBySchema(endpoint.input?.query, query);
-            const coercedParams = coerceBySchema(endpoint.input?.params, params);
-            await validateRequest(endpoint.input, { body: parsedBody, query: coercedQuery, params: coercedParams });
+            const coercedQuery = coerceBySchema(endpoint.input?.query, query) ?? query;
+            const coercedParams = coerceBySchema(endpoint.input?.params, params) ?? params;
+            dispatchInput = await validateRequest(endpoint.input, {
+              body: parsedBody,
+              query: coercedQuery,
+              params: coercedParams,
+            });
           }
 
           // 8. Dispatch + serialize. Pass IP/UA from headers as RequestMeta so
@@ -225,7 +225,7 @@ export function buildHandleRequest(
           ?? undefined,
             userAgent: request.headers.get('user-agent') ?? undefined,
           };
-          const dispatched = await dispatchEndpoint(fortress, request, endpoint, params, {
+          const dispatched = await dispatchEndpoint(fortress, request, endpoint, dispatchInput, {
             subject,
             userId,
             claims,

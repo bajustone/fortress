@@ -226,8 +226,7 @@ function isDisabled(
   return !!block && 'disabled' in block && block.disabled === true;
 }
 
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function rateLimit(config: RateLimitConfig = {}) {
+export function rateLimit(config: RateLimitConfig = {}): FortressPlugin<'rate-limit', RateLimitMethods, undefined> {
   const store = config.store ?? createMemoryStore();
 
   // Gate blocks — always on with defaults; `{ disabled: true }` opts out.

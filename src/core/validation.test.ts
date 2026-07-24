@@ -54,17 +54,17 @@ describe('coerceBySchema', () => {
     const params = coerceBySchema(schema, { mode: '2', version: '3' });
 
     expect(params).toEqual({ mode: 2, version: 3 });
-    await expect(validateRequest({ params: schema }, { params })).resolves.toBeUndefined();
+    await expect(validateRequest({ params: schema }, { params })).resolves.toEqual({ params });
   });
 });
 
 describe('validateRequest', () => {
   it('no-op when input is undefined', async () => {
-    await expect(validateRequest(undefined, {})).resolves.toBeUndefined();
+    await expect(validateRequest(undefined, {})).resolves.toEqual({});
   });
 
   it('no-op when no schemas are set', async () => {
-    await expect(validateRequest({}, {})).resolves.toBeUndefined();
+    await expect(validateRequest({}, {})).resolves.toEqual({});
   });
 
   it('validates hand-authored JSON Schemas and aggregates locations', async () => {
@@ -97,7 +97,7 @@ describe('validateRequest', () => {
       },
     } as unknown as JSONSchema;
 
-    await expect(validateRequest({ body }, { body: { name: 'admin' } })).resolves.toBeUndefined();
+    await expect(validateRequest({ body }, { body: { name: 'admin' } })).resolves.toEqual({ body: { name: 'admin' } });
     await expect(
       validateRequest({ body }, { body: {} }),
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', statusCode: 422 });
@@ -107,7 +107,9 @@ describe('validateRequest', () => {
     const input = iamEndpoints.createRole.input;
     await expect(validateRequest(input, {
       body: { name: 'editor', permissions: [{ resource: 'posts', action: 'read' }] },
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({
+      body: { name: 'editor', permissions: [{ resource: 'posts', action: 'read' }] },
+    });
     await expect(validateRequest(input, {
       body: { name: 'editor', permissions: [{ resource: 'posts' }] },
     })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', statusCode: 422 });
@@ -120,7 +122,7 @@ describe('validateRequest', () => {
       bodySchema: body,
     };
 
-    await expect(validateRequest(input, { body: { name: 'Alice' } })).resolves.toBeUndefined();
+    await expect(validateRequest(input, { body: { name: 'Alice' } })).resolves.toEqual({ body: { name: 'Alice' } });
 
     try {
       await validateRequest(input, { body: {} });
@@ -141,7 +143,7 @@ describe('validateRequest', () => {
       querySchema: query,
     };
 
-    await expect(validateRequest(input, { query: { q: 'hello' } })).resolves.toBeUndefined();
+    await expect(validateRequest(input, { query: { q: 'hello' } })).resolves.toEqual({ query: { q: 'hello' } });
 
     try {
       await validateRequest(input, { query: {} });
@@ -160,7 +162,7 @@ describe('validateRequest', () => {
       paramsSchema: params,
     };
 
-    await expect(validateRequest(input, { params: { id: 42 } })).resolves.toBeUndefined();
+    await expect(validateRequest(input, { params: { id: 42 } })).resolves.toEqual({ params: { id: 42 } });
 
     try {
       await validateRequest(input, { params: {} });
@@ -169,6 +171,22 @@ describe('validateRequest', () => {
     catch (err) {
       expect((err as FortressError).code).toBe('VALIDATION_ERROR');
     }
+  });
+
+  it('returns transformed Standard Schema outputs', async () => {
+    const bodySchema = {
+      '~standard': {
+        version: 1 as const,
+        vendor: 'test',
+        validate: (value: unknown) => ({
+          value: { normalized: String((value as { raw?: unknown }).raw ?? '').toUpperCase() },
+        }),
+      },
+    };
+
+    await expect(validateRequest({ bodySchema }, { body: { raw: 'hello' } })).resolves.toEqual({
+      body: { normalized: 'HELLO' },
+    });
   });
 
   it('collects errors from multiple inputs', async () => {

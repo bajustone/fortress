@@ -286,8 +286,7 @@ export interface TwoFactorMethods {
  * that adds TOTP enrolment and verification, hashed backup codes, and
  * trusted-device opt-out for the sign-in flow.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function twoFactor(config: TwoFactorConfig) {
+export function twoFactor(config: TwoFactorConfig): FortressPlugin<'two-factor', TwoFactorMethods, undefined> {
   if (!config?.secretEncryptionKey)
     throw Errors.badRequest('twoFactor requires secretEncryptionKey');
   const keyBytes = decodeEncryptionKey(config.secretEncryptionKey);

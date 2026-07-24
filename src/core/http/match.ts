@@ -44,6 +44,17 @@ export function canonicalizePath(pathname: string): string {
 }
 
 /**
+ * Canonical route-ownership shape. Parameter names do not affect matching,
+ * so `/:id` and `/:sessionId` must collide during startup validation too.
+ */
+export function canonicalizeRouteShape(pathname: string): string {
+  return canonicalizePath(pathname)
+    .split('/')
+    .map(segment => segment.startsWith(':') ? ':' : segment)
+    .join('/');
+}
+
+/**
  * Pre-build a route table from endpoint definitions. Adapters call this once
  * at startup and hand the result to {@link matchRoute} on every request.
  */

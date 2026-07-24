@@ -16,7 +16,7 @@ import type { socialLogin } from '@bajustone/fortress/plugins/social-login';
 import type { twoFactor } from '@bajustone/fortress/plugins/two-factor';
 import type { webauthn } from '@bajustone/fortress/plugins/webauthn';
 import type { webhook } from '@bajustone/fortress/plugins/webhook';
-import { createFortress, definePlugin, endpoint, obj, str } from '@bajustone/fortress';
+import { createFortress, defineEndpoints, definePlugin, endpoint, obj, str } from '@bajustone/fortress';
 import { apiKey } from '@bajustone/fortress/plugins/api-key';
 import { tenancy } from '@bajustone/fortress/plugins/tenancy';
 
@@ -67,6 +67,14 @@ export type BuiltInUnknownMethodContracts = [
   Assert<Lacks<Surface<typeof webhook>, 'webhook', 'missing'>>,
 ];
 
+const builtRoutes = defineEndpoints({
+  builtGreeting: endpoint('POST', '/built/greeting')
+    .body(obj({ name: str() }, 'name'))
+    .response(200, 'Greeting', obj({ greeting: str() }, 'greeting'))
+    .handler('builtGreeting')
+    .build(),
+});
+
 const thirdParty = definePlugin({
   name: 'built-third-party',
   methods: () => ({
@@ -77,13 +85,7 @@ const thirdParty = definePlugin({
       greeting: `Hello ${input.name}`,
     }),
   }),
-  routes: {
-    builtGreeting: endpoint('POST', '/built/greeting')
-      .body(obj({ name: str() }, 'name'))
-      .response(200, 'Greeting', obj({ greeting: str() }, 'greeting'))
-      .handler('builtGreeting')
-      .build(),
-  },
+  routes: builtRoutes,
 });
 
 export function declarationContract(database: DatabaseAdapter, dynamicName: string): void {

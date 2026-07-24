@@ -340,13 +340,20 @@ export function protect(
         fortressScopes: scopes,
       });
 
-      const body = await parseJsonBody(request);
+      const rawBody = await parseJsonBody(request);
       const rawQuery = Object.fromEntries(url.searchParams);
       const match = matchRoute(endpointRouteTable, endpoint.method, options.path ?? url.pathname);
       const rawParams = options.params ?? match?.params ?? {};
-      const query = coerceBySchema(endpoint.input?.query, rawQuery) ?? rawQuery;
-      const params = coerceBySchema(endpoint.input?.params, rawParams) ?? rawParams;
-      await validateRequest(endpoint.input, { body, query, params });
+      const coercedQuery = coerceBySchema(endpoint.input?.query, rawQuery) ?? rawQuery;
+      const coercedParams = coerceBySchema(endpoint.input?.params, rawParams) ?? rawParams;
+      const validated = await validateRequest(endpoint.input, {
+        body: rawBody,
+        query: coercedQuery,
+        params: coercedParams,
+      });
+      const body = validated.body;
+      const query = objectOrEmpty(validated.query);
+      const params = objectOrEmpty(validated.params);
 
       const input = { ...objectOrEmpty(body), ...query, ...params };
       const result = await handler({

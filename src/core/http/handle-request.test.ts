@@ -333,6 +333,63 @@ describe('fortress.handleRequest', () => {
       expect(denied.status).toBe(403);
     });
 
+    it('dispatches merged JSON body, query, and schema-coerced params to plugin handlers', async () => {
+      let received: Record<string, unknown> | undefined;
+      const plugin: FortressPlugin = {
+        name: 'merged-input',
+        routes: {
+          merge: {
+            method: 'POST',
+            path: '/merged/:count/:enabled',
+            handler: 'merge',
+            meta: { summary: 'Merged input', security: ['none'] },
+            input: {
+              body: {
+                type: 'object',
+                properties: { message: { type: 'string' } },
+                required: ['message'],
+              },
+              bodySchema: {
+                '~standard': {
+                  version: 1,
+                  vendor: 'test',
+                  validate: (value: unknown) => ({
+                    value: { message: String((value as { message?: unknown }).message).toUpperCase() },
+                  }),
+                },
+              },
+              query: {
+                type: 'object',
+                properties: { limit: { type: 'integer' } },
+                required: ['limit'],
+              },
+              params: {
+                type: 'object',
+                properties: { count: { type: 'integer' }, enabled: { type: 'boolean' } },
+                required: ['count', 'enabled'],
+              },
+            },
+            responses: { 200: { description: 'ok' } },
+          },
+        },
+        methods: () => ({
+          merge: async (input: Record<string, unknown>) => {
+            received = input;
+            return { ok: true };
+          },
+        }),
+      };
+      const f = createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins: [plugin] });
+      const res = await f.handleRequest(new Request('http://localhost/merged/3/true?limit=2', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: 'hello' }),
+      }));
+
+      expect(res.status).toBe(200);
+      expect(received).toEqual({ message: 'HELLO', limit: 2, count: 3, enabled: true });
+    });
+
     it('passes request + meta but leaves userId/claims undefined on public routes', async () => {
       const { plugin, received } = makeSpyPlugin();
       const spyFortress = createFortress({

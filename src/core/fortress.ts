@@ -29,7 +29,7 @@ import { Errors } from './errors';
 import { buildCall } from './http/call';
 import { serializeAuthCookies as serializeAuthCookiesFn } from './http/cookie-serialize';
 import { buildHandleRequest } from './http/handle-request';
-import { canonicalizePath } from './http/match';
+import { canonicalizeRouteShape } from './http/match';
 import { runPluginMiddleware as runPluginMiddlewareFn } from './http/plugin-middleware';
 import { resolveRequestPrincipal as resolveRequestPrincipalFn } from './http/principal';
 import { extractAccessToken as extractAccessTokenFn } from './http/token-extraction';
@@ -107,6 +107,13 @@ const MIN_SECRET_BYTES = 32;
  * list, wires up auth/IAM services, and returns the assembled instance with
  * type-safe plugin method access for any plugins listed in the config.
  */
+export function createFortress(
+  config: FortressConfig & { plugins?: undefined },
+): Fortress<readonly []>;
+export function createFortress<const T extends readonly RuntimeFortressPlugin[]>(
+  config: FortressConfig & { plugins: T },
+): Fortress<T>;
+export function createFortress(config: FortressConfig): Fortress;
 export function createFortress<const T extends readonly RuntimeFortressPlugin[]>(
   config: FortressConfig & { plugins?: T },
 ): Fortress<T> {
@@ -250,21 +257,49 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     ...Object.values(iamEndpoints) as EndpointDefinition[],
   ];
   for (const ep of coreEndpoints) {
-    const routeKey = `${ep.method.toUpperCase()} ${canonicalizePath(ep.path)}`;
+    const routeKey = `${ep.method.toUpperCase()} ${canonicalizeRouteShape(ep.path)}`;
     endpointMap.set(routeKey, ep);
     endpointOwners.set(routeKey, 'core');
   }
   for (const plugin of plugins) {
-    for (const ep of Object.values(plugin.routes ?? {}) as EndpointDefinition[]) {
-      const routeKey = `${ep.method.toUpperCase()} ${canonicalizePath(ep.path)}`;
+    const appliedCoreOverrides = new Set<string>();
+    for (const [routeName, value] of Object.entries(plugin.routes ?? {})) {
+      const ep = value as EndpointDefinition;
+      const routeKey = `${ep.method.toUpperCase()} ${canonicalizeRouteShape(ep.path)}`;
       const owner = endpointOwners.get(routeKey);
       if (owner && owner !== 'core') {
         throw Errors.badRequest(
           `Duplicate endpoint ${routeKey} declared by plugins "${owner}" and "${plugin.name}"`,
         );
       }
+      if (owner === 'core') {
+        if (plugin.name === HOST_ROUTES_PLUGIN_NAME) {
+          throw Errors.badRequest(
+            `Top-level route ${routeKey} collides with a Fortress core route; use an explicit plugin for intentional overrides.`,
+          );
+        }
+        const coreHandler = endpointMap.get(routeKey)!.handler;
+        if (!plugin.coreOverrides?.includes(coreHandler)) {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" overrides core route ${routeKey}; declare "${coreHandler}" in coreOverrides so the derived call tree can remove the core callable safely.`,
+          );
+        }
+        if (routeName !== coreHandler || ep.handler !== coreHandler) {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" overrides core route ${routeKey}; its route key and handler must both be "${coreHandler}".`,
+          );
+        }
+        appliedCoreOverrides.add(coreHandler);
+      }
       endpointMap.set(routeKey, ep);
       endpointOwners.set(routeKey, plugin.name);
+    }
+    for (const declared of plugin.coreOverrides ?? []) {
+      if (!appliedCoreOverrides.has(declared)) {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" declares unused core override "${declared}"; it must provide a matching core method/path with the same route key and handler.`,
+        );
+      }
     }
   }
   const endpoints = Array.from(endpointMap.values());
@@ -382,13 +417,24 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   for (const plugin of plugins) {
     if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
       continue;
-    pluginCallTree[plugin.name] = buildCall(instance, plugin.routes as Record<string, EndpointDefinition>);
+    const genericRoutes = Object.fromEntries(
+      Object.entries(plugin.routes).filter(([, ep]) => ep.meta?.bearerKind !== 'oauth'),
+    ) as Record<string, EndpointDefinition>;
+    pluginCallTree[plugin.name] = buildCall(instance, genericRoutes);
   }
   // `call` is readonly on the returned public surface, but is populated once
   // here after `handleRequest` has been bound.
+  const effectiveCoreRoutes = (
+    routes: Record<string, EndpointDefinition>,
+  ): Record<string, EndpointDefinition> => Object.fromEntries(
+    Object.entries(routes).filter(([, ep]) => {
+      const key = `${ep.method.toUpperCase()} ${canonicalizeRouteShape(ep.path)}`;
+      return endpointOwners.get(key) === 'core';
+    }),
+  );
   (instance as { call: unknown }).call = {
-    auth: buildCall(instance, authEndpoints as unknown as Record<string, EndpointDefinition>),
-    iam: buildCall(instance, iamEndpoints as unknown as Record<string, EndpointDefinition>),
+    auth: buildCall(instance, effectiveCoreRoutes(authEndpoints as unknown as Record<string, EndpointDefinition>)),
+    iam: buildCall(instance, effectiveCoreRoutes(iamEndpoints as unknown as Record<string, EndpointDefinition>)),
     plugins: pluginCallTree,
   };
 

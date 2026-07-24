@@ -24,7 +24,9 @@
  */
 
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { FortressPlugin, PluginContext, PluginRouteContext } from '../../core/plugin';
+import type { EndpointDefinition } from '../../core/endpoint';
+import type { FortressSchema } from '../../core/json-schema';
+import type { FortressPlugin, JsonOf, PluginContext, PluginRouteContext } from '../../core/plugin';
 import { Errors } from '../../core/errors';
 import { definePlugin } from '../../core/plugin';
 import { arr, bool, endpoint, id, nullable, obj, ref, str } from '../../core/schema-builder';
@@ -125,12 +127,12 @@ function assertSafeSchemaPrefix(prefix: string): void {
 
 // ── Routes ──────────────────────────────────────────────────────────
 
-const errorRef = ref('ErrorResponse');
+const errorRef: FortressSchema<unknown> = ref('ErrorResponse');
 
 // Mirrors the JSON serialization of `TenantRecord` exactly (description is
 // null when unset; timestamps always present) — definePlugin's handler
 // correlation rejects any drift between this schema and the method returns.
-const tenantResponse = obj({
+const tenantResponse: FortressSchema<JsonOf<TenantRecord>> = obj({
   id: id('Tenant id'),
   name: str('Tenant name'),
   taxId: str('Unique tenant tax id / external code'),
@@ -139,7 +141,24 @@ const tenantResponse = obj({
   updatedAt: str('ISO 8601 update timestamp'),
 }, 'id', 'name', 'taxId', 'description', 'createdAt', 'updatedAt');
 
-const tenancyRoutes = {
+/* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- alias preserves Record compatibility; empty endpoint phantom slots are intentional */
+type TenancyRoutes = {
+  readonly createTenant: EndpointDefinition<
+    { name: string; taxId: string; description?: string },
+    {},
+    {},
+    { 201: JsonOf<TenantRecord> },
+    'createTenant',
+    'POST',
+    '/tenancy/tenants'
+  >;
+  readonly deleteTenant: EndpointDefinition<{}, {}, { id: string }, { 200: { ok: boolean } }, 'deleteTenant', 'DELETE', '/tenancy/tenants/:id'>;
+  readonly getMyTenants: EndpointDefinition<{}, {}, {}, { 200: { tenants: JsonOf<TenantRecord>[] } }, 'getMyTenants', 'GET', '/tenancy/tenants/mine'>;
+  readonly switchTenant: EndpointDefinition<{ taxId: string }, {}, {}, { 200: { ok: boolean } }, 'switchTenant', 'POST', '/tenancy/switch'>;
+};
+
+/* eslint-enable ts/consistent-type-definitions, ts/no-empty-object-type */
+const tenancyRoutes: TenancyRoutes = {
   createTenant: endpoint('POST', '/tenancy/tenants')
     .summary('Create a tenant')
     .description('Create a new tenant and its PostgreSQL schema. Requires the `fortress:manageTenants` permission.')
@@ -204,8 +223,9 @@ const tenancyRoutes = {
  * verified `tenantId` JWT claim, providing schema-level isolation between
  * tenants. Pass `{ routes: true }` to mount the HTTP routes under `/tenancy/*`.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-function createTenancyPlugin(config: TenancyConfig = {}) {
+type TenancyPlugin = FortressPlugin<'tenancy', TenancyMethods, TenancyRoutes | undefined>;
+
+function createTenancyPlugin(config: TenancyConfig = {}): TenancyPlugin {
   const schemaPrefix = config.schemaPrefix ?? 'tenant_';
   assertSafeSchemaPrefix(schemaPrefix);
   const mountRoutes = config.routes === true;
@@ -545,10 +565,8 @@ function createTenancyPlugin(config: TenancyConfig = {}) {
         },
       };
     },
-  } satisfies FortressPlugin<'tenancy', TenancyMethods>);
+  } satisfies FortressPlugin<'tenancy', TenancyMethods, TenancyRoutes | undefined>);
 }
-
-type TenancyPlugin = ReturnType<typeof createTenancyPlugin>;
 
 export function tenancy(config: TenancyConfig & { routes: true }): TenancyPlugin & { routes: typeof tenancyRoutes };
 export function tenancy(config?: TenancyConfig & { routes?: false | undefined }): TenancyPlugin;

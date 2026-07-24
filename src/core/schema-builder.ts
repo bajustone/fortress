@@ -701,9 +701,11 @@ export class EndpointBuilder<
   // eslint-disable-next-line ts/no-empty-object-type
   TResponses extends Record<number, unknown> = {},
   THandler extends string = string,
+  TMethod extends HttpMethod = HttpMethod,
+  TPath extends string = string,
 > {
-  private _method: HttpMethod;
-  private _path: string;
+  private _method: TMethod;
+  private _path: TPath;
   private _handler = '';
   private _summary = '';
   private _description?: string;
@@ -716,7 +718,7 @@ export class EndpointBuilder<
   private _params?: SchemaInput;
   private _responses: Record<number, EndpointResponse> = {};
 
-  constructor(method: HttpMethod, path: string) {
+  constructor(method: TMethod, path: TPath) {
     this._method = method;
     this._path = path;
   }
@@ -753,23 +755,23 @@ export class EndpointBuilder<
 
   body<T extends StandardSchemaV1>(
     schema: T,
-  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler> {
+  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
     this._body = schema;
-    return this as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler>;
+    return this as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath>;
   }
 
   query<T extends StandardSchemaV1>(
     schema: T,
-  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler> {
+  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath> {
     this._query = schema;
-    return this as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler>;
+    return this as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath>;
   }
 
   params<T extends StandardSchemaV1>(
     schema: T,
-  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler> {
+  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath> {
     this._params = schema;
-    return this as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler>;
+    return this as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath>;
   }
 
   /**
@@ -786,22 +788,22 @@ export class EndpointBuilder<
     status: S,
     description: string,
     schema: T,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }, THandler>;
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }, THandler, TMethod, TPath>;
   response<S extends number>(
     status: S,
     description: string,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }, THandler>;
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }, THandler, TMethod, TPath>;
   response<S extends number>(
     status: S,
     description: string,
     schema?: StandardSchemaV1 | JSONSchema,
-  ): EndpointBuilder<TBody, TQuery, TParams, any, THandler> {
+  ): EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath> {
     const stored: EndpointResponse = { description };
     if (schema !== undefined) {
       stored.schema = isStandardSchema(schema) ? extractJsonSchema(schema as FortressSchema<any>) : schema as JSONSchema;
     }
     this._responses[status] = stored;
-    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, any, THandler>;
+    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath>;
   }
 
   /**
@@ -824,7 +826,7 @@ export class EndpointBuilder<
   errorResponse<S extends number>(
     status: S,
     description: string,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }, THandler> {
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }, THandler, TMethod, TPath> {
     return this.response(status, description, ErrorEnvelope);
   }
 
@@ -833,13 +835,13 @@ export class EndpointBuilder<
    * captured in the definition's `THandler` phantom so `definePlugin` can
    * statically verify the handler exists and matches the endpoint's I/O.
    */
-  handler<H extends string>(name: H): EndpointBuilder<TBody, TQuery, TParams, TResponses, H> {
+  handler<H extends string>(name: H): EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath> {
     this._handler = name;
-    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, TResponses, H>;
+    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath>;
   }
 
-  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler> {
-    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler> = {
+  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
+    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath> = {
       method: this._method,
       path: this._path,
       handler: this._handler as THandler,
@@ -884,7 +886,11 @@ export class EndpointBuilder<
 }
 
 /** Start building a new {@link EndpointDefinition} for the given HTTP method and path. */
-// eslint-disable-next-line ts/no-empty-object-type
-export function endpoint(method: HttpMethod, path: string): EndpointBuilder<{}, {}, {}, {}> {
+/* eslint-disable ts/no-empty-object-type -- builder starts with empty phantom input/response slots */
+export function endpoint<const TMethod extends HttpMethod, const TPath extends string>(
+  method: TMethod,
+  path: TPath,
+): EndpointBuilder<{}, {}, {}, {}, string, TMethod, TPath> {
   return new EndpointBuilder(method, path);
 }
+/* eslint-enable ts/no-empty-object-type */

@@ -55,6 +55,13 @@ export interface FortressPlugin<
    */
   routes?: TRoutes;
 
+  /**
+   * Core call keys this plugin intentionally overrides. Required when a route
+   * claims a core method/path so the derived call tree can omit that core
+   * callable without guessing from widened or configurable route records.
+   */
+  coreOverrides?: readonly string[];
+
   /** Middleware to inject into the request pipeline */
   middleware?: MiddlewareDefinition[];
 
@@ -107,9 +114,11 @@ export type PluginMethodsOf<P> = P extends { methods: (...args: any[]) => infer 
   : P extends FortressPlugin<any, infer TMethods, any> ? TMethods : Record<never, never>;
 
 /** Extract the route record carried by a plugin definition. */
-export type PluginRoutesOf<P> = P extends { routes: infer TRoutes }
-  ? TRoutes
-  : P extends FortressPlugin<any, any, infer TRoutes> ? TRoutes : undefined;
+export type PluginRoutesOf<P> = 'routes' extends keyof P
+  ? P extends { routes: infer TRoutes }
+    ? TRoutes
+    : P extends { routes?: infer TRoutes } ? TRoutes : undefined
+  : undefined;
 
 /**
  * The JSON-wire projection of a handler's return value: `Date`s serialize
@@ -122,6 +131,16 @@ export type JsonOf<T> = T extends Date ? string
     : T extends readonly (infer U)[] ? JsonOf<U>[]
       : T extends object ? { [K in keyof T]: JsonOf<T[K]> }
         : T;
+
+type ContainsNonJsonValue<T> = T extends Date ? false
+  : T extends ((...args: any[]) => any) | bigint | symbol | undefined ? true
+    : T extends readonly (infer U)[]
+      ? true extends ContainsNonJsonValue<U> ? true : false
+      : T extends object
+        ? true extends {
+          [K in keyof T]-?: ContainsNonJsonValue<Exclude<T[K], undefined>>;
+        }[keyof T] ? true : false
+        : false;
 
 /**
  * Does the handler accept the endpoint's flat call input? Dispatch invokes
@@ -141,7 +160,13 @@ type HandlerInputCompatible<M, E> = M extends (input: infer I, ...rest: any[]) =
 type HandlerReturnCompatible<M, E> = M extends (...args: any[]) => infer R
   ? unknown extends InferEndpointSuccessResponse<E>
     ? true
-    : JsonOf<Awaited<R>> extends InferEndpointSuccessResponse<E> ? true : false
+    : true extends ContainsNonJsonValue<Awaited<R>>
+      ? false
+      : JsonOf<Awaited<R>> extends infer J
+        ? [J] extends [never]
+            ? false
+            : [J] extends [InferEndpointSuccessResponse<E>] ? true : false
+        : false
   : false;
 
 /** Compile-time diagnostic: a route names a handler that is not a plugin method. */
@@ -200,7 +225,7 @@ export type ValidatePluginRoutes<TRoutes, TMethods> = string extends keyof TRout
   // handlers at runtime. They also contribute no typed call namespace.
   ? TRoutes
   : {
-      [K in keyof TRoutes]: undefined extends TRoutes[K]
+      [K in keyof TRoutes as K extends string ? K : never]: undefined extends TRoutes[K]
         ? ValidatePluginRoute<Exclude<TRoutes[K], undefined>, TMethods> | undefined
         : ValidatePluginRoute<TRoutes[K], TMethods>;
     };
@@ -221,7 +246,7 @@ export function definePlugin<
   const TRoutes extends PluginRoutes | undefined,
 >(definition: TDefinition & FortressPlugin<TName, TMethods, TRoutes>
   & { routes?: ValidatePluginRoutes<TRoutes, NoInfer<TMethods>> }): TDefinition
-    & Omit<FortressPlugin<TName, TMethods, TRoutes>, 'name' | 'methods' | 'routes'>;
+    & Omit<FortressPlugin<TName, TMethods, TRoutes>, 'name' | 'methods' | 'routes' | 'coreOverrides'>;
 export function definePlugin(definition: FortressPlugin): FortressPlugin {
   return definition;
 }

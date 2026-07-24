@@ -3,8 +3,10 @@
 Fortress v2 derives every typed surface from one source — the `const` plugin
 tuple you pass to `createFortress()` — and replaces erased instance boundaries
 with minimal runtime capability interfaces. The full design rationale is in
-[ADR 0001](./adr/0001-definition-derived-api.md). Runtime behavior is
-unchanged; every break below is source-level only.
+[ADR 0001](./adr/0001-definition-derived-api.md). Request execution remains
+framework-neutral, but the public `fortress.call` object changes shape at
+runtime as well as in TypeScript; JavaScript consumers must make the same
+namespace migration described below.
 
 ## At a glance
 
@@ -36,13 +38,23 @@ await fortress.call.createRole({ ... });     await fortress.call.iam.createRole(
 await fortress.call.sendMagicLink({ ... });  await fortress.call.plugins['magic-link'].sendMagicLink({ ... });
 ```
 
-The rewrite is mechanical. No flattened compatibility client ships in core;
-if you need a flat map during migration, the runtime builder is still
-exported:
+The rewrite is mechanical. OAuth protocol routes that require form, Basic, or
+OAuth-bearer semantics are intentionally absent from the generic JSON call
+tree; call their plugin methods directly or use HTTP with the protocol's
+required encoding. An explicit plugin override of a core method/path must list
+the core call key in `coreOverrides` and reuse it as the route key and handler
+name; the declaration removes the conflicting `call.auth`/`call.iam` member
+and exposes the accurate callable under that plugin's namespace.
+
+No flattened compatibility client ships in core; if you need a flat map
+during migration, the runtime builder is still exported:
 
 ```ts
 import { buildCall } from '@bajustone/fortress';
-const flat = buildCall(fortress, { ...authEndpoints, ...iamEndpoints });
+
+// For endpoint records your application owns. Core auth/IAM definitions stay
+// behind the canonical namespaced tree.
+const flat = buildCall(fortress, { ...myPluginRoutes, ...myHostEndpoints });
 ```
 
 ## 2. `AnyFortress` is gone — accept a capability instead
@@ -138,10 +150,10 @@ registry edit and no augmentation.
 
 ## 6. Rarely needed
 
-- `EndpointDefinition` gained a fifth phantom generic (`THandler extends
-  string = string`). Code that spelled out all four generics is unaffected;
-  code that pattern-matched `EndpointDefinition<infer A, infer B, infer C,
-  infer D>` in conditional types should add a trailing `any`.
+- `EndpointDefinition` gained trailing phantom generics for the literal handler,
+  method, and path (`THandler`, `TMethod`, `TPath`). Code that spelled out the
+  original four generics is unaffected; conditional types that need to match
+  every slot should add three trailing `any` arguments.
 - `buildCall()` now accepts `Pick<FortressHttpRuntime, 'handleRequest'>`
   instead of `AnyFortress` — strictly wider.
 - `record()` in the schema builder accepts an optional generic

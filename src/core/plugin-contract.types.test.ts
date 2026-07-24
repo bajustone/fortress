@@ -1,12 +1,9 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { accountLockout } from '../plugins/account-lockout';
-import type { admin } from '../plugins/admin';
 import type { auditLog } from '../plugins/audit-log';
 import type { dataIsolation } from '../plugins/data-isolation';
 import type { emailVerification } from '../plugins/email-verification';
 import type { magicLink } from '../plugins/magic-link';
-import type { oauth } from '../plugins/oauth';
-import type { openapi } from '../plugins/openapi';
 import type { rateLimit } from '../plugins/rate-limit';
 import type { socialLogin } from '../plugins/social-login';
 import type { twoFactor } from '../plugins/two-factor';
@@ -15,8 +12,12 @@ import type { webhook } from '../plugins/webhook';
 import type { FortressPlugin } from './plugin';
 import type { InferPlugins } from './plugin-methods-map';
 import { describe, expect, it } from 'vitest';
+import { admin } from '../plugins/admin';
 import { apiKey } from '../plugins/api-key';
+import { oauth } from '../plugins/oauth';
+import { openapi } from '../plugins/openapi';
 import { tenancy } from '../plugins/tenancy';
+import { defineEndpoints } from './define-endpoints';
 import { createFortress } from './fortress';
 import { definePlugin } from './plugin';
 import { bool, endpoint, obj, str } from './schema-builder';
@@ -112,6 +113,22 @@ export function compileAllBuiltIns(plugins: AllBuiltIns): void {
   plugins.openapi.missing();
 }
 
+const composedRoutes = defineEndpoints({
+  composedEcho: endpoint('POST', '/composed/echo')
+    .body(obj({ message: str() }, 'message'))
+    .response(200, 'Echo', obj({ echoed: str() }, 'echoed'))
+    .handler('composedEcho')
+    .build(),
+});
+
+const composedPlugin = definePlugin({
+  name: 'composed',
+  methods: () => ({
+    composedEcho: async ({ message }: { message: string }): Promise<{ echoed: string }> => ({ echoed: message }),
+  }),
+  routes: composedRoutes,
+});
+
 const thirdParty = definePlugin({
   name: 'third-party',
   methods: () => ({
@@ -163,6 +180,30 @@ definePlugin({
   },
 });
 
+definePlugin({
+  name: 'function-return',
+  methods: () => ({ invalid: async (): Promise<() => string> => () => 'not JSON' }),
+  routes: {
+    // @ts-expect-error function-valued returns project to never and cannot satisfy a JSON response
+    invalid: endpoint('GET', '/invalid-function')
+      .response(200, 'Invalid', obj({ value: str() }, 'value'))
+      .handler('invalid')
+      .build(),
+  },
+});
+
+definePlugin({
+  name: 'nested-function-return',
+  methods: () => ({ invalid: async () => ({ value: () => 'not JSON' }) }),
+  routes: {
+    // @ts-expect-error nested function values are omitted by JSON.stringify and must be rejected
+    invalid: endpoint('GET', '/invalid-nested-function')
+      .response(200, 'Invalid', obj({ value: str() }, 'value'))
+      .handler('invalid')
+      .build(),
+  },
+});
+
 declare const _legacyPlugin: FortressPlugin<'legacy'>;
 export type LegacyContract = Assert<Equal<InferPlugins<readonly [typeof _legacyPlugin]>['legacy'], LegacyMethods>>;
 
@@ -174,6 +215,20 @@ definePlugin({
 } satisfies FortressPlugin<'broken', ExpectedMethods>);
 
 export function compilePluginContracts(database: DatabaseAdapter): void {
+  const noPlugins = createFortress({ database, jwt: { key: 'x'.repeat(32) } });
+  // @ts-expect-error omitted plugins produce an exact empty static plugin surface
+  void noPlugins.plugins.arbitrary;
+  // @ts-expect-error omitted plugins produce an exact empty plugin call surface
+  void noPlugins.call.plugins.arbitrary;
+  void noPlugins.call.auth.login;
+  void noPlugins.call.iam.getRoles;
+
+  const composedFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [composedPlugin] as const });
+  const composedResult: Promise<{ echoed: string }> = composedFortress.call.plugins.composed.composedEcho({ message: 'ok' });
+  void composedResult;
+  // @ts-expect-error defineEndpoints preserves its exact route keys through definePlugin
+  void composedFortress.call.plugins.composed.unknown;
+
   const thirdFortress = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [thirdParty] as const });
   const greeting: Promise<{ greeting: string }> = thirdFortress.call.plugins['third-party'].thirdPartyGreeting({ name: 'Ada' });
   void greeting;
@@ -223,4 +278,98 @@ export function compilePluginContracts(database: DatabaseAdapter): void {
   const both = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [first, second] as const });
   void both.call.plugins.first.status({});
   void both.call.plugins.second.status({});
+
+  const override = definePlugin({
+    name: 'override',
+    coreOverrides: ['login', 'getRoles'] as const,
+    methods: () => ({
+      login: async ({ code }: { code: string }): Promise<{ alternate: boolean }> => ({ alternate: code.length > 0 }),
+      getRoles: async (): Promise<{ source: string }> => ({ source: 'plugin' }),
+    }),
+    routes: {
+      login: endpoint('POST', '/auth//login/')
+        .body(obj({ code: str() }, 'code'))
+        .response(200, 'Alternate', obj({ alternate: bool() }, 'alternate'))
+        .handler('login')
+        .build(),
+      getRoles: endpoint('GET', '/iam/roles')
+        .response(200, 'Alternate', obj({ source: str() }, 'source'))
+        .handler('getRoles')
+        .build(),
+    },
+  });
+  const overridden = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [override] as const });
+  void overridden.call.plugins.override.login({ code: '123' });
+  void overridden.call.plugins.override.getRoles({});
+  // @ts-expect-error overridden core auth call is omitted rather than retaining a false contract
+  void overridden.call.auth.login;
+  // @ts-expect-error overridden core IAM call is omitted rather than retaining a false contract
+  void overridden.call.iam.getRoles;
+  void overridden.call.auth.me({});
+
+  const unrelatedLoginKey = definePlugin({
+    name: 'unrelated-login-key',
+    methods: () => ({
+      login: async (): Promise<{ ok: boolean }> => ({ ok: true }),
+    }),
+    routes: {
+      login: endpoint('GET', '/custom/login-status')
+        .response(200, 'Status', obj({ ok: bool() }, 'ok'))
+        .handler('login')
+        .build(),
+    },
+  });
+  const unrelated = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [unrelatedLoginKey] as const,
+  });
+  void unrelated.call.auth.login;
+  void unrelated.call.plugins['unrelated-login-key'].login;
+
+  const oauthFortress = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [oauth({ loginUrl: '/login', consentUrl: '/consent' })] as const,
+  });
+  // OAuth protocol routes require form/basic/bearer semantics and are not generic JSON callables.
+  // @ts-expect-error excluded optional OAuth authorization callable
+  void oauthFortress.call.plugins.oauth.handleAuthorizeRequest;
+  // @ts-expect-error excluded OAuth protocol callable
+  void oauthFortress.call.plugins.oauth.handleTokenRequest;
+  // @ts-expect-error excluded OAuth protocol callable
+  void oauthFortress.call.plugins.oauth.handleIntrospectRequest;
+  // @ts-expect-error excluded OAuth protocol callable
+  void oauthFortress.call.plugins.oauth.handleRevokeRequest;
+  // @ts-expect-error excluded OAuth protocol callable
+  void oauthFortress.call.plugins.oauth.handleUserInfoRequest;
+  // @ts-expect-error excluded OAuth protocol callable
+  void oauthFortress.call.plugins.oauth.handleDiscovery;
+  // @ts-expect-error excluded OAuth protocol callable
+  void oauthFortress.call.plugins.oauth.handleJwksRequest;
+  // JWT-backed consent-flow routes remain generic callables, and unrelated
+  // core calls remain available because OAuth route identities stay exact.
+  void oauthFortress.call.plugins.oauth.handleGetFlow;
+  void oauthFortress.call.auth.login;
+  void oauthFortress.call.auth.me;
+  void oauthFortress.call.iam.getRoles;
+
+  const openapiFortress = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [openapi()] as const,
+  });
+  // Configurable OpenAPI paths cannot erase unrelated core callables; a
+  // runtime collision must use the matching core route key/handler instead.
+  void openapiFortress.call.auth.me;
+  void openapiFortress.call.iam.getRoles;
+
+  const adminFortress = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [admin()] as const,
+  });
+  void adminFortress.call.auth.me;
+  // @ts-expect-error admin explicitly overrides the core IAM surface
+  void adminFortress.call.iam.getRoles;
 }

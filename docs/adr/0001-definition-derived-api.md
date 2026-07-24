@@ -46,11 +46,11 @@ interface Fortress<TPlugins extends readonly RuntimeFortressPlugin[] = readonly 
 `plugins` and `call` from it. There is no second generic to drift and no
 `AnyFortress`: the unparameterized `Fortress` (default tuple) is the erased
 form, and boundaries that don't need plugin inference accept a capability
-interface instead (§4). Two details keep the erased form a true supertype of
-every concrete instantiation: `InferPlugins` degrades a non-literal plugin
-name (`string`) to `object`, claiming nothing about unknown surfaces, and no
-type parameter of `Fortress` appears in a conditional check position (which
-would poison assignability variance).
+interface instead (§4). The erased form remains a true supertype by making no
+plugin-call promises: `InferPlugins` degrades a non-literal plugin name
+(`string`) to `object`, while the broad default `CallTree` resolves to an
+empty erased tree. A concrete tuple resolves to its precise core and plugin
+callables.
 
 ### 2. Endpoint collections are validated and branded at their definition site
 
@@ -65,7 +65,7 @@ const authEndpoints = defineEndpoints({
 parameter type maps every non-endpoint property to a per-property compile
 error, so invalid members fail *where they are written*, with exact literal
 keys and full `EndpointDefinition<TBody, TQuery, TParams, TResponses,
-THandler>` generics preserved and no string index signature introduced. The
+THandler, TMethod, TPath>` generics preserved and no string index signature introduced. The
 returned type carries a phantom `DefinedEndpoints` brand recording that
 validation happened.
 
@@ -81,8 +81,10 @@ fallback branches.
 
 ### 3. `definePlugin()` correlates name, methods, routes, and handlers
 
-`EndpointDefinition` gains a fifth phantom generic, `THandler extends string`,
-captured literally by `EndpointBuilder.handler()`. `definePlugin()` (canonical
+`EndpointDefinition` gains trailing phantom generics for the literal handler,
+method, and path. `EndpointBuilder` captures all three so call ownership can
+remove a core callable when a plugin intentionally overrides the same
+method/path. `definePlugin()` (canonical
 authoring API, introduced by #11, extended here) statically verifies:
 
 - the plugin name is preserved as a literal type;
@@ -94,8 +96,9 @@ authoring API, introduced by #11, extended here) statically verifies:
 - **the handler's first parameter accepts the endpoint's inferred
   body+query+params input, and its resolved return value serializes to the
   declared success response** (`RouteHandlerIncompatible`). Dispatch calls
-  `methods[handler]({...body, ...params}, ctx)` and JSON-serializes the
-  result, so the return check compares through a `JsonOf` wire projection
+  `methods[handler]({...body, ...query, ...params}, ctx)` with validated,
+  schema-transformed values and JSON-serializes the result, so the return check
+  compares through a `JsonOf` wire projection
   (`Date` → ISO string) — schemas describe the wire, methods describe the
   runtime;
 - third-party plugins get all of this from inference alone — no central
@@ -176,13 +179,19 @@ shadow `login` for readers even when the compiler accepts it; ownership stays
 invisible in code review and generated docs.
 
 **(b) Namespaced tree.** `call.auth.*` and `call.iam.*` for core;
-`call.plugins.<pluginName>.<routeKey>` for every plugin. *For:* collisions are
-impossible by construction — plugin names are already unique (enforced at
-startup and keyed by `InferPlugins`); the type is a plain nested mapped type
-with no intersections or filtering; ownership is explicit at every call site
-and in generated documentation; symmetric with `fortress.plugins.<name>`
-(direct method access) — same second segment, HTTP pipeline vs in-process.
-*Against:* every 1.x call site changes.
+`call.plugins.<pluginName>.<routeKey>` for plugin routes that the generic JSON
+caller can serialize. *For:* collisions are impossible by construction —
+plugin names are already unique (enforced at startup and keyed by
+`InferPlugins`); ownership is explicit at every call site and in generated
+documentation; symmetric with `fortress.plugins.<name>` (direct method
+access) — same second segment, HTTP pipeline vs in-process. OAuth protocol
+routes that require form, Basic, or OAuth-bearer semantics are excluded.
+Intentional plugin overrides remain available in the plugin namespace and
+remove the conflicting core callable rather than retaining a false core
+contract. An override must list the core call key in `coreOverrides` and reuse
+that key as its route key and handler name; this explicit declaration lets the
+type projection identify removed callables even when route records or paths
+are configurable. *Against:* every 1.x call site changes.
 
 **Decision: (b), namespaced.** The migration is mechanical
 (`call.login` → `call.auth.login`; `call.createKey` →
@@ -196,7 +205,9 @@ validation merely because a compile-time contract exists).
 
 Host routes declared via top-level `config.routes` remain excluded from the
 call tree (they have no backing methods; calling them would be a guaranteed
-`NOT_FOUND`).
+`NOT_FOUND`). Host/core method-path collisions are rejected at startup;
+intentional core overrides must be declared as explicit plugins so their
+backing method and accurate plugin call contract are available.
 
 ### 6. Static and dynamic plugin access are separate APIs
 
@@ -224,8 +235,10 @@ call tree (they have no backing methods; calling them would be a guaranteed
 - All 1.x consumers of `AnyFortress`, flat `fortress.call.*`, bare
   `FortressPlugin` factories, `getPluginMethods`, and `PluginMethodsMap`
   augmentation must migrate — see `docs/v2-migration.md`.
-- Runtime behavior is unchanged and framework-neutral (web-standard
+- Request execution remains framework-neutral (web-standard
   `Request`/`Response` only); Bun, Node, Deno, and workerd remain supported.
+  The public `fortress.call` object changes shape at runtime as part of the
+  namespaced major-version API.
 
 ## Verification
 

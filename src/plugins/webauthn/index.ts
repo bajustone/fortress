@@ -17,7 +17,8 @@ import type {
   RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { FortressPlugin, PluginRouteContext } from '../../core/plugin';
+import type { EndpointDefinition } from '../../core/endpoint';
+import type { FortressPlugin, JsonOf, PluginRouteContext } from '../../core/plugin';
 import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import {
   generateAuthenticationOptions as generateAuthOptions,
@@ -133,7 +134,48 @@ function uint8ArrayToBase64url(bytes: Uint8Array): string {
 
 // ── Routes ──────────────────────────────────────────────────────────
 
-const webauthnRoutes = {
+/* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- alias preserves Record compatibility; empty endpoint phantom slots are intentional */
+type WebAuthnRoutes = {
+  readonly generateRegistrationOptions: EndpointDefinition<
+    {},
+    {},
+    {},
+    { 200: { options: PublicKeyCredentialCreationOptionsJSON } },
+    'generateRegistrationOptions',
+    'POST',
+    '/webauthn/register/options'
+  >;
+  readonly verifyRegistration: EndpointDefinition<
+    { response: RegistrationResponseJSON },
+    {},
+    {},
+    { 200: { verified: boolean; credentialId?: string; credentialDeviceType?: string; credentialBackedUp?: boolean } },
+    'verifyRegistration',
+    'POST',
+    '/webauthn/register/verify'
+  >;
+  readonly generateAuthenticationOptions: EndpointDefinition<
+    { userId?: string },
+    {},
+    {},
+    { 200: { options: PublicKeyCredentialRequestOptionsJSON } },
+    'generateAuthenticationOptions',
+    'POST',
+    '/webauthn/authenticate/options'
+  >;
+  readonly verifyAuthentication: EndpointDefinition<
+    { response: AuthenticationResponseJSON },
+    {},
+    {},
+    { 200: JsonOf<AuthResult> },
+    'verifyAuthentication',
+    'POST',
+    '/webauthn/authenticate/verify'
+  >;
+};
+
+/* eslint-enable ts/consistent-type-definitions, ts/no-empty-object-type */
+const webauthnRoutes: WebAuthnRoutes = {
   generateRegistrationOptions: endpoint('POST', '/webauthn/register/options')
     .summary('Generate WebAuthn registration options')
     .description('Generate public key credential creation options for registering a new passkey against the authenticated caller.')
@@ -204,8 +246,7 @@ const webauthnRoutes = {
  * implements passkey registration, passwordless authentication, and a
  * second-factor mode using `@simplewebauthn/server`.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function webauthn(config: WebAuthnConfig) {
+export function webauthn(config: WebAuthnConfig): FortressPlugin<'webauthn', WebAuthnMethods, WebAuthnRoutes> & { routes: WebAuthnRoutes } {
   const rpName = config.rpName;
   const rpID = config.rpID;
   const origin = config.origin;
@@ -552,5 +593,5 @@ export function webauthn(config: WebAuthnConfig) {
         return ctx.auth.completePluginAuth(userId, 'webauthn', meta);
       },
     }),
-  } satisfies FortressPlugin<'webauthn', WebAuthnMethods>);
+  } satisfies FortressPlugin<'webauthn', WebAuthnMethods, WebAuthnRoutes>);
 }

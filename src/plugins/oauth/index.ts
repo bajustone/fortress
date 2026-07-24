@@ -10,6 +10,7 @@
  */
 
 import type { WhereClause } from '../../adapters/database/types';
+import type { EndpointDefinition, EndpointMeta } from '../../core/endpoint';
 import type { FortressPlugin } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, generateTokenFamily, hashToken } from '../../core/auth/refresh-token';
@@ -358,8 +359,30 @@ export interface OAuthMethods {
  * grant, persists clients and tokens, and exposes `/authorize` and `/token`
  * endpoints when mounted on a framework adapter.
  */
-// eslint-disable-next-line ts/explicit-function-return-type -- definePlugin preserves the exact public contract
-export function oauth(config: OAuthConfig = {}) {
+type OAuthProtocolRoute<
+  H extends string,
+  M extends 'GET' | 'POST',
+  P extends string,
+> = EndpointDefinition<any, any, any, any, H, M, P> & {
+  meta: EndpointMeta & { bearerKind: 'oauth' };
+};
+
+/* eslint-disable ts/consistent-type-definitions -- alias preserves Record compatibility */
+type OAuthRoutes = {
+  handleAuthorizeRequest?: OAuthProtocolRoute<'handleAuthorizeRequest', 'GET', '/oauth/authorize'>;
+  handleGetFlow?: EndpointDefinition<any, any, any, any, 'handleGetFlow', 'GET', '/oauth/flows/:flowId'>;
+  handleApproveFlow?: EndpointDefinition<any, any, any, any, 'handleApproveFlow', 'POST', '/oauth/flows/:flowId/approve'>;
+  handleDenyFlow?: EndpointDefinition<any, any, any, any, 'handleDenyFlow', 'POST', '/oauth/flows/:flowId/deny'>;
+  handleTokenRequest: OAuthProtocolRoute<'handleTokenRequest', 'POST', '/oauth/token'>;
+  handleIntrospectRequest: OAuthProtocolRoute<'handleIntrospectRequest', 'POST', '/oauth/introspect'>;
+  handleRevokeRequest: OAuthProtocolRoute<'handleRevokeRequest', 'POST', '/oauth/revoke'>;
+  handleUserInfoRequest: OAuthProtocolRoute<'handleUserInfoRequest', 'GET', '/oauth/userinfo'>;
+  handleDiscovery: OAuthProtocolRoute<'handleDiscovery', 'GET', '/oauth/.well-known/openid-configuration'>;
+  handleJwksRequest: OAuthProtocolRoute<'handleJwksRequest', 'GET', '/oauth/.well-known/jwks.json'>;
+};
+/* eslint-enable ts/consistent-type-definitions */
+
+export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes> & { routes: OAuthRoutes } {
   const authCodeExpiry = config.authCodeExpirySeconds ?? 600;
   const pendingFlowExpiry = config.pendingFlowExpirySeconds ?? 600;
   const accessTokenExpiry = config.accessTokenExpirySeconds ?? 3600;
@@ -1818,7 +1841,7 @@ export function oauth(config: OAuthConfig = {}) {
         ? {
             handleAuthorizeRequest: {
               method: 'GET' as const,
-              path: '/oauth/authorize',
+              path: '/oauth/authorize' as const,
               handler: 'handleAuthorizeRequest' as const,
               meta: {
                 summary: 'Start an OAuth authorization-code flow',
@@ -1853,7 +1876,7 @@ export function oauth(config: OAuthConfig = {}) {
         ? {
             handleGetFlow: {
               method: 'GET' as const,
-              path: '/oauth/flows/:flowId',
+              path: '/oauth/flows/:flowId' as const,
               handler: 'handleGetFlow' as const,
               meta: {
                 summary: 'Fetch pending OAuth flow metadata',
@@ -1886,7 +1909,7 @@ export function oauth(config: OAuthConfig = {}) {
             },
             handleApproveFlow: {
               method: 'POST' as const,
-              path: '/oauth/flows/:flowId/approve',
+              path: '/oauth/flows/:flowId/approve' as const,
               handler: 'handleApproveFlow' as const,
               meta: {
                 summary: 'Approve a pending OAuth flow',
@@ -1907,7 +1930,7 @@ export function oauth(config: OAuthConfig = {}) {
             },
             handleDenyFlow: {
               method: 'POST' as const,
-              path: '/oauth/flows/:flowId/deny',
+              path: '/oauth/flows/:flowId/deny' as const,
               handler: 'handleDenyFlow' as const,
               meta: {
                 summary: 'Deny a pending OAuth flow',
@@ -1930,7 +1953,7 @@ export function oauth(config: OAuthConfig = {}) {
         : {}),
       handleTokenRequest: {
         method: 'POST',
-        path: '/oauth/token',
+        path: '/oauth/token' as const,
         handler: 'handleTokenRequest' as const,
         meta: { summary: 'Exchange credentials for tokens', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: {
@@ -1957,7 +1980,7 @@ export function oauth(config: OAuthConfig = {}) {
       },
       handleIntrospectRequest: {
         method: 'POST',
-        path: '/oauth/introspect',
+        path: '/oauth/introspect' as const,
         handler: 'handleIntrospectRequest' as const,
         meta: { summary: 'Introspect a token (RFC 7662)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
@@ -1968,7 +1991,7 @@ export function oauth(config: OAuthConfig = {}) {
       },
       handleRevokeRequest: {
         method: 'POST',
-        path: '/oauth/revoke',
+        path: '/oauth/revoke' as const,
         handler: 'handleRevokeRequest' as const,
         meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
@@ -1976,7 +1999,7 @@ export function oauth(config: OAuthConfig = {}) {
       },
       handleUserInfoRequest: {
         method: 'GET',
-        path: '/oauth/userinfo',
+        path: '/oauth/userinfo' as const,
         handler: 'handleUserInfoRequest' as const,
         meta: { summary: 'Get user info (OIDC Core §5.3)', tags: ['OAuth'], security: ['bearer'], bearerKind: 'oauth' as const },
         responses: {
@@ -2001,14 +2024,14 @@ export function oauth(config: OAuthConfig = {}) {
       },
       handleDiscovery: {
         method: 'GET',
-        path: '/oauth/.well-known/openid-configuration',
+        path: '/oauth/.well-known/openid-configuration' as const,
         handler: 'handleDiscovery' as const,
         meta: { summary: 'OIDC discovery document', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         responses: { 200: { description: 'OIDC configuration', schema: { type: 'object', additionalProperties: true } } },
       },
       handleJwksRequest: {
         method: 'GET',
-        path: '/oauth/.well-known/jwks.json',
+        path: '/oauth/.well-known/jwks.json' as const,
         handler: 'handleJwksRequest' as const,
         meta: { summary: 'JSON Web Key Set (RFC 7517)', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         responses: {
