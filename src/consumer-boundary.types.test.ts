@@ -1,5 +1,6 @@
 import type { DatabaseAdapter } from './adapters/database';
 import type { AnyFortress, Fortress, TypedCall } from './core/fortress';
+import type { CallOptions } from './core/http/call';
 import type { FortressPlugin } from './core/plugin';
 import type { InferPlugins } from './core/plugin-methods-map';
 import type { ApiKeyMethods } from './plugins/api-key';
@@ -26,9 +27,12 @@ import {
   buildRouteManifest,
   createFortress,
   detectRouteManifestDrift,
+  endpoint,
   getPluginMethods,
+  obj,
   protect,
   resolveProtectedEndpoint,
+  str,
 } from './index';
 import { apiKey } from './plugins/api-key';
 import { expressRateLimit } from './plugins/rate-limit/express';
@@ -53,6 +57,11 @@ interface ExpressAppBoundary {
   use: Parameters<typeof mountExpressFortress>[0]['use'];
 }
 
+type ExpectedFixtureCall = (
+  input: { message: string },
+  options?: CallOptions,
+) => Promise<{ echo: string }>;
+
 /** Compile-only coverage: this function is deliberately never invoked. */
 function acceptsBrandedPluginAtEverySourceBoundary(
   database: DatabaseAdapter,
@@ -73,6 +82,38 @@ function acceptsBrandedPluginAtEverySourceBoundary(
   expectTypeOf(fortress).toEqualTypeOf<
     Fortress<InferPlugins<[typeof brandedPlugin]>, TypedCall<[typeof brandedPlugin]>>
   >();
+
+  // Exercise a concrete plugin call without deriving the expected type from
+  // the instance itself. Inline routes retain their generics; built-in plugin
+  // factories currently erase conditional route records (#10/#11), so this
+  // intentionally does not claim api-key route inference is fixed here.
+  const callPlugin = {
+    name: 'call-fixture',
+    routes: {
+      fixtureEcho: endpoint('POST', '/fixture/echo')
+        .body(obj({ message: str() }, 'message'))
+        .response(200, 'Echo', obj({ echo: str() }, 'echo'))
+        .handler('fixtureEcho')
+        .build(),
+    },
+  } as const satisfies FortressPlugin;
+  const callFortress = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [callPlugin] as const,
+  });
+  expectTypeOf(callFortress.call.fixtureEcho).toEqualTypeOf<ExpectedFixtureCall>();
+  expectTypeOf(
+    callFortress.call.fixtureEcho({ message: 'hello' }),
+  ).toEqualTypeOf<Promise<{ echo: string }>>();
+  // @ts-expect-error -- fixtureEcho's concretely inferred input requires message
+  callFortress.call.fixtureEcho({});
+
+  const erased: AnyFortress = fortress;
+  // @ts-expect-error -- an erased consumer must not replace a precise plugin surface
+  erased.plugins = {};
+  // @ts-expect-error -- an erased consumer must not replace a precise call surface
+  erased.call = {};
 
   const app = new Hono();
   mountHonoFortress(app, fortress);

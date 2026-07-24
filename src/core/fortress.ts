@@ -202,7 +202,12 @@ export interface Fortress<
  * precisely typed {@link createFortress} result remains assignable without
  * giving up its plugin and call types at the creation site.
  */
-export type AnyFortress = Fortress<unknown, unknown>;
+export type AnyFortress = Omit<Fortress<unknown, unknown>, 'plugins' | 'call'> & {
+  /** Erased plugin surface; readonly so a consumer cannot replace a precise instance's plugins. */
+  readonly plugins: unknown;
+  /** Erased call surface; readonly so a consumer cannot replace a precise instance's callables. */
+  readonly call: unknown;
+};
 
 /** Options accepted by {@link Fortress.toOpenAPI}. */
 export interface FortressToOpenAPIOptions extends ToOpenAPIOptions {
