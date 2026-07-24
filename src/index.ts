@@ -88,7 +88,7 @@ export type { FortressErrorCode, OAuthErrorCode } from './core/errors';
 export { createFortress, getPluginMethods } from './core/fortress';
 
 /** The fortress instance type returned by {@link createFortress}, plus the typed call-map helper. */
-export type { Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, TypedCall } from './core/fortress';
+export type { AnyFortress, Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, TypedCall } from './core/fortress';
 
 /** Typed in-process client builder and per-call options. */
 export { buildCall } from './core/http/call';

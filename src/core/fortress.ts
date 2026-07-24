@@ -68,7 +68,7 @@ export interface Fortress<
 > {
   auth: AuthService;
   iam: IamService;
-  plugins: TPlugins;
+  readonly plugins: TPlugins;
   /**
    * Typed in-process client. Each key is a handler name (from the core
    * auth/IAM endpoint records or a plugin's `routes` record); each value is
@@ -80,7 +80,7 @@ export interface Fortress<
    * verification, RBAC, and validation all run — the same path a network
    * client would eventually hit. See `src/core/http/call.ts`.
    */
-  call: TCall;
+  readonly call: TCall;
   config: Readonly<FortressConfig>;
   /** All endpoint definitions (auth + IAM + plugins) with JSON Schema metadata. */
   endpoints: EndpointDefinition[];
@@ -196,6 +196,14 @@ export interface Fortress<
   toOpenAPI: (opts?: FortressToOpenAPIOptions) => OpenAPISpec;
 }
 
+/**
+ * A Fortress instance whose plugin and call surfaces are intentionally
+ * erased. Public APIs that only consume an instance use this boundary so a
+ * precisely typed {@link createFortress} result remains assignable without
+ * giving up its plugin and call types at the creation site.
+ */
+export type AnyFortress = Fortress<unknown, unknown>;
+
 /** Options accepted by {@link Fortress.toOpenAPI}. */
 export interface FortressToOpenAPIOptions extends ToOpenAPIOptions {
   /** Override the endpoints to emit. Defaults to `fortress.endpoints`. */
@@ -246,8 +254,8 @@ export interface MigrateResult {
  * const result = await twoFactor.setup(userId); // fully typed
  * ```
  */
-export function getPluginMethods<T>(fortress: Fortress, pluginName: string): T {
-  const methods = fortress.plugins[pluginName];
+export function getPluginMethods<T>(fortress: AnyFortress, pluginName: string): T {
+  const methods = (fortress.plugins as Record<string, unknown>)[pluginName];
   if (!methods) {
     throw Errors.notFound(`Plugin '${pluginName}' is not registered`);
   }
@@ -544,7 +552,9 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
       callOwners.set(key, plugin.name);
     }
   }
-  instance.call = buildCall(instance as Fortress, callEndpoints) as TypedCall<T>;
+  // `call` is readonly on the returned public surface, but is populated once
+  // here after `handleRequest` has been bound.
+  (instance as { call: TypedCall<T> }).call = buildCall(instance as Fortress, callEndpoints) as TypedCall<T>;
 
   return instance;
 }

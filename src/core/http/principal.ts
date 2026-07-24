@@ -17,7 +17,7 @@
  *   Fortress-owned routes.
  */
 
-import type { Fortress } from '../fortress';
+import type { AnyFortress } from '../fortress';
 import type { Subject, TokenClaims } from '../types';
 
 /** Result of a successful principal resolution. */
@@ -33,7 +33,7 @@ export interface ResolvedPrincipal {
  * result, or null if every plugin deferred.
  */
 export async function tryPluginPrincipal(
-  fortress: Fortress,
+  fortress: AnyFortress,
   request: Request,
 ): Promise<ResolvedPrincipal | null> {
   const plugins = fortress.config.plugins ?? [];
@@ -63,7 +63,7 @@ export async function tryPluginPrincipal(
  * anonymous pass for public ones).
  */
 export async function resolveRequestPrincipal(
-  fortress: Fortress,
+  fortress: AnyFortress,
   request: Request,
 ): Promise<ResolvedPrincipal | null> {
   const plugin = await tryPluginPrincipal(fortress, request);

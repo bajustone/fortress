@@ -15,7 +15,7 @@
  */
 
 import type { DatabaseAdapter } from '../adapters/database';
-import type { Fortress } from '../core/fortress';
+import type { AnyFortress } from '../core/fortress';
 import type { RouteManifestDrift } from '../core/manifest/drift';
 import type { RouteClassification, RouteManifestEntry } from '../core/manifest/route-manifest';
 import type { MigrationDrift } from '../core/migrations/engine';
@@ -44,7 +44,7 @@ export interface CheckResult {
  * `ok: false` and emits one message per drift category.
  */
 export function checkRouteManifestDrift(
-  fortress: Fortress,
+  fortress: AnyFortress,
 ): CheckResult & { drift: RouteManifestDrift } {
   const drift = detectRouteManifestDrift(fortress);
   const messages: string[] = [];
@@ -117,7 +117,7 @@ const DEFAULT_PUBLIC_ALLOW: readonly string[] = [
  * surface so consumers only need to add their own.
  */
 export function checkPublicRoutes(
-  fortress: Fortress,
+  fortress: AnyFortress,
   options: PublicRouteCheckOptions = {},
 ): CheckResult & { unexpected: RouteManifestEntry[] } {
   const allow = new Set([...(options.allow ?? []), ...DEFAULT_PUBLIC_ALLOW]);
@@ -196,7 +196,7 @@ export interface AuthSmokeTestOptions {
  * a network roundtrip.
  */
 export async function smokeTestAuth(
-  fortress: Fortress,
+  fortress: AnyFortress,
   options: AuthSmokeTestOptions = {},
 ): Promise<CheckResult> {
   const email = options.email ?? `smoke+${Date.now()}@fortress.test`;
@@ -231,7 +231,7 @@ export async function smokeTestAuth(
  * Inputs to {@link runFortressChecks}.
  */
 export interface RunFortressChecksOptions {
-  fortress: Fortress;
+  fortress: AnyFortress;
   /** Optional DB adapter for the migration check. Defaults to `fortress.config.database`. */
   db?: DatabaseAdapter;
   /** Skip the migration drift check (e.g. if you bring your own migration tool). */

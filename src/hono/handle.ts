@@ -19,7 +19,7 @@
  */
 
 import type { Env, Hono } from 'hono';
-import type { Fortress } from '../core/fortress';
+import type { AnyFortress } from '../core/fortress';
 import { buildRouteTable, matchRoute } from '../core/http/match';
 
 /** Options for {@link mountFortress}. */
@@ -43,7 +43,7 @@ export interface MountFortressOptions {
  */
 export function mountFortress<E extends Env = Env>(
   app: Hono<E>,
-  fortress: Fortress,
+  fortress: AnyFortress,
   options: MountFortressOptions = {},
 ): void {
   const prefix = options.prefix ?? '';

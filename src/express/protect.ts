@@ -1,5 +1,5 @@
 import type { EndpointDefinition } from '../core/endpoint';
-import type { Fortress } from '../core/fortress';
+import type { AnyFortress } from '../core/fortress';
 import type {
   ProtectedRouteContext,
   ProtectedRouteHandler,
@@ -40,19 +40,19 @@ export function protectedRoute<
   E extends EndpointDefinition<any, any, any, any>,
   TResult = unknown,
 >(
-  fortress: Fortress,
+  fortress: AnyFortress,
   target: E,
   handler: ExpressProtectedRouteHandler<E, TResult>,
   options?: ProtectOptions,
 ): ExpressMiddleware;
 export function protectedRoute<TResult = unknown>(
-  fortress: Fortress,
+  fortress: AnyFortress,
   target: string,
   handler: ExpressProtectedRouteHandler<EndpointDefinition, TResult>,
   options?: ProtectOptions,
 ): ExpressMiddleware;
 export function protectedRoute(
-  fortress: Fortress,
+  fortress: AnyFortress,
   target: ProtectedRouteTarget,
 
   handler: ExpressProtectedRouteHandler<any, unknown>,
@@ -63,7 +63,7 @@ export function protectedRoute(
       const request = expressToWebRequest(req);
       // Cast: core `protect` overloads require a concrete branch; impl is loose.
       const protectedHandler = (protect as (
-        f: Fortress,
+        f: AnyFortress,
         t: ProtectedRouteTarget,
         h: ProtectedRouteHandler,
         o?: ProtectOptions,

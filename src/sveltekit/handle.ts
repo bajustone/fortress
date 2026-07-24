@@ -34,7 +34,7 @@
  */
 
 import type { DatabaseAdapter } from '../adapters/database';
-import type { Fortress } from '../core/fortress';
+import type { AnyFortress } from '../core/fortress';
 import type { PluginContext } from '../core/plugin';
 import type { AuthTokenPair, RequestMeta, Subject, TokenClaims } from '../core/types';
 import type {
@@ -58,7 +58,7 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /** Build the SvelteKit `handle` hook for a Fortress instance. */
 export function createSvelteKitHandle(
-  fortress: Fortress<any, any>,
+  fortress: AnyFortress,
   options: SvelteKitAdapterOptions = {},
 ): SvelteKitHandle {
   const basePath = options.basePath ?? '';
@@ -268,7 +268,7 @@ function requestMeta(request: Request): RequestMeta {
  */
 function populateLocals(
   event: SvelteKitRequestEvent<FortressLocals>,
-  fortress: Fortress<any, any>,
+  fortress: AnyFortress,
   subject: Subject,
   claims: TokenClaims | undefined,
   scopes: string[] | null | undefined,

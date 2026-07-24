@@ -43,7 +43,7 @@
  */
 
 import type { EndpointDefinition } from '../endpoint';
-import type { Fortress } from '../fortress';
+import type { AnyFortress } from '../fortress';
 import { Errors } from '../errors';
 
 /** Optional per-call options. */
@@ -73,7 +73,7 @@ function schemaKeys(schema: unknown): Set<string> {
  * callable map to expose per-handler inferred I/O.
  */
 export function buildCall(
-  fortress: Fortress,
+  fortress: AnyFortress,
   endpoints: Record<string, EndpointDefinition>,
 ): Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> {
   const out: Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> = {};
