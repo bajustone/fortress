@@ -68,7 +68,7 @@ export interface Fortress<
 > {
   auth: AuthService;
   iam: IamService;
-  plugins: TPlugins;
+  readonly plugins: TPlugins;
   /**
    * Typed in-process client. Each key is a handler name (from the core
    * auth/IAM endpoint records or a plugin's `routes` record); each value is
@@ -80,7 +80,7 @@ export interface Fortress<
    * verification, RBAC, and validation all run — the same path a network
    * client would eventually hit. See `src/core/http/call.ts`.
    */
-  call: TCall;
+  readonly call: TCall;
   config: Readonly<FortressConfig>;
   /** All endpoint definitions (auth + IAM + plugins) with JSON Schema metadata. */
   endpoints: EndpointDefinition[];
@@ -202,12 +202,7 @@ export interface Fortress<
  * precisely typed {@link createFortress} result remains assignable without
  * giving up its plugin and call types at the creation site.
  */
-export type AnyFortress = Omit<Fortress<unknown, unknown>, 'plugins' | 'call'> & {
-  /** Erased plugin surface; readonly so a consumer cannot replace a precise instance's plugins. */
-  readonly plugins: unknown;
-  /** Erased call surface; readonly so a consumer cannot replace a precise instance's callables. */
-  readonly call: unknown;
-};
+export type AnyFortress = Fortress<unknown, unknown>;
 
 /** Options accepted by {@link Fortress.toOpenAPI}. */
 export interface FortressToOpenAPIOptions extends ToOpenAPIOptions {
@@ -557,7 +552,9 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
       callOwners.set(key, plugin.name);
     }
   }
-  instance.call = buildCall(instance as Fortress, callEndpoints) as TypedCall<T>;
+  // `call` is readonly on the returned public surface, but is populated once
+  // here after `handleRequest` has been bound.
+  (instance as { call: TypedCall<T> }).call = buildCall(instance as Fortress, callEndpoints) as TypedCall<T>;
 
   return instance;
 }

@@ -109,11 +109,28 @@ function acceptsBrandedPluginAtEverySourceBoundary(
   // @ts-expect-error -- fixtureEcho's concretely inferred input requires message
   callFortress.call.fixtureEcho({});
 
+  const precisePlugins = fortress.plugins;
+  const preciseCall = fortress.call;
+  // @ts-expect-error -- the created plugin surface is constructed once and readonly
+  fortress.plugins = precisePlugins;
+  // @ts-expect-error -- the created call surface is constructed once and readonly
+  fortress.call = preciseCall;
+
   const erased: AnyFortress = fortress;
   // @ts-expect-error -- an erased consumer must not replace a precise plugin surface
   erased.plugins = {};
   // @ts-expect-error -- an erased consumer must not replace a precise call surface
   erased.call = {};
+
+  // A consumer can alias the erased facade back to its underlying generic
+  // interface, but those generic slots must remain readonly there as well.
+  const alias: Fortress<unknown, unknown> = erased;
+  const aliasedPlugins = alias.plugins;
+  const aliasedCall = alias.call;
+  // @ts-expect-error -- aliasing cannot recover a writable plugin slot
+  alias.plugins = aliasedPlugins;
+  // @ts-expect-error -- aliasing cannot recover a writable call slot
+  alias.call = aliasedCall;
 
   const app = new Hono();
   mountHonoFortress(app, fortress);

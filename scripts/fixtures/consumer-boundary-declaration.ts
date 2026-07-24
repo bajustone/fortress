@@ -88,16 +88,34 @@ export function acceptsBrandedPluginFromBuiltDeclarations(
   });
   const fixtureEcho: ExpectedFixtureCall = callFortress.call.fixtureEcho;
   const fixtureResult: Promise<{ echo: string }> = callFortress.call.fixtureEcho({ message: 'hello' });
+  // @ts-expect-error -- built output must not degrade to Promise<any>
+  const incompatibleFixtureResult: Promise<{ echo: number }> = callFortress.call.fixtureEcho({ message: 'hello' });
   void fixtureEcho;
   void fixtureResult;
+  void incompatibleFixtureResult;
   // @ts-expect-error -- fixtureEcho's built input requires message
   callFortress.call.fixtureEcho({});
+
+  const precisePlugins = fortress.plugins;
+  const preciseCall = fortress.call;
+  // @ts-expect-error -- built declarations expose the created plugin slot as readonly
+  fortress.plugins = precisePlugins;
+  // @ts-expect-error -- built declarations expose the created call slot as readonly
+  fortress.call = preciseCall;
 
   const erased: AnyFortress = fortress;
   // @ts-expect-error -- built declarations must prevent replacing a precise plugin surface
   erased.plugins = {};
   // @ts-expect-error -- built declarations must prevent replacing a precise call surface
   erased.call = {};
+
+  const alias: Fortress<unknown, unknown> = erased;
+  const aliasedPlugins = alias.plugins;
+  const aliasedCall = alias.call;
+  // @ts-expect-error -- aliasing the built facade cannot recover a writable plugin slot
+  alias.plugins = aliasedPlugins;
+  // @ts-expect-error -- aliasing the built facade cannot recover a writable call slot
+  alias.call = aliasedCall;
 
   mountHonoFortress(new Hono(), fortress);
   honoRateLimit(fortress, 'api');
