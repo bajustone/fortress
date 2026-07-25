@@ -20,7 +20,7 @@ import type { ResolvedPrincipal } from './http/principal';
 import type { IamEvent, PermissionCheckEvent } from './iam/iam-service';
 import type { PermissionSyncOptions, PermissionSyncResult } from './iam/permission-sync';
 import type { RouteManifestEntry } from './manifest/route-manifest';
-import type { FortressPlugin, RuntimeFortressPlugin } from './plugin';
+import type { FortressPlugin, PluginMethod, RuntimeFortressPlugin } from './plugin';
 import type { InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
 import { createAuthService } from './auth/auth-service';
@@ -101,6 +101,25 @@ export type {
 
 const MIN_SECRET_BYTES = 32;
 
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+type NoInferCompat<T> = [T][T extends any ? 0 : never];
+type CallableMethodProjection<TMethods extends object> = IsAny<TMethods> extends true
+  ? TMethods
+  : { [K in keyof TMethods]: TMethods[K] extends PluginMethod ? TMethods[K] : never };
+type ValidatePluginMethodSurface<P> = P extends {
+  methods: (...args: infer TArgs) => infer TMethods extends object;
+}
+  ? Omit<P, 'methods'> & { methods: (...args: TArgs) => CallableMethodProjection<TMethods> }
+  : P;
+type ValidateConfiguredPlugins<C extends FortressConfig> = C extends {
+  plugins: infer TPlugins extends readonly RuntimeFortressPlugin[];
+}
+  ? { plugins: { readonly [K in keyof TPlugins]: ValidatePluginMethodSurface<TPlugins[K]> } }
+  : unknown;
+type PluginsFromConfig<C extends FortressConfig> = C extends { plugins: infer TPlugins }
+  ? TPlugins extends readonly RuntimeFortressPlugin[] ? TPlugins : readonly []
+  : C extends { plugins?: undefined } ? readonly [] : readonly RuntimeFortressPlugin[];
+
 /**
  * Build a configured {@link Fortress} instance from a {@link FortressConfig}.
  *
@@ -111,10 +130,9 @@ const MIN_SECRET_BYTES = 32;
 export function createFortress(
   config: FortressConfig & { plugins?: undefined },
 ): Fortress<readonly []>;
-export function createFortress<const T extends readonly RuntimeFortressPlugin[]>(
-  config: FortressConfig & { plugins: T },
-): Fortress<T>;
-export function createFortress(config: FortressConfig): Fortress;
+export function createFortress<const C extends FortressConfig>(
+  config: C & ValidateConfiguredPlugins<NoInferCompat<C>>,
+): Fortress<PluginsFromConfig<C>>;
 export function createFortress<const T extends readonly RuntimeFortressPlugin[]>(
   config: FortressConfig & { plugins?: T },
 ): Fortress<T> {
@@ -187,6 +205,14 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
         throw Errors.badRequest(
           `Plugin "${plugin.name}" route "${routeName}" is not a valid endpoint definition`,
         );
+      }
+      for (const location of ['body', 'query', 'params'] as const) {
+        const schema = endpoint.input?.[location];
+        if (schema?.type && schema.type !== 'object') {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" route "${routeName}" ${location} schema must describe a flat object`,
+          );
+        }
       }
     }
   }

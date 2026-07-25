@@ -62,12 +62,13 @@ type OpenAPIUIRoute = {
   getUI: EndpointDefinition<{}, {}, {}, {}, 'getUI', 'GET', string>;
 };
 type IsAny<T> = 0 extends (1 & T) ? true : false;
+type DisableUIValues<C extends OpenAPIConfig> = C extends unknown
+  ? 'disableUI' extends keyof C ? C['disableUI'] : false
+  : never;
 type OpenAPIRoutes<C extends OpenAPIConfig> = OpenAPIBaseRoutes
   & (IsAny<C> extends true
     ? Record<never, never>
-    : 'disableUI' extends keyof C
-      ? true extends C['disableUI'] ? Record<never, never> : OpenAPIUIRoute
-      : OpenAPIUIRoute);
+    : true extends DisableUIValues<C> ? Record<never, never> : OpenAPIUIRoute);
 /* eslint-enable ts/consistent-type-definitions, ts/no-empty-object-type */
 
 function computeRelativeUrl(fromPath: string, toPath: string): string {

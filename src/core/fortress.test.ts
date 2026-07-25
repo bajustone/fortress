@@ -85,7 +85,7 @@ describe('createFortress', () => {
       meta: { summary: 'Unsafe OAuth', security: ['none'] as const, bearerKind: 'oauth' as const },
       expected: 'OAuth handler \'handleDiscovery\' not found',
     },
-  ])('fails startup for $name routes with non-function handlers', ({ name, path, handler, meta }) => {
+  ])('fails startup for $name plugins with non-function method members', ({ name, path, handler, meta }) => {
     const unsafe = {
       name,
       methods: () => ({ [handler]: 'not callable' }),
@@ -97,7 +97,19 @@ describe('createFortress', () => {
       jwt: { key: 'fortress-test-secret-at-least-32!' },
       database: mockDb,
       plugins: [unsafe] as const,
-    })).toThrow(`Plugin "${name}" route handler "${handler}" must be an own callable method`);
+    })).toThrow(`Plugin "${name}" method "${handler}" must be callable`);
+  });
+
+  it('fails startup for a non-callable methods-only surface', () => {
+    const unsafe = {
+      name: 'methods-only-runtime',
+      methods: () => ({ callable: () => 'ok', metadata: 42 }),
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [unsafe],
+    })).toThrow('Plugin "methods-only-runtime" method "metadata" must be callable');
   });
 
   it('fails startup for route-only and inherited handlers', () => {
@@ -132,6 +144,24 @@ describe('createFortress', () => {
       database: mockDb,
       plugins: [invalidMethod],
     })).toThrow('route "trace" is not a valid endpoint definition');
+
+    const arrayBody = {
+      name: 'array-body-runtime',
+      methods: () => ({ accept: () => ({ ok: true }) }),
+      routes: {
+        accept: {
+          method: 'POST',
+          path: '/array-body',
+          handler: 'accept',
+          input: { body: { type: 'array', items: { type: 'string' } } },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [arrayBody],
+    })).toThrow('route "accept" body schema must describe a flat object');
   });
 
   it('safely supports poisoned own plugin and handler names', async () => {

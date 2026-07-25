@@ -59,8 +59,16 @@ describe('coerceBySchema', () => {
 });
 
 describe('validateRequest', () => {
-  it('no-op when input is undefined', async () => {
-    await expect(validateRequest(undefined, {})).resolves.toEqual({});
+  it('is a no-op for fully contractless endpoints', async () => {
+    await expect(validateRequest(undefined, {
+      body: { legacy: true },
+      query: { q: 'raw' },
+      params: { id: 'raw' },
+    })).resolves.toEqual({
+      body: { legacy: true },
+      query: { q: 'raw' },
+      params: { id: 'raw' },
+    });
   });
 
   it('no-op when no schemas are set', async () => {
@@ -173,7 +181,7 @@ describe('validateRequest', () => {
     }
   });
 
-  it('returns transformed Standard Schema outputs', async () => {
+  it('returns transformed Standard Schema outputs and drops undeclared locations', async () => {
     const bodySchema = {
       '~standard': {
         version: 1 as const,
@@ -184,8 +192,27 @@ describe('validateRequest', () => {
       },
     };
 
-    await expect(validateRequest({ bodySchema }, { body: { raw: 'hello' } })).resolves.toEqual({
+    await expect(validateRequest({ bodySchema }, {
+      body: { raw: 'hello' },
+      query: { normalized: 'QUERY' },
+      params: { normalized: 'PARAMS' },
+    })).resolves.toEqual({
       body: { normalized: 'HELLO' },
+    });
+  });
+
+  it('rejects a declared location whose validator returns a non-flat value', async () => {
+    const bodySchema = {
+      '~standard': {
+        version: 1 as const,
+        vendor: 'test',
+        validate: () => ({ value: ['not', 'flat'] }),
+      },
+    };
+
+    await expect(validateRequest({ bodySchema }, { body: {} })).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      statusCode: 422,
     });
   });
 

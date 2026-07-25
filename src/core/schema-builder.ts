@@ -8,6 +8,37 @@ import { isHttpMethod } from './endpoint';
 /** Shorthand for the Standard Schema inferred output type. */
 type InferSchema<T extends StandardSchemaV1> = StandardSchemaV1.InferOutput<T>;
 
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+type IsUnknown<T> = IsAny<T> extends true ? false : unknown extends T ? [keyof T] extends [never] ? true : false : false;
+type NoInferCompat<T> = [T][T extends any ? 0 : never];
+type IsFlatInputObject<T> = IsAny<T> extends true
+  ? true
+  : IsUnknown<T> extends true
+    ? true
+    : [T] extends [object]
+        ? [Extract<T, readonly unknown[] | ((...args: any[]) => any)>] extends [never] ? true : false
+        : false;
+
+/** Compile-time diagnostic for request locations incompatible with the flat call contract. */
+interface FlatEndpointInputRequired {
+  readonly 'fortress:input-error': 'endpoint body/query/params schemas must accept and return a flat object';
+}
+
+type FlatInputSchemaConstraint<T extends StandardSchemaV1>
+  = IsFlatInputObject<StandardSchemaV1.InferInput<T>> extends true
+    ? IsFlatInputObject<StandardSchemaV1.InferOutput<T>> extends true
+      ? unknown
+      : FlatEndpointInputRequired
+    : FlatEndpointInputRequired;
+
+const FLAT_INPUT_JSON_SCHEMA_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'array', 'object', 'null']);
+
+function assertFlatInputSchema(location: 'body' | 'query' | 'params', schema: StandardSchemaV1): void {
+  const type = (schema as StandardSchemaV1 & { type?: unknown }).type;
+  if (typeof type === 'string' && FLAT_INPUT_JSON_SCHEMA_TYPES.has(type) && type !== 'object')
+    throw new TypeError(`Endpoint ${location} schema must describe a flat object`);
+}
+
 /** Distribute a union into an intersection — `A | B` → `A & B`. Used by {@link intersect}. */
 type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends (k: infer I) => void ? I : never;
 
@@ -776,24 +807,27 @@ export class EndpointBuilder<
   }
 
   body<T extends StandardSchemaV1>(
-    schema: T,
+    schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
   ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
+    assertFlatInputSchema('body', schema);
     const next = this.clone();
     next._body = schema;
     return next as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath>;
   }
 
   query<T extends StandardSchemaV1>(
-    schema: T,
+    schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
   ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath> {
+    assertFlatInputSchema('query', schema);
     const next = this.clone();
     next._query = schema;
     return next as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath>;
   }
 
   params<T extends StandardSchemaV1>(
-    schema: T,
+    schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
   ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath> {
+    assertFlatInputSchema('params', schema);
     const next = this.clone();
     next._params = schema;
     return next as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath>;

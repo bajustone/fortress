@@ -140,7 +140,13 @@ ISO string) to the declared success response.
 
 Migrating a v1 plugin:
 
-- Ensure each route's handler exists on the object returned by `methods()`.
+- Ensure every own member returned by `methods()` is callable. This is enforced
+  for direct plugin literals as well as `definePlugin()` definitions and is
+  validated again at startup for JavaScript or widened configurations.
+- Request body/query/params schemas must accept and return flat, non-array
+  objects because dispatch merges declared locations into one handler input.
+  Once any input contract is declared, undeclared query/params locations are
+  discarded rather than being allowed to override validated fields.
 - Ensure route response schemas describe what the method actually returns —
   in v1 several built-ins had drifted (api-key's `id` was documented as an
   integer but returned as a string; webauthn's `verifyAuthentication`

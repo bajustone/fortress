@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 import { definePlugin } from '../plugin';
-import { endpoint, nullType } from '../schema-builder';
+import { endpoint, nullType, obj, str } from '../schema-builder';
 
 const SECRET = 'fortress-test-secret-at-least-32-bytes-long!';
 
@@ -209,6 +209,7 @@ describe('fortress.handleRequest', () => {
       name: 'response-shapes',
       methods: () => ({
         explicitNull: () => null,
+        htmlAccepted: () => '<!DOCTYPE html><title>Accepted</title>',
         noContent: () => undefined,
       }),
       routes: {
@@ -216,6 +217,11 @@ describe('fortress.handleRequest', () => {
           .security('none')
           .response(200, 'Explicit null', nullType())
           .handler('explicitNull')
+          .build(),
+        htmlAccepted: endpoint('GET', '/response-shapes/html')
+          .security('none')
+          .response(202, 'Accepted HTML', str())
+          .handler('htmlAccepted')
           .build(),
         noContent: endpoint('GET', '/response-shapes/no-content')
           .security('none')
@@ -237,6 +243,19 @@ describe('fortress.handleRequest', () => {
       const response = await local.handleRequest(new Request('http://localhost/response-shapes/null'));
       expect(response.status).toBe(200);
       expect(await response.json()).toBeNull();
+    });
+
+    it('uses the declared success status for HTML responses', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [responseShapes] as const,
+      });
+
+      const response = await local.handleRequest(new Request('http://localhost/response-shapes/html'));
+      expect(response.status).toBe(202);
+      expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(await response.text()).toBe('<!DOCTYPE html><title>Accepted</title>');
     });
 
     it('emits bodyless 204 responses', async () => {
@@ -439,6 +458,36 @@ describe('fortress.handleRequest', () => {
 
       expect(res.status).toBe(200);
       expect(received).toEqual({ message: 'HELLO', limit: 2, count: 3, enabled: true });
+    });
+
+    it('does not merge undeclared query or params over a validated body', async () => {
+      let received: { role: string } | undefined;
+      const plugin = definePlugin({
+        name: 'declared-input-only',
+        methods: () => ({
+          accept: (input: { role: string }) => {
+            received = input;
+            return { ok: 'yes' };
+          },
+        }),
+        routes: {
+          accept: endpoint('POST', '/declared-input-only/:role')
+            .security('none')
+            .body(obj({ role: str() }, 'role'))
+            .response(200, 'Accepted', obj({ ok: str() }))
+            .handler('accept')
+            .build(),
+        },
+      });
+      const f = createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins: [plugin] });
+      const res = await f.handleRequest(new Request('http://localhost/declared-input-only/path?role=query', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'member' }),
+      }));
+
+      expect(res.status).toBe(200);
+      expect(received).toEqual({ role: 'member' });
     });
 
     it('passes request + meta but leaves userId/claims undefined on public routes', async () => {

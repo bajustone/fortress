@@ -234,6 +234,36 @@ describe('protect()', () => {
     expect(await res.json()).toEqual({ code: 'NOT_FOUND', message: 'no thing', statusCode: 404 });
   });
 
+  it('drops undeclared query and params before building protected input', async () => {
+    const ep = endpoint('POST', '/host/declared-only/:role')
+      .security('none')
+      .body(obj({ role: str() }, 'role'))
+      .response(200, 'OK', obj({ role: str() }, 'role'))
+      .handler('declaredOnly')
+      .build();
+    const fortress = createFortress({
+      database: createTestAdapter(),
+      jwt: { key: secret },
+      csrf: { enabled: false },
+      routes: { declaredOnly: ep },
+    });
+    let seen: unknown;
+    const handler = protect(fortress, ep, (ctx) => {
+      seen = { input: ctx.input, query: ctx.query, params: ctx.params };
+      return ctx.input;
+    });
+
+    const response = await handler(new Request('http://localhost/host/declared-only/path?role=query', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'member' }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ role: 'member' });
+    expect(seen).toEqual({ input: { role: 'member' }, query: {}, params: {} });
+  });
+
   it('narrows ctx.body to non-optional T when a body schema is declared (type-level)', () => {
     const withBody = endpoint('POST', '/things')
       .body(obj({ name: str() }, 'name'))

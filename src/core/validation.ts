@@ -128,7 +128,10 @@ export async function validateRequest(
     return data;
 
   const allIssues: Array<{ path?: unknown; message: string; location: string }> = [];
-  const validated: ValidatedRequestData = { ...data };
+  // Once an endpoint declares an input contract, only declared locations may
+  // reach dispatch. Otherwise undeclared query/params values could overwrite
+  // a validated body field when the flat handler input is assembled.
+  const validated: ValidatedRequestData = {};
 
   if (input.bodySchema || input.body) {
     const result = await validateSchema(input.bodySchema ?? input.body!, data.body, 'body');
@@ -173,6 +176,14 @@ async function validateSchema(
         message: issue.message,
         location,
       })),
+    };
+  }
+  if (result.value === null || typeof result.value !== 'object' || Array.isArray(result.value)) {
+    return {
+      issues: [{
+        message: `Endpoint ${location} schemas must validate to a flat object`,
+        location,
+      }],
     };
   }
   return { issues: [], value: result.value };

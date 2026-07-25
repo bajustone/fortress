@@ -459,6 +459,12 @@ describe('endpoint builder', () => {
       handler: 'healthCheck',
     });
     expect(() => endpoint('TRACE' as any, '/trace')).toThrow('Unsupported endpoint method: TRACE');
+    expect(() => endpoint('POST', '/primitive').body(str() as any)).toThrow(
+      'Endpoint body schema must describe a flat object',
+    );
+    expect(() => endpoint('POST', '/array').body(arr(str()) as any)).toThrow(
+      'Endpoint body schema must describe a flat object',
+    );
   });
 
   it('builds a full endpoint with all fields', () => {

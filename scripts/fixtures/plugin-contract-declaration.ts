@@ -20,7 +20,7 @@ import type { TenancyConfig } from '@bajustone/fortress/plugins/tenancy';
 import type { twoFactor } from '@bajustone/fortress/plugins/two-factor';
 import type { webauthn } from '@bajustone/fortress/plugins/webauthn';
 import type { webhook } from '@bajustone/fortress/plugins/webhook';
-import { createFortress, defineEndpoints, definePlugin, endpoint, obj, str } from '@bajustone/fortress';
+import { arr, createFortress, defineEndpoints, definePlugin, endpoint, obj, str } from '@bajustone/fortress';
 import { apiKey } from '@bajustone/fortress/plugins/api-key';
 import { oauth } from '@bajustone/fortress/plugins/oauth';
 import { openapi } from '@bajustone/fortress/plugins/openapi';
@@ -221,12 +221,35 @@ definePlugin({
   methods: () => ({ value: 1 }),
 });
 
+endpoint('POST', '/built-primitive-body').body(
+  // @ts-expect-error published endpoint bodies must be flat objects
+  str(),
+);
+endpoint('POST', '/built-array-body').body(
+  // @ts-expect-error published endpoint bodies cannot be arrays
+  arr(str()),
+);
+
 interface BuiltConcreteMethods { run: () => void }
 // @ts-expect-error concrete FortressPlugin contracts require methods
 const _missingBuiltMethods: FortressPlugin<'built-concrete', BuiltConcreteMethods> = { name: 'built-concrete' };
 void _missingBuiltMethods;
 
 export function declarationContract(database: DatabaseAdapter, dynamicName: string): void {
+  const directPlugin = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [{ name: 'built-direct-callable', methods: () => ({ ping: () => 'pong' }) }] as const,
+  });
+  const directResult: string = directPlugin.plugins['built-direct-callable'].ping();
+  void directResult;
+  const invalidDirectPlugin = {
+    name: 'built-direct-non-callable',
+    methods: () => ({ ping: () => 'pong', metadata: 42 }),
+  } as const;
+  // @ts-expect-error direct published plugin surfaces must contain only functions
+  createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [invalidDirectPlugin] as const });
+
   const noPlugins = createFortress({ database, jwt: { key: 'x'.repeat(32) } });
   // @ts-expect-error omitted plugins expose no arbitrary static keys
   void noPlugins.plugins.arbitrary;
@@ -316,6 +339,17 @@ export function declarationContract(database: DatabaseAdapter, dynamicName: stri
   const optionalFalseConfig: { disableUI?: false } = {};
   const optionalFalseUi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(optionalFalseConfig)] as const });
   void optionalFalseUi.call.plugins.openapi.getUI;
+  const checkUnsafeOpenapiUnion = (config: { disableUI: true } | { title: string }): void => {
+    const unionOpenapi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(config)] as const });
+    // @ts-expect-error one published config branch disables the UI route
+    void unionOpenapi.call.plugins.openapi.getUI;
+  };
+  const checkSafeOpenapiUnion = (config: { disableUI?: false } | { title: string }): void => {
+    const unionOpenapi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi(config)] as const });
+    void unionOpenapi.call.plugins.openapi.getUI;
+  };
+  void checkUnsafeOpenapiUnion;
+  void checkSafeOpenapiUnion;
   const noUi = createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [openapi({ disableUI: true })] as const });
   // @ts-expect-error literal disableUI removes getUI
   void noUi.call.plugins.openapi.getUI;

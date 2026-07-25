@@ -189,7 +189,7 @@ async function dispatchPlugin(
   // Allow handlers to opt into HTML by returning a string starting with `<!`.
   if (typeof result === 'string' && result.trimStart().startsWith('<!')) {
     return new Response(result, {
-      status: 200,
+      status: endpointSuccessStatus(endpoint),
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   }

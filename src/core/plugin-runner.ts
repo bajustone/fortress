@@ -27,7 +27,16 @@ export function processPlugins(
   const result: Record<string, Record<string, Function>> = Object.create(null) as Record<string, Record<string, Function>>;
 
   for (const plugin of plugins) {
-    const methods = plugin.methods?.(ctx) ?? Object.create(null) as object;
+    const methods = plugin.methods ? plugin.methods(ctx) : Object.create(null) as object;
+    if (methods === null || typeof methods !== 'object')
+      throw Errors.badRequest(`Plugin "${plugin.name}" methods factory must return an object`);
+    for (const key of Reflect.ownKeys(methods)) {
+      if (typeof Reflect.get(methods, key) !== 'function') {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" method "${String(key)}" must be callable`,
+        );
+      }
+    }
     // Keep each surface's own properties and `this` identity intact. Dispatch
     // performs own-property checks, so inherited names can never become route
     // handlers accidentally.

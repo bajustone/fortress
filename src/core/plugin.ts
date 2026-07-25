@@ -4,8 +4,11 @@ import type { AuthService } from './auth/auth-service';
 import type { FortressConfig } from './config';
 import type {
   AnyEndpointDefinition,
+  InferEndpointBody,
   InferEndpointCallInput,
   InferEndpointHandler,
+  InferEndpointParams,
+  InferEndpointQuery,
   InferEndpointSuccessResponse,
 } from './endpoint';
 import type { PluginRequestContext } from './http/plugin-middleware';
@@ -149,6 +152,21 @@ export type JsonOf<T> = T extends Date ? string
       : T extends object ? { [K in keyof T]: JsonOf<T[K]> }
         : T;
 
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+type IsUnknown<T> = IsAny<T> extends true ? false : unknown extends T ? [keyof T] extends [never] ? true : false : false;
+type IsFlatInputObject<T> = IsAny<T> extends true
+  ? true
+  : IsUnknown<T> extends true
+    ? true
+    : [T] extends [object]
+        ? [Extract<T, readonly unknown[] | ((...args: any[]) => any)>] extends [never] ? true : false
+        : false;
+type EndpointInputCompatible<E> = [
+  IsFlatInputObject<InferEndpointBody<E>>,
+  IsFlatInputObject<InferEndpointQuery<E>>,
+  IsFlatInputObject<InferEndpointParams<E>>,
+] extends [true, true, true] ? true : false;
+
 type ContainsNonJsonValue<T> = T extends Date ? false
   : T extends ((...args: any[]) => any) | bigint | symbol | undefined ? true
     : T extends readonly (infer U)[]
@@ -196,6 +214,11 @@ export interface RouteHandlerMissing<THandler extends string> {
   readonly 'fortress:route-error': `route handler '${THandler}' is not a plugin method — declare it in methods()`;
 }
 
+/** Compile-time diagnostic: a route declares input incompatible with flat dispatch. */
+export interface RouteInputNotFlat<THandler extends string> {
+  readonly 'fortress:route-error': `route handler '${THandler}' requires body/query/params schemas that accept and return flat objects`;
+}
+
 /** Compile-time diagnostic: a route's handler method does not match the endpoint's I/O. */
 export interface RouteHandlerIncompatible<THandler extends string> {
   readonly 'fortress:route-error': `plugin method '${THandler}' does not accept this endpoint's input or return its declared success response`;
@@ -217,13 +240,15 @@ type ValidatePluginRoute<K extends string, E, TMethods> = E extends AnyEndpointD
         ? H extends keyof TMethods
           ? E extends { meta: { bearerKind: 'oauth' } | { dispatchKind: 'oauth' } }
             ? E
-            : HandlerInvocationCompatible<TMethods[H], E> extends true
-              ? ContractlessEndpoint<E> extends true
-                ? E
-                : HandlerReturnCompatible<TMethods[H], E> extends true
+            : EndpointInputCompatible<E> extends true
+              ? HandlerInvocationCompatible<TMethods[H], E> extends true
+                ? ContractlessEndpoint<E> extends true
                   ? E
-                  : RouteHandlerIncompatible<H>
-              : RouteHandlerIncompatible<H>
+                  : HandlerReturnCompatible<TMethods[H], E> extends true
+                    ? E
+                    : RouteHandlerIncompatible<H>
+                : RouteHandlerIncompatible<H>
+              : RouteInputNotFlat<H>
           : RouteHandlerMissing<H>
         : RouteHandlerKeyMismatch<K, H>
     : never
