@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.consumer-base.json",
+  "compilerOptions": {
+    "baseUrl": "..",
+    "paths": {
+      "@bajustone/fortress": ["src/index.ts"],
+      "@bajustone/fortress/drizzle": ["src/drizzle/index.ts"],
+      "@bajustone/fortress/express": ["src/express/index.ts"],
+      "@bajustone/fortress/hono": ["src/hono/index.ts"],
+      "@bajustone/fortress/sveltekit": ["src/sveltekit/index.ts"],
+      "@bajustone/fortress/testing": ["src/testing/index.ts"],
+      "@bajustone/fortress/plugins/*": ["src/plugins/*/index.ts"],
+      "@bajustone/fortress/plugins/rate-limit/*": ["src/plugins/rate-limit/*.ts"]
+    }
+  }
+}

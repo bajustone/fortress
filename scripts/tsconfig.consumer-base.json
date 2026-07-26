@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "noEmit": true
+  },
+  "include": [
+    "fixtures/call-surface-declaration.ts",
+    "fixtures/consumer-boundary-declaration.ts",
+    "fixtures/error-response-declaration.ts",
+    "fixtures/express-5-declaration.ts",
+    "fixtures/plugin-contract-declaration.ts",
+    "fixtures/readme-hono-adapter-declaration.ts",
+    "fixtures/readme-hono-declaration.ts"
+  ]
+}
