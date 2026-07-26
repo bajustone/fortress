@@ -22,8 +22,11 @@ import type { FortressHttpRuntime } from '../core/capabilities';
 import type { ExpressMiddleware, ExpressNextFunction, ExpressRequest, ExpressResponse } from './middleware';
 import { buildRouteTable, matchRoute } from '../core/http/match';
 
+// Model only the capability used below. A single-handler signature is
+// compatible with Express 5's overloaded `Application.use` and with small
+// Express-compatible hosts, without making Express types a public dependency.
 interface ExpressApp {
-  use: (path: string | ExpressMiddleware, handler?: ExpressMiddleware) => void;
+  use: (handler: ExpressMiddleware) => void;
 }
 
 /** Options for {@link mountFortress}. */

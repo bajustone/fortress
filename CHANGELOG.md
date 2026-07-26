@@ -9,6 +9,9 @@
 - **Legacy call/plugin helpers are removed.** `getPluginMethods`, `CallableForEndpoints`, and `InferPluginCallMap` no longer ship; use inferred `fortress.plugins`, the namespaced `fortress.call` tree, and `resolvePlugin(name, validator)` for dynamic names.
 - **Built-in route capabilities reflect configuration.** OAuth consent calls exist only with literal `enableConsentApi: true`; OpenAPI `getUI` exists unless UI is literally disabled, without promising callables for widened configurations that may omit them.
 
+### Fixed
+- Accept Express 5 applications in `mountFortress` without casts while retaining support for lightweight Express-compatible hosts.
+
 ## [1.0.2] - 2026-07-14
 
 ### Fixed

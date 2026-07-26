@@ -12,6 +12,7 @@
     "fixtures/call-surface-declaration.ts",
     "fixtures/consumer-boundary-declaration.ts",
     "fixtures/error-response-declaration.ts",
+    "fixtures/express-5-declaration.ts",
     "fixtures/plugin-contract-declaration.ts"
   ]
 }

@@ -1,6 +1,6 @@
 import type { ErrorRequestHandler, Express, RequestHandler } from 'express';
 import type { PluginRequestContext } from '../core/http/plugin-middleware';
-import type { ExpressNextFunction, ExpressRequest, ExpressResponse } from './middleware';
+import type { ExpressMiddleware, ExpressNextFunction, ExpressRequest, ExpressResponse } from './middleware';
 import { once } from 'node:events';
 import express from 'express';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +9,7 @@ import { createFortress } from '../core/fortress';
 import { assertSuccess } from '../core/types';
 import { rateLimit } from '../plugins/rate-limit';
 import { createTestAdapter } from '../testing';
-import { expressToWebRequest } from './handle';
+import { expressToWebRequest, mountFortress } from './handle';
 import { createAuthMiddleware, createCsrfMiddleware, createErrorHandler, createExpressMiddleware, createRbacMiddleware, getClaims, getDb, getUserId } from './middleware';
 
 const SECRET = 'express-test-secret-32-chars!!!x';
@@ -84,6 +84,24 @@ describe('express adapter', () => {
     expect(typeof csrfMiddleware).toBe('function');
     expect(typeof rbacMiddleware).toBe('function');
     expect(typeof errorHandler).toBe('function');
+  });
+
+  it('mounts into a lightweight Express-compatible app', () => {
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+    });
+    const registeredMiddleware: ExpressMiddleware[] = [];
+    const app = {
+      use(middleware: ExpressMiddleware): void {
+        registeredMiddleware.push(middleware);
+      },
+    };
+
+    mountFortress(app, fortress);
+
+    expect(registeredMiddleware).toHaveLength(1);
+    expect(registeredMiddleware[0]).toBeTypeOf('function');
   });
 
   it('auth middleware rejects missing Authorization header', async () => {

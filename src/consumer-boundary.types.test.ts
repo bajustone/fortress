@@ -14,6 +14,7 @@ import type { CallOptions } from './core/http/call';
 import type { FortressPlugin } from './core/plugin';
 import type { ApiKeyMethods } from './plugins/api-key';
 import type { SvelteKitRequestEvent } from './sveltekit/types';
+import express from 'express';
 import { Hono } from 'hono';
 import { describe, expectTypeOf, it } from 'vitest';
 import {
@@ -161,6 +162,8 @@ function acceptsBrandedPluginAtEverySourceBoundary(
   honoProtectedRoute(fortress, 'login', () => ({ ok: true }));
   honoRateLimit(fortress, 'api');
 
+  const express5App = express();
+  mountExpressFortress(express5App, fortress);
   mountExpressFortress(expressApp, fortress);
   createExpressMiddleware(fortress);
   createExpressAuthMiddleware(fortress);
