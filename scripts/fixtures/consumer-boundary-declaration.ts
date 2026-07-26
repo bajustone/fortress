@@ -52,8 +52,8 @@ type ExpectedFixtureCall = (
   options?: CallOptions,
 ) => Promise<{ echo: string }>;
 
-/** Compiled against package exports after `tsup` emits declarations. */
-export function acceptsBrandedPluginFromBuiltDeclarations(
+/** Compiled unchanged against public source entrypoints and package exports. */
+export function acceptsBrandedPluginFromConsumerContract(
   database: DatabaseAdapter,
   expressApp: ExpressAppBoundary,
   event: SvelteKitRequestEvent,
@@ -118,23 +118,23 @@ export function acceptsBrandedPluginFromBuiltDeclarations(
 
   const precisePlugins = fortress.plugins;
   const preciseCall = fortress.call;
-  // @ts-expect-error -- built declarations expose the created plugin slot as readonly
+  // @ts-expect-error -- public declarations expose the created plugin slot as readonly
   fortress.plugins = precisePlugins;
-  // @ts-expect-error -- built declarations expose the created call slot as readonly
+  // @ts-expect-error -- public declarations expose the created call slot as readonly
   fortress.call = preciseCall;
 
   const erased: Fortress = fortress;
-  // @ts-expect-error -- built declarations must prevent replacing a precise plugin surface
+  // @ts-expect-error -- public declarations must prevent replacing a precise plugin surface
   erased.plugins = {};
-  // @ts-expect-error -- built declarations must prevent replacing a precise call surface
+  // @ts-expect-error -- public declarations must prevent replacing a precise call surface
   erased.call = preciseCall;
 
   const alias: Fortress = erased;
   const aliasedPlugins = alias.plugins;
   const aliasedCall = alias.call;
-  // @ts-expect-error -- aliasing the built facade cannot recover a writable plugin slot
+  // @ts-expect-error -- aliasing the public facade cannot recover a writable plugin slot
   alias.plugins = aliasedPlugins;
-  // @ts-expect-error -- aliasing the built facade cannot recover a writable call slot
+  // @ts-expect-error -- aliasing the public facade cannot recover a writable call slot
   alias.call = aliasedCall;
 
   // Every concrete instance satisfies every runtime capability interface —
@@ -159,6 +159,7 @@ export function acceptsBrandedPluginFromBuiltDeclarations(
   // @ts-expect-error -- mount boundary requires the manifest it actually reads
   mountHonoFortress(new Hono(), { handleRequest: fortress.handleRequest });
   honoRateLimit(fortress, 'api');
+  mountExpressFortress(expressApp, fortress);
   mountExpressFortress(expressApp, { manifest: fortress.manifest, handleRequest: fortress.handleRequest });
   expressRateLimit(fortress, 'api');
   createSvelteKitHandle(fortress);

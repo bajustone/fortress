@@ -9,8 +9,8 @@ import {
 import express from 'express';
 
 /**
- * Compiles the README Express quickstart against package exports after the
- * build emits declarations. Keep this aligned with README.md's Express block.
+ * Compiles the README Express quickstart against public source entrypoints and
+ * generated package declarations. Keep this aligned with README.md's Express block.
  */
 export function express5QuickstartContract(database: DatabaseAdapter): void {
   const fortress = createFortress({
@@ -33,7 +33,7 @@ export function express5QuickstartContract(database: DatabaseAdapter): void {
   app.use(errorHandler);
 }
 
-/** Package declarations intentionally retain support for lightweight hosts. */
+/** Both public surfaces intentionally retain support for lightweight hosts. */
 export function lightweightExpressAppContract(database: DatabaseAdapter): void {
   const fortress = createFortress({
     database,

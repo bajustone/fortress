@@ -79,6 +79,26 @@ export type BuiltInUnknownMethodContracts = [
   Assert<Lacks<Surface<typeof webhook>, 'webhook', 'missing'>>,
 ];
 
+type AllBuiltInPlugins = readonly [
+  ReturnType<typeof accountLockout>,
+  ReturnType<typeof admin>,
+  ReturnType<typeof apiKey>,
+  ReturnType<typeof auditLog>,
+  ReturnType<typeof dataIsolation>,
+  ReturnType<typeof emailVerification>,
+  ReturnType<typeof magicLink>,
+  ReturnType<typeof oauth>,
+  ReturnType<typeof openapi>,
+  ReturnType<typeof rateLimit>,
+  ReturnType<typeof socialLogin>,
+  ReturnType<typeof tenancy>,
+  ReturnType<typeof twoFactor>,
+  ReturnType<typeof webauthn>,
+  ReturnType<typeof webhook>,
+];
+
+declare const allBuiltInPlugins: AllBuiltInPlugins;
+
 const builtRoutes = defineEndpoints({
   builtGreeting: endpoint('POST', '/built/greeting')
     .body(obj({ name: str() }, 'name'))
@@ -378,6 +398,31 @@ export function declarationContract(database: DatabaseAdapter, dynamicName: stri
   // @ts-expect-error direct published plugin surfaces must contain only functions
   createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [invalidDirectPlugin] as const });
 
+  const allBuiltIns = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: allBuiltInPlugins,
+  });
+  void allBuiltIns.plugins['account-lockout'].getLockoutStatus;
+  void allBuiltIns.plugins.admin.listUsers;
+  void allBuiltIns.plugins['api-key'].createKey;
+  void allBuiltIns.plugins['audit-log'].getAuditLog;
+  void allBuiltIns.plugins['data-isolation'].withoutScope;
+  void allBuiltIns.plugins['email-verification'].verify;
+  void allBuiltIns.plugins['magic-link'].sendMagicLink;
+  void allBuiltIns.plugins.oauth.createClient;
+  void allBuiltIns.plugins.openapi.generateSpec;
+  void allBuiltIns.plugins['rate-limit'].check;
+  void allBuiltIns.plugins['social-login'].getProviders;
+  void allBuiltIns.plugins.tenancy.createTenant;
+  void allBuiltIns.plugins['two-factor'].enable;
+  void allBuiltIns.plugins.webauthn.generateRegistrationOptions;
+  void allBuiltIns.plugins.webhook.emit;
+  // @ts-expect-error the combined built-in tuple has no arbitrary plugin keys
+  void allBuiltIns.plugins.missing;
+  // @ts-expect-error known built-ins have no arbitrary methods
+  void allBuiltIns.plugins.oauth.missing;
+
   const noPlugins = createFortress({ database, jwt: { key: 'x'.repeat(32) } });
   // @ts-expect-error omitted plugins expose no arbitrary static keys
   void noPlugins.plugins.arbitrary;
@@ -436,22 +481,23 @@ export function declarationContract(database: DatabaseAdapter, dynamicName: stri
   });
   // @ts-expect-error omitted OAuth consent API contributes no consent callable
   void optionalRoutes.call.plugins.oauth.handleGetFlow;
-  // The standalone enabled definition proves the positive conditional route
-  // projection without introducing a duplicate runtime plugin name.
-  type EnabledConsentCalls = import('@bajustone/fortress').PluginCallTree<readonly [typeof _enabledOAuth]>;
-  const enabledConsentCalls = (null as unknown as EnabledConsentCalls).oauth;
+  const enabledOAuth = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [_enabledOAuth] as const,
+  });
   const flow: Promise<{
     flowId: string;
     client: { clientId: string; name: string };
     redirectUri: string;
     scopes: string[];
     state: string;
-  }> = enabledConsentCalls.handleGetFlow({ flowId: 'flow' });
-  const approved: Promise<{ redirectUrl: string }> = enabledConsentCalls.handleApproveFlow({ flowId: 'flow' });
+  }> = enabledOAuth.call.plugins.oauth.handleGetFlow({ flowId: 'flow' });
+  const approved: Promise<{ redirectUrl: string }> = enabledOAuth.call.plugins.oauth.handleApproveFlow({ flowId: 'flow' });
   void flow;
   void approved;
   // @ts-expect-error enabled consent calls require flowId
-  enabledConsentCalls.handleGetFlow({});
+  enabledOAuth.call.plugins.oauth.handleGetFlow({});
   // @ts-expect-error bearer lookup remains implementation-private
   optionalRoutes.plugins.oauth._lookupBearer('token');
   void optionalRoutes.call.plugins.openapi.getUI;

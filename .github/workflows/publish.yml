@@ -31,8 +31,7 @@ jobs:
       - run: bun run typecheck:examples
       - run: bun run test
       - run: bun run test:integration
-      - run: bun run build
-      - run: bun run check:declarations
+      - run: bun run check:consumer-contract
       - run: bun run check:testing-esm
 
   publish-jsr:
