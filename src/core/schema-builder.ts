@@ -5,18 +5,24 @@ import { fromJSONSchema } from '@bajustone/fetcher/openapi';
 import { date as fDate, datetime as fDatetime, email as fEmail, time as fTime, url as fUrl, uuid as fUuid } from '@bajustone/fetcher/schema';
 import { isHttpMethod } from './endpoint';
 
-/** Shorthand for the Standard Schema inferred output type. */
+/** Shorthands for the Standard Schema wire-input and validated-output types. */
+type InferSchemaInput<T extends StandardSchemaV1> = StandardSchemaV1.InferInput<T>;
 type InferSchema<T extends StandardSchemaV1> = StandardSchemaV1.InferOutput<T>;
 
 type IsAny<T> = 0 extends (1 & T) ? true : false;
 type IsUnknown<T> = IsAny<T> extends true ? false : unknown extends T ? [keyof T] extends [never] ? true : false : false;
 type NoInferCompat<T> = [T][T extends any ? 0 : never];
+type FunctionPropertyKeys<T> = {
+  [K in keyof T]-?: Exclude<T[K], undefined> extends (...args: any[]) => any ? K : never;
+}[keyof T];
 type IsFlatInputObject<T> = IsAny<T> extends true
   ? true
   : IsUnknown<T> extends true
     ? true
     : [T] extends [object]
-        ? [Extract<T, readonly unknown[] | ((...args: any[]) => any)>] extends [never] ? true : false
+        ? [Extract<T, Date | readonly unknown[] | ((...args: any[]) => any)>] extends [never]
+            ? [FunctionPropertyKeys<T>] extends [never] ? true : false
+            : false
         : false;
 
 /** Compile-time diagnostic for request locations incompatible with the flat call contract. */
@@ -732,6 +738,9 @@ export class EndpointBuilder<
   THandler extends string = string,
   TMethod extends HttpMethod = HttpMethod,
   TPath extends string = string,
+  TBodyInput = TBody,
+  TQueryInput = TQuery,
+  TParamsInput = TParams,
 > {
   private _method: TMethod;
   private _path: TPath;
@@ -757,8 +766,8 @@ export class EndpointBuilder<
    * This prevents an aliased builder from mutating the runtime definition
    * behind a previously inferred body/query/params/response/handler type.
    */
-  private clone(): EndpointBuilder<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
-    const next = new EndpointBuilder<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath>(
+  private clone(): EndpointBuilder<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
+    const next = new EndpointBuilder<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>(
       this._method,
       this._path,
     );
@@ -808,29 +817,29 @@ export class EndpointBuilder<
 
   body<T extends StandardSchemaV1>(
     schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
-  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
+  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath, InferSchemaInput<T>, TQueryInput, TParamsInput> {
     assertFlatInputSchema('body', schema);
     const next = this.clone();
     next._body = schema;
-    return next as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath>;
+    return next as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath, InferSchemaInput<T>, TQueryInput, TParamsInput>;
   }
 
   query<T extends StandardSchemaV1>(
     schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
-  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath> {
+  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, InferSchemaInput<T>, TParamsInput> {
     assertFlatInputSchema('query', schema);
     const next = this.clone();
     next._query = schema;
-    return next as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath>;
+    return next as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, InferSchemaInput<T>, TParamsInput>;
   }
 
   params<T extends StandardSchemaV1>(
     schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
-  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath> {
+  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, InferSchemaInput<T>> {
     assertFlatInputSchema('params', schema);
     const next = this.clone();
     next._params = schema;
-    return next as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath>;
+    return next as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, InferSchemaInput<T>>;
   }
 
   /**
@@ -847,23 +856,23 @@ export class EndpointBuilder<
     status: S,
     description: string,
     schema: T,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }, THandler, TMethod, TPath>;
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>;
   response<S extends number>(
     status: S,
     description: string,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }, THandler, TMethod, TPath>;
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>;
   response<S extends number>(
     status: S,
     description: string,
     schema?: StandardSchemaV1 | JSONSchema,
-  ): EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath> {
+  ): EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
     const next = this.clone();
     const stored: EndpointResponse = { description };
     if (schema !== undefined) {
       stored.schema = isStandardSchema(schema) ? extractJsonSchema(schema as FortressSchema<any>) : schema as JSONSchema;
     }
     next._responses[status] = stored;
-    return next as unknown as EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath>;
+    return next as unknown as EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>;
   }
 
   /**
@@ -886,7 +895,7 @@ export class EndpointBuilder<
   errorResponse<S extends number>(
     status: S,
     description: string,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }, THandler, TMethod, TPath> {
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
     return this.response(status, description, ErrorEnvelope);
   }
 
@@ -895,14 +904,14 @@ export class EndpointBuilder<
    * captured in the definition's `THandler` phantom so `definePlugin` can
    * statically verify the handler exists and matches the endpoint's I/O.
    */
-  handler<H extends string>(name: H): EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath> {
+  handler<H extends string>(name: H): EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
     const next = this.clone();
     next._handler = name;
-    return next as unknown as EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath>;
+    return next as unknown as EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>;
   }
 
-  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath> {
-    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath> = {
+  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
+    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> = {
       method: this._method,
       path: this._path,
       handler: this._handler as THandler,

@@ -1,9 +1,14 @@
 import type {
   DatabaseAdapter,
   FortressPlugin,
+  InferEndpointBody,
+  InferEndpointBodyInput,
+  InferEndpointCallInput,
   InferEndpointSuccessResponse,
+  InferEndpointValidatedInput,
   InferPlugins,
   PluginRouteContext,
+  StandardSchemaV1,
 } from '@bajustone/fortress';
 import type { accountLockout } from '@bajustone/fortress/plugins/account-lockout';
 import type { admin } from '@bajustone/fortress/plugins/admin';
@@ -20,7 +25,7 @@ import type { TenancyConfig } from '@bajustone/fortress/plugins/tenancy';
 import type { twoFactor } from '@bajustone/fortress/plugins/two-factor';
 import type { webauthn } from '@bajustone/fortress/plugins/webauthn';
 import type { webhook } from '@bajustone/fortress/plugins/webhook';
-import { arr, createFortress, defineEndpoints, definePlugin, endpoint, obj, str } from '@bajustone/fortress';
+import { arr, buildCall, createFortress, defineEndpoints, definePlugin, endpoint, obj, str } from '@bajustone/fortress';
 import { apiKey } from '@bajustone/fortress/plugins/api-key';
 import { oauth } from '@bajustone/fortress/plugins/oauth';
 import { openapi } from '@bajustone/fortress/plugins/openapi';
@@ -171,6 +176,15 @@ definePlugin({
 });
 
 definePlugin({
+  name: 'built-unset-handler',
+  methods: () => ({ unset: () => 'ok' }),
+  routes: {
+    // @ts-expect-error endpoint declarations require .handler() before .build()
+    unset: endpoint('GET', '/built-unset-handler').build(),
+  },
+});
+
+definePlugin({
   name: 'built-mismatched-route-key',
   methods: () => ({ actual: () => 'ok' }),
   routes: {
@@ -235,6 +249,51 @@ interface BuiltConcreteMethods { run: () => void }
 const _missingBuiltMethods: FortressPlugin<'built-concrete', BuiltConcreteMethods> = { name: 'built-concrete' };
 void _missingBuiltMethods;
 
+const builtTransformingSchema: StandardSchemaV1<
+  { occurredAt: string },
+  { occurredAt: Date }
+> & {
+  readonly type: 'object';
+  readonly properties: { readonly occurredAt: { readonly type: 'string' } };
+} = {
+  'type': 'object',
+  'properties': { occurredAt: { type: 'string' } },
+  '~standard': {
+    version: 1,
+    vendor: 'transform-declaration-test',
+    validate: value => ({ value: { occurredAt: new Date((value as { occurredAt: string }).occurredAt) } }),
+    types: undefined,
+  },
+};
+const builtNonFlatTransformingSchema: StandardSchemaV1<{ value: string }, Date> & {
+  readonly type: 'object';
+  readonly properties: { readonly value: { readonly type: 'string' } };
+} = {
+  'type': 'object',
+  'properties': { value: { type: 'string' } },
+  '~standard': {
+    version: 1,
+    vendor: 'non-flat-transform-declaration-test',
+    validate: value => ({ value: new Date((value as { value: string }).value) }),
+    types: undefined,
+  },
+};
+endpoint('POST', '/built-non-flat-transform').body(
+  // @ts-expect-error published declarations reject whole Date outputs
+  builtNonFlatTransformingSchema,
+);
+
+const builtTransformingRoute = endpoint('POST', '/built-transforming')
+  .body(builtTransformingSchema)
+  .handler('transform')
+  .build();
+export type BuiltTransformingContracts = [
+  Assert<Equal<InferEndpointBodyInput<typeof builtTransformingRoute>, { occurredAt: string }>>,
+  Assert<Equal<InferEndpointBody<typeof builtTransformingRoute>, { occurredAt: Date }>>,
+  Assert<Equal<InferEndpointCallInput<typeof builtTransformingRoute>, { occurredAt: string }>>,
+  Assert<Equal<InferEndpointValidatedInput<typeof builtTransformingRoute>, { occurredAt: Date }>>,
+];
+
 export function declarationContract(database: DatabaseAdapter, dynamicName: string): void {
   const directPlugin = createFortress({
     database,
@@ -243,6 +302,75 @@ export function declarationContract(database: DatabaseAdapter, dynamicName: stri
   });
   const directResult: string = directPlugin.plugins['built-direct-callable'].ping();
   void directResult;
+
+  const transforming = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    plugins: [{
+      name: 'built-direct-transforming',
+      methods: () => ({ transform: ({ occurredAt }: { occurredAt: Date }) => occurredAt.toISOString() }),
+      routes: { transform: builtTransformingRoute },
+    }] as const,
+  });
+  transforming.call.plugins['built-direct-transforming'].transform({ occurredAt: '2026-07-25T00:00:00.000Z' });
+  // @ts-expect-error call arguments use the transforming schema's wire input
+  transforming.call.plugins['built-direct-transforming'].transform({ occurredAt: new Date() });
+  const transformingBuildCall = buildCall(transforming, { transform: builtTransformingRoute });
+  transformingBuildCall.transform({ occurredAt: '2026-07-25T00:00:00.000Z' });
+  // @ts-expect-error buildCall arguments also use wire input in published declarations
+  transformingBuildCall.transform({ occurredAt: new Date() });
+
+  const invalidRouteKeyPlugin = {
+    name: 'built-direct-key-mismatch',
+    methods: () => ({ actual: () => 'ok' }),
+    routes: { alias: endpoint('GET', '/built-direct-key-mismatch').handler('actual').build() },
+  } as const;
+  // @ts-expect-error createFortress validates direct route keys against handlers
+  createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [invalidRouteKeyPlugin] as const });
+
+  const missingRouteHandlerPlugin = {
+    name: 'built-direct-missing-handler',
+    methods: () => ({ real: () => 'ok' }),
+    routes: { ghost: endpoint('GET', '/built-direct-missing').handler('ghost').build() },
+  } as const;
+  // @ts-expect-error createFortress validates direct handler existence
+  createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [missingRouteHandlerPlugin] as const });
+
+  const unsetRouteHandlerPlugin = {
+    name: 'built-direct-unset-handler',
+    methods: () => ({ unset: () => 'ok' }),
+    routes: { unset: endpoint('GET', '/built-direct-unset-handler').build() },
+  } as const;
+  // @ts-expect-error createFortress rejects endpoint definitions without .handler()
+  createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [unsetRouteHandlerPlugin] as const });
+
+  const invalidRouteInputPlugin = {
+    name: 'built-direct-input-mismatch',
+    methods: () => ({ echo: (_input: { value: number }) => ({ value: 'ok' }) }),
+    routes: {
+      echo: endpoint('POST', '/built-direct-input')
+        .body(obj({ value: str() }, 'value'))
+        .response(200, 'Echo', obj({ value: str() }, 'value'))
+        .handler('echo')
+        .build(),
+    },
+  } as const;
+  // @ts-expect-error createFortress validates direct handler input compatibility
+  createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [invalidRouteInputPlugin] as const });
+
+  const invalidRouteReturnPlugin = {
+    name: 'built-direct-return-mismatch',
+    methods: () => ({ echo: () => ({ value: 1 }) }),
+    routes: {
+      echo: endpoint('POST', '/built-direct-return')
+        .response(200, 'Echo', obj({ value: str() }, 'value'))
+        .handler('echo')
+        .build(),
+    },
+  } as const;
+  // @ts-expect-error createFortress correlates direct handler returns with success responses
+  createFortress({ database, jwt: { key: 'x'.repeat(32) }, plugins: [invalidRouteReturnPlugin] as const });
+
   const invalidDirectPlugin = {
     name: 'built-direct-non-callable',
     methods: () => ({ ping: () => 'pong', metadata: 42 }),

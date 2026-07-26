@@ -1,11 +1,13 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { RuntimeFortressPlugin } from './plugin';
+import type { StandardSchemaV1 } from './standard-schema';
 
 import { describe, expect, it } from 'vitest';
 import { oauth } from '../plugins/oauth';
 import { openapi } from '../plugins/openapi';
 import { createFortress } from './fortress';
 import { definePlugin } from './plugin';
+import { endpoint } from './schema-builder';
 
 // Minimal mock adapter — just enough for createFortress to wire up
 const mockDb: DatabaseAdapter = {
@@ -110,6 +112,71 @@ describe('createFortress', () => {
       database: mockDb,
       plugins: [unsafe],
     })).toThrow('Plugin "methods-only-runtime" method "metadata" must be callable');
+  });
+
+  it('fails startup when a concrete plugin route key differs from its handler', () => {
+    const mismatched = {
+      name: 'mismatched-runtime-key',
+      methods: () => ({ actual: () => ({ ok: true }) }),
+      routes: {
+        alias: { method: 'GET', path: '/mismatched-runtime-key', handler: 'actual' },
+      },
+    } as unknown as RuntimeFortressPlugin;
+
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [mismatched],
+    })).toThrow('route key "alias" must match handler "actual"');
+  });
+
+  it('passes wire input to a transforming schema and validated output to the plugin handler', async () => {
+    const transformingSchema: StandardSchemaV1<
+      { occurredAt: string },
+      { occurredAt: Date }
+    > & {
+      readonly type: 'object';
+      readonly properties: { readonly occurredAt: { readonly type: 'string' } };
+      readonly required: readonly ['occurredAt'];
+    } = {
+      'type': 'object',
+      'properties': { occurredAt: { type: 'string' } },
+      'required': ['occurredAt'],
+      '~standard': {
+        version: 1,
+        vendor: 'transform-test',
+        validate: value => ({
+          value: { occurredAt: new Date((value as { occurredAt: string }).occurredAt) },
+        }),
+        types: undefined,
+      },
+    };
+    let handlerInput: { occurredAt: Date } | undefined;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [{
+        name: 'transform-runtime',
+        methods: () => ({
+          transform: (input: { occurredAt: Date }) => {
+            handlerInput = input;
+            return { occurredAt: input.occurredAt.toISOString() };
+          },
+        }),
+        routes: {
+          transform: endpoint('POST', '/transform-runtime')
+            .security('none')
+            .body(transformingSchema)
+            .handler('transform')
+            .build(),
+        },
+      }] as const,
+    });
+
+    await expect(fortress.call.plugins['transform-runtime'].transform({
+      occurredAt: '2026-07-25T00:00:00.000Z',
+    })).resolves.toEqual({ occurredAt: '2026-07-25T00:00:00.000Z' });
+    expect(handlerInput?.occurredAt).toBeInstanceOf(Date);
   });
 
   it('fails startup for route-only and inherited handlers', () => {
@@ -568,13 +635,13 @@ describe('createFortress', () => {
       const protocol = {
         method: 'POST' as const,
         path: '/oauth/token',
-        handler: 'handleTokenRequest',
+        handler: 'handleTokenRequest' as const,
         meta: { summary: 'Token', bearerKind: 'oauth' as const, security: ['basic' as const] },
       };
       const consent = {
         method: 'GET' as const,
         path: '/oauth/flows/:flowId',
-        handler: 'handleGetFlow',
+        handler: 'handleGetFlow' as const,
         meta: { summary: 'Consent', security: ['bearer' as const] },
       };
       const fortress = createFortress({

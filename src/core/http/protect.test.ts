@@ -1,5 +1,6 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin } from '../plugin';
+import type { StandardSchemaV1 } from '../standard-schema';
 import type { ProtectedRouteContext } from './protect';
 import { describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
@@ -262,6 +263,38 @@ describe('protect()', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ role: 'member' });
     expect(seen).toEqual({ input: { role: 'member' }, query: {}, params: {} });
+  });
+
+  it('types transforming schema call input as wire data and protected context as validated output', () => {
+    const transformingSchema: StandardSchemaV1<
+      { occurredAt: string },
+      { occurredAt: Date }
+    > & {
+      readonly type: 'object';
+      readonly properties: { readonly occurredAt: { readonly type: 'string' } };
+    } = {
+      'type': 'object',
+      'properties': { occurredAt: { type: 'string' } },
+      '~standard': {
+        version: 1,
+        vendor: 'transform-test',
+        validate: value => ({
+          value: { occurredAt: new Date((value as { occurredAt: string }).occurredAt) },
+        }),
+        types: undefined,
+      },
+    };
+    const transformed = endpoint('POST', '/transformed')
+      .body(transformingSchema)
+      .handler('transformed')
+      .build();
+    type TransformedCtx = ProtectedRouteContext<typeof transformed>;
+    const _bodyOutput: Expect<TransformedCtx['body'], { occurredAt: Date }> = true;
+    const _inputOutput: Expect<TransformedCtx['input'], { occurredAt: Date }> = true;
+
+    expect(transformed.handler).toBe('transformed');
+    expect(_bodyOutput).toBe(true);
+    expect(_inputOutput).toBe(true);
   });
 
   it('narrows ctx.body to non-optional T when a body schema is declared (type-level)', () => {

@@ -42,6 +42,7 @@
  * middleware chain.
  */
 
+import type { CallClient } from '../call-tree';
 import type { FortressHttpRuntime } from '../capabilities';
 import type { EndpointDefinition } from '../endpoint';
 import { Errors } from '../errors';
@@ -67,15 +68,14 @@ function schemaKeys(schema: unknown): Set<string> {
  * map. Each callable invokes `fortress.handleRequest` with a synthesized
  * `Request` and returns the parsed JSON body on success.
  *
- * The returned type is intentionally loose (`Record<string, ...>`). The
- * strong typing happens at the call site via the `CallTree`/`CallClient`
- * mapped types in `src/core/call-tree.ts`, which `createFortress` layers
- * over the runtime callable maps to expose per-handler inferred I/O.
+ * The returned {@link CallClient} preserves each endpoint's wire-input and
+ * success-response phantoms. `createFortress` composes these clients into its
+ * namespaced `CallTree` without changing their per-handler contracts.
  */
-export function buildCall(
+export function buildCall<const TEndpoints extends Record<string, EndpointDefinition>>(
   fortress: Pick<FortressHttpRuntime, 'handleRequest'>,
-  endpoints: Record<string, EndpointDefinition>,
-): Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> {
+  endpoints: TEndpoints,
+): CallClient<TEndpoints> {
   const out = Object.create(null) as Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>>;
 
   for (const [key, ep] of Object.entries(endpoints)) {
@@ -145,5 +145,5 @@ export function buildCall(
     };
   }
 
-  return out;
+  return out as unknown as CallClient<TEndpoints>;
 }

@@ -95,6 +95,12 @@ const fortress = createFortress({
   database: db,
   passwordPolicy: { minLength: 10 },
   logger,
+
+  // ── Host-owned routes metadata ──
+  // protectedRoute() below uses this endpoint metadata for auth/RBAC and
+  // OpenAPI can include it alongside Fortress-owned endpoints.
+  routes: { hostOwnedStats: hostOwnedStatsEndpoint },
+
   // To wire OpenTelemetry metrics/spans, install @opentelemetry/api and:
   //
   //   import { createOtelTelemetry } from '../../src/otel';
@@ -211,11 +217,6 @@ const fortress = createFortress({
         'read:users': { resource: 'user', action: 'list' },
       },
     }),
-
-    // ── Host-owned routes metadata ──
-    // protectedRoute() below uses this endpoint metadata for auth/RBAC and
-    // OpenAPI can include it alongside Fortress-owned endpoints.
-    { name: 'host-routes', routes: { hostOwnedStats: hostOwnedStatsEndpoint } },
 
     // ── OpenAPI (API docs) ──
     // convertRoutes turns createRoute-style objects into EndpointDefinitions

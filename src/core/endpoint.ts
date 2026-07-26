@@ -82,11 +82,13 @@ export interface EndpointResponse {
  * fluent {@link EndpointBuilder} as schemas are declared via `.body()`,
  * `.query()`, `.params()`, `.response()`, and `.handler()`, and then
  * extracted at the call site by the `InferEndpoint*` helpers (and by the
- * typed `fortress.call.*` tree). None of them exist at runtime.
+ * typed `fortress.call.*` tree). None of them exist at runtime. Each input
+ * location carries both its Standard Schema input (the wire payload) and
+ * output (the validated value delivered to handlers).
  *
  * The input defaults are `{}` (empty object), not `unknown`, so that the
- * intersection-based `InferEndpointCallInput` collapses cleanly for
- * endpoints that only declare one of the three input slots. `THandler`
+ * intersection-based input helpers collapse cleanly for endpoints that only
+ * declare one of the three input slots. `THandler`
  * captures the literal handler name so `definePlugin` can statically check
  * that every route dispatches to an existing, signature-compatible plugin
  * method. `TMethod` and `TPath` preserve route identity so an intentional
@@ -104,6 +106,9 @@ export interface EndpointDefinition<
   THandler extends string = string,
   TMethod extends HttpMethod = HttpMethod,
   TPath extends string = string,
+  TBodyInput = TBody,
+  TQueryInput = TQuery,
+  TParamsInput = TParams,
 > {
   method: TMethod;
   path: TPath;
@@ -117,6 +122,9 @@ export interface EndpointDefinition<
     query: TQuery;
     params: TParams;
     responses: TResponses;
+    bodyInput: TBodyInput;
+    queryInput: TQueryInput;
+    paramsInput: TParamsInput;
   };
 }
 
@@ -125,7 +133,7 @@ export interface EndpointDefinition<
  * Runtime fields retain their real constraints so wildcard consumers cannot
  * accidentally admit unsupported methods or non-string handlers/paths.
  */
-export type AnyEndpointDefinition = EndpointDefinition<any, any, any, any, string, HttpMethod, string>;
+export type AnyEndpointDefinition = EndpointDefinition<any, any, any, any, string, HttpMethod, string, any, any, any>;
 
 /** Select the lowest numeric 2xx response key, defaulting to 200. */
 export function endpointSuccessStatus(endpoint: EndpointDefinition): number {
@@ -137,16 +145,22 @@ export function endpointSuccessStatus(endpoint: EndpointDefinition): number {
 
 // ── Endpoint type inference helpers ────────────────────────────────
 
-/** Extract the request-body type from an {@link EndpointDefinition}. */
-export type InferEndpointBody<E> = E extends EndpointDefinition<infer B, any, any, any, any, any, any> ? B : never;
-/** Extract the query-string type from an {@link EndpointDefinition}. */
-export type InferEndpointQuery<E> = E extends EndpointDefinition<any, infer Q, any, any, any, any, any> ? Q : never;
-/** Extract the path-params type from an {@link EndpointDefinition}. */
-export type InferEndpointParams<E> = E extends EndpointDefinition<any, any, infer P, any, any, any, any> ? P : never;
+/** Extract the validated request-body type from an {@link EndpointDefinition}. */
+export type InferEndpointBody<E> = E extends EndpointDefinition<infer B, any, any, any, any, any, any, any, any, any> ? B : never;
+/** Extract the validated query-string type from an {@link EndpointDefinition}. */
+export type InferEndpointQuery<E> = E extends EndpointDefinition<any, infer Q, any, any, any, any, any, any, any, any> ? Q : never;
+/** Extract the validated path-params type from an {@link EndpointDefinition}. */
+export type InferEndpointParams<E> = E extends EndpointDefinition<any, any, infer P, any, any, any, any, any, any, any> ? P : never;
+/** Extract the wire request-body type accepted by Standard Schema. */
+export type InferEndpointBodyInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, infer B, any, any> ? B : never;
+/** Extract the wire query-string type accepted by Standard Schema. */
+export type InferEndpointQueryInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, any, infer Q, any> ? Q : never;
+/** Extract the wire path-params type accepted by Standard Schema. */
+export type InferEndpointParamsInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, any, any, infer P> ? P : never;
 /** Extract the full `Record<status, body>` response map from an {@link EndpointDefinition}. */
-export type InferEndpointResponses<E> = E extends EndpointDefinition<any, any, any, infer R, any, any, any> ? R : never;
+export type InferEndpointResponses<E> = E extends EndpointDefinition<any, any, any, infer R, any, any, any, any, any, any> ? R : never;
 /** Extract the literal handler name from an {@link EndpointDefinition}. */
-export type InferEndpointHandler<E> = E extends EndpointDefinition<any, any, any, any, infer H, any, any> ? H : never;
+export type InferEndpointHandler<E> = E extends EndpointDefinition<any, any, any, any, infer H, any, any, any, any, any> ? H : never;
 
 /** Ordered exact HTTP success statuses used by hand-authored definitions. */
 /* eslint-disable antfu/consistent-list-newline -- grouped by decade for readability */
@@ -194,6 +208,11 @@ export type InferEndpointSuccessResponse<E>
  * the intersection.
  */
 export type InferEndpointCallInput<E> = Simplify<
+  InferEndpointBodyInput<E> & InferEndpointQueryInput<E> & InferEndpointParamsInput<E>
+>;
+
+/** The merged, validated payload delivered to plugin and protected handlers. */
+export type InferEndpointValidatedInput<E> = Simplify<
   InferEndpointBody<E> & InferEndpointQuery<E> & InferEndpointParams<E>
 >;
 

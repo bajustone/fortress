@@ -20,7 +20,13 @@ import type { ResolvedPrincipal } from './http/principal';
 import type { IamEvent, PermissionCheckEvent } from './iam/iam-service';
 import type { PermissionSyncOptions, PermissionSyncResult } from './iam/permission-sync';
 import type { RouteManifestEntry } from './manifest/route-manifest';
-import type { FortressPlugin, PluginMethod, RuntimeFortressPlugin } from './plugin';
+import type {
+  FortressPlugin,
+  PluginMethod,
+  PluginMethodsOf,
+  RuntimeFortressPlugin,
+  ValidatePluginRoutes,
+} from './plugin';
 import type { InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
 import { createAuthService } from './auth/auth-service';
@@ -111,10 +117,14 @@ type ValidatePluginMethodSurface<P> = P extends {
 }
   ? Omit<P, 'methods'> & { methods: (...args: TArgs) => CallableMethodProjection<TMethods> }
   : P;
+type ValidateConfiguredPlugin<P> = ValidatePluginMethodSurface<P>
+  & (P extends { routes: infer TRoutes }
+    ? { routes: ValidatePluginRoutes<TRoutes, NoInferCompat<PluginMethodsOf<P>>> }
+    : unknown);
 type ValidateConfiguredPlugins<C extends FortressConfig> = C extends {
   plugins: infer TPlugins extends readonly RuntimeFortressPlugin[];
 }
-  ? { plugins: { readonly [K in keyof TPlugins]: ValidatePluginMethodSurface<TPlugins[K]> } }
+  ? { plugins: { readonly [K in keyof TPlugins]: ValidateConfiguredPlugin<TPlugins[K]> } }
   : unknown;
 type PluginsFromConfig<C extends FortressConfig> = C extends { plugins: infer TPlugins }
   ? TPlugins extends readonly RuntimeFortressPlugin[] ? TPlugins : readonly []
@@ -204,6 +214,11 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
       ) {
         throw Errors.badRequest(
           `Plugin "${plugin.name}" route "${routeName}" is not a valid endpoint definition`,
+        );
+      }
+      if (plugin.name !== HOST_ROUTES_PLUGIN_NAME && routeName !== endpoint.handler) {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" route key "${routeName}" must match handler "${endpoint.handler}"`,
         );
       }
       for (const location of ['body', 'query', 'params'] as const) {

@@ -998,10 +998,9 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin<'admin',
     name: 'admin',
     coreOverrides: adminCoreOverrides,
 
-    // Admin-owned routes use `${method}_${path}` keys so similarly named
-    // handlers cannot collide. Re-exported core IAM routes retain their core
-    // handler keys: intentional core overrides must do so for the derived call
-    // tree to omit those core callables safely.
+    // Routes are keyed by handler name, matching the runtime dispatch
+    // contract. Re-exported core IAM routes retain the same keys so intentional
+    // core overrides can be projected out of the derived call tree safely.
     routes: Object.fromEntries([
       ...[
         ...(mountBootstrap ? [bootstrapEndpoint] : []),
@@ -1009,7 +1008,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin<'admin',
         ...adminAuthEndpoints,
         ...adminIamEndpoints,
         ...(mountApiKeyRoutes ? adminApiKeyEndpoints : []),
-      ].map(ep => [`${ep.method}_${ep.path}`, ep] as const),
+      ].map(ep => [ep.handler, ep] as const),
       ...Object.entries(iamEndpoints),
     ]),
 

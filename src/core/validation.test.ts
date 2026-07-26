@@ -216,6 +216,39 @@ describe('validateRequest', () => {
     });
   });
 
+  it.each([
+    ['Date', () => new Date('2026-07-25T00:00:00.000Z')],
+    ['class instance', () => new (class TransformedValue { value = 'not-plain'; })()],
+  ])('rejects a whole transformed %s output because dispatch spreads plain records', async (_label, output) => {
+    const bodySchema = {
+      '~standard': {
+        version: 1 as const,
+        vendor: 'test',
+        validate: () => ({ value: output() }),
+      },
+    };
+
+    await expect(validateRequest({ bodySchema }, { body: { value: 'wire' } })).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      statusCode: 422,
+    });
+  });
+
+  it('preserves nested Date values inside an otherwise plain transformed record', async () => {
+    const occurredAt = new Date('2026-07-25T00:00:00.000Z');
+    const bodySchema = {
+      '~standard': {
+        version: 1 as const,
+        vendor: 'test',
+        validate: () => ({ value: { occurredAt } }),
+      },
+    };
+
+    await expect(validateRequest({ bodySchema }, { body: { occurredAt: occurredAt.toISOString() } }))
+      .resolves
+      .toEqual({ body: { occurredAt } });
+  });
+
   it('collects errors from multiple inputs', async () => {
     const body = obj({ name: str() }, 'name');
     const query = obj({ q: str() }, 'q');

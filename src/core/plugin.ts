@@ -5,11 +5,15 @@ import type { FortressConfig } from './config';
 import type {
   AnyEndpointDefinition,
   InferEndpointBody,
+  InferEndpointBodyInput,
   InferEndpointCallInput,
   InferEndpointHandler,
   InferEndpointParams,
+  InferEndpointParamsInput,
   InferEndpointQuery,
+  InferEndpointQueryInput,
   InferEndpointSuccessResponse,
+  InferEndpointValidatedInput,
 } from './endpoint';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
@@ -154,18 +158,26 @@ export type JsonOf<T> = T extends Date ? string
 
 type IsAny<T> = 0 extends (1 & T) ? true : false;
 type IsUnknown<T> = IsAny<T> extends true ? false : unknown extends T ? [keyof T] extends [never] ? true : false : false;
+type FunctionPropertyKeys<T> = {
+  [K in keyof T]-?: Exclude<T[K], undefined> extends (...args: any[]) => any ? K : never;
+}[keyof T];
 type IsFlatInputObject<T> = IsAny<T> extends true
   ? true
   : IsUnknown<T> extends true
     ? true
     : [T] extends [object]
-        ? [Extract<T, readonly unknown[] | ((...args: any[]) => any)>] extends [never] ? true : false
+        ? [Extract<T, Date | readonly unknown[] | ((...args: any[]) => any)>] extends [never]
+            ? [FunctionPropertyKeys<T>] extends [never] ? true : false
+            : false
         : false;
 type EndpointInputCompatible<E> = [
+  IsFlatInputObject<InferEndpointBodyInput<E>>,
+  IsFlatInputObject<InferEndpointQueryInput<E>>,
+  IsFlatInputObject<InferEndpointParamsInput<E>>,
   IsFlatInputObject<InferEndpointBody<E>>,
   IsFlatInputObject<InferEndpointQuery<E>>,
   IsFlatInputObject<InferEndpointParams<E>>,
-] extends [true, true, true] ? true : false;
+] extends [true, true, true, true, true, true] ? true : false;
 
 type ContainsNonJsonValue<T> = T extends Date ? false
   : T extends ((...args: any[]) => any) | bigint | symbol | undefined ? true
@@ -183,7 +195,7 @@ type ContainsNonJsonValue<T> = T extends Date ? false
  * checking optional/rest parameters and rejecting required trailing ones.
  */
 type HandlerInvocationCompatible<M, E> = M extends (
-  input: InferEndpointCallInput<E>,
+  input: InferEndpointValidatedInput<E>,
   context: PluginRouteContext,
 ) => any ? true : false;
 
@@ -259,13 +271,15 @@ type ValidatePluginRoute<K extends string, E, TMethods> = E extends AnyEndpointD
  * surface. Each route must (1) name an existing plugin method via its
  * literal `handler`, and (2) — for routes that declare a phantom contract —
  * be signature-compatible with how dispatch invokes it: the method must
- * accept the flat call input, and its resolved return must serialize
- * ({@link JsonOf}) to the declared success response.
+ * accept the flat validated input (the Standard Schema output), and its
+ * resolved return must serialize ({@link JsonOf}) to the declared success
+ * response.
  *
  * Two exemptions from the I/O check (handler existence is always enforced):
- * - self-authenticating OAuth protocol routes (`meta.bearerKind: 'oauth'`)
- *   use bespoke dispatch calling conventions (see `dispatchOAuth`); typing
- *   that boundary is tracked by issue #27;
+ * - routes marked `meta.bearerKind: 'oauth'` or
+ *   `meta.dispatchKind: 'oauth'` use bespoke OAuth dispatch calling
+ *   conventions (see `dispatchOAuth`); typing that boundary is tracked by
+ *   issue #27;
  * - {@link ContractlessEndpoint contractless} routes declare nothing to
  *   check against. Author routes with `endpoint()` to opt into full I/O
  *   correlation.

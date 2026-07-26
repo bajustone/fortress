@@ -160,6 +160,13 @@ export async function validateRequest(
   return validated;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 async function validateSchema(
   schema: StandardSchemaV1 | JSONSchema,
   data: unknown,
@@ -178,7 +185,7 @@ async function validateSchema(
       })),
     };
   }
-  if (result.value === null || typeof result.value !== 'object' || Array.isArray(result.value)) {
+  if (!isPlainRecord(result.value)) {
     return {
       issues: [{
         message: `Endpoint ${location} schemas must validate to a flat object`,

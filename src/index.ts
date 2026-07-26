@@ -96,12 +96,16 @@ export type {
   EndpointResponse,
   HttpMethod,
   InferEndpointBody,
+  InferEndpointBodyInput,
   InferEndpointCallInput,
   InferEndpointHandler,
   InferEndpointParams,
+  InferEndpointParamsInput,
   InferEndpointQuery,
+  InferEndpointQueryInput,
   InferEndpointResponses,
   InferEndpointSuccessResponse,
+  InferEndpointValidatedInput,
   SecurityRequirement,
 } from './core/endpoint';
 /** Single error class plus the typed factory used throughout fortress. */

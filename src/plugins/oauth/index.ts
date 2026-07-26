@@ -380,10 +380,14 @@ type OAuthAuthorizeRoute = {
 type OAuthConsentParams = { flowId: string };
 type OAuthFlowDetails = Awaited<ReturnType<OAuthMethods['handleGetFlow']>>;
 type OAuthRedirect = Awaited<ReturnType<OAuthMethods['handleApproveFlow']>>;
+type OAuthConsentRoute<H extends string, M extends 'GET' | 'POST', P extends string, R>
+  = EndpointDefinition<{}, {}, OAuthConsentParams, { 200: R }, H, M, P> & {
+    meta: EndpointMeta & { dispatchKind: 'oauth' };
+  };
 type OAuthConsentRoutes = {
-  handleGetFlow: EndpointDefinition<{}, {}, OAuthConsentParams, { 200: OAuthFlowDetails }, 'handleGetFlow', 'GET', '/oauth/flows/:flowId'>;
-  handleApproveFlow: EndpointDefinition<{}, {}, OAuthConsentParams, { 200: OAuthRedirect }, 'handleApproveFlow', 'POST', '/oauth/flows/:flowId/approve'>;
-  handleDenyFlow: EndpointDefinition<{}, {}, OAuthConsentParams, { 200: OAuthRedirect }, 'handleDenyFlow', 'POST', '/oauth/flows/:flowId/deny'>;
+  handleGetFlow: OAuthConsentRoute<'handleGetFlow', 'GET', '/oauth/flows/:flowId', OAuthFlowDetails>;
+  handleApproveFlow: OAuthConsentRoute<'handleApproveFlow', 'POST', '/oauth/flows/:flowId/approve', OAuthRedirect>;
+  handleDenyFlow: OAuthConsentRoute<'handleDenyFlow', 'POST', '/oauth/flows/:flowId/deny', OAuthRedirect>;
 };
 type OAuthRoutes<C extends OAuthConfig> = OAuthBaseRoutes
   & (C extends { enableAuthorizeEndpoint: true } ? OAuthAuthorizeRoute : Record<never, never>)

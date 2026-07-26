@@ -11,10 +11,10 @@ import type { FortressProtectRuntime } from '../capabilities';
 import type {
   EndpointDefinition,
   InferEndpointBody,
-  InferEndpointCallInput,
   InferEndpointParams,
   InferEndpointQuery,
   InferEndpointResponses,
+  InferEndpointValidatedInput,
 } from '../endpoint';
 import type { RouteManifestEntry } from '../manifest/route-manifest';
 import type { Subject, TokenClaims } from '../types';
@@ -96,12 +96,13 @@ export interface ProtectedRouteContext<
     ? unknown
     : InferEndpointBody<E>;
   /**
-   * Merged `{ ...body, ...query, ...params }` input after URL coercion.
-   * Typed as the same intersection the `fortress.call.*` proxy uses.
+   * Merged `{ ...body, ...query, ...params }` input after validation.
+   * Transforming Standard Schemas expose their validated output here, while
+   * the `fortress.call.*` proxy accepts the corresponding wire input.
    */
-  input: [keyof InferEndpointCallInput<E>] extends [never]
+  input: [keyof InferEndpointValidatedInput<E>] extends [never]
     ? Record<string, unknown>
-    : InferEndpointCallInput<E>;
+    : InferEndpointValidatedInput<E>;
   /**
    * Build a typed JSON response for a status declared on the endpoint.
    *
