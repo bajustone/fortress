@@ -1,0 +1,188 @@
+# Migrating to Fortress v2 — the definition-derived API
+
+Fortress v2 derives every typed surface from one source — the `const` plugin
+tuple you pass to `createFortress()` — and replaces erased instance boundaries
+with minimal runtime capability interfaces. The full design rationale is in
+[ADR 0001](./adr/0001-definition-derived-api.md). Request execution remains
+framework-neutral, but the public `fortress.call` object changes shape at
+runtime as well as in TypeScript; JavaScript consumers must make the same
+namespace migration described below.
+
+## At a glance
+
+| v1 | v2 |
+|---|---|
+| `Fortress<TPlugins, TCall>` | `Fortress<TPlugins extends readonly RuntimeFortressPlugin[]>` — one generic, both surfaces derived |
+| `AnyFortress` | bare `Fortress` (erased supertype), or — better — a capability interface |
+| `TypedCall<T>` | `CallTree<T>` |
+| `fortress.call.login(...)` | `fortress.call.auth.login(...)` |
+| `fortress.call.createRole(...)` | `fortress.call.iam.createRole(...)` |
+| `fortress.call.createKey(...)` | `fortress.call.plugins['api-key'].createKey(...)` |
+| `getPluginMethods<T>(fortress, name)` | `fortress.plugins.<name>` (static) / `fortress.resolvePlugin(name, validator?)` (dynamic) |
+| `CallableForEndpoints<E>` | `CallClient<E>` |
+| `InferPluginCallMap<T>` | `PluginCallTree<T>` (namespaced; no intersection) |
+| `PluginMethodsMap` augmentation | `definePlugin()` inference (bridge kept, deprecated) |
+| bare endpoint record literals | `defineEndpoints({...})` (validated + branded at the definition site) |
+
+## 1. The call client is namespaced
+
+Ownership is explicit at every call site: core auth under `call.auth`, core
+IAM under `call.iam`, and each plugin's routes under `call.plugins.<name>`.
+Cross-plugin call-name collisions are impossible by construction — plugin
+names are unique (still enforced at startup as defense in depth).
+
+```ts
+// v1                                        // v2
+await fortress.call.login({ ... });          await fortress.call.auth.login({ ... });
+await fortress.call.createRole({ ... });     await fortress.call.iam.createRole({ ... });
+await fortress.call.sendMagicLink({ ... });  await fortress.call.plugins['magic-link'].sendMagicLink({ ... });
+```
+
+The rewrite is mechanical. OAuth protocol routes that require form, Basic, or
+OAuth-bearer semantics are intentionally absent from the generic JSON call
+tree; call their plugin methods directly or use HTTP with the protocol's
+required encoding. An explicit plugin override of a core method/path must list
+the core call key in `coreOverrides` and reuse it as the route key and handler
+name; the declaration removes the conflicting `call.auth`/`call.iam` member
+and exposes the accurate callable under that plugin's namespace.
+
+Top-level `config.routes` are metadata for host-owned handlers and can no
+longer overlap a Fortress core method/path. Move an intentional core override
+to an explicit plugin with matching `coreOverrides`, route key, and handler;
+otherwise `createFortress()` rejects the collision at startup.
+
+No flattened compatibility client ships in core; if you need a flat map
+during migration, the runtime builder is still exported:
+
+```ts
+import { buildCall } from '@bajustone/fortress';
+
+// Only Fortress-mounted endpoint records with matching handlers are callable.
+// Core auth/IAM stay behind the canonical namespaced tree; top-level host
+// endpoints are metadata-only and must be invoked through the host router.
+const flat = buildCall(fortress, myPluginRoutes);
+```
+
+### Success responses are status-correlated
+
+For every endpoint, the lowest numeric exact 2xx response key is the status/body
+contract used by ordinary dispatch, `protect()`, and `EndpointCall`. Declaration
+order does not change the selection. Every status remains available through
+`InferEndpointResponses`; when the response map has a widened numeric index,
+body correlation stays conservatively `unknown` because no exact lowest status
+can be proven.
+
+## 2. `AnyFortress` is gone — accept a capability instead
+
+Framework adapters and utilities now accept the capability they actually use
+(`src/core/capabilities.ts`). Every `Fortress<TPlugins>` instance satisfies
+every capability, so call sites that pass a real instance need no change.
+Code that *declared* `AnyFortress` parameters should narrow:
+
+```ts
+// v1
+function mount(app: Hono, fortress: AnyFortress) { ... }
+
+// v2 — say what you use
+function mount(app: Hono, fortress: FortressHttpRuntime) { ... }
+```
+
+Available capabilities: `FortressHttpRuntime` (endpoints, manifest, config,
+handleRequest), `FortressAuthRuntime` (auth, iam, cookies, config, token
+extraction, principal resolution, cookie serialization),
+`FortressPluginRuntime` (config, erased plugins, plugin middleware,
+`resolvePlugin`), `FortressManifestRuntime` (endpoints, manifest, config,
+toOpenAPI), `FortressMigrationRuntime` (migrate, syncPermissionsFromManifest),
+`FortressObservabilityRuntime` (logger, telemetry), plus the compositions
+`FortressProtectRuntime` and `FortressRuntime`. If you genuinely need the
+whole erased instance, the bare `Fortress` type is the supertype of every
+concrete instantiation.
+
+`MigrateOptions`, `MigrateResult`, `FortressToOpenAPIOptions`, and
+`PluginMethodsValidator` now live with the capabilities but remain exported
+from the package root — imports keep working.
+
+## 3. `getPluginMethods()` is removed
+
+- **Known plugin, configured tuple** — use the inferred surface:
+  `fortress.plugins.oauth.createAuthorizationUrl(...)`. Unknown names are
+  compile errors.
+- **Dynamic name** — `fortress.resolvePlugin(name)` returns `unknown`. Pass a
+  type guard to prove the surface at runtime:
+  `fortress.resolvePlugin(name, isOAuthMethods)`. There is deliberately no
+  `resolvePlugin<T>(name)` caller-selected assertion — the v1
+  `getPluginMethods<T>()` form was an unchecked cast.
+
+## 4. Endpoint collections use `defineEndpoints()`
+
+Wrap keyed endpoint records at their definition site. Non-endpoint members
+fail to compile *on that property* (and throw at runtime as defense in
+depth); exact keys and per-endpoint generics are preserved and branded.
+
+```ts
+const authEndpoints = defineEndpoints({
+  login: endpoint('POST', '/auth/login')...build(),
+  register: endpoint('POST', '/auth/register')...build(),
+});
+```
+
+A defined collection feeds `CallClient<E>` directly — the v1 conditional
+filtering (`CallableForEndpoints`) and its destructive fallback branches are
+gone.
+
+## 5. `definePlugin()` checks route→method wiring
+
+`definePlugin()` (canonical since #11) now statically verifies that every
+route's `.handler('x')` names an existing plugin method whose signature is
+compatible: the method must accept the endpoint's inferred
+body+query+params input, and its resolved return must serialize (`Date` →
+ISO string) to the declared success response.
+
+Migrating a v1 plugin:
+
+- Ensure every own member returned by `methods()` is callable. This is enforced
+  for direct plugin literals as well as `definePlugin()` definitions and is
+  validated again at startup for JavaScript or widened configurations.
+- Request body/query/params schemas must accept and return flat, non-array
+  objects because dispatch merges declared locations into one handler input.
+  Once any input contract is declared, undeclared query/params locations are
+  discarded rather than being allowed to override validated fields.
+- Ensure route response schemas describe what the method actually returns —
+  in v1 several built-ins had drifted (api-key's `id` was documented as an
+  integer but returned as a string; webauthn's `verifyAuthentication`
+  documented a bespoke envelope but returns the standard auth result). v2
+  makes such drift a compile error.
+- Hand-authored route literals must keep their handler literal:
+  `handler: 'getSpec' as const`. Routes built with `endpoint().handler(...)`
+  capture the literal automatically.
+- Routes with no declared schemas ("contractless") and self-authenticating
+  OAuth protocol routes (`meta.bearerKind: 'oauth'`) keep only the
+  handler-existence check.
+- Dynamically aggregated route records (string-indexed, e.g. built with
+  `Object.fromEntries`) are validated at runtime only and contribute no
+  typed call namespace — same as v1.
+- Metadata-only route collections that a host app serves itself belong in
+  top-level `config.routes`, not in a plugin — plugin routes without backing
+  methods are now compile errors by design.
+
+`PluginMethodsMap` remains only as a deprecated bridge so existing
+`declare module` augmentations keep resolving; new plugins need no central
+registry edit and no augmentation.
+
+## 6. Rarely needed
+
+- `EndpointDefinition` gained trailing phantom generics for the literal handler,
+  method, and path (`THandler`, `TMethod`, `TPath`). Code that spelled out the
+  original four generics is unaffected; conditional types that need to match
+  every slot should add three trailing `any` arguments.
+- `buildCall()` now accepts `Pick<FortressHttpRuntime, 'handleRequest'>`
+  instead of `AnyFortress` — strictly wider.
+- `record()` remains an honestly typed `Record<string, unknown>` schema and
+  no longer accepts a caller-selected generic. Use `obj(...)` or a Standard
+  Schema that performs the external library's runtime validation before
+  claiming a narrower payload type.
+- Endpoint builder operations that refine request/response/handler types are
+  copy-on-write. Retain their return value as normal fluent code does; calling
+  `.body()`, `.query()`, `.params()`, `.response()`, or `.handler()` only for
+  side effects is no longer supported, because it made aliased phantom types
+  diverge from runtime definitions.

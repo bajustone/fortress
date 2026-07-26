@@ -4,6 +4,13 @@ import type { StandardSchemaV1 } from './standard-schema';
 /** HTTP method an {@link EndpointDefinition} can declare. */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
+const HTTP_METHODS = new Set<HttpMethod>(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']);
+
+/** Runtime guard matching the public {@link HttpMethod} union. */
+export function isHttpMethod(value: unknown): value is HttpMethod {
+  return typeof value === 'string' && HTTP_METHODS.has(value as HttpMethod);
+}
+
 /** Authentication scheme required to call an endpoint. */
 export type SecurityRequirement = 'bearer' | 'basic' | 'apiKey' | 'none';
 
@@ -46,6 +53,8 @@ export interface EndpointMeta {
    * dispatcher honour `security: ['bearer']` everywhere else.
    */
   bearerKind?: 'jwt' | 'oauth';
+  // Internal marker for OAuth's bespoke positional dispatch convention.
+  dispatchKind?: 'oauth';
 }
 
 /** Request input declarations for an endpoint — JSON Schemas for OpenAPI plus Standard Schemas for runtime validation. */
@@ -69,15 +78,21 @@ export interface EndpointResponse {
 /**
  * Declarative description of one HTTP endpoint.
  *
- * The four generic parameters are **phantom types** — they're populated by
- * the fluent {@link EndpointBuilder} as schemas are declared via `.body()`,
- * `.query()`, `.params()`, and `.response()`, and then extracted at the call
- * site by the `InferEndpoint*` helpers (and by the typed `fortress.call.*`
- * proxy). None of them exist at runtime.
+ * The generic parameters are **phantom types** — they're populated by the
+ * fluent {@link EndpointBuilder} as schemas are declared via `.body()`,
+ * `.query()`, `.params()`, `.response()`, and `.handler()`, and then
+ * extracted at the call site by the `InferEndpoint*` helpers (and by the
+ * typed `fortress.call.*` tree). None of them exist at runtime. Each input
+ * location carries both its Standard Schema input (the wire payload) and
+ * output (the validated value delivered to handlers).
  *
- * The defaults are `{}` (empty object), not `unknown`, so that the
- * intersection-based `InferEndpointCallInput` collapses cleanly for
- * endpoints that only declare one of the three input slots.
+ * The input defaults are `{}` (empty object), not `unknown`, so that the
+ * intersection-based input helpers collapse cleanly for endpoints that only
+ * declare one of the three input slots. `THandler`
+ * captures the literal handler name so `definePlugin` can statically check
+ * that every route dispatches to an existing, signature-compatible plugin
+ * method. `TMethod` and `TPath` preserve route identity so an intentional
+ * plugin override can remove the conflicting core callable.
  */
 export interface EndpointDefinition<
   // eslint-disable-next-line ts/no-empty-object-type -- default must be {} so the input intersection collapses
@@ -88,10 +103,16 @@ export interface EndpointDefinition<
   TParams = {},
   // eslint-disable-next-line ts/no-empty-object-type
   TResponses extends Record<number, unknown> = {},
+  THandler extends string = string,
+  TMethod extends HttpMethod = HttpMethod,
+  TPath extends string = string,
+  TBodyInput = TBody,
+  TQueryInput = TQuery,
+  TParamsInput = TParams,
 > {
-  method: HttpMethod;
-  path: string;
-  handler: string;
+  method: TMethod;
+  path: TPath;
+  handler: THandler;
   meta?: EndpointMeta;
   input?: EndpointInput;
   responses?: Record<number, EndpointResponse>;
@@ -101,33 +122,83 @@ export interface EndpointDefinition<
     query: TQuery;
     params: TParams;
     responses: TResponses;
+    bodyInput: TBodyInput;
+    queryInput: TQueryInput;
+    paramsInput: TParamsInput;
   };
+}
+
+/**
+ * Any endpoint definition, regardless of its inferred phantom contract.
+ * Runtime fields retain their real constraints so wildcard consumers cannot
+ * accidentally admit unsupported methods or non-string handlers/paths.
+ */
+export type AnyEndpointDefinition = EndpointDefinition<any, any, any, any, string, HttpMethod, string, any, any, any>;
+
+/** Select the lowest numeric 2xx response key, defaulting to 200. */
+export function endpointSuccessStatus(endpoint: EndpointDefinition): number {
+  const statuses = Object.keys(endpoint.responses ?? {})
+    .map(Number)
+    .filter(status => Number.isInteger(status) && status >= 200 && status < 300);
+  return statuses.length > 0 ? Math.min(...statuses) : 200;
 }
 
 // ── Endpoint type inference helpers ────────────────────────────────
 
-/** Extract the request-body type from an {@link EndpointDefinition}. */
-export type InferEndpointBody<E> = E extends EndpointDefinition<infer B, any, any, any> ? B : never;
-/** Extract the query-string type from an {@link EndpointDefinition}. */
-export type InferEndpointQuery<E> = E extends EndpointDefinition<any, infer Q, any, any> ? Q : never;
-/** Extract the path-params type from an {@link EndpointDefinition}. */
-export type InferEndpointParams<E> = E extends EndpointDefinition<any, any, infer P, any> ? P : never;
+/** Extract the validated request-body type from an {@link EndpointDefinition}. */
+export type InferEndpointBody<E> = E extends EndpointDefinition<infer B, any, any, any, any, any, any, any, any, any> ? B : never;
+/** Extract the validated query-string type from an {@link EndpointDefinition}. */
+export type InferEndpointQuery<E> = E extends EndpointDefinition<any, infer Q, any, any, any, any, any, any, any, any> ? Q : never;
+/** Extract the validated path-params type from an {@link EndpointDefinition}. */
+export type InferEndpointParams<E> = E extends EndpointDefinition<any, any, infer P, any, any, any, any, any, any, any> ? P : never;
+/** Extract the wire request-body type accepted by Standard Schema. */
+export type InferEndpointBodyInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, infer B, any, any> ? B : never;
+/** Extract the wire query-string type accepted by Standard Schema. */
+export type InferEndpointQueryInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, any, infer Q, any> ? Q : never;
+/** Extract the wire path-params type accepted by Standard Schema. */
+export type InferEndpointParamsInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, any, any, infer P> ? P : never;
 /** Extract the full `Record<status, body>` response map from an {@link EndpointDefinition}. */
-export type InferEndpointResponses<E> = E extends EndpointDefinition<any, any, any, infer R> ? R : never;
+export type InferEndpointResponses<E> = E extends EndpointDefinition<any, any, any, infer R, any, any, any, any, any, any> ? R : never;
+/** Extract the literal handler name from an {@link EndpointDefinition}. */
+export type InferEndpointHandler<E> = E extends EndpointDefinition<any, any, any, any, infer H, any, any, any, any, any> ? H : never;
+
+/** Ordered exact HTTP success statuses used by hand-authored definitions. */
+/* eslint-disable antfu/consistent-list-newline -- grouped by decade for readability */
+type HttpSuccessStatuses = readonly [
+  200, 201, 202, 203, 204, 205, 206, 207, 208, 209,
+  210, 211, 212, 213, 214, 215, 216, 217, 218, 219,
+  220, 221, 222, 223, 224, 225, 226, 227, 228, 229,
+  230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
+  240, 241, 242, 243, 244, 245, 246, 247, 248, 249,
+  250, 251, 252, 253, 254, 255, 256, 257, 258, 259,
+  260, 261, 262, 263, 264, 265, 266, 267, 268, 269,
+  270, 271, 272, 273, 274, 275, 276, 277, 278, 279,
+  280, 281, 282, 283, 284, 285, 286, 287, 288, 289,
+  290, 291, 292, 293, 294, 295, 296, 297, 298, 299,
+];
+/* eslint-enable antfu/consistent-list-newline */
 
 /**
- * Extract the success-response body from an {@link EndpointDefinition}.
- *
- * Tries `200`, then `201`, then `204`, then falls back to `unknown`.
- * This matches the behavior of the `fortress.call.*` proxy, which always
- * resolves to the first successful status declared.
+ * Select the body for the lowest exact numeric 2xx key. A numeric index
+ * signature means the status set is not statically known, so correlation must
+ * remain `unknown` even when a later literal response is also declared.
+ */
+type TwoXxResponse<R, Statuses extends readonly number[] = HttpSuccessStatuses>
+  = number extends keyof R
+    ? unknown
+    : Statuses extends readonly [infer Status extends number, ...infer Rest extends number[]]
+      ? Status extends keyof R ? R[Status] : TwoXxResponse<R, Rest>
+      : never;
+
+/**
+ * Extract the body correlated with the status dispatch will actually use:
+ * the lowest exact numeric 2xx response key. Every endpoint definition uses
+ * the same response-map projection; all statuses remain available through
+ * {@link InferEndpointResponses}.
  */
 export type InferEndpointSuccessResponse<E>
-  = InferEndpointResponses<E> extends infer R
-    ? R extends { 200: infer T } ? T
-      : R extends { 201: infer T } ? T
-        : R extends { 204: infer T } ? T
-          : unknown
+  = InferEndpointResponses<E> extends infer Responses
+    ? [TwoXxResponse<Responses>] extends [never] ? unknown : TwoXxResponse<Responses>
     : never;
 
 /**
@@ -137,6 +208,11 @@ export type InferEndpointSuccessResponse<E>
  * the intersection.
  */
 export type InferEndpointCallInput<E> = Simplify<
+  InferEndpointBodyInput<E> & InferEndpointQueryInput<E> & InferEndpointParamsInput<E>
+>;
+
+/** The merged, validated payload delivered to plugin and protected handlers. */
+export type InferEndpointValidatedInput<E> = Simplify<
   InferEndpointBody<E> & InferEndpointQuery<E> & InferEndpointParams<E>
 >;
 

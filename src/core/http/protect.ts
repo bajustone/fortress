@@ -7,17 +7,18 @@
  * validation, and auth-cookie attachment.
  */
 
+import type { FortressProtectRuntime } from '../capabilities';
 import type {
   EndpointDefinition,
   InferEndpointBody,
-  InferEndpointCallInput,
   InferEndpointParams,
   InferEndpointQuery,
   InferEndpointResponses,
+  InferEndpointValidatedInput,
 } from '../endpoint';
-import type { AnyFortress } from '../fortress';
 import type { RouteManifestEntry } from '../manifest/route-manifest';
 import type { Subject, TokenClaims } from '../types';
+import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
 import { coerceBySchema, validateRequest } from '../validation';
 import { enforceCsrf, resolveCsrfConfig } from './csrf';
@@ -95,12 +96,13 @@ export interface ProtectedRouteContext<
     ? unknown
     : InferEndpointBody<E>;
   /**
-   * Merged `{ ...body, ...query, ...params }` input after URL coercion.
-   * Typed as the same intersection the `fortress.call.*` proxy uses.
+   * Merged `{ ...body, ...query, ...params }` input after validation.
+   * Transforming Standard Schemas expose their validated output here, while
+   * the `fortress.call.*` proxy accepts the corresponding wire input.
    */
-  input: [keyof InferEndpointCallInput<E>] extends [never]
+  input: [keyof InferEndpointValidatedInput<E>] extends [never]
     ? Record<string, unknown>
-    : InferEndpointCallInput<E>;
+    : InferEndpointValidatedInput<E>;
   /**
    * Build a typed JSON response for a status declared on the endpoint.
    *
@@ -147,7 +149,7 @@ function routeKey(route: Pick<EndpointDefinition, 'method' | 'path'>): string {
   return `${route.method.toUpperCase()} ${route.path}`;
 }
 
-function findEndpoint(fortress: AnyFortress, target: ProtectedRouteTarget, method?: string): EndpointDefinition {
+function findEndpoint(fortress: FortressProtectRuntime, target: ProtectedRouteTarget, method?: string): EndpointDefinition {
   if (typeof target !== 'string') {
     return target;
   }
@@ -171,7 +173,7 @@ function findEndpoint(fortress: AnyFortress, target: ProtectedRouteTarget, metho
   return matches[0];
 }
 
-function findManifestEntry(fortress: AnyFortress, endpoint: EndpointDefinition): RouteManifestEntry {
+function findManifestEntry(fortress: FortressProtectRuntime, endpoint: EndpointDefinition): RouteManifestEntry {
   const key = routeKey(endpoint);
   const entry = fortress.manifest.find(route => `${route.method.toUpperCase()} ${route.path}` === key);
   if (!entry)
@@ -202,21 +204,16 @@ function objectOrEmpty(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function successStatus(endpoint: EndpointDefinition): number {
-  const status = Object.keys(endpoint.responses ?? {})
-    .map(Number)
-    .find(code => code >= 200 && code < 300);
-  return status ?? 200;
-}
-
 function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body ?? { ok: true }), {
+  if (status === 204 || status === 205)
+    return new Response(null, { status });
+  return new Response(JSON.stringify(body === undefined ? { ok: true } : body), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
 }
 
-function maybeAttachAuthCookies(fortress: AnyFortress, result: Response | unknown, response: Response): Response {
+function maybeAttachAuthCookies(fortress: FortressProtectRuntime, result: Response | unknown, response: Response): Response {
   if (result instanceof Response)
     return response;
   const obj = result as { accessToken?: unknown; refreshToken?: unknown } | undefined;
@@ -248,19 +245,19 @@ export function protect<
   E extends EndpointDefinition<any, any, any, any>,
   TResult = unknown,
 >(
-  fortress: AnyFortress,
+  fortress: FortressProtectRuntime,
   target: E,
   handler: ProtectedRouteHandler<E, TResult>,
   options?: ProtectOptions,
 ): (request: Request) => Promise<Response>;
 export function protect<TResult = unknown>(
-  fortress: AnyFortress,
+  fortress: FortressProtectRuntime,
   target: string,
   handler: ProtectedRouteHandler<EndpointDefinition, TResult>,
   options?: ProtectOptions,
 ): (request: Request) => Promise<Response>;
 export function protect(
-  fortress: AnyFortress,
+  fortress: FortressProtectRuntime,
   target: ProtectedRouteTarget,
 
   handler: ProtectedRouteHandler<any, unknown>,
@@ -340,13 +337,20 @@ export function protect(
         fortressScopes: scopes,
       });
 
-      const body = await parseJsonBody(request);
+      const rawBody = await parseJsonBody(request);
       const rawQuery = Object.fromEntries(url.searchParams);
       const match = matchRoute(endpointRouteTable, endpoint.method, options.path ?? url.pathname);
       const rawParams = options.params ?? match?.params ?? {};
-      const query = coerceBySchema(endpoint.input?.query, rawQuery) ?? rawQuery;
-      const params = coerceBySchema(endpoint.input?.params, rawParams) ?? rawParams;
-      await validateRequest(endpoint.input, { body, query, params });
+      const coercedQuery = coerceBySchema(endpoint.input?.query, rawQuery) ?? rawQuery;
+      const coercedParams = coerceBySchema(endpoint.input?.params, rawParams) ?? rawParams;
+      const validated = await validateRequest(endpoint.input, {
+        body: rawBody,
+        query: coercedQuery,
+        params: coercedParams,
+      });
+      const body = validated.body;
+      const query = objectOrEmpty(validated.query);
+      const params = objectOrEmpty(validated.params);
 
       const input = { ...objectOrEmpty(body), ...query, ...params };
       const result = await handler({
@@ -367,7 +371,7 @@ export function protect(
         // loose `ProtectedRouteContext<EndpointDefinition>`.
       } as ProtectedRouteContext);
 
-      response = result instanceof Response ? result : jsonResponse(result, successStatus(endpoint));
+      response = result instanceof Response ? result : jsonResponse(result, endpointSuccessStatus(endpoint));
       if (options.attachAuthCookies ?? true)
         response = maybeAttachAuthCookies(fortress, result, response);
       return response;
@@ -381,7 +385,7 @@ export function protect(
 
 /** Resolve an endpoint eagerly; useful for adapter wrappers and diagnostics. */
 export function resolveProtectedEndpoint(
-  fortress: AnyFortress,
+  fortress: FortressProtectRuntime,
   target: ProtectedRouteTarget,
   method?: string,
 ): EndpointDefinition {

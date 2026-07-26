@@ -14,7 +14,7 @@
  * ```
  */
 
-import type { AnyFortress } from '../core/fortress';
+import type { FortressHttpRuntime } from '../core/capabilities';
 import type { SvelteKitRequestEvent } from './types';
 
 /** Per-method handler signature compatible with SvelteKit `+server.ts` exports. */
@@ -25,7 +25,7 @@ export type SvelteKitRouteHandler = (event: SvelteKitRequestEvent) => Promise<Re
  * delegate to `fortress.handleRequest`. Suitable for `export const { ... } =
  * toSvelteKitHandler(fortress)` in a catch-all `+server.ts`.
  */
-export function toSvelteKitHandler(fortress: AnyFortress): {
+export function toSvelteKitHandler(fortress: Pick<FortressHttpRuntime, 'handleRequest'>): {
   GET: SvelteKitRouteHandler;
   POST: SvelteKitRouteHandler;
   PUT: SvelteKitRouteHandler;

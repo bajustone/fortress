@@ -22,15 +22,12 @@
  * @module
  */
 
-import type { AnyFortress } from '../../core/fortress';
+import type { FortressPluginRuntime } from '../../core/capabilities';
+import { resolveRateLimitMethods } from './plugin-methods';
 
 export interface SvelteKitRateLimitEvent {
   request: Request;
   locals?: { fortressUserId?: string };
-}
-
-interface RateLimitCheck {
-  check: (rule: string, keys: { ip?: string; userId?: string }) => Promise<void>;
 }
 
 function ipFromRequest(request: Request): string | undefined {
@@ -46,17 +43,12 @@ function ipFromRequest(request: Request): string | undefined {
  * on exceed.
  */
 export async function svelteKitRateLimit(
-  fortress: AnyFortress,
+  fortress: Pick<FortressPluginRuntime, 'plugins'>,
   ruleName: string,
   event: SvelteKitRateLimitEvent,
   options: { keyByUser?: boolean } = {},
 ): Promise<void> {
-  const methods = (fortress.plugins as Record<string, unknown>)['rate-limit'] as RateLimitCheck | undefined;
-  if (!methods?.check) {
-    throw new Error(
-      'rate-limit plugin is not registered — add rateLimit({...}) to your FortressConfig.plugins',
-    );
-  }
+  const methods = resolveRateLimitMethods(fortress);
   const keyByUser = options.keyByUser ?? true;
   const userId = keyByUser ? event.locals?.fortressUserId : undefined;
   await methods.check(ruleName, {

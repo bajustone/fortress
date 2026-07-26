@@ -5,7 +5,7 @@ import type { FortressConfig } from './config';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
-import type { FortressPlugin, MiddlewareDefinition, PluginContext } from './plugin';
+import type { FortressPlugin, MiddlewareDefinition, PluginContext, RuntimeFortressPlugin } from './plugin';
 import { Errors } from './errors';
 import { canonicalizePath } from './http/match';
 
@@ -14,7 +14,7 @@ import { canonicalizePath } from './http/match';
  */
 
 export function processPlugins(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   db: DatabaseAdapter,
   config: FortressConfig,
   auth?: AuthService,
@@ -24,10 +24,24 @@ export function processPlugins(
 ): Record<string, Record<string, Function>> {
   const ctx: PluginContext = { db, config, auth, iam, logger };
   // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
-  const result: Record<string, Record<string, Function>> = {};
+  const result: Record<string, Record<string, Function>> = Object.create(null) as Record<string, Record<string, Function>>;
 
   for (const plugin of plugins) {
-    result[plugin.name] = plugin.methods?.(ctx) ?? {};
+    const methods = plugin.methods ? plugin.methods(ctx) : Object.create(null) as object;
+    if (methods === null || typeof methods !== 'object')
+      throw Errors.badRequest(`Plugin "${plugin.name}" methods factory must return an object`);
+    for (const key of Reflect.ownKeys(methods)) {
+      if (typeof Reflect.get(methods, key) !== 'function') {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" method "${String(key)}" must be callable`,
+        );
+      }
+    }
+    // Keep each surface's own properties and `this` identity intact. Dispatch
+    // performs own-property checks, so inherited names can never become route
+    // handlers accidentally.
+    // eslint-disable-next-line ts/no-unsafe-function-type -- normalized at the runtime dictionary boundary
+    result[plugin.name] = methods as Record<string, Function>;
   }
 
   return result;
@@ -38,7 +52,7 @@ export function processPlugins(
  * Each wrapper receives the result of the previous.
  */
 export function chainAdapterWrappers(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   baseAdapter: DatabaseAdapter,
   requestContext: Record<string, unknown>,
 ): DatabaseAdapter {
@@ -58,7 +72,7 @@ export function chainAdapterWrappers(
  * Later plugins override earlier ones on key conflicts.
  */
 export async function mergeTokenClaims(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   userId: string,
   ctx: PluginContext,
 ): Promise<Record<string, unknown>> {
@@ -89,7 +103,7 @@ export async function mergeTokenClaims(
  * All filters are AND'd together. All defaults are merged.
  */
 export async function collectScopeRules(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   userId: string,
   model: string,
   ctx: PluginContext,
@@ -200,7 +214,7 @@ export function wrapAdapterWithScopeRules(
  * Get all model definitions declared by plugins.
  */
 export function collectPluginModels(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
 ): { pluginName: string; models: FortressPlugin['models'] }[] {
   return plugins
     .filter(p => p.models && p.models.length > 0)
@@ -225,10 +239,10 @@ function middlewarePathToRegex(pattern: string): RegExp {
  * Returns them in plugin registration order.
  */
 export function collectPluginMiddleware(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   position: MiddlewareDefinition['position'],
-): { plugin: FortressPlugin; middleware: MiddlewareDefinition }[] {
-  const result: { plugin: FortressPlugin; middleware: MiddlewareDefinition }[] = [];
+): { plugin: RuntimeFortressPlugin; middleware: MiddlewareDefinition }[] {
+  const result: { plugin: RuntimeFortressPlugin; middleware: MiddlewareDefinition }[] = [];
   for (const plugin of plugins) {
     if (!plugin.middleware)
       continue;
@@ -249,7 +263,7 @@ export function collectPluginMiddleware(
  * handlers so each `next()` invokes the next matching middleware.
  */
 export async function executePluginMiddleware(
-  plugins: readonly FortressPlugin[],
+  plugins: readonly RuntimeFortressPlugin[],
   position: MiddlewareDefinition['position'],
   requestPath: string,
   ctx: PluginContext,

@@ -30,6 +30,7 @@ import type {
   WebhookEndpoint,
 } from './types';
 import { Buffer } from 'node:buffer';
+import { definePlugin } from '../../core/plugin';
 import { builtinEvents } from './builtin-events';
 import { createDeliveryClient, deliver } from './delivery';
 import { bindBuiltinHooks } from './hooks';
@@ -58,6 +59,17 @@ export type {
   WebhookEventDeclaration,
 } from './types';
 export { WebhookEmitError } from './types';
+
+export interface WebhookMethods {
+  emit: (eventName: string, payload: Record<string, unknown>, opts?: EmitOptions) => Promise<void>;
+  registerEndpoint: (url: string, events: string[], opts?: RegisterEndpointOptions) => Promise<WebhookEndpoint>;
+  updateEndpoint: (id: string, patch: UpdateEndpointPatch) => Promise<RedactedWebhookEndpoint | null>;
+  rotateSecret: (id: string) => Promise<{ id: string; secret: string }>;
+  listEndpoints: () => Promise<RedactedWebhookEndpoint[]>;
+  removeEndpoint: (id: string) => Promise<void>;
+  listEventTypes: () => { name: string; description?: string }[];
+  stop: () => Promise<void>;
+}
 
 /** Plugin-scheduled retry backoff ladder (ms); jittered ±25% per attempt. */
 const RETRY_INTERVALS_MS = [5_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 5 * 60 * 60_000];
@@ -90,7 +102,7 @@ function redact(endpoint: WebhookEndpoint): RedactedWebhookEndpoint {
 /**
  * Webhook plugin factory. See the module docs for the full feature set.
  */
-export function webhook(config: WebhookConfig = {}): FortressPlugin {
+export function webhook(config: WebhookConfig = {}): FortressPlugin<'webhook', WebhookMethods, undefined> {
   const registry = createEventRegistry(config.events ?? builtinEvents());
   const queue = config.queue ?? inMemoryQueue();
   const retryMode = config.delivery?.retry ?? 'pluginScheduled';
@@ -330,7 +342,7 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
       });
   }
 
-  return {
+  return definePlugin({
     name: 'webhook',
 
     models: [
@@ -441,5 +453,5 @@ export function webhook(config: WebhookConfig = {}): FortressPlugin {
         },
       };
     },
-  };
+  } satisfies FortressPlugin<'webhook', WebhookMethods>);
 }

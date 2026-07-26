@@ -42,8 +42,9 @@
  * middleware chain.
  */
 
+import type { CallClient } from '../call-tree';
+import type { FortressHttpRuntime } from '../capabilities';
 import type { EndpointDefinition } from '../endpoint';
-import type { AnyFortress } from '../fortress';
 import { Errors } from '../errors';
 
 /** Optional per-call options. */
@@ -67,16 +68,15 @@ function schemaKeys(schema: unknown): Set<string> {
  * map. Each callable invokes `fortress.handleRequest` with a synthesized
  * `Request` and returns the parsed JSON body on success.
  *
- * The returned type is intentionally loose (`Record<string, ...>`). The
- * strong typing happens at the call site via the `TypedCall` helper in
- * `src/core/fortress.ts`, which layers a mapped type over the runtime
- * callable map to expose per-handler inferred I/O.
+ * The returned {@link CallClient} preserves each endpoint's wire-input and
+ * success-response phantoms. `createFortress` composes these clients into its
+ * namespaced `CallTree` without changing their per-handler contracts.
  */
-export function buildCall(
-  fortress: AnyFortress,
-  endpoints: Record<string, EndpointDefinition>,
-): Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> {
-  const out: Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>> = {};
+export function buildCall<const TEndpoints extends Record<string, EndpointDefinition>>(
+  fortress: Pick<FortressHttpRuntime, 'handleRequest'>,
+  endpoints: TEndpoints,
+): CallClient<TEndpoints> {
+  const out = Object.create(null) as Record<string, (input?: Record<string, unknown>, options?: CallOptions) => Promise<unknown>>;
 
   for (const [key, ep] of Object.entries(endpoints)) {
     const bodyKeys = schemaKeys(ep.input?.body);
@@ -86,9 +86,9 @@ export function buildCall(
     out[key] = async (input: Record<string, unknown> = {}, options: CallOptions = {}): Promise<unknown> => {
       // Split the flat input into body/query/params by schema membership.
       // Params take priority (path substitution), then query, then body.
-      const body: Record<string, unknown> = {};
-      const query: Record<string, unknown> = {};
-      const params: Record<string, unknown> = {};
+      const body = Object.create(null) as Record<string, unknown>;
+      const query = Object.create(null) as Record<string, unknown>;
+      const params = Object.create(null) as Record<string, unknown>;
       for (const [k, v] of Object.entries(input)) {
         if (paramsKeys.has(k))
           params[k] = v;
@@ -145,5 +145,5 @@ export function buildCall(
     };
   }
 
-  return out;
+  return out as unknown as CallClient<TEndpoints>;
 }

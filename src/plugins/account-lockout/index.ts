@@ -10,6 +10,7 @@
 
 import type { FortressPlugin } from '../../core/plugin';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 
 export interface AccountLockoutConfig {
   /** Max failed attempts before lockout. Default: 5. */
@@ -31,6 +32,11 @@ export interface LockoutStatus {
   isLocked: boolean;
 }
 
+export interface AccountLockoutMethods {
+  getLockoutStatus: (identifier: string) => Promise<LockoutStatus>;
+  resetLockout: (identifier: string) => Promise<void>;
+}
+
 interface LockoutRecord {
   id: string;
   identifier: string;
@@ -46,7 +52,7 @@ interface LockoutRecord {
  * tracks failed sign-in attempts per identifier and applies a progressive
  * lockout (each successive lockout extends the cooldown window).
  */
-export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugin {
+export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugin<'account-lockout', AccountLockoutMethods, undefined> {
   const maxFailedAttempts = config.maxFailedAttempts ?? 5;
   const lockoutDurationSeconds = config.lockoutDurationSeconds ?? 900;
   const escalation = config.escalation ?? true;
@@ -64,7 +70,7 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
     return Math.min(duration, maxLockoutSeconds);
   }
 
-  return {
+  return definePlugin({
     name: 'account-lockout',
 
     models: [{
@@ -263,5 +269,5 @@ export function accountLockout(config: AccountLockoutConfig = {}): FortressPlugi
         });
       },
     }),
-  };
+  } satisfies FortressPlugin<'account-lockout', AccountLockoutMethods>);
 }

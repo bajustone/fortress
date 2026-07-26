@@ -20,7 +20,7 @@ import { createHonoMiddleware } from './index';
 const SECRET = 'hono-api-key-user-routes-secret-32char!';
 
 interface Ctx {
-  fortress: Fortress<any>;
+  fortress: Fortress;
   app: Hono<FortressEnv>;
   userId: string;
   userKey: string;
@@ -32,7 +32,7 @@ interface Ctx {
 }
 
 async function setup(): Promise<Ctx> {
-  const fortress: Fortress<any> = createFortress({
+  const fortress = createFortress({
     jwt: { key: SECRET },
     database: createTestAdapter(),
     plugins: [apiKey({ prefix: 'test' })],

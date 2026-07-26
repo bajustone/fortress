@@ -95,6 +95,12 @@ const fortress = createFortress({
   database: db,
   passwordPolicy: { minLength: 10 },
   logger,
+
+  // ── Host-owned routes metadata ──
+  // protectedRoute() below uses this endpoint metadata for auth/RBAC and
+  // OpenAPI can include it alongside Fortress-owned endpoints.
+  routes: { hostOwnedStats: hostOwnedStatsEndpoint },
+
   // To wire OpenTelemetry metrics/spans, install @opentelemetry/api and:
   //
   //   import { createOtelTelemetry } from '../../src/otel';
@@ -211,11 +217,6 @@ const fortress = createFortress({
         'read:users': { resource: 'user', action: 'list' },
       },
     }),
-
-    // ── Host-owned routes metadata ──
-    // protectedRoute() below uses this endpoint metadata for auth/RBAC and
-    // OpenAPI can include it alongside Fortress-owned endpoints.
-    { name: 'host-routes', routes: { hostOwnedStats: hostOwnedStatsEndpoint } },
 
     // ── OpenAPI (API docs) ──
     // convertRoutes turns createRoute-style objects into EndpointDefinitions
@@ -968,15 +969,17 @@ async function seed(): Promise<void> {
   await fortress.plugins.webhook.registerEndpoint(
     'https://example.com/webhooks',
     ['LOGIN_SUCCESS', 'REGISTER'],
-    'webhook-signing-secret',
+    { secret: 'webhook-signing-secret' },
   );
 
   // ── Typed in-process client ─────────────────────────────────────────
-  // `fortress.call.*` is the typed client surface. Each handler is
-  // inferred from its EndpointDefinition: input shape matches the body/
-  // query/params schemas, output matches the 2xx response schema.
+  // `fortress.call` is the namespaced typed client surface: `call.auth.*`
+  // and `call.iam.*` for core endpoints, `call.plugins.<name>.*` for plugin
+  // routes. Each callable is inferred from its EndpointDefinition: input
+  // shape matches the body/query/params schemas, output matches the 2xx
+  // response schema.
   //
-  //   const { accessToken, user } = await fortress.call.login({
+  //   const { accessToken, user } = await fortress.call.auth.login({
   //     identifier: 'admin@example.com',
   //     password: 'Password123!',
   //   });

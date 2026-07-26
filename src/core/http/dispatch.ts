@@ -19,10 +19,12 @@
  */
 
 import type { ClientAuth } from '../../plugins/oauth';
+import type { FortressRuntime } from '../capabilities';
 import type { EndpointDefinition } from '../endpoint';
-import type { Fortress } from '../fortress';
-import type { FortressPlugin, PluginRouteContext } from '../plugin';
+import type { PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
 import type { RequestMeta, Subject, TokenClaims } from '../types';
+import type { ValidatedRequestData } from '../validation';
+import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
 
 /** Auth context resolved by `handleRequest` before dispatch. */
@@ -50,10 +52,10 @@ export type DispatchResult = Response;
  * verification, validation, and {@link enforceFortressPermission}.
  */
 export async function dispatchEndpoint(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   request: Request,
   endpoint: EndpointDefinition,
-  pathParams: Record<string, string>,
+  input: ValidatedRequestData,
   auth: DispatchAuth,
 ): Promise<DispatchResult> {
   // OAuth endpoints get form-encoded body parsing + Basic auth handling.
@@ -62,22 +64,25 @@ export async function dispatchEndpoint(
     return dispatchOAuth(fortress, request, endpoint, auth);
   }
 
-  // Parse body / query into a generic object.
-  const body = await parseBodyOrQuery(request);
+  const body = objectOrEmpty(input.body);
+  const query = objectOrEmpty(input.query);
+  const params = objectOrEmpty(input.params);
 
   // Plugin route (non-oauth)
   if (owningPlugin) {
-    return dispatchPlugin(fortress, owningPlugin, endpoint, body, pathParams, request, auth);
+    return dispatchPlugin(fortress, owningPlugin, endpoint, body, query, params, request, auth);
   }
 
-  // Core auth / IAM dispatch
+  // Core auth / IAM dispatch. Query values are available on every method;
+  // params remain separate for the existing positional service calls.
+  const bodyAndQuery = { ...body, ...query };
   if (endpoint.path.startsWith('/auth/')) {
-    const result = await invokeAuthHandler(fortress, endpoint.handler, body, pathParams, auth);
-    return jsonResponse(result, successStatus(endpoint));
+    const result = await invokeAuthHandler(fortress, endpoint.handler, bodyAndQuery, params as Record<string, string>, auth);
+    return jsonResponse(result, endpointSuccessStatus(endpoint));
   }
   if (endpoint.path.startsWith('/iam/')) {
-    const result = await invokeIamHandler(fortress, endpoint.handler, body, pathParams);
-    return jsonResponse(result, successStatus(endpoint));
+    const result = await invokeIamHandler(fortress, endpoint.handler, bodyAndQuery, params as Record<string, string>);
+    return jsonResponse(result, endpointSuccessStatus(endpoint));
   }
 
   // Top-level host routes are metadata-only and have no Fortress handler.
@@ -89,33 +94,16 @@ export async function dispatchEndpoint(
 
 // ── Body parsing ─────────────────────────────────────────────────────
 
-/**
- * Parse the request body as JSON for write methods, or fall back to query
- * params for GET. Returns an empty object if parsing fails or there is no
- * body — handlers tolerate missing fields.
- */
-async function parseBodyOrQuery(request: Request): Promise<Record<string, unknown>> {
-  if (request.method === 'GET' || request.method === 'HEAD') {
-    return Object.fromEntries(new URL(request.url).searchParams);
-  }
-  // Some requests have no body at all (e.g. DELETE without payload).
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!contentType.includes('json')) {
-    // No body or non-JSON body for write methods — try query params.
-    return Object.fromEntries(new URL(request.url).searchParams);
-  }
-  try {
-    return (await request.json()) as Record<string, unknown>;
-  }
-  catch {
-    return {};
-  }
+function objectOrEmpty(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 async function parseFormBody(request: Request): Promise<Record<string, string>> {
   const text = await request.text();
   const params = new URLSearchParams(text);
-  const out: Record<string, string> = {};
+  const out = Object.create(null) as Record<string, string>;
   for (const [k, v] of params) out[k] = v;
   return out;
 }
@@ -148,7 +136,7 @@ function parseBearerToken(header: string | null): string | undefined {
 // ── Plugin dispatch (non-oauth) ─────────────────────────────────────
 
 /** Find the plugin (if any) that owns the given endpoint. */
-function findOwningPlugin(fortress: Fortress, endpoint: EndpointDefinition): FortressPlugin | undefined {
+function findOwningPlugin(fortress: FortressRuntime, endpoint: EndpointDefinition): RuntimeFortressPlugin | undefined {
   const plugins = fortress.config.plugins ?? [];
   for (const plugin of plugins) {
     if (!plugin.routes)
@@ -162,16 +150,19 @@ function findOwningPlugin(fortress: Fortress, endpoint: EndpointDefinition): For
 }
 
 async function dispatchPlugin(
-  fortress: Fortress,
-  plugin: FortressPlugin,
+  fortress: FortressRuntime,
+  plugin: RuntimeFortressPlugin,
   endpoint: EndpointDefinition,
   body: Record<string, unknown>,
-  pathParams: Record<string, string>,
+  query: Record<string, unknown>,
+  pathParams: Record<string, unknown>,
   request: Request,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)[plugin.name];
-  if (!methods?.[endpoint.handler]) {
+  const registry = fortress.plugins as Record<string, Record<string, unknown>>;
+  const methods = Object.hasOwn(registry, plugin.name) ? registry[plugin.name] : undefined;
+  const method = methods && Object.hasOwn(methods, endpoint.handler) ? methods[endpoint.handler] : undefined;
+  if (typeof method !== 'function') {
     throw Errors.notFound(`Plugin handler '${plugin.name}.${endpoint.handler}' not found`);
   }
 
@@ -179,7 +170,7 @@ async function dispatchPlugin(
   // some plugin methods reference sibling helpers via `this`.
   // OpenAPI Scalar UI returns HTML, not JSON.
   if (plugin.name === 'openapi' && endpoint.handler === 'getUI') {
-    const html = methods.getUI() as string;
+    const html = method.call(methods) as string;
     return new Response(html, {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -194,30 +185,31 @@ async function dispatchPlugin(
     meta: auth.meta,
     request,
   };
-  const result = await methods[endpoint.handler]({ ...body, ...pathParams }, ctx);
+  const result = await method.call(methods, { ...body, ...query, ...pathParams }, ctx);
   // Allow handlers to opt into HTML by returning a string starting with `<!`.
   if (typeof result === 'string' && result.trimStart().startsWith('<!')) {
     return new Response(result, {
-      status: 200,
+      status: endpointSuccessStatus(endpoint),
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   }
-  return jsonResponse(result ?? { ok: true }, successStatus(endpoint));
+  return jsonResponse(result, endpointSuccessStatus(endpoint));
 }
 
 // ── OAuth special case ──────────────────────────────────────────────
 
 async function dispatchOAuth(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   request: Request,
   endpoint: EndpointDefinition,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>).oauth;
+  const registry = fortress.plugins as Record<string, Record<string, unknown>>;
+  const methods = Object.hasOwn(registry, 'oauth') ? registry.oauth : undefined;
   if (!methods)
     throw Errors.notFound(`OAuth plugin not registered`);
   const handlerName = endpoint.handler;
-  if (!methods[handlerName])
+  if (!Object.hasOwn(methods, handlerName) || typeof methods[handlerName] !== 'function')
     throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
 
   // IMPORTANT: invoke as `methods.<name>(...)` so the `this` binding is the
@@ -348,7 +340,7 @@ async function dispatchOAuth(
       // `this` binding survives.
       const body = (await request.json().catch(() => ({}))) as unknown;
       const result = await m[handlerName](body);
-      return jsonResponse(result ?? { ok: true }, successStatus(endpoint));
+      return jsonResponse(result, endpointSuccessStatus(endpoint));
     }
   }
 }
@@ -370,7 +362,7 @@ function consentFlowIdFromUrl(url: string): string {
 // ── Auth / IAM hardcoded dispatch ────────────────────────────────────
 
 async function invokeAuthHandler(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   handler: string,
   body: Record<string, unknown>,
   params: Record<string, string>,
@@ -442,7 +434,7 @@ async function invokeAuthHandler(
 }
 
 async function invokeIamHandler(
-  fortress: Fortress,
+  fortress: FortressRuntime,
   handler: string,
   body: Record<string, unknown>,
   params: Record<string, string>,
@@ -628,24 +620,11 @@ function requireUserId(auth: DispatchAuth): string {
 
 // ── Response helpers ────────────────────────────────────────────────
 
-/**
- * Pick the first 2xx status declared in `endpoint.responses` (e.g. `201`
- * for `POST /auth/register`), defaulting to `200`.
- */
-function successStatus(endpoint: EndpointDefinition): number {
-  if (!endpoint.responses)
-    return 200;
-  for (const code of Object.keys(endpoint.responses)) {
-    const num = Number(code);
-    if (num >= 200 && num < 300)
-      return num;
-  }
-  return 200;
-}
-
 /** Build a JSON `Response` with the right `Content-Type`. */
 export function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body ?? { ok: true }), {
+  if (status === 204 || status === 205)
+    return new Response(null, { status });
+  return new Response(JSON.stringify(body === undefined ? { ok: true } : body), {
     status,
     headers: { 'Content-Type': 'application/json' },
   });

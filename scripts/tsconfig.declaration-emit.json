@@ -11,6 +11,7 @@
   "include": [
     "fixtures/call-surface-declaration.ts",
     "fixtures/consumer-boundary-declaration.ts",
-    "fixtures/error-response-declaration.ts"
+    "fixtures/error-response-declaration.ts",
+    "fixtures/plugin-contract-declaration.ts"
   ]
 }

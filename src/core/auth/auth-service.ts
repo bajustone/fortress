@@ -6,9 +6,9 @@ import type { FortressLogger } from '../observability/logger';
 import type { Histogram, TelemetryProvider } from '../observability/types';
 import type {
   AfterHookContext,
-  FortressPlugin,
   HookContext,
   HookResult,
+  RuntimeFortressPlugin,
 } from '../plugin';
 import type {
   AuthMethod,
@@ -156,7 +156,7 @@ export interface AuthServiceDeps {
 export function createAuthService(
   db: DatabaseAdapter,
   config: FortressConfig,
-  plugins: readonly FortressPlugin[] = [],
+  plugins: readonly RuntimeFortressPlugin[] = [],
   deps?: AuthServiceDeps,
 ): AuthService {
   const resolved = resolveConfig(config);

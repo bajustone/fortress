@@ -18,6 +18,7 @@ import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
 import { normalizeEmail } from '../../core/auth/email';
 import { Errors } from '../../core/errors';
 import { outboundClient } from '../../core/http/outbound';
+import { definePlugin } from '../../core/plugin';
 import { builtInProviders, createMicrosoftProvider } from './providers';
 import { createOidcProvider } from './providers/oidc';
 
@@ -351,7 +352,7 @@ export interface SocialLoginMethods {
  * the OAuth/OIDC authorization-code flow against the configured providers,
  * links provider accounts to fortress users, and issues fortress tokens.
  */
-export function socialLogin(config: SocialLoginConfig): FortressPlugin & { readonly name: 'social-login' } {
+export function socialLogin(config: SocialLoginConfig): FortressPlugin<'social-login', SocialLoginMethods, undefined> {
   const autoRegister = config.autoRegister ?? true;
   const linkAccounts = config.linkAccounts ?? true;
   // Default OFF: persisting provider tokens requires an explicit
@@ -373,7 +374,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
     providerMap.set(pc.name, { definition: resolveProviderDefinition(pc), config: pc });
   }
 
-  return {
+  return definePlugin({
     name: 'social-login',
 
     models: [{
@@ -709,7 +710,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin & { reado
         return Array.from(providerMap.keys());
       },
     }),
-  };
+  } satisfies FortressPlugin<'social-login', SocialLoginMethods>);
 }
 
 export type { ProviderConfig, ProviderProfile, SocialLoginConfig } from './types';

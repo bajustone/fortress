@@ -10,11 +10,13 @@
  */
 
 import type { WhereClause } from '../../adapters/database/types';
-import type { FortressPlugin } from '../../core/plugin';
+import type { EndpointDefinition, EndpointMeta } from '../../core/endpoint';
+import type { FortressPlugin, PluginContext } from '../../core/plugin';
 import type { FortressUser } from '../../core/types';
 import { generateRefreshToken, generateTokenFamily, hashToken } from '../../core/auth/refresh-token';
 import { timingSafeEqualHex } from '../../core/auth/timing-safe';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 import { issueIdToken } from './id-token';
 import { getActiveSigningKey, listJwks, rotateSigningKey } from './jwks';
 import { verifyCodeChallenge } from './pkce';
@@ -355,7 +357,48 @@ export interface OAuthMethods {
  * grant, persists clients and tokens, and exposes `/authorize` and `/token`
  * endpoints when mounted on a framework adapter.
  */
-export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly name: 'oauth' } {
+type OAuthProtocolRoute<
+  H extends string,
+  M extends 'GET' | 'POST',
+  P extends string,
+> = EndpointDefinition<any, any, any, any, H, M, P> & {
+  meta: EndpointMeta & { bearerKind: 'oauth' };
+};
+
+/* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- route phantoms intentionally use empty object slots */
+type OAuthBaseRoutes = {
+  handleTokenRequest: OAuthProtocolRoute<'handleTokenRequest', 'POST', '/oauth/token'>;
+  handleIntrospectRequest: OAuthProtocolRoute<'handleIntrospectRequest', 'POST', '/oauth/introspect'>;
+  handleRevokeRequest: OAuthProtocolRoute<'handleRevokeRequest', 'POST', '/oauth/revoke'>;
+  handleUserInfoRequest: OAuthProtocolRoute<'handleUserInfoRequest', 'GET', '/oauth/userinfo'>;
+  handleDiscovery: OAuthProtocolRoute<'handleDiscovery', 'GET', '/oauth/.well-known/openid-configuration'>;
+  handleJwksRequest: OAuthProtocolRoute<'handleJwksRequest', 'GET', '/oauth/.well-known/jwks.json'>;
+};
+type OAuthAuthorizeRoute = {
+  handleAuthorizeRequest: OAuthProtocolRoute<'handleAuthorizeRequest', 'GET', '/oauth/authorize'>;
+};
+type OAuthConsentParams = { flowId: string };
+type OAuthFlowDetails = Awaited<ReturnType<OAuthMethods['handleGetFlow']>>;
+type OAuthRedirect = Awaited<ReturnType<OAuthMethods['handleApproveFlow']>>;
+type OAuthConsentRoute<H extends string, M extends 'GET' | 'POST', P extends string, R>
+  = EndpointDefinition<{}, {}, OAuthConsentParams, { 200: R }, H, M, P> & {
+    meta: EndpointMeta & { dispatchKind: 'oauth' };
+  };
+type OAuthConsentRoutes = {
+  handleGetFlow: OAuthConsentRoute<'handleGetFlow', 'GET', '/oauth/flows/:flowId', OAuthFlowDetails>;
+  handleApproveFlow: OAuthConsentRoute<'handleApproveFlow', 'POST', '/oauth/flows/:flowId/approve', OAuthRedirect>;
+  handleDenyFlow: OAuthConsentRoute<'handleDenyFlow', 'POST', '/oauth/flows/:flowId/deny', OAuthRedirect>;
+};
+type OAuthRoutes<C extends OAuthConfig> = OAuthBaseRoutes
+  & (C extends { enableAuthorizeEndpoint: true } ? OAuthAuthorizeRoute : Record<never, never>)
+  & (C extends { enableConsentApi: true } ? OAuthConsentRoutes : Record<never, never>);
+/* eslint-enable ts/consistent-type-definitions */
+
+export function oauth(): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<Record<never, never>>> & { routes: OAuthRoutes<Record<never, never>> };
+export function oauth(config: undefined): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<Record<never, never>>> & { routes: OAuthRoutes<Record<never, never>> };
+export function oauth<const C extends OAuthConfig>(config: C): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<C>> & { routes: OAuthRoutes<C> };
+export function oauth(config: OAuthConfig | undefined): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<OAuthConfig>> & { routes: OAuthRoutes<OAuthConfig> };
+export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<OAuthConfig>> & { routes: OAuthRoutes<OAuthConfig> } {
   const authCodeExpiry = config.authCodeExpirySeconds ?? 600;
   const pendingFlowExpiry = config.pendingFlowExpirySeconds ?? 600;
   const accessTokenExpiry = config.accessTokenExpirySeconds ?? 3600;
@@ -381,7 +424,27 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
     );
   }
 
-  return {
+  const lookupBearer = async (
+    ctx: PluginContext,
+    token: string,
+  ): Promise<{ user: FortressUser; scope: string | null } | null> => {
+    const tokenHash = await hashToken(token);
+    const record = await ctx.db.findOne<AccessTokenRecord>({
+      model: 'oauth_access_token',
+      where: [{ field: 'token', operator: '=', value: tokenHash }],
+    });
+
+    if (!record || !record.userId || record.expiresAt < new Date())
+      return null;
+
+    const user = await ctx.db.findOne<FortressUser>({
+      model: 'user',
+      where: [{ field: 'id', operator: '=', value: record.userId }],
+    });
+    return user ? { user, scope: record.scope } : null;
+  };
+
+  return definePlugin({
     name: 'oauth',
 
     models: [
@@ -1478,32 +1541,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       },
 
       async getUserInfo(token: string): Promise<FortressUser | null> {
-        const result = await this._lookupBearer(token);
+        const result = await lookupBearer(ctx, token);
         return result?.user ?? null;
-      },
-
-      /**
-       * Internal: resolve a bearer token to its access-token row + user.
-       * Shared by `getUserInfo` (returns the raw user) and
-       * `handleUserInfoRequest` (maps to OIDC claims).
-       */
-      async _lookupBearer(token: string): Promise<{ user: FortressUser; scope: string | null } | null> {
-        const tokenHash = await hashToken(token);
-        const record = await ctx.db.findOne<AccessTokenRecord>({
-          model: 'oauth_access_token',
-          where: [{ field: 'token', operator: '=', value: tokenHash }],
-        });
-
-        if (!record || !record.userId || record.expiresAt < new Date())
-          return null;
-
-        const user = await ctx.db.findOne<FortressUser>({
-          model: 'user',
-          where: [{ field: 'id', operator: '=', value: record.userId }],
-        });
-        if (!user)
-          return null;
-        return { user, scope: record.scope };
       },
 
       // --- HTTP handler methods (RFC 6749 / 7662 / 7009) ---
@@ -1695,7 +1734,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
        * {@link OAuthConfig.userinfoClaims}.
        */
       async handleUserInfoRequest(bearerToken: string): Promise<Record<string, unknown>> {
-        const result = await this._lookupBearer(bearerToken);
+        const result = await lookupBearer(ctx, bearerToken);
         if (!result)
           throw Errors.unauthorized('Invalid or expired access token');
 
@@ -1814,8 +1853,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         ? {
             handleAuthorizeRequest: {
               method: 'GET' as const,
-              path: '/oauth/authorize',
-              handler: 'handleAuthorizeRequest',
+              path: '/oauth/authorize' as const,
+              handler: 'handleAuthorizeRequest' as const,
               meta: {
                 summary: 'Start an OAuth authorization-code flow',
                 tags: ['OAuth'],
@@ -1849,12 +1888,21 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         ? {
             handleGetFlow: {
               method: 'GET' as const,
-              path: '/oauth/flows/:flowId',
-              handler: 'handleGetFlow',
+              path: '/oauth/flows/:flowId' as const,
+              handler: 'handleGetFlow' as const,
               meta: {
                 summary: 'Fetch pending OAuth flow metadata',
                 tags: ['OAuth'],
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+                dispatchKind: 'oauth' as const,
+              },
+              input: {
+                params: {
+                  type: 'object' as const,
+                  properties: { flowId: { type: 'string' as const } },
+                  required: ['flowId'],
+                  additionalProperties: false,
+                },
               },
               responses: {
                 200: {
@@ -1869,11 +1917,13 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
                           clientId: { type: 'string' as const },
                           name: { type: 'string' as const },
                         },
+                        required: ['clientId', 'name'],
                       },
                       redirectUri: { type: 'string' as const },
                       scopes: { type: 'array' as const, items: { type: 'string' as const } },
                       state: { type: 'string' as const },
                     },
+                    required: ['flowId', 'client', 'redirectUri', 'scopes', 'state'],
                   },
                 },
                 401: { description: 'Authentication required' },
@@ -1882,12 +1932,21 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             },
             handleApproveFlow: {
               method: 'POST' as const,
-              path: '/oauth/flows/:flowId/approve',
-              handler: 'handleApproveFlow',
+              path: '/oauth/flows/:flowId/approve' as const,
+              handler: 'handleApproveFlow' as const,
               meta: {
                 summary: 'Approve a pending OAuth flow',
                 tags: ['OAuth'],
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+                dispatchKind: 'oauth' as const,
+              },
+              input: {
+                params: {
+                  type: 'object' as const,
+                  properties: { flowId: { type: 'string' as const } },
+                  required: ['flowId'],
+                  additionalProperties: false,
+                },
               },
               responses: {
                 200: {
@@ -1895,6 +1954,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
                   schema: {
                     type: 'object' as const,
                     properties: { redirectUrl: { type: 'string' as const } },
+                    required: ['redirectUrl'],
                   },
                 },
                 401: { description: 'Authentication required' },
@@ -1903,12 +1963,21 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
             },
             handleDenyFlow: {
               method: 'POST' as const,
-              path: '/oauth/flows/:flowId/deny',
-              handler: 'handleDenyFlow',
+              path: '/oauth/flows/:flowId/deny' as const,
+              handler: 'handleDenyFlow' as const,
               meta: {
                 summary: 'Deny a pending OAuth flow',
                 tags: ['OAuth'],
                 security: ['bearer'] as ('none' | 'basic' | 'bearer')[],
+                dispatchKind: 'oauth' as const,
+              },
+              input: {
+                params: {
+                  type: 'object' as const,
+                  properties: { flowId: { type: 'string' as const } },
+                  required: ['flowId'],
+                  additionalProperties: false,
+                },
               },
               responses: {
                 200: {
@@ -1916,6 +1985,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
                   schema: {
                     type: 'object' as const,
                     properties: { redirectUrl: { type: 'string' as const } },
+                    required: ['redirectUrl'],
                   },
                 },
                 401: { description: 'Authentication required' },
@@ -1926,8 +1996,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         : {}),
       handleTokenRequest: {
         method: 'POST',
-        path: '/oauth/token',
-        handler: 'handleTokenRequest',
+        path: '/oauth/token' as const,
+        handler: 'handleTokenRequest' as const,
         meta: { summary: 'Exchange credentials for tokens', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: {
           body: {
@@ -1953,8 +2023,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       },
       handleIntrospectRequest: {
         method: 'POST',
-        path: '/oauth/introspect',
-        handler: 'handleIntrospectRequest',
+        path: '/oauth/introspect' as const,
+        handler: 'handleIntrospectRequest' as const,
         meta: { summary: 'Introspect a token (RFC 7662)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: {
@@ -1964,16 +2034,16 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       },
       handleRevokeRequest: {
         method: 'POST',
-        path: '/oauth/revoke',
-        handler: 'handleRevokeRequest',
+        path: '/oauth/revoke' as const,
+        handler: 'handleRevokeRequest' as const,
         meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: { 200: { description: 'Token revoked' } },
       },
       handleUserInfoRequest: {
         method: 'GET',
-        path: '/oauth/userinfo',
-        handler: 'handleUserInfoRequest',
+        path: '/oauth/userinfo' as const,
+        handler: 'handleUserInfoRequest' as const,
         meta: { summary: 'Get user info (OIDC Core §5.3)', tags: ['OAuth'], security: ['bearer'], bearerKind: 'oauth' as const },
         responses: {
           200: {
@@ -1997,15 +2067,15 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
       },
       handleDiscovery: {
         method: 'GET',
-        path: '/oauth/.well-known/openid-configuration',
-        handler: 'handleDiscovery',
+        path: '/oauth/.well-known/openid-configuration' as const,
+        handler: 'handleDiscovery' as const,
         meta: { summary: 'OIDC discovery document', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         responses: { 200: { description: 'OIDC configuration', schema: { type: 'object', additionalProperties: true } } },
       },
       handleJwksRequest: {
         method: 'GET',
-        path: '/oauth/.well-known/jwks.json',
-        handler: 'handleJwksRequest',
+        path: '/oauth/.well-known/jwks.json' as const,
+        handler: 'handleJwksRequest' as const,
         meta: { summary: 'JSON Web Key Set (RFC 7517)', tags: ['OAuth'], security: ['none'], bearerKind: 'oauth' as const },
         responses: {
           200: {
@@ -2024,7 +2094,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin & { readonly nam
         },
       },
     },
-  };
+  } satisfies FortressPlugin<'oauth', OAuthMethods>) as unknown as FortressPlugin<'oauth', OAuthMethods, OAuthRoutes<OAuthConfig>> & { routes: OAuthRoutes<OAuthConfig> };
 }
 
 /**

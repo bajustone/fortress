@@ -12,6 +12,7 @@ import type { FortressPlugin } from '../../core/plugin';
 import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 
 export interface MagicLinkConfig {
   /** Token expiry in seconds. Default: 600 (10 minutes). */
@@ -40,10 +41,10 @@ interface MagicLinkTokenRecord {
  * delivered out-of-band (email) and exchanged for fortress access/refresh
  * tokens via the verify endpoint.
  */
-export function magicLink(config: MagicLinkConfig = {}): FortressPlugin & { readonly name: 'magic-link' } {
+export function magicLink(config: MagicLinkConfig = {}): FortressPlugin<'magic-link', MagicLinkMethods, undefined> {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 600;
 
-  return {
+  return definePlugin({
     name: 'magic-link',
 
     models: [{
@@ -125,5 +126,5 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin & { read
         return ctx.auth.completePluginAuth(user.id, 'magic-link', meta);
       },
     }),
-  };
+  } satisfies FortressPlugin<'magic-link', MagicLinkMethods>);
 }

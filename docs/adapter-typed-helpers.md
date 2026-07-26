@@ -12,6 +12,16 @@ already typed via `InferPlugins<T>` — the const generic plugin list
 passed to `createFortress` carries each plugin's method-shape through to
 `fortress.plugins`. Nothing extra to do.
 
+Adapter entry points (mounts, middleware factories, rate-limit helpers)
+accept narrow capability interfaces — `FortressHttpRuntime`,
+`FortressAuthRuntime`, `FortressPluginRuntime`, `FortressManifestRuntime`,
+`FortressMigrationRuntime`, `FortressObservabilityRuntime`,
+`FortressProtectRuntime`, and the composed `FortressRuntime` — rather than
+the full `Fortress` type. Every `Fortress<TPlugins>` instance satisfies
+every capability interface, so you pass your created instance as-is; the
+interfaces matter when you write helpers of your own that only need part
+of the runtime.
+
 ---
 
 ## Hono — `FortressEnv<TAppEnv>`
@@ -187,6 +197,22 @@ await fortress.plugins['api-key'].createKey({
 });
 ```
 
-For dynamic plugin lookup (e.g. a plugin loaded by name at runtime),
-use `getPluginMethods<T>(fortress, name)` to attach a known interface
-without casting.
+Known plugin keys are typed directly on `fortress.plugins`. A dynamically
+named plugin goes through `fortress.resolvePlugin`: without a validator the
+result is `unknown`; provide a runtime type guard when the name is loaded
+at runtime:
+
+```ts
+const methods = fortress.resolvePlugin(
+  pluginName,
+  (value): value is { ping: () => Promise<void> } =>
+    typeof value === 'object'
+    && value !== null
+    && typeof Reflect.get(value, 'ping') === 'function',
+);
+await methods.ping();
+```
+
+A caller-selected `resolvePlugin<T>(name)` call without a validator does
+not compile, because it could manufacture a type without runtime
+validation.

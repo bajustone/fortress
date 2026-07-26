@@ -1,6 +1,6 @@
+import type { FortressManifestRuntime } from '../capabilities';
 import type { EndpointDefinition, EndpointPermission, HttpMethod, SecurityRequirement } from '../endpoint';
-import type { AnyFortress } from '../fortress';
-import type { FortressPlugin, MiddlewareDefinition } from '../plugin';
+import type { MiddlewareDefinition, RuntimeFortressPlugin } from '../plugin';
 import { authEndpoints } from '../auth/auth-endpoints';
 import { resolveCsrfConfig } from '../http/csrf';
 import { iamEndpoints } from '../iam/iam-endpoints';
@@ -65,7 +65,7 @@ function middlewareMatchesEndpoint(middleware: MiddlewareDefinition, endpoint: E
   return true;
 }
 
-function isRateLimited(endpoint: EndpointDefinition, plugins: readonly FortressPlugin[]): boolean {
+function isRateLimited(endpoint: EndpointDefinition, plugins: readonly RuntimeFortressPlugin[]): boolean {
   for (const plugin of plugins) {
     if (plugin.name !== 'rate-limit')
       continue;
@@ -89,7 +89,7 @@ function isRateLimited(endpoint: EndpointDefinition, plugins: readonly FortressP
   return false;
 }
 
-function csrfApplies(endpoint: EndpointDefinition, fortress: Pick<AnyFortress, 'config'>): boolean {
+function csrfApplies(endpoint: EndpointDefinition, fortress: Pick<FortressManifestRuntime, 'config'>): boolean {
   const csrf = resolveCsrfConfig(fortress.config.csrf);
   if (!csrf.enabled)
     return false;
@@ -102,7 +102,7 @@ function csrfApplies(endpoint: EndpointDefinition, fortress: Pick<AnyFortress, '
   return true;
 }
 
-function collectEndpointOrigins(fortress: Pick<AnyFortress, 'endpoints' | 'config'>): EndpointWithOrigin[] {
+function collectEndpointOrigins(fortress: Pick<FortressManifestRuntime, 'endpoints' | 'config'>): EndpointWithOrigin[] {
   const origins = new Map<string, EndpointWithOrigin>();
 
   const coreAuth = Object.values(authEndpoints) as EndpointDefinition[];
@@ -129,7 +129,7 @@ function collectEndpointOrigins(fortress: Pick<AnyFortress, 'endpoints' | 'confi
   return [...byKey.values()];
 }
 
-export function buildRouteManifest(fortress: Pick<AnyFortress, 'endpoints' | 'config'>): RouteManifestEntry[] {
+export function buildRouteManifest(fortress: Pick<FortressManifestRuntime, 'endpoints' | 'config'>): RouteManifestEntry[] {
   const plugins = fortress.config.plugins ?? [];
   return collectEndpointOrigins(fortress)
     .map(({ endpoint, plugin }) => {

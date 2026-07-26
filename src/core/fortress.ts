@@ -1,27 +1,42 @@
 import type { OpenAPISpec } from '../plugins/openapi/spec-builder';
-import type { AuthEvent, AuthService } from './auth/auth-service';
-import type { FortressConfig, ResolvedCookieConfig } from './config';
+import type { AuthEvent } from './auth/auth-service';
+import type { CallTree } from './call-tree';
+import type {
+  FortressAuthRuntime,
+  FortressHttpRuntime,
+  FortressManifestRuntime,
+  FortressMigrationRuntime,
+  FortressObservabilityRuntime,
+  FortressPluginRuntime,
+  FortressToOpenAPIOptions,
+  MigrateOptions,
+  MigrateResult,
+  PluginMethodsValidator,
+} from './capabilities';
+import type { FortressConfig } from './config';
 import type { EndpointDefinition } from './endpoint';
 import type { AuthCookiePayload } from './http/cookie-serialize';
-import type { PluginRequestContext } from './http/plugin-middleware';
 import type { ResolvedPrincipal } from './http/principal';
-import type { IamEvent, IamService, PermissionCheckEvent } from './iam/iam-service';
+import type { IamEvent, PermissionCheckEvent } from './iam/iam-service';
 import type { PermissionSyncOptions, PermissionSyncResult } from './iam/permission-sync';
 import type { RouteManifestEntry } from './manifest/route-manifest';
-import type { MigrationApplyResult } from './migrations/engine';
-import type { FortressLogger } from './observability/logger';
-import type { TelemetryProvider } from './observability/types';
-import type { ToOpenAPIOptions } from './openapi';
-import type { FortressPlugin, MiddlewareDefinition } from './plugin';
-import type { CallableForEndpoints, InferPluginCallMap, InferPlugins } from './plugin-methods-map';
+import type {
+  FortressPlugin,
+  PluginMethod,
+  PluginMethodsOf,
+  RuntimeFortressPlugin,
+  ValidatePluginRoutes,
+} from './plugin';
+import type { InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
 import { createAuthService } from './auth/auth-service';
 import { resolveCookieConfig } from './config';
+import { isHttpMethod } from './endpoint';
 import { Errors } from './errors';
 import { buildCall } from './http/call';
 import { serializeAuthCookies as serializeAuthCookiesFn } from './http/cookie-serialize';
 import { buildHandleRequest } from './http/handle-request';
-import { canonicalizePath } from './http/match';
+import { canonicalizeRouteShape } from './http/match';
 import { runPluginMiddleware as runPluginMiddlewareFn } from './http/plugin-middleware';
 import { resolveRequestPrincipal as resolveRequestPrincipalFn } from './http/principal';
 import { extractAccessToken as extractAccessTokenFn } from './http/token-extraction';
@@ -37,232 +52,83 @@ import { toOpenAPI as endpointsToOpenAPI } from './openapi';
 import { processPlugins } from './plugin-runner';
 
 /**
- * Typed in-process call surface. Composes auth + IAM endpoint callables
- * with any plugin-contributed routes (derived from the plugins tuple).
+ * Configured fortress instance returned by {@link createFortress}.
  *
- * Each handler becomes a `(input, options?) => Promise<successBody>` where
- * the input shape is the inferred intersection of the endpoint's body,
- * query, and params schemas, and the output is the inferred 2xx response
- * type. Non-2xx responses throw a `FortressError`.
- */
-export type TypedCall<T extends readonly FortressPlugin[]>
-  = & CallableForEndpoints<typeof authEndpoints>
-    & CallableForEndpoints<typeof iamEndpoints>
-    & InferPluginCallMap<T>;
-
-/**
- * Configured fortress instance returned by {@link createFortress}. Holds the
- * core auth and IAM services, the resolved config, every endpoint definition
- * (auth + IAM + plugin routes), and the typed plugin method surface.
+ * One generic — the `const` plugin tuple passed to {@link createFortress} —
+ * is the source of every derived surface: the typed plugin methods
+ * (`plugins`) and the namespaced typed call tree (`call`) are both
+ * projections of it and cannot drift apart (ADR 0001 §1).
  *
- * Also exposes the framework-agnostic HTTP entry points
- * ({@link Fortress.handleRequest}, {@link Fortress.runPluginMiddleware},
- * {@link Fortress.extractAccessToken}, {@link Fortress.serializeAuthCookies})
- * that adapters delegate to. See `src/core/http/`.
+ * Everything else the instance exposes is declared on the composed runtime
+ * capability interfaces (`src/core/capabilities.ts`): HTTP dispatch, the
+ * auth boundary, plugin middleware/dynamic lookup, manifest introspection,
+ * migrations, and observability. Adapters and utilities accept those focused
+ * capabilities rather than this full interface.
  */
-
 export interface Fortress<
-  // eslint-disable-next-line ts/no-unsafe-function-type -- fallback type for untyped plugin access
-  TPlugins = Record<string, Record<string, Function>>,
-  TCall = Record<string, (input?: any, options?: any) => Promise<any>>,
-> {
-  auth: AuthService;
-  iam: IamService;
-  readonly plugins: TPlugins;
+  TPlugins extends readonly RuntimeFortressPlugin[] = readonly RuntimeFortressPlugin[],
+> extends
+  FortressHttpRuntime,
+  FortressAuthRuntime,
+  FortressPluginRuntime,
+  FortressManifestRuntime,
+  FortressMigrationRuntime,
+  FortressObservabilityRuntime {
   /**
-   * Typed in-process client. Each key is a handler name (from the core
-   * auth/IAM endpoint records or a plugin's `routes` record); each value is
-   * an async function whose input/output types are inferred from the
-   * endpoint's declared body/query/params/response schemas.
+   * Typed plugin-method surfaces inferred from the configured tuple. Known
+   * plugin names are exact keys; unknown keys are compile errors. For
+   * dynamically named plugins use
+   * {@link FortressPluginRuntime.resolvePlugin} instead.
+   */
+  readonly plugins: InferPlugins<TPlugins>;
+  /**
+   * Namespaced typed in-process client: `call.auth.*` and `call.iam.*` for
+   * core endpoints, `call.plugins.<name>.*` for each configured plugin with
+   * concrete routes. Input/output types are inferred from each endpoint's
+   * declared body/query/params/response schemas.
    *
    * Under the hood, each callable serializes its input to a `Request` and
    * delegates to `fortress.handleRequest`, so middleware, token
    * verification, RBAC, and validation all run — the same path a network
    * client would eventually hit. See `src/core/http/call.ts`.
    */
-  readonly call: TCall;
-  config: Readonly<FortressConfig>;
-  /** All endpoint definitions (auth + IAM + plugins) with JSON Schema metadata. */
-  endpoints: EndpointDefinition[];
-  /** Canonical generated route-security manifest derived from endpoint metadata. */
-  manifest: RouteManifestEntry[];
-  /** Resolved auth-cookie names and attributes (NODE_ENV-aware). */
-  cookies: ResolvedCookieConfig;
-  /** Resolved logger (defaults to a silent no-op when `config.logger` is unset). */
-  logger: FortressLogger;
-  /** Resolved telemetry provider (defaults to a no-op when `config.observability` is unset). */
-  telemetry: TelemetryProvider;
-  /**
-   * Handle a Fortress-managed request and return a web-standard `Response`.
-   * Composes plugin middleware, token verification, default-deny RBAC,
-   * validation, and dispatch.
-   *
-   * Adapters call this for paths owned by Fortress (e.g. `/auth/*`,
-   * `/iam/*`, plugin-registered routes). See `src/core/http/handle-request.ts`.
-   */
-  handleRequest: (request: Request) => Promise<Response>;
-  /**
-   * Run plugin middleware at a given lifecycle phase, passing a duck-typed
-   * request context. Adapters call this on user-owned routes so plugins
-   * like rate-limit and audit-log still apply outside Fortress paths.
-   */
-  runPluginMiddleware: (
-    phase: MiddlewareDefinition['position'],
-    ctx: PluginRequestContext,
-  ) => Promise<void>;
-  /**
-   * Extract the access token from a request, preferring the configured
-   * cookie and falling back to `Authorization: Bearer`.
-   */
-  extractAccessToken: (request: Request) => string | null;
-  /**
-   * Resolve the request principal by trying plugin `resolvePrincipal`
-   * hooks (e.g. `api-key`) first, then falling back to the configured JWT
-   * bearer token. Non-throwing — returns `null` when no credential is
-   * present or the JWT fails to verify.
-   *
-   * Adapter user-route middleware calls this so api-keys, cookies, and
-   * bearer tokens authenticate uniformly on user-owned routes — not just
-   * Fortress-owned routes dispatched through `handleRequest`.
-   */
-  resolvePrincipal: (request: Request) => Promise<ResolvedPrincipal | null>;
-  /**
-   * Serialize an auth result (or pair of tokens) into one or two
-   * `Set-Cookie` header values using the resolved cookie config and the
-   * configured token expiries.
-   */
-  serializeAuthCookies: (payload: AuthCookiePayload) => string[];
-  /**
-   * Run Fortress's pending schema migrations against the configured database
-   * and, optionally, an application-supplied migration step afterwards.
-   *
-   * Fortress migrations always run first because app schemas commonly
-   * reference fortress tables (foreign keys to `user.id`, etc.). The
-   * `migrateApp` callback (when provided) is awaited after Fortress
-   * migrations complete, so a host can do something like:
-   *
-   * ```ts
-   * await fortress.migrate({
-   *   migrateApp: () => migrate(db, { migrationsFolder: './drizzle' }),
-   * });
-   * ```
-   *
-   * Eliminates the two-step "forget to call `migrateUp` and silently
-   * have no auth tables" footgun.
-   */
-  migrate: (opts?: MigrateOptions) => Promise<MigrateResult>;
-  /**
-   * Seed permissions discovered on registered endpoints (`fortress.endpoints`)
-   * into the IAM database and, optionally, bind them onto a set of default
-   * roles. Idempotent — re-running adds only what's missing and never
-   * revokes anything that was already there.
-   *
-   * Typical bootstrap sequence:
-   *
-   * ```ts
-   * await fortress.migrate({ migrateApp: () => migrate(db, '...') });
-   * await fortress.syncPermissionsFromManifest({
-   *   defaultRoles: { admin: '*', member: ['school:read', 'school:list'] },
-   * });
-   * ```
-   *
-   * Replaces the seed script every consumer used to write that walked
-   * `fortress.endpoints`, deduped `(resource, action)` pairs, and called
-   * `iam.createPermission(...)` for each.
-   */
-  syncPermissionsFromManifest: (opts?: PermissionSyncOptions) => Promise<PermissionSyncResult>;
-  /**
-   * Emit a complete OpenAPI 3.1 spec from the endpoint definitions Fortress
-   * knows about: core auth/IAM routes, plugin routes, and any top-level
-   * host `routes` registered on {@link FortressConfig}.
-   *
-   * This is the programmatic companion to the OpenAPI plugin. Use it when
-   * you already own the docs route or when a build script needs to write
-   * `openapi.json` for client codegen:
-   *
-   * ```ts
-   * const spec = fortress.toOpenAPI({
-   *   title: 'My API',
-   *   version: '0.0.0',
-   *   servers: [{ url: 'http://localhost:3001', description: 'Local' }],
-   *   tags: [{ name: 'Schools' }],
-   * });
-   * ```
-   *
-   * Defaults to endpoint `handler` names for `operationId`, matching most
-   * host route-contract files. Pass `operationId: 'methodPath'` to keep the
-   * historical OpenAPI-plugin ID style.
-   */
-  toOpenAPI: (opts?: FortressToOpenAPIOptions) => OpenAPISpec;
+  readonly call: CallTree<TPlugins>;
 }
 
-/**
- * A Fortress instance whose plugin and call surfaces are intentionally
- * erased. Public APIs that only consume an instance use this boundary so a
- * precisely typed {@link createFortress} result remains assignable without
- * giving up its plugin and call types at the creation site.
- */
-export type AnyFortress = Fortress<unknown, unknown>;
-
-/** Options accepted by {@link Fortress.toOpenAPI}. */
-export interface FortressToOpenAPIOptions extends ToOpenAPIOptions {
-  /** Override the endpoints to emit. Defaults to `fortress.endpoints`. */
-  endpoints?: EndpointDefinition[];
-}
-
-/** Options accepted by {@link Fortress.migrate}. */
-export interface MigrateOptions {
-  /**
-   * Optional host-app migration step. Runs after Fortress migrations
-   * complete; any thrown error propagates after Fortress migrations have
-   * already been applied. Library-agnostic: pass any `() => Promise<void>`
-   * — e.g. drizzle's `migrate(db, { migrationsFolder })`, Knex's
-   * `db.migrate.latest()`, a hand-rolled SQL runner.
-   */
-  migrateApp?: () => Promise<void>;
-  /**
-   * Override the migration dialect. Defaults to the adapter's `dialect`
-   * property (matches the behavior of {@link migrateUp}).
-   */
-  dialect?: 'sqlite' | 'pg';
-  /** Stop applying Fortress migrations after this version. Defaults to the latest. */
-  targetVersion?: number;
-}
-
-/** Result returned by {@link Fortress.migrate}. */
-export interface MigrateResult {
-  /** Result of the Fortress-managed migration step. */
-  fortress: MigrationApplyResult;
-  /** `true` if `migrateApp` was supplied and ran to completion. */
-  appRan: boolean;
-}
-
-/**
- * Type-safe helper to retrieve a plugin's methods from a Fortress instance.
- *
- * Since plugin methods are dynamically typed at runtime, this helper lets
- * consumers provide a known interface for type-safe access without casting.
- *
- * @example
- * ```ts
- * interface TwoFactorMethods {
- *   setup: (userId: string) => Promise<{ secret: string; qrCode: string }>;
- *   verify: (userId: string, code: string) => Promise<boolean>;
- * }
- *
- * const twoFactor = getPluginMethods<TwoFactorMethods>(fortress, 'two-factor');
- * const result = await twoFactor.setup(userId); // fully typed
- * ```
- */
-export function getPluginMethods<T>(fortress: AnyFortress, pluginName: string): T {
-  const methods = (fortress.plugins as Record<string, unknown>)[pluginName];
-  if (!methods) {
-    throw Errors.notFound(`Plugin '${pluginName}' is not registered`);
-  }
-  return methods as T;
-}
+// Option/result types for the migration, manifest, and plugin capabilities
+// live with their capability interfaces; re-exported here for discoverability
+// next to `createFortress`.
+export type {
+  FortressToOpenAPIOptions,
+  MigrateOptions,
+  MigrateResult,
+  PluginMethodsValidator,
+} from './capabilities';
 
 const MIN_SECRET_BYTES = 32;
+
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+type NoInferCompat<T> = [T][T extends any ? 0 : never];
+type CallableMethodProjection<TMethods extends object> = IsAny<TMethods> extends true
+  ? TMethods
+  : { [K in keyof TMethods]: TMethods[K] extends PluginMethod ? TMethods[K] : never };
+type ValidatePluginMethodSurface<P> = P extends {
+  methods: (...args: infer TArgs) => infer TMethods extends object;
+}
+  ? Omit<P, 'methods'> & { methods: (...args: TArgs) => CallableMethodProjection<TMethods> }
+  : P;
+type ValidateConfiguredPlugin<P> = ValidatePluginMethodSurface<P>
+  & (P extends { routes: infer TRoutes }
+    ? { routes: ValidatePluginRoutes<TRoutes, NoInferCompat<PluginMethodsOf<P>>> }
+    : unknown);
+type ValidateConfiguredPlugins<C extends FortressConfig> = C extends {
+  plugins: infer TPlugins extends readonly RuntimeFortressPlugin[];
+}
+  ? { plugins: { readonly [K in keyof TPlugins]: ValidateConfiguredPlugin<TPlugins[K]> } }
+  : unknown;
+type PluginsFromConfig<C extends FortressConfig> = C extends { plugins: infer TPlugins }
+  ? TPlugins extends readonly RuntimeFortressPlugin[] ? TPlugins : readonly []
+  : C extends { plugins?: undefined } ? readonly [] : readonly RuntimeFortressPlugin[];
 
 /**
  * Build a configured {@link Fortress} instance from a {@link FortressConfig}.
@@ -271,9 +137,15 @@ const MIN_SECRET_BYTES = 32;
  * list, wires up auth/IAM services, and returns the assembled instance with
  * type-safe plugin method access for any plugins listed in the config.
  */
-export function createFortress<const T extends readonly FortressPlugin[]>(
+export function createFortress(
+  config: FortressConfig & { plugins?: undefined },
+): Fortress<readonly []>;
+export function createFortress<const C extends FortressConfig>(
+  config: C & ValidateConfiguredPlugins<NoInferCompat<C>>,
+): Fortress<PluginsFromConfig<C>>;
+export function createFortress<const T extends readonly RuntimeFortressPlugin[]>(
   config: FortressConfig & { plugins?: T },
-): Fortress<InferPlugins<T>, TypedCall<T>> {
+): Fortress<T> {
   // Validate JWT key strength (HS256 shared-secret bytes).
   const keys = Array.isArray(config.jwt.key) ? config.jwt.key : [config.jwt.key];
   for (const key of keys) {
@@ -333,6 +205,31 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
       throw Errors.badRequest(`Duplicate plugin name: '${plugin.name}'`);
     }
     pluginNames.add(plugin.name);
+    for (const [routeName, endpoint] of Object.entries(plugin.routes ?? {})) {
+      if (
+        !endpoint || typeof endpoint !== 'object'
+        || !isHttpMethod(endpoint.method)
+        || typeof endpoint.path !== 'string'
+        || typeof endpoint.handler !== 'string'
+      ) {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" route "${routeName}" is not a valid endpoint definition`,
+        );
+      }
+      if (plugin.name !== HOST_ROUTES_PLUGIN_NAME && routeName !== endpoint.handler) {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" route key "${routeName}" must match handler "${endpoint.handler}"`,
+        );
+      }
+      for (const location of ['body', 'query', 'params'] as const) {
+        const schema = endpoint.input?.[location];
+        if (schema?.type && schema.type !== 'object') {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" route "${routeName}" ${location} schema must describe a flat object`,
+          );
+        }
+      }
+    }
   }
 
   // Token-verify histogram is built before the auth service so it can be
@@ -347,6 +244,23 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   const auth = createAuthService(db, config, plugins, { logger, telemetry, tokenVerifyDuration });
   const iam = createIamService(db, config, { logger, telemetry });
   const pluginMethods = processPlugins(plugins, db, config, auth, iam, logger);
+
+  // A Fortress-mounted plugin route is executable only when its handler is
+  // an own callable method. Fail at startup rather than publishing a call
+  // namespace whose first request would 404; top-level host routes remain
+  // metadata-only and are intentionally exempt.
+  for (const plugin of plugins) {
+    if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
+      continue;
+    const methods = pluginMethods[plugin.name];
+    for (const endpoint of Object.values(plugin.routes)) {
+      if (!Object.hasOwn(methods, endpoint.handler) || typeof methods[endpoint.handler] !== 'function') {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" route handler "${endpoint.handler}" must be an own callable method`,
+        );
+      }
+    }
+  }
 
   // --- Wire built-in telemetry observers ------------------------------
   //
@@ -399,7 +313,7 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   });
 
   // Wire IAM events → audit log if the plugin is registered
-  if (pluginMethods['audit-log']?.logCustomEvent) {
+  if (Object.hasOwn(pluginMethods, 'audit-log') && Object.hasOwn(pluginMethods['audit-log'], 'logCustomEvent')) {
     const logCustomEvent = pluginMethods['audit-log'].logCustomEvent as (event: IamEvent) => Promise<void>;
     iam.addIamObserver(event => logCustomEvent(event));
   }
@@ -414,21 +328,49 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     ...Object.values(iamEndpoints) as EndpointDefinition[],
   ];
   for (const ep of coreEndpoints) {
-    const routeKey = `${ep.method.toUpperCase()} ${canonicalizePath(ep.path)}`;
+    const routeKey = `${ep.method.toUpperCase()} ${canonicalizeRouteShape(ep.path)}`;
     endpointMap.set(routeKey, ep);
     endpointOwners.set(routeKey, 'core');
   }
   for (const plugin of plugins) {
-    for (const ep of Object.values(plugin.routes ?? {}) as EndpointDefinition[]) {
-      const routeKey = `${ep.method.toUpperCase()} ${canonicalizePath(ep.path)}`;
+    const appliedCoreOverrides = new Set<string>();
+    for (const [routeName, value] of Object.entries(plugin.routes ?? {})) {
+      const ep = value as EndpointDefinition;
+      const routeKey = `${ep.method.toUpperCase()} ${canonicalizeRouteShape(ep.path)}`;
       const owner = endpointOwners.get(routeKey);
       if (owner && owner !== 'core') {
         throw Errors.badRequest(
           `Duplicate endpoint ${routeKey} declared by plugins "${owner}" and "${plugin.name}"`,
         );
       }
+      if (owner === 'core') {
+        if (plugin.name === HOST_ROUTES_PLUGIN_NAME) {
+          throw Errors.badRequest(
+            `Top-level route ${routeKey} collides with a Fortress core route; use an explicit plugin for intentional overrides.`,
+          );
+        }
+        const coreHandler = endpointMap.get(routeKey)!.handler;
+        if (!plugin.coreOverrides?.includes(coreHandler)) {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" overrides core route ${routeKey}; declare "${coreHandler}" in coreOverrides so the derived call tree can remove the core callable safely.`,
+          );
+        }
+        if (routeName !== coreHandler || ep.handler !== coreHandler) {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" overrides core route ${routeKey}; its route key and handler must both be "${coreHandler}".`,
+          );
+        }
+        appliedCoreOverrides.add(coreHandler);
+      }
       endpointMap.set(routeKey, ep);
       endpointOwners.set(routeKey, plugin.name);
+    }
+    for (const declared of plugin.coreOverrides ?? []) {
+      if (!appliedCoreOverrides.has(declared)) {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" declares unused core override "${declared}"; it must provide a matching core method/path with the same route key and handler.`,
+        );
+      }
     }
   }
   const endpoints = Array.from(endpointMap.values());
@@ -477,15 +419,31 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
   // `endpoints`; `call` delegates to `handleRequest`).
   let routeManifest: RouteManifestEntry[] | undefined;
 
-  const instance: Fortress<InferPlugins<T>, TypedCall<T>> = {
+  const resolvePlugin = (<TMethods>(name: string, validator?: PluginMethodsValidator<TMethods>): TMethods | unknown => {
+    // Dynamic lookup is erased by design: without a runtime validator the
+    // caller gets `unknown`. Static access goes through `fortress.plugins`.
+    if (!Object.hasOwn(pluginMethods, name))
+      throw Errors.notFound(`Plugin '${name}' is not registered`);
+    const methods = (pluginMethods as Record<string, unknown>)[name];
+    if (validator && !validator(methods))
+      throw Errors.badRequest(`Plugin '${name}' methods failed runtime validation`);
+    return methods;
+  }) as Fortress<T>['resolvePlugin'];
+
+  const instance: Fortress<T> = {
     auth,
     iam,
     plugins: pluginMethods as InferPlugins<T>,
-    call: {} as TypedCall<T>,
+    call: Object.assign(Object.create(null), {
+      auth: Object.create(null),
+      iam: Object.create(null),
+      plugins: Object.create(null),
+    }) as Fortress<T>['call'],
+    resolvePlugin,
     config,
     endpoints,
     get manifest(): RouteManifestEntry[] {
-      routeManifest ??= buildRouteManifest(this as Fortress);
+      routeManifest ??= buildRouteManifest(this);
       return routeManifest;
     },
     cookies,
@@ -495,7 +453,7 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     runPluginMiddleware: (phase, ctx): Promise<void> => runPluginMiddlewareFn(plugins, config, phase, ctx),
     extractAccessToken: (request: Request): string | null => extractAccessTokenFn(request, cookies),
     resolvePrincipal: (request: Request): Promise<ResolvedPrincipal | null> =>
-      resolveRequestPrincipalFn(instance as Fortress, request),
+      resolveRequestPrincipalFn(instance, request),
     serializeAuthCookies: (payload: AuthCookiePayload): string[] =>
       serializeAuthCookiesFn(payload, cookies, {
         access: config.jwt.accessTokenExpirySeconds ?? 900,
@@ -521,40 +479,44 @@ export function createFortress<const T extends readonly FortressPlugin[]>(
     },
   };
 
-  instance.handleRequest = buildHandleRequest(instance as Fortress);
+  instance.handleRequest = buildHandleRequest(instance);
 
-  // Assemble the typed call map. Core auth/IAM handlers come first; plugin
-  // routes are layered on top so they can override a core handler that
-  // shares a key (matches the `endpointMap` dedup order).
-  const callEndpoints: Record<string, EndpointDefinition> = {
-    ...(authEndpoints as unknown as Record<string, EndpointDefinition>),
-    ...(iamEndpoints as unknown as Record<string, EndpointDefinition>),
-  };
-  const callOwners = new Map<string, string>();
-  for (const key of Object.keys(callEndpoints))
-    callOwners.set(key, 'core');
+  // Assemble the namespaced typed call tree (ADR 0001 §5). Core auth/IAM
+  // callables live under fixed namespaces; each plugin with routes gets its
+  // own namespace keyed by its (startup-unique) name, so cross-plugin call
+  // collisions are impossible by construction. Top-level `routes` are
+  // metadata for manifest/OpenAPI/protected host routes; they carry no
+  // plugin methods, so exposing them as callables would create a runtime
+  // `NOT_FOUND` footgun — the `__host` virtual plugin is skipped.
+  const pluginCallTree: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
   for (const plugin of plugins) {
-    // Top-level `routes` are metadata for manifest/OpenAPI/protected host
-    // routes; they do not come with plugin methods, so exposing them through
-    // `fortress.call.*` would create a runtime `NOT_FOUND` footgun. If a
-    // consumer wants typed in-process callables for custom routes, use a real
-    // plugin that supplies both `routes` and matching `methods`.
-    if (plugin.name === HOST_ROUTES_PLUGIN_NAME)
+    if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
       continue;
-    for (const [key, endpoint] of Object.entries(plugin.routes ?? {}) as [string, EndpointDefinition][]) {
-      const owner = callOwners.get(key);
-      if (owner && owner !== 'core') {
-        throw Errors.badRequest(
-          `Duplicate fortress.call key "${key}" declared by plugins "${owner}" and "${plugin.name}"`,
-        );
-      }
-      callEndpoints[key] = endpoint;
-      callOwners.set(key, plugin.name);
+    const genericRoutes = Object.create(null) as Record<string, EndpointDefinition>;
+    for (const [name, endpoint] of Object.entries(plugin.routes)) {
+      if (endpoint.meta?.bearerKind !== 'oauth')
+        genericRoutes[name] = endpoint;
     }
+    pluginCallTree[plugin.name] = buildCall(instance, genericRoutes);
   }
   // `call` is readonly on the returned public surface, but is populated once
   // here after `handleRequest` has been bound.
-  (instance as { call: TypedCall<T> }).call = buildCall(instance as Fortress, callEndpoints) as TypedCall<T>;
+  const effectiveCoreRoutes = (
+    routes: Record<string, EndpointDefinition>,
+  ): Record<string, EndpointDefinition> => {
+    const effective = Object.create(null) as Record<string, EndpointDefinition>;
+    for (const [name, endpoint] of Object.entries(routes)) {
+      const key = `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
+      if (endpointOwners.get(key) === 'core')
+        effective[name] = endpoint;
+    }
+    return effective;
+  };
+  (instance as { call: unknown }).call = Object.assign(Object.create(null), {
+    auth: buildCall(instance, effectiveCoreRoutes(authEndpoints as unknown as Record<string, EndpointDefinition>)),
+    iam: buildCall(instance, effectiveCoreRoutes(iamEndpoints as unknown as Record<string, EndpointDefinition>)),
+    plugins: pluginCallTree,
+  });
 
   return instance;
 }

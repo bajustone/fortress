@@ -30,7 +30,13 @@ describe('account-lockout plugin', () => {
       })],
     });
 
-    methods = fortress.plugins['account-lockout'] as unknown as LockoutMethods;
+    methods = fortress.resolvePlugin(
+      'account-lockout',
+      (value): value is LockoutMethods => typeof value === 'object'
+        && value !== null
+        && typeof Reflect.get(value, 'getLockoutStatus') === 'function'
+        && typeof Reflect.get(value, 'resetLockout') === 'function',
+    );
 
     await fortress.auth.createUser({
       email,

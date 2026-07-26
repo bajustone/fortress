@@ -510,7 +510,7 @@ describe('plugin route mounting: OAuth', () => {
     mountFortress(app, fortress);
 
     // Create an OAuth client
-    const methods = fortress.plugins.oauth as any;
+    const methods = fortress.resolvePlugin('oauth') as any;
     oauthClient = await methods.createClient({
       name: 'Test App',
       redirectUris: ['https://app.example.com/callback'],
@@ -690,7 +690,7 @@ describe('plugin route mounting: OAuth', () => {
       password: 'password-123456',
     });
 
-    const methods = fortress.plugins.oauth as any;
+    const methods = fortress.resolvePlugin('oauth') as any;
     const { code } = await methods.createAuthorizationCode({
       clientId: oauthClient.clientId,
       userId: user.id,

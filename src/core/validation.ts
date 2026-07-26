@@ -114,49 +114,86 @@ function numericConstraintType(schema: JSONSchema): 'integer' | 'number' | undef
  * Uses `~standard.validate()` from whichever schema is attached
  * (fortress built-in or external Standard Schema).
  */
+export interface ValidatedRequestData {
+  body?: unknown;
+  query?: unknown;
+  params?: unknown;
+}
+
 export async function validateRequest(
   input: EndpointInput | undefined,
-  data: { body?: unknown; query?: unknown; params?: unknown },
-): Promise<void> {
+  data: ValidatedRequestData,
+): Promise<ValidatedRequestData> {
   if (!input)
-    return;
+    return data;
 
   const allIssues: Array<{ path?: unknown; message: string; location: string }> = [];
+  // Once an endpoint declares an input contract, only declared locations may
+  // reach dispatch. Otherwise undeclared query/params values could overwrite
+  // a validated body field when the flat handler input is assembled.
+  const validated: ValidatedRequestData = {};
 
   if (input.bodySchema || input.body) {
-    const issues = await validateSchema(input.bodySchema ?? input.body!, data.body, 'body');
-    allIssues.push(...issues);
+    const result = await validateSchema(input.bodySchema ?? input.body!, data.body, 'body');
+    allIssues.push(...result.issues);
+    if (result.issues.length === 0)
+      validated.body = result.value;
   }
 
   if (input.querySchema || input.query) {
-    const issues = await validateSchema(input.querySchema ?? input.query!, data.query, 'query');
-    allIssues.push(...issues);
+    const result = await validateSchema(input.querySchema ?? input.query!, data.query, 'query');
+    allIssues.push(...result.issues);
+    if (result.issues.length === 0)
+      validated.query = result.value;
   }
 
   if (input.paramsSchema || input.params) {
-    const issues = await validateSchema(input.paramsSchema ?? input.params!, data.params, 'params');
-    allIssues.push(...issues);
+    const result = await validateSchema(input.paramsSchema ?? input.params!, data.params, 'params');
+    allIssues.push(...result.issues);
+    if (result.issues.length === 0)
+      validated.params = result.value;
   }
 
-  if (allIssues.length > 0) {
+  if (allIssues.length > 0)
     throw Errors.validationError(allIssues);
-  }
+
+  return validated;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 async function validateSchema(
   schema: StandardSchemaV1 | JSONSchema,
   data: unknown,
   location: string,
-): Promise<Array<{ path?: unknown; message: string; location: string }>> {
+): Promise<{
+  issues: Array<{ path?: unknown; message: string; location: string }>;
+  value?: unknown;
+}> {
   const result = await standardSchemaFor(schema)['~standard'].validate(data);
   if (result.issues) {
-    return result.issues.map(issue => ({
-      path: issue.path,
-      message: issue.message,
-      location,
-    }));
+    return {
+      issues: result.issues.map(issue => ({
+        path: issue.path,
+        message: issue.message,
+        location,
+      })),
+    };
   }
-  return [];
+  if (!isPlainRecord(result.value)) {
+    return {
+      issues: [{
+        message: `Endpoint ${location} schemas must validate to a flat object`,
+        location,
+      }],
+    };
+  }
+  return { issues: [], value: result.value };
 }
 
 /**

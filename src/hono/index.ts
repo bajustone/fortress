@@ -29,7 +29,7 @@
  * @module
  */
 
-import type { AnyFortress } from '../core/fortress';
+import type { FortressAuthRuntime, FortressPluginRuntime } from '../core/capabilities';
 import type { RbacOptions } from './middleware/rbac';
 import { createAuthMiddleware } from './middleware/auth';
 import { createErrorHandler } from './middleware/error-handler';
@@ -78,7 +78,11 @@ export interface HonoAdapterOptions extends RbacOptions {}
  *   app.use('/api/*', rbacMiddleware);
  *   app.use('/api/*', pluginMiddleware.afterRbac);
  */
-export function createHonoMiddleware(fortress: AnyFortress, options?: HonoAdapterOptions): {
+export function createHonoMiddleware(
+  fortress: Pick<FortressAuthRuntime, 'resolvePrincipal' | 'config' | 'iam'>
+    & Pick<FortressPluginRuntime, 'config'>,
+  options?: HonoAdapterOptions,
+): {
   authMiddleware: ReturnType<typeof createAuthMiddleware>;
   rbacMiddleware: ReturnType<typeof createRbacMiddleware>;
   errorHandler: ReturnType<typeof createErrorHandler>;

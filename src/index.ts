@@ -53,8 +53,31 @@ export type {
   PasswordPolicyConfig,
   PasswordPolicyObserver,
 } from './core/auth/password-policy';
+/** Namespaced typed call tree derived from the configured plugin tuple (ADR 0001 §5). */
+export type { CallClient, CallTree, EndpointCall, PluginCallTree } from './core/call-tree';
+/**
+ * Minimal runtime capability interfaces (ADR 0001 §4). Framework adapters
+ * and utility boundaries accept these instead of a full instance; every
+ * `Fortress<TPlugins>` composes all of them.
+ */
+export type {
+  FortressAuthRuntime,
+  FortressHttpRuntime,
+  FortressManifestRuntime,
+  FortressMigrationRuntime,
+  FortressObservabilityRuntime,
+  FortressPluginRuntime,
+  FortressProtectRuntime,
+  FortressRuntime,
+} from './core/capabilities';
+
 /** Top-level fortress configuration and pluggable password-hasher contract. */
 export type { FortressConfig, PasswordHasher, SessionConfig } from './core/config';
+/** Definition-site validation and branding for exact endpoint collections (ADR 0001 §2). */
+export { defineEndpoints } from './core/define-endpoints';
+
+export type { DefinedEndpoints, ValidEndpointRecord } from './core/define-endpoints';
+
 /**
  * Endpoint definition primitives — declarative `EndpointDefinition` objects
  * carrying request/response schemas, OpenAPI metadata, and HTTP method info
@@ -65,6 +88,7 @@ export type { FortressConfig, PasswordHasher, SessionConfig } from './core/confi
  * `fortress.call.*` in-process client.
  */
 export type {
+  AnyEndpointDefinition,
   ComponentSchemas,
   EndpointDefinition,
   EndpointInput,
@@ -72,11 +96,16 @@ export type {
   EndpointResponse,
   HttpMethod,
   InferEndpointBody,
+  InferEndpointBodyInput,
   InferEndpointCallInput,
+  InferEndpointHandler,
   InferEndpointParams,
+  InferEndpointParamsInput,
   InferEndpointQuery,
+  InferEndpointQueryInput,
   InferEndpointResponses,
   InferEndpointSuccessResponse,
+  InferEndpointValidatedInput,
   SecurityRequirement,
 } from './core/endpoint';
 /** Single error class plus the typed factory used throughout fortress. */
@@ -84,11 +113,11 @@ export { Errors, FortressError } from './core/errors';
 /** Discriminated string unions for Fortress and OAuth errors. */
 export type { FortressErrorCode, OAuthErrorCode } from './core/errors';
 
-/** Factory that builds a configured fortress instance and the helper for type-safe plugin method access. */
-export { createFortress, getPluginMethods } from './core/fortress';
+/** Factory that builds a configured fortress instance. */
+export { createFortress } from './core/fortress';
 
-/** The fortress instance type returned by {@link createFortress}, plus the typed call-map helper. */
-export type { AnyFortress, Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, TypedCall } from './core/fortress';
+/** The fortress instance type returned by {@link createFortress}. */
+export type { Fortress, FortressToOpenAPIOptions, MigrateOptions, MigrateResult, PluginMethodsValidator } from './core/fortress';
 
 /** Typed in-process client builder and per-call options. */
 export { buildCall } from './core/http/call';
@@ -159,24 +188,37 @@ export type { ToOpenAPIOptions } from './core/openapi';
  * with new models, hooks, methods, routes, middleware, scope rules, or
  * adapter wrappers.
  */
+export { definePlugin } from './core/plugin';
 export type {
   AfterHookContext,
   FieldDefinition,
   FortressPlugin,
+  FortressPluginDefinition,
   HookContext,
   HookResult,
+  LegacyPluginMethods,
   MiddlewareDefinition,
   ModelConstraint,
   ModelDefinition,
   PluginContext,
   PluginHooks,
+  PluginMethod,
+  PluginMethodsOf,
+  PluginRouteContext,
+  PluginRoutes,
+  PluginRoutesOf,
   PostAuthGateContext,
   PostAuthGateDecision,
   PostAuthGateProvider,
   PostAuthGateVerificationContext,
+  RouteHandlerIncompatible,
+  RouteHandlerKeyMismatch,
+  RouteHandlerMissing,
+  RuntimeFortressPlugin,
+  ValidatePluginRoutes,
 } from './core/plugin';
-/** Type-level mapping helpers used to expose plugin methods and typed call maps on the fortress instance. */
-export type { CallableForEndpoints, InferPluginCallMap, InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
+/** Plugin-methods inference plus the deprecated legacy augmentation bridge. */
+export type { InferPlugins, PluginMethodsMap } from './core/plugin-methods-map';
 /** Declarative policy-as-code: loader, diff, and apply primitives. */
 export { applyPolicyPlan, applyResourceOps } from './core/policy/apply';
 export type { ApplyPolicyResult } from './core/policy/apply';
@@ -276,6 +318,12 @@ export { assertSuccess, isImpersonation, isPending, isSuccess } from './core/typ
  */
 export { validateRequest } from './core/validation';
 
+/** Type-safe method surface contributed by the account lockout plugin. */
+export type { AccountLockoutMethods } from './plugins/account-lockout';
+
+/** Type-safe method surface contributed by the admin plugin. */
+export type { AdminMethods } from './plugins/admin';
+
 /** Type-safe method surface contributed by the API key plugin. */
 export type { ApiKeyMethods } from './plugins/api-key';
 
@@ -296,6 +344,9 @@ export type { AuthorizeRequestParams, ClientAuth, OAuthMethods, PendingFlowRecor
 
 export type { OpenAPISpec, SpecBuilderOptions } from './plugins/openapi/spec-builder';
 
+/** Type-safe method surface contributed by the rate-limit plugin. */
+export type { RateLimitMethods } from './plugins/rate-limit';
+
 /** Type-safe method surface contributed by the social login plugin. */
 export type { SocialLoginMethods } from './plugins/social-login';
 
@@ -307,3 +358,6 @@ export type { TwoFactorMethods } from './plugins/two-factor';
 
 /** Type-safe method surface contributed by the WebAuthn plugin. */
 export type { WebAuthnMethods } from './plugins/webauthn';
+
+/** Type-safe method surface contributed by the webhook plugin. */
+export type { WebhookMethods } from './plugins/webhook';

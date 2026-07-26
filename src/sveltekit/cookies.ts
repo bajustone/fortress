@@ -8,8 +8,8 @@
  * the same shape.
  */
 
+import type { FortressAuthRuntime } from '../core/capabilities';
 import type { ResolvedCookieConfig } from '../core/config';
-import type { AnyFortress } from '../core/fortress';
 import type { AuthCookiePayload } from '../core/http/cookie-serialize';
 import type { SvelteKitCookieOptions, SvelteKitRequestEvent } from './types';
 import { parseCookieHeader } from '../core/http/cookie-serialize';
@@ -21,7 +21,7 @@ import { parseCookieHeader } from '../core/http/cookie-serialize';
  */
 export function setAuthCookies(
   event: SvelteKitRequestEvent,
-  fortress: AnyFortress,
+  fortress: Pick<FortressAuthRuntime, 'cookies' | 'config'>,
   payload: AuthCookiePayload,
 ): void {
   const cookies = fortress.cookies;
@@ -35,7 +35,7 @@ export function setAuthCookies(
 }
 
 /** Clear both fortress auth cookies (logout). */
-export function clearAuthCookies(event: SvelteKitRequestEvent, fortress: AnyFortress): void {
+export function clearAuthCookies(event: SvelteKitRequestEvent, fortress: Pick<FortressAuthRuntime, 'cookies' | 'config'>): void {
   const cookies = fortress.cookies;
   event.cookies.delete(cookies.accessName, optsFor(cookies));
   event.cookies.delete(cookies.refreshName, optsFor(cookies));

@@ -1,7 +1,13 @@
 import type { DatabaseAdapter } from '../adapters/database';
+import type { RuntimeFortressPlugin } from './plugin';
+import type { StandardSchemaV1 } from './standard-schema';
 
 import { describe, expect, it } from 'vitest';
+import { oauth } from '../plugins/oauth';
+import { openapi } from '../plugins/openapi';
 import { createFortress } from './fortress';
+import { definePlugin } from './plugin';
+import { endpoint } from './schema-builder';
 
 // Minimal mock adapter — just enough for createFortress to wire up
 const mockDb: DatabaseAdapter = {
@@ -14,7 +20,309 @@ const mockDb: DatabaseAdapter = {
   transaction: async fn => fn(mockDb),
 };
 
+describe('resolvePlugin', () => {
+  const plugin = definePlugin({
+    name: 'known',
+    methods: () => ({ ping: () => 'pong' as const }),
+  });
+  const fortress = createFortress({
+    jwt: { key: 'fortress-test-secret-at-least-32!' },
+    database: mockDb,
+    plugins: [plugin] as const,
+  });
+
+  it('infers known keys and validates dynamic keys', () => {
+    expect(fortress.plugins.known.ping()).toBe('pong');
+    const dynamicName: string = 'known';
+    const dynamic = fortress.resolvePlugin(dynamicName);
+    // @ts-expect-error dynamic lookups return unknown without a validator
+    dynamic.ping();
+    const validated = fortress.resolvePlugin(
+      dynamicName,
+      (value): value is { ping: () => 'pong' } => typeof value === 'object'
+        && value !== null
+        && typeof Reflect.get(value, 'ping') === 'function',
+    );
+    expect(validated.ping()).toBe('pong');
+  });
+
+  it('rejects missing and invalid dynamic plugins', () => {
+    expect(() => fortress.resolvePlugin('missing')).toThrow('Plugin \'missing\' is not registered');
+    expect(() => fortress.resolvePlugin('known', (_value): _value is { nope: true } => false))
+      .toThrow('Plugin \'known\' methods failed runtime validation');
+  });
+});
+
 describe('createFortress', () => {
+  it('matches optional built-in call routes to runtime configuration', () => {
+    const configured = (plugins: readonly RuntimeFortressPlugin[]) => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins,
+    });
+    const calls = (plugins: readonly RuntimeFortressPlugin[]): Record<string, Record<string, unknown>> =>
+      configured(plugins).call.plugins as Record<string, Record<string, unknown>>;
+    expect(calls([oauth()]).oauth).not.toHaveProperty('handleGetFlow');
+    expect(calls([oauth({ enableConsentApi: true })]).oauth).toHaveProperty('handleGetFlow');
+    expect(calls([oauth({ enableConsentApi: true })]).oauth).toHaveProperty('handleApproveFlow');
+    expect(calls([oauth({ enableConsentApi: true })]).oauth).toHaveProperty('handleDenyFlow');
+
+    expect(calls([openapi()]).openapi).toHaveProperty('getUI');
+    expect(calls([openapi({ disableUI: false })]).openapi).toHaveProperty('getUI');
+    expect(calls([openapi({ disableUI: true })]).openapi).not.toHaveProperty('getUI');
+  });
+
+  it.each([
+    {
+      name: 'unsafe-runtime',
+      path: '/unsafe-runtime',
+      handler: 'handle',
+      meta: { summary: 'Unsafe', security: ['none'] as const },
+      expected: 'Plugin handler \'unsafe-runtime.handle\' not found',
+    },
+    {
+      name: 'oauth',
+      path: '/oauth/.well-known/openid-configuration',
+      handler: 'handleDiscovery',
+      meta: { summary: 'Unsafe OAuth', security: ['none'] as const, bearerKind: 'oauth' as const },
+      expected: 'OAuth handler \'handleDiscovery\' not found',
+    },
+  ])('fails startup for $name plugins with non-function method members', ({ name, path, handler, meta }) => {
+    const unsafe = {
+      name,
+      methods: () => ({ [handler]: 'not callable' }),
+      routes: {
+        [handler]: { method: 'GET', path, handler, meta },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [unsafe] as const,
+    })).toThrow(`Plugin "${name}" method "${handler}" must be callable`);
+  });
+
+  it('fails startup for a non-callable methods-only surface', () => {
+    const unsafe = {
+      name: 'methods-only-runtime',
+      methods: () => ({ callable: () => 'ok', metadata: 42 }),
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [unsafe],
+    })).toThrow('Plugin "methods-only-runtime" method "metadata" must be callable');
+  });
+
+  it('fails startup when a concrete plugin route key differs from its handler', () => {
+    const mismatched = {
+      name: 'mismatched-runtime-key',
+      methods: () => ({ actual: () => ({ ok: true }) }),
+      routes: {
+        alias: { method: 'GET', path: '/mismatched-runtime-key', handler: 'actual' },
+      },
+    } as unknown as RuntimeFortressPlugin;
+
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [mismatched],
+    })).toThrow('route key "alias" must match handler "actual"');
+  });
+
+  it('passes wire input to a transforming schema and validated output to the plugin handler', async () => {
+    const transformingSchema: StandardSchemaV1<
+      { occurredAt: string },
+      { occurredAt: Date }
+    > & {
+      readonly type: 'object';
+      readonly properties: { readonly occurredAt: { readonly type: 'string' } };
+      readonly required: readonly ['occurredAt'];
+    } = {
+      'type': 'object',
+      'properties': { occurredAt: { type: 'string' } },
+      'required': ['occurredAt'],
+      '~standard': {
+        version: 1,
+        vendor: 'transform-test',
+        validate: value => ({
+          value: { occurredAt: new Date((value as { occurredAt: string }).occurredAt) },
+        }),
+        types: undefined,
+      },
+    };
+    let handlerInput: { occurredAt: Date } | undefined;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [{
+        name: 'transform-runtime',
+        methods: () => ({
+          transform: (input: { occurredAt: Date }) => {
+            handlerInput = input;
+            return { occurredAt: input.occurredAt.toISOString() };
+          },
+        }),
+        routes: {
+          transform: endpoint('POST', '/transform-runtime')
+            .security('none')
+            .body(transformingSchema)
+            .handler('transform')
+            .build(),
+        },
+      }] as const,
+    });
+
+    await expect(fortress.call.plugins['transform-runtime'].transform({
+      occurredAt: '2026-07-25T00:00:00.000Z',
+    })).resolves.toEqual({ occurredAt: '2026-07-25T00:00:00.000Z' });
+    expect(handlerInput?.occurredAt).toBeInstanceOf(Date);
+  });
+
+  it('fails startup for route-only and inherited handlers', () => {
+    const routeOnly = {
+      name: 'route-only-runtime',
+      routes: { missing: { method: 'GET', path: '/missing', handler: 'missing' } },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [routeOnly],
+    })).toThrow('must be an own callable method');
+
+    const inherited = {
+      name: 'inherited-runtime',
+      methods: () => Object.create({ toString: () => ({ unsafe: true }) }) as object,
+      routes: { toString: { method: 'GET', path: '/inherited', handler: 'toString' } },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [inherited],
+    })).toThrow('must be an own callable method');
+
+    const invalidMethod = {
+      name: 'invalid-method-runtime',
+      methods: () => ({ trace: () => ({ ok: true }) }),
+      routes: { trace: { method: 'TRACE', path: '/trace', handler: 'trace' } },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [invalidMethod],
+    })).toThrow('route "trace" is not a valid endpoint definition');
+
+    const arrayBody = {
+      name: 'array-body-runtime',
+      methods: () => ({ accept: () => ({ ok: true }) }),
+      routes: {
+        accept: {
+          method: 'POST',
+          path: '/array-body',
+          handler: 'accept',
+          input: { body: { type: 'array', items: { type: 'string' } } },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [arrayBody],
+    })).toThrow('route "accept" body schema must describe a flat object');
+  });
+
+  it('safely supports poisoned own plugin and handler names', async () => {
+    const methods = Object.create(null) as Record<string, () => { value: string }>;
+    methods.constructor = function (this: typeof methods) {
+      return { value: Reflect.get(this, '__proto__').call(this).value };
+    };
+    Reflect.set(methods, '__proto__', () => ({ value: 'safe' }));
+    const poisoned = {
+      name: '__proto__',
+      methods: () => methods,
+      routes: {
+        constructor: {
+          method: 'GET',
+          path: '/poisoned',
+          handler: 'constructor',
+          meta: { summary: 'Poisoned', security: ['none'] },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [poisoned] as const,
+    });
+
+    expect(fortress.resolvePlugin('__proto__')).toBe(methods);
+    expect(Object.getPrototypeOf(fortress.call.plugins)).toBeNull();
+    const poisonedCalls = Reflect.get(fortress.call.plugins, '__proto__') as Record<string, (input: object) => Promise<unknown>>;
+    expect(Object.getPrototypeOf(poisonedCalls)).toBeNull();
+    await expect(poisonedCalls.constructor({})).resolves.toEqual({ value: 'safe' });
+    const response = await fortress.handleRequest(new Request('http://localhost/poisoned'));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ value: 'safe' });
+  });
+
+  it('preserves plugin method this binding during route dispatch', async () => {
+    const bound = {
+      name: 'bound-runtime',
+      methods: () => ({
+        prefix: () => 'bound',
+        handle(this: { prefix: () => string }) {
+          return { value: this.prefix() };
+        },
+      }),
+      routes: {
+        handle: {
+          method: 'GET',
+          path: '/bound-runtime',
+          handler: 'handle',
+          meta: { summary: 'Bound', security: ['none'] },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [bound] as const,
+    });
+
+    const response = await fortress.handleRequest(new Request('http://localhost/bound-runtime'));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ value: 'bound' });
+  });
+
+  it('preserves OAuth method this binding during protocol dispatch', async () => {
+    const boundOAuth = {
+      name: 'oauth',
+      methods: () => ({
+        issuer: () => 'https://issuer.example',
+        handleDiscovery(this: { issuer: () => string }) {
+          return { issuer: this.issuer() };
+        },
+      }),
+      routes: {
+        handleDiscovery: {
+          method: 'GET',
+          path: '/oauth/.well-known/openid-configuration',
+          handler: 'handleDiscovery',
+          meta: { summary: 'Discovery', security: ['none'], bearerKind: 'oauth' },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [boundOAuth] as const,
+    });
+
+    const response = await fortress.handleRequest(new Request('http://localhost/oauth/.well-known/openid-configuration'));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ issuer: 'https://issuer.example' });
+  });
+
   it('creates a fortress instance with auth and iam services', () => {
     const fortress = createFortress({
       jwt: { key: 'fortress-test-secret-at-least-32!' },
@@ -151,30 +459,23 @@ describe('createFortress', () => {
       // methods, so exposing them on fortress.call would create a runtime
       // NOT_FOUND footgun. Use a real plugin with routes+methods for custom
       // typed callables.
-      expect((fortress.call as Record<string, unknown>).getSchool).toBeUndefined();
+      expect((fortress.call as unknown as Record<string, unknown>).getSchool).toBeUndefined();
+      expect((fortress.call.plugins as Record<string, unknown>).__host).toBeUndefined();
     });
 
-    it('keeps a top-level host override of a core route metadata-only', async () => {
+    it('rejects top-level metadata routes that collide with core routes', async () => {
       const { endpoint } = await import('./schema-builder');
       const hostMe = endpoint('GET', '/auth/me')
         .summary('Host-owned me')
         .security('none')
         .handler('hostMe')
         .build();
-      const fortress = createFortress({
+
+      expect(() => createFortress({
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         routes: { hostMe },
-      });
-
-      expect(fortress.manifest.find(route => route.path === '/auth/me')).toMatchObject({
-        handler: 'hostMe',
-        plugin: null,
-        mounted: false,
-      });
-      await expect(fortress.handleRequest(new Request('http://localhost/auth/me')))
-        .resolves
-        .toMatchObject({ status: 404 });
+      })).toThrow(/collides with a Fortress core route/);
     });
 
     it('returns 404 before auth/RBAC for protected metadata-only host routes', async () => {
@@ -234,8 +535,8 @@ describe('createFortress', () => {
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         plugins: [
-          { name: 'first-plugin', routes: { first } },
-          { name: 'second-plugin', routes: { second } },
+          { name: 'first-plugin', routes: { first }, methods: () => ({ first: () => ({ ok: true }) }) },
+          { name: 'second-plugin', routes: { second }, methods: () => ({ second: () => ({ ok: true }) }) },
         ],
       })).toThrow(/Duplicate endpoint GET \/duplicate.*first-plugin.*second-plugin/);
     });
@@ -249,10 +550,56 @@ describe('createFortress', () => {
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         plugins: [
-          { name: 'first-plugin', routes: { first } },
-          { name: 'second-plugin', routes: { second } },
+          { name: 'first-plugin', routes: { first }, methods: () => ({ first: () => ({ ok: true }) }) },
+          { name: 'second-plugin', routes: { second }, methods: () => ({ second: () => ({ ok: true }) }) },
         ],
       })).toThrow(/Duplicate endpoint GET \/duplicate\/path/);
+    });
+
+    it('rejects core overrides whose route key or handler does not match the core callable', async () => {
+      const { endpoint } = await import('./schema-builder');
+      const alternate = endpoint('GET', '/auth/me')
+        .summary('Unsafe override')
+        .security('none')
+        .handler('alternateMe')
+        .build();
+
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'undeclared-override',
+          routes: { alternateMe: alternate },
+          methods: () => ({ alternateMe: () => ({ source: 'plugin' }) }),
+        }],
+      })).toThrow(/declare "me" in coreOverrides/);
+
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'unsafe-override',
+          coreOverrides: ['me'] as const,
+          routes: { alternateMe: alternate },
+          methods: () => ({ alternateMe: () => ({ source: 'plugin' }) }),
+        }],
+      })).toThrow(/route key and handler must both be "me"/);
+
+      const unrelatedMe = endpoint('GET', '/custom/me')
+        .summary('Not an override')
+        .security('none')
+        .handler('me')
+        .build();
+      expect(() => createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'unused-override',
+          coreOverrides: ['me'] as const,
+          routes: { me: unrelatedMe },
+          methods: () => ({ me: () => ({ source: 'plugin' }) }),
+        }],
+      })).toThrow(/declares unused core override "me"/);
     });
 
     it('preserves intentional plugin overrides of core route and call keys', async () => {
@@ -267,6 +614,7 @@ describe('createFortress', () => {
         database: mockDb,
         plugins: [{
           name: 'core-override',
+          coreOverrides: ['me'] as const,
           routes: { me },
           methods: () => ({ me: () => ({ source: 'plugin' }) }),
         }],
@@ -279,21 +627,75 @@ describe('createFortress', () => {
         plugin: 'core-override',
         mounted: true,
       });
+      expect((fortress.call.auth as Record<string, unknown>).me).toBeUndefined();
+      await expect(fortress.call.plugins['core-override'].me({})).resolves.toEqual({ source: 'plugin' });
     });
 
-    it('rejects duplicate fortress.call keys across plugins', async () => {
+    it('excludes OAuth protocol routes from the generic runtime call tree', async () => {
+      const protocol = {
+        method: 'POST' as const,
+        path: '/oauth/token',
+        handler: 'handleTokenRequest' as const,
+        meta: { summary: 'Token', bearerKind: 'oauth' as const, security: ['basic' as const] },
+      };
+      const consent = {
+        method: 'GET' as const,
+        path: '/oauth/flows/:flowId',
+        handler: 'handleGetFlow' as const,
+        meta: { summary: 'Consent', security: ['bearer' as const] },
+      };
+      const fortress = createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [{
+          name: 'oauth',
+          routes: { handleTokenRequest: protocol, handleGetFlow: consent },
+          methods: () => ({
+            handleTokenRequest: () => ({}),
+            handleGetFlow: () => ({ flowId: 'flow' }),
+          }),
+        }],
+      });
+
+      expect((fortress.call.plugins.oauth as Record<string, unknown>).handleTokenRequest).toBeUndefined();
+      expect(Object.keys(fortress.call.plugins.oauth)).toContain('handleGetFlow');
+    });
+
+    it('treats differently named path parameters as the same route shape', async () => {
       const { endpoint } = await import('./schema-builder');
-      const first = endpoint('GET', '/first').summary('first').security('none').handler('shared').build();
-      const second = endpoint('GET', '/second').summary('second').security('none').handler('shared').build();
+      const first = endpoint('DELETE', '/items/:id').summary('first').security('none').handler('first').build();
+      const second = endpoint('DELETE', '/items/:itemId').summary('second').security('none').handler('second').build();
 
       expect(() => createFortress({
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
         plugins: [
-          { name: 'first-plugin', routes: { shared: first } },
-          { name: 'second-plugin', routes: { shared: second } },
+          { name: 'first-plugin', routes: { first }, methods: () => ({ first: () => ({ ok: true }) }) },
+          { name: 'second-plugin', routes: { second }, methods: () => ({ second: () => ({ ok: true }) }) },
         ],
-      })).toThrow(/Duplicate fortress\.call key "shared".*first-plugin.*second-plugin/);
+      })).toThrow(/Duplicate endpoint DELETE \/items\/:/);
+    });
+
+    it('namespaces shared call keys per plugin instead of colliding', async () => {
+      // v1 threw on two plugins reusing a call key. In the namespaced tree
+      // (ADR 0001 §5) each plugin owns its namespace, so shared keys coexist;
+      // duplicate method+path routes and duplicate plugin names are still
+      // rejected elsewhere.
+      const { endpoint } = await import('./schema-builder');
+      const first = endpoint('GET', '/first').summary('first').security('none').handler('shared').build();
+      const second = endpoint('GET', '/second').summary('second').security('none').handler('shared').build();
+
+      const fortress = createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+        plugins: [
+          { name: 'first-plugin', routes: { shared: first }, methods: () => ({ shared: () => ({ source: 'first' }) }) },
+          { name: 'second-plugin', routes: { shared: second }, methods: () => ({ shared: () => ({ source: 'second' }) }) },
+        ],
+      });
+      const tree = fortress.call.plugins as Record<string, Record<string, unknown>>;
+      expect(typeof tree['first-plugin'].shared).toBe('function');
+      expect(typeof tree['second-plugin'].shared).toBe('function');
     });
   });
 

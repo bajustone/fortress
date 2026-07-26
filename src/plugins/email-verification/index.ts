@@ -13,6 +13,7 @@ import type { FortressPlugin } from '../../core/plugin';
 import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import { generateRefreshToken, hashToken } from '../../core/auth/refresh-token';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 
 export interface EmailVerificationConfig {
   /** Token expiry in seconds (default: 86400 = 24h) */
@@ -46,7 +47,7 @@ export interface EmailVerificationMethods {
  * issues hashed verification tokens, exposes `requestVerification` /
  * `verifyEmail` methods, and (when mounted) the corresponding HTTP routes.
  */
-export function emailVerification(config: EmailVerificationConfig = {}): FortressPlugin & { readonly name: 'email-verification' } {
+export function emailVerification(config: EmailVerificationConfig = {}): FortressPlugin<'email-verification', EmailVerificationMethods, undefined> {
   const tokenExpirySeconds = config.tokenExpirySeconds ?? 86400;
   const requireVerification = config.requireVerification ?? true;
 
@@ -78,7 +79,7 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
     return record;
   }
 
-  return {
+  return definePlugin({
     name: 'email-verification',
 
     models: [{
@@ -186,5 +187,5 @@ export function emailVerification(config: EmailVerificationConfig = {}): Fortres
         return ctx.auth.completePendingAuth(continuationToken, verificationToken, meta);
       },
     }),
-  };
+  } satisfies FortressPlugin<'email-verification', EmailVerificationMethods>);
 }

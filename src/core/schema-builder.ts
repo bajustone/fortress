@@ -3,9 +3,47 @@ import type { FortressSchema, Infer, JSONSchema, Simplify } from './json-schema'
 import type { StandardSchemaV1 } from './standard-schema';
 import { fromJSONSchema } from '@bajustone/fetcher/openapi';
 import { date as fDate, datetime as fDatetime, email as fEmail, time as fTime, url as fUrl, uuid as fUuid } from '@bajustone/fetcher/schema';
+import { isHttpMethod } from './endpoint';
 
-/** Shorthand for the Standard Schema inferred output type. */
+/** Shorthands for the Standard Schema wire-input and validated-output types. */
+type InferSchemaInput<T extends StandardSchemaV1> = StandardSchemaV1.InferInput<T>;
 type InferSchema<T extends StandardSchemaV1> = StandardSchemaV1.InferOutput<T>;
+
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+type IsUnknown<T> = IsAny<T> extends true ? false : unknown extends T ? [keyof T] extends [never] ? true : false : false;
+type NoInferCompat<T> = [T][T extends any ? 0 : never];
+type FunctionPropertyKeys<T> = {
+  [K in keyof T]-?: Exclude<T[K], undefined> extends (...args: any[]) => any ? K : never;
+}[keyof T];
+type IsFlatInputObject<T> = IsAny<T> extends true
+  ? true
+  : IsUnknown<T> extends true
+    ? true
+    : [T] extends [object]
+        ? [Extract<T, Date | readonly unknown[] | ((...args: any[]) => any)>] extends [never]
+            ? [FunctionPropertyKeys<T>] extends [never] ? true : false
+            : false
+        : false;
+
+/** Compile-time diagnostic for request locations incompatible with the flat call contract. */
+interface FlatEndpointInputRequired {
+  readonly 'fortress:input-error': 'endpoint body/query/params schemas must accept and return a flat object';
+}
+
+type FlatInputSchemaConstraint<T extends StandardSchemaV1>
+  = IsFlatInputObject<StandardSchemaV1.InferInput<T>> extends true
+    ? IsFlatInputObject<StandardSchemaV1.InferOutput<T>> extends true
+      ? unknown
+      : FlatEndpointInputRequired
+    : FlatEndpointInputRequired;
+
+const FLAT_INPUT_JSON_SCHEMA_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'array', 'object', 'null']);
+
+function assertFlatInputSchema(location: 'body' | 'query' | 'params', schema: StandardSchemaV1): void {
+  const type = (schema as StandardSchemaV1 & { type?: unknown }).type;
+  if (typeof type === 'string' && FLAT_INPUT_JSON_SCHEMA_TYPES.has(type) && type !== 'object')
+    throw new TypeError(`Endpoint ${location} schema must describe a flat object`);
+}
 
 /** Distribute a union into an intersection — `A | B` → `A & B`. Used by {@link intersect}. */
 type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends (k: infer I) => void ? I : never;
@@ -697,9 +735,15 @@ export class EndpointBuilder<
   TParams = {},
   // eslint-disable-next-line ts/no-empty-object-type
   TResponses extends Record<number, unknown> = {},
+  THandler extends string = string,
+  TMethod extends HttpMethod = HttpMethod,
+  TPath extends string = string,
+  TBodyInput = TBody,
+  TQueryInput = TQuery,
+  TParamsInput = TParams,
 > {
-  private _method: HttpMethod;
-  private _path: string;
+  private _method: TMethod;
+  private _path: TPath;
   private _handler = '';
   private _summary = '';
   private _description?: string;
@@ -712,9 +756,33 @@ export class EndpointBuilder<
   private _params?: SchemaInput;
   private _responses: Record<number, EndpointResponse> = {};
 
-  constructor(method: HttpMethod, path: string) {
+  constructor(method: TMethod, path: TPath) {
     this._method = method;
     this._path = path;
+  }
+
+  /**
+   * Clone the builder before any operation that changes its phantom type.
+   * This prevents an aliased builder from mutating the runtime definition
+   * behind a previously inferred body/query/params/response/handler type.
+   */
+  private clone(): EndpointBuilder<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
+    const next = new EndpointBuilder<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>(
+      this._method,
+      this._path,
+    );
+    next._handler = this._handler;
+    next._summary = this._summary;
+    next._description = this._description;
+    next._tags = [...this._tags];
+    next._security = [...this._security];
+    next._deprecated = this._deprecated;
+    next._permission = this._permission ? { ...this._permission } : undefined;
+    next._body = this._body;
+    next._query = this._query;
+    next._params = this._params;
+    next._responses = { ...this._responses };
+    return next;
   }
 
   summary(s: string): this {
@@ -748,24 +816,30 @@ export class EndpointBuilder<
   }
 
   body<T extends StandardSchemaV1>(
-    schema: T,
-  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses> {
-    this._body = schema;
-    return this as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses>;
+    schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
+  ): EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath, InferSchemaInput<T>, TQueryInput, TParamsInput> {
+    assertFlatInputSchema('body', schema);
+    const next = this.clone();
+    next._body = schema;
+    return next as unknown as EndpointBuilder<InferSchema<T>, TQuery, TParams, TResponses, THandler, TMethod, TPath, InferSchemaInput<T>, TQueryInput, TParamsInput>;
   }
 
   query<T extends StandardSchemaV1>(
-    schema: T,
-  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses> {
-    this._query = schema;
-    return this as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses>;
+    schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
+  ): EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, InferSchemaInput<T>, TParamsInput> {
+    assertFlatInputSchema('query', schema);
+    const next = this.clone();
+    next._query = schema;
+    return next as unknown as EndpointBuilder<TBody, InferSchema<T>, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, InferSchemaInput<T>, TParamsInput>;
   }
 
   params<T extends StandardSchemaV1>(
-    schema: T,
-  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses> {
-    this._params = schema;
-    return this as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses>;
+    schema: T & FlatInputSchemaConstraint<NoInferCompat<T>>,
+  ): EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, InferSchemaInput<T>> {
+    assertFlatInputSchema('params', schema);
+    const next = this.clone();
+    next._params = schema;
+    return next as unknown as EndpointBuilder<TBody, TQuery, InferSchema<T>, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, InferSchemaInput<T>>;
   }
 
   /**
@@ -782,22 +856,23 @@ export class EndpointBuilder<
     status: S,
     description: string,
     schema: T,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }>;
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<T> }, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>;
   response<S extends number>(
     status: S,
     description: string,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }>;
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: unknown }, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>;
   response<S extends number>(
     status: S,
     description: string,
     schema?: StandardSchemaV1 | JSONSchema,
-  ): EndpointBuilder<TBody, TQuery, TParams, any> {
+  ): EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
+    const next = this.clone();
     const stored: EndpointResponse = { description };
     if (schema !== undefined) {
       stored.schema = isStandardSchema(schema) ? extractJsonSchema(schema as FortressSchema<any>) : schema as JSONSchema;
     }
-    this._responses[status] = stored;
-    return this as unknown as EndpointBuilder<TBody, TQuery, TParams, any>;
+    next._responses[status] = stored;
+    return next as unknown as EndpointBuilder<TBody, TQuery, TParams, any, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>;
   }
 
   /**
@@ -820,20 +895,26 @@ export class EndpointBuilder<
   errorResponse<S extends number>(
     status: S,
     description: string,
-  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }> {
+  ): EndpointBuilder<TBody, TQuery, TParams, TResponses & { [K in S]: InferSchema<typeof ErrorEnvelope> }, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
     return this.response(status, description, ErrorEnvelope);
   }
 
-  handler(name: string): this {
-    this._handler = name;
-    return this;
+  /**
+   * Name the plugin method this route dispatches to. The literal name is
+   * captured in the definition's `THandler` phantom so `definePlugin` can
+   * statically verify the handler exists and matches the endpoint's I/O.
+   */
+  handler<H extends string>(name: H): EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
+    const next = this.clone();
+    next._handler = name;
+    return next as unknown as EndpointBuilder<TBody, TQuery, TParams, TResponses, H, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput>;
   }
 
-  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses> {
-    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses> = {
+  build(): EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> {
+    const def: EndpointDefinition<TBody, TQuery, TParams, TResponses, THandler, TMethod, TPath, TBodyInput, TQueryInput, TParamsInput> = {
       method: this._method,
       path: this._path,
-      handler: this._handler,
+      handler: this._handler as THandler,
     };
 
     if (this._summary || this._tags.length > 0 || this._security.length > 0 || this._description || this._deprecated || this._permission) {
@@ -875,7 +956,13 @@ export class EndpointBuilder<
 }
 
 /** Start building a new {@link EndpointDefinition} for the given HTTP method and path. */
-// eslint-disable-next-line ts/no-empty-object-type
-export function endpoint(method: HttpMethod, path: string): EndpointBuilder<{}, {}, {}, {}> {
+/* eslint-disable ts/no-empty-object-type -- builder starts with empty phantom input/response slots */
+export function endpoint<const TMethod extends HttpMethod, const TPath extends string>(
+  method: TMethod,
+  path: TPath,
+): EndpointBuilder<{}, {}, {}, {}, string, TMethod, TPath> {
+  if (!isHttpMethod(method))
+    throw new TypeError(`Unsupported endpoint method: ${String(method)}`);
   return new EndpointBuilder(method, path);
 }
+/* eslint-enable ts/no-empty-object-type */

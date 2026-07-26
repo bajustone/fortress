@@ -34,7 +34,7 @@
  */
 
 import type { DatabaseAdapter } from '../adapters/database';
-import type { AnyFortress } from '../core/fortress';
+import type { FortressAuthRuntime, FortressHttpRuntime, FortressPluginRuntime } from '../core/capabilities';
 import type { PluginContext } from '../core/plugin';
 import type { AuthTokenPair, RequestMeta, Subject, TokenClaims } from '../core/types';
 import type {
@@ -56,9 +56,14 @@ import { replayCookies, setAuthCookies } from './cookies';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+type SvelteKitHandleRuntime
+  = & Pick<FortressHttpRuntime, 'manifest' | 'handleRequest'>
+    & Pick<FortressAuthRuntime, 'auth' | 'iam' | 'config' | 'extractAccessToken' | 'cookies'>
+    & Pick<FortressPluginRuntime, 'runPluginMiddleware'>;
+
 /** Build the SvelteKit `handle` hook for a Fortress instance. */
 export function createSvelteKitHandle(
-  fortress: AnyFortress,
+  fortress: SvelteKitHandleRuntime,
   options: SvelteKitAdapterOptions = {},
 ): SvelteKitHandle {
   const basePath = options.basePath ?? '';
@@ -268,7 +273,7 @@ function requestMeta(request: Request): RequestMeta {
  */
 function populateLocals(
   event: SvelteKitRequestEvent<FortressLocals>,
-  fortress: AnyFortress,
+  fortress: Pick<FortressAuthRuntime, 'config'>,
   subject: Subject,
   claims: TokenClaims | undefined,
   scopes: string[] | null | undefined,

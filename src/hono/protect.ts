@@ -1,6 +1,6 @@
 import type { Context, Env, MiddlewareHandler } from 'hono';
+import type { FortressProtectRuntime } from '../core/capabilities';
 import type { EndpointDefinition } from '../core/endpoint';
-import type { AnyFortress } from '../core/fortress';
 import type {
   ProtectedRouteContext,
   ProtectedRouteHandler,
@@ -44,19 +44,19 @@ export function protectedRoute<
   HEnv extends Env = Env,
   TResult = unknown,
 >(
-  fortress: AnyFortress,
+  fortress: FortressProtectRuntime,
   target: E,
   handler: HonoProtectedRouteHandler<E, HEnv, TResult>,
   options?: ProtectOptions,
 ): MiddlewareHandler<HEnv>;
 export function protectedRoute<HEnv extends Env = Env, TResult = unknown>(
-  fortress: AnyFortress,
+  fortress: FortressProtectRuntime,
   target: string,
   handler: HonoProtectedRouteHandler<EndpointDefinition, HEnv, TResult>,
   options?: ProtectOptions,
 ): MiddlewareHandler<HEnv>;
 export function protectedRoute(
-  fortress: AnyFortress,
+  fortress: FortressProtectRuntime,
   target: ProtectedRouteTarget,
 
   handler: HonoProtectedRouteHandler<any, any, unknown>,
@@ -65,7 +65,7 @@ export function protectedRoute(
   return async (c) => {
     // Cast: core `protect` overloads require a concrete branch; impl is loose.
     const protectedHandler = (protect as (
-      f: AnyFortress,
+      f: FortressProtectRuntime,
       t: ProtectedRouteTarget,
       h: ProtectedRouteHandler,
       o?: ProtectOptions,

@@ -1,6 +1,6 @@
 import type { Context, Env, MiddlewareHandler } from 'hono';
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { AnyFortress } from '../../core/fortress';
+import type { FortressAuthRuntime } from '../../core/capabilities';
 import type { PluginContext } from '../../core/plugin';
 import type { Subject, TokenClaims } from '../../core/types';
 import { FortressError } from '../../core/errors';
@@ -83,7 +83,7 @@ export type FortressContext<E extends Env = FortressEnv> = Context<E>;
  * `scopeRules` for the requested model.
  */
 export function createAuthMiddleware(
-  fortress: AnyFortress,
+  fortress: Pick<FortressAuthRuntime, 'resolvePrincipal' | 'config'>,
 ): MiddlewareHandler<FortressEnv> {
   // Internally typed as the base FortressEnv. The middleware is variance-safe
   // when mounted on a `Hono<FortressEnv<MyApp>>()` because the augmented env's

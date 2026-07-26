@@ -21,7 +21,8 @@
  */
 
 import type { Context, MiddlewareHandler } from 'hono';
-import type { AnyFortress } from '../../core/fortress';
+import type { FortressPluginRuntime } from '../../core/capabilities';
+import { resolveRateLimitMethods } from './plugin-methods';
 
 export interface HonoRateLimitOptions {
   /**
@@ -32,10 +33,6 @@ export interface HonoRateLimitOptions {
   keyByUser?: boolean;
   /** Override IP extraction. Default reads `X-Forwarded-For` then `X-Real-IP`. */
   extractIp?: (c: Context) => string | undefined;
-}
-
-interface RateLimitCheck {
-  check: (rule: string, keys: { ip?: string; userId?: string }) => Promise<void>;
 }
 
 function defaultExtractIp(c: Context): string | undefined {
@@ -50,16 +47,11 @@ function defaultExtractIp(c: Context): string | undefined {
  * defined in your `rateLimit({ rules: { ... } })` config.
  */
 export function honoRateLimit(
-  fortress: AnyFortress,
+  fortress: Pick<FortressPluginRuntime, 'plugins'>,
   ruleName: string,
   options: HonoRateLimitOptions = {},
 ): MiddlewareHandler {
-  const methods = (fortress.plugins as Record<string, unknown>)['rate-limit'] as RateLimitCheck | undefined;
-  if (!methods?.check) {
-    throw new Error(
-      'rate-limit plugin is not registered — add rateLimit({...}) to your FortressConfig.plugins',
-    );
-  }
+  const methods = resolveRateLimitMethods(fortress);
   const extractIp = options.extractIp ?? defaultExtractIp;
   const keyByUser = options.keyByUser ?? true;
 

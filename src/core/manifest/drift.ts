@@ -1,6 +1,6 @@
 import type { OpenAPISpec } from '../../plugins/openapi/spec-builder';
+import type { FortressManifestRuntime } from '../capabilities';
 import type { EndpointDefinition } from '../endpoint';
-import type { AnyFortress } from '../fortress';
 import type { RouteManifestEntry } from './route-manifest';
 import { buildRouteManifest } from './route-manifest';
 
@@ -46,7 +46,7 @@ function diffSets(expected: Set<string>, actual: Set<string>): string[] {
 }
 
 export function detectRouteManifestDrift(
-  fortress: Pick<AnyFortress, 'endpoints' | 'config' | 'manifest'>,
+  fortress: Pick<FortressManifestRuntime, 'endpoints' | 'config' | 'manifest'>,
   options: DetectRouteManifestDriftOptions = {},
 ): RouteManifestDrift {
   const canonicalManifest = buildRouteManifest(fortress);

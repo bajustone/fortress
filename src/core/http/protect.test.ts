@@ -1,11 +1,12 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin } from '../plugin';
+import type { StandardSchemaV1 } from '../standard-schema';
 import type { ProtectedRouteContext } from './protect';
 import { describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 import { buildRouteManifest } from '../manifest/route-manifest';
-import { endpoint, id, int, obj, str } from '../schema-builder';
+import { endpoint, id, int, nullType, obj, str } from '../schema-builder';
 import { protect } from './protect';
 
 /** Compile-time assertion that two types are identical. */
@@ -21,23 +22,33 @@ function testEndpoint(): EndpointDefinition {
     meta: { summary: 'Create host thing', security: ['none'] },
     input: {
       body: obj({ name: str() }, 'name'),
-      bodySchema: obj({ name: str() }, 'name'),
+      bodySchema: {
+        '~standard': {
+          version: 1,
+          vendor: 'test',
+          validate: (value: unknown) => ({
+            value: { name: String((value as { name?: unknown }).name).toUpperCase() },
+          }),
+        },
+      },
       query: obj({ draft: str() }),
       querySchema: obj({ draft: str() }),
       params: obj({ id: id() }, 'id'),
       paramsSchema: obj({ id: id() }, 'id'),
     },
-    responses: { 201: { description: 'Created', schema: obj({ ok: str() }, 'ok') } },
+    responses: {
+      202: { description: 'Queued', schema: obj({ queued: str() }, 'queued') },
+      201: { description: 'Created', schema: obj({ ok: str() }, 'ok') },
+    },
   };
 }
 
 describe('protect()', () => {
-  it('runs plugin middleware, validates/coerces input, and calls the host handler', async () => {
+  it('runs the pipeline and aligns the handler body with the lowest numeric success status', async () => {
     const calls: string[] = [];
     const ep = testEndpoint();
     const plugin: FortressPlugin = {
-      name: 'host-routes',
-      routes: { createHostThing: ep },
+      name: 'host-middleware',
       middleware: [
         {
           path: '/host/things/:id',
@@ -69,12 +80,13 @@ describe('protect()', () => {
       database: createTestAdapter(),
       jwt: { key: secret },
       csrf: { enabled: false },
+      routes: { createHostThing: ep },
       plugins: [plugin],
     });
 
     const handler = protect(fortress, 'createHostThing', (ctx) => {
       expect(ctx.manifest.classification).toBe('public');
-      expect(ctx.input).toEqual({ name: 'alpha', draft: 'true', id: '123' });
+      expect(ctx.input).toEqual({ name: 'ALPHA', draft: 'true', id: '123' });
       expect(ctx.params).toEqual({ id: '123' });
       return { ok: 'yes' };
     });
@@ -153,7 +165,7 @@ describe('protect()', () => {
       database: createTestAdapter(),
       jwt: { key: secret },
       csrf: { enabled: false },
-      plugins: [{ name: 'host-routes', routes: { createHostThing: ep } }],
+      routes: { createHostThing: ep },
       cookies: { secure: false },
     });
 
@@ -167,13 +179,45 @@ describe('protect()', () => {
     expect(res.headers.getSetCookie().length).toBeGreaterThanOrEqual(2);
   });
 
+  it('preserves explicit null and emits bodyless 205 responses', async () => {
+    const nullable = endpoint('GET', '/host/nullable')
+      .security('none')
+      .response(200, 'Null', nullType())
+      .handler('nullable')
+      .build();
+    const reset = endpoint('POST', '/host/reset')
+      .security('none')
+      .response(205, 'Reset content')
+      .handler('reset')
+      .build();
+    const fortress = createFortress({
+      database: createTestAdapter(),
+      jwt: { key: secret },
+      csrf: { enabled: false },
+      routes: { nullable, reset },
+    });
+
+    const nullResponse = await protect(fortress, nullable, () => null)(
+      new Request('http://localhost/host/nullable'),
+    );
+    expect(nullResponse.status).toBe(200);
+    expect(await nullResponse.json()).toBeNull();
+
+    const resetResponse = await protect(fortress, reset, () => undefined)(
+      new Request('http://localhost/host/reset', { method: 'POST' }),
+    );
+    expect(resetResponse.status).toBe(205);
+    expect(resetResponse.headers.has('content-type')).toBe(false);
+    expect(await resetResponse.text()).toBe('');
+  });
+
   it('exposes ctx.respond for typed non-success status returns', async () => {
     const ep = testEndpoint();
     const fortress = createFortress({
       database: createTestAdapter(),
       jwt: { key: secret },
       csrf: { enabled: false },
-      plugins: [{ name: 'host-routes', routes: { createHostThing: ep } }],
+      routes: { createHostThing: ep },
       cookies: { secure: false },
     });
 
@@ -189,6 +233,68 @@ describe('protect()', () => {
 
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ code: 'NOT_FOUND', message: 'no thing', statusCode: 404 });
+  });
+
+  it('drops undeclared query and params before building protected input', async () => {
+    const ep = endpoint('POST', '/host/declared-only/:role')
+      .security('none')
+      .body(obj({ role: str() }, 'role'))
+      .response(200, 'OK', obj({ role: str() }, 'role'))
+      .handler('declaredOnly')
+      .build();
+    const fortress = createFortress({
+      database: createTestAdapter(),
+      jwt: { key: secret },
+      csrf: { enabled: false },
+      routes: { declaredOnly: ep },
+    });
+    let seen: unknown;
+    const handler = protect(fortress, ep, (ctx) => {
+      seen = { input: ctx.input, query: ctx.query, params: ctx.params };
+      return ctx.input;
+    });
+
+    const response = await handler(new Request('http://localhost/host/declared-only/path?role=query', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'member' }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ role: 'member' });
+    expect(seen).toEqual({ input: { role: 'member' }, query: {}, params: {} });
+  });
+
+  it('types transforming schema call input as wire data and protected context as validated output', () => {
+    const transformingSchema: StandardSchemaV1<
+      { occurredAt: string },
+      { occurredAt: Date }
+    > & {
+      readonly type: 'object';
+      readonly properties: { readonly occurredAt: { readonly type: 'string' } };
+    } = {
+      'type': 'object',
+      'properties': { occurredAt: { type: 'string' } },
+      '~standard': {
+        version: 1,
+        vendor: 'transform-test',
+        validate: value => ({
+          value: { occurredAt: new Date((value as { occurredAt: string }).occurredAt) },
+        }),
+        types: undefined,
+      },
+    };
+    const transformed = endpoint('POST', '/transformed')
+      .body(transformingSchema)
+      .handler('transformed')
+      .build();
+    type TransformedCtx = ProtectedRouteContext<typeof transformed>;
+    const _bodyOutput: Expect<TransformedCtx['body'], { occurredAt: Date }> = true;
+    const _inputOutput: Expect<TransformedCtx['input'], { occurredAt: Date }> = true;
+
+    expect(transformed.handler).toBe('transformed');
+    expect(_bodyOutput).toBe(true);
+    expect(_inputOutput).toBe(true);
   });
 
   it('narrows ctx.body to non-optional T when a body schema is declared (type-level)', () => {

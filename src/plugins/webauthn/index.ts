@@ -17,7 +17,10 @@ import type {
   RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import type { DatabaseAdapter } from '../../adapters/database';
-import type { FortressPlugin, PluginRouteContext } from '../../core/plugin';
+import type { EndpointDefinition } from '../../core/endpoint';
+import type { FortressSchema } from '../../core/json-schema';
+import type { FortressPlugin, JsonOf, PluginRouteContext } from '../../core/plugin';
+import type { StandardSchemaV1 } from '../../core/standard-schema';
 import type { AuthResult, FortressUser, RequestMeta } from '../../core/types';
 import {
   generateAuthenticationOptions as generateAuthOptions,
@@ -25,7 +28,9 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
+import { authRef } from '../../core/auth/auth-endpoints';
 import { Errors } from '../../core/errors';
+import { definePlugin } from '../../core/plugin';
 import { bool, endpoint, id, obj, record, str } from '../../core/schema-builder';
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -72,7 +77,7 @@ export interface WebAuthnMethods {
   generateAuthenticationOptions: (input: { userId?: string }) => Promise<{ options: PublicKeyCredentialRequestOptionsJSON }>;
   verifyAuthentication: (
     input: { response: AuthenticationResponseJSON },
-    meta?: RequestMeta,
+    context?: RequestMeta | PluginRouteContext,
   ) => Promise<AuthResult>;
   completeAuthentication: (
     continuationToken: string,
@@ -129,9 +134,148 @@ function uint8ArrayToBase64url(bytes: Uint8Array): string {
   return btoa(binary).replace(RE_PLUS, '-').replace(RE_SLASH, '_').replace(RE_TRAILING_EQ, '');
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasString(value: Record<string, unknown>, key: string): boolean {
+  return typeof value[key] === 'string';
+}
+
+function hasOptionalType(
+  value: Record<string, unknown>,
+  key: string,
+  type: 'boolean' | 'number' | 'string',
+): boolean {
+  if (value[key] === undefined)
+    return true;
+  if (type === 'boolean')
+    return typeof value[key] === 'boolean';
+  if (type === 'number')
+    return typeof value[key] === 'number';
+  return typeof value[key] === 'string';
+}
+
+function hasValidAttachment(value: Record<string, unknown>): boolean {
+  return value.authenticatorAttachment === undefined
+    || value.authenticatorAttachment === 'cross-platform'
+    || value.authenticatorAttachment === 'platform';
+}
+
+function hasValidExtensions(value: unknown): boolean {
+  if (!isObject(value))
+    return false;
+  if (!hasOptionalType(value, 'appid', 'boolean') || !hasOptionalType(value, 'hmacCreateSecret', 'boolean'))
+    return false;
+  if (value.credProps === undefined)
+    return true;
+  return isObject(value.credProps) && hasOptionalType(value.credProps, 'rk', 'boolean');
+}
+
+const AUTHENTICATOR_TRANSPORTS = new Set([
+  'ble',
+  'cable',
+  'hybrid',
+  'internal',
+  'nfc',
+  'smart-card',
+  'usb',
+]);
+
+function isRegistrationResponse(value: unknown): value is RegistrationResponseJSON {
+  if (!isObject(value) || !hasString(value, 'id') || !hasString(value, 'rawId') || value.type !== 'public-key')
+    return false;
+  if (!hasValidAttachment(value) || !hasValidExtensions(value.clientExtensionResults) || !isObject(value.response))
+    return false;
+  const response = value.response;
+  return hasString(response, 'clientDataJSON')
+    && hasString(response, 'attestationObject')
+    && hasOptionalType(response, 'authenticatorData', 'string')
+    && hasOptionalType(response, 'publicKey', 'string')
+    && hasOptionalType(response, 'publicKeyAlgorithm', 'number')
+    && (response.transports === undefined
+      || (Array.isArray(response.transports)
+        && response.transports.every(transport => AUTHENTICATOR_TRANSPORTS.has(transport as string))));
+}
+
+function isAuthenticationResponse(value: unknown): value is AuthenticationResponseJSON {
+  if (!isObject(value) || !hasString(value, 'id') || !hasString(value, 'rawId') || value.type !== 'public-key')
+    return false;
+  if (!hasValidAttachment(value) || !hasValidExtensions(value.clientExtensionResults) || !isObject(value.response))
+    return false;
+  return hasString(value.response, 'clientDataJSON')
+    && hasString(value.response, 'authenticatorData')
+    && hasString(value.response, 'signature')
+    && hasOptionalType(value.response, 'userHandle', 'string');
+}
+
+/** Open response payload produced and typed by SimpleWebAuthn itself. */
+function webAuthnOutput<T extends object>(description: string): FortressSchema<T> {
+  return record(description) as FortressSchema<T>;
+}
+
+/** Request wrapper whose Standard Schema validates the upstream-owned payload. */
+function webAuthnResponseBody<T extends object>(
+  guard: (value: unknown) => value is T,
+  description: string,
+): FortressSchema<{ response: T }> {
+  const schema = obj({ response: record(description) }, 'response');
+  const standard: StandardSchemaV1<{ response: T }>['~standard'] = {
+    version: 1,
+    vendor: 'fortress',
+    validate(value: unknown): StandardSchemaV1.Result<{ response: T }> {
+      if (isObject(value) && guard(value.response))
+        return { value: { response: value.response } };
+      return { issues: [{ message: 'Invalid WebAuthn response payload', path: ['response'] }] };
+    },
+  };
+  return Object.assign(schema, { '~standard': standard }) as FortressSchema<{ response: T }>;
+}
+
 // ── Routes ──────────────────────────────────────────────────────────
 
-const webauthnRoutes = {
+/* eslint-disable ts/consistent-type-definitions, ts/no-empty-object-type -- alias preserves Record compatibility; empty endpoint phantom slots are intentional */
+type WebAuthnRoutes = {
+  readonly generateRegistrationOptions: EndpointDefinition<
+    {},
+    {},
+    {},
+    { 200: { options: PublicKeyCredentialCreationOptionsJSON } },
+    'generateRegistrationOptions',
+    'POST',
+    '/webauthn/register/options'
+  >;
+  readonly verifyRegistration: EndpointDefinition<
+    { response: RegistrationResponseJSON },
+    {},
+    {},
+    { 200: { verified: boolean; credentialId?: string; credentialDeviceType?: string; credentialBackedUp?: boolean } },
+    'verifyRegistration',
+    'POST',
+    '/webauthn/register/verify'
+  >;
+  readonly generateAuthenticationOptions: EndpointDefinition<
+    { userId?: string },
+    {},
+    {},
+    { 200: { options: PublicKeyCredentialRequestOptionsJSON } },
+    'generateAuthenticationOptions',
+    'POST',
+    '/webauthn/authenticate/options'
+  >;
+  readonly verifyAuthentication: EndpointDefinition<
+    { response: AuthenticationResponseJSON },
+    {},
+    {},
+    { 200: JsonOf<AuthResult> },
+    'verifyAuthentication',
+    'POST',
+    '/webauthn/authenticate/verify'
+  >;
+};
+
+/* eslint-enable ts/consistent-type-definitions, ts/no-empty-object-type */
+const webauthnRoutes: WebAuthnRoutes = {
   generateRegistrationOptions: endpoint('POST', '/webauthn/register/options')
     .summary('Generate WebAuthn registration options')
     .description('Generate public key credential creation options for registering a new passkey against the authenticated caller.')
@@ -139,7 +283,7 @@ const webauthnRoutes = {
     .security('bearer')
     .body(obj({}))
     .response(200, 'Registration options', obj({
-      options: record('PublicKeyCredentialCreationOptions JSON'),
+      options: webAuthnOutput<PublicKeyCredentialCreationOptionsJSON>('PublicKeyCredentialCreationOptions JSON'),
     }, 'options'))
     .response(400, 'Bad request')
     .response(401, 'Not authenticated')
@@ -152,9 +296,10 @@ const webauthnRoutes = {
     .description('Verify the registration response from the authenticator and store the new credential for the authenticated caller.')
     .tags('WebAuthn')
     .security('bearer')
-    .body(obj({
-      response: record('RegistrationResponseJSON from navigator.credentials.create()'),
-    }, 'response'))
+    .body(webAuthnResponseBody(
+      isRegistrationResponse,
+      'RegistrationResponseJSON from navigator.credentials.create()',
+    ))
     .response(200, 'Registration verified', obj({
       verified: bool('Whether registration was successful'),
       credentialId: str('Base64url-encoded credential ID'),
@@ -172,7 +317,7 @@ const webauthnRoutes = {
     .security('none')
     .body(obj({ userId: id('Optional user ID') }))
     .response(200, 'Authentication options', obj({
-      options: record('PublicKeyCredentialRequestOptions JSON'),
+      options: webAuthnOutput<PublicKeyCredentialRequestOptionsJSON>('PublicKeyCredentialRequestOptions JSON'),
     }, 'options'))
     .handler('generateAuthenticationOptions')
     .build(),
@@ -182,15 +327,15 @@ const webauthnRoutes = {
     .description('Verify the authentication assertion. Returns tokens if passwordless mode is enabled.')
     .tags('WebAuthn')
     .security('none')
-    .body(obj({
-      response: record('AuthenticationResponseJSON from navigator.credentials.get()'),
-    }, 'response'))
-    .response(200, 'Authentication verified', obj({
-      verified: bool('Whether authentication was successful'),
-      userId: id('Authenticated user ID'),
-      accessToken: str('JWT access token (if passwordless)'),
-      refreshToken: str('Refresh token (if passwordless)'),
-    }, 'verified', 'userId'))
+    .body(webAuthnResponseBody(
+      isAuthenticationResponse,
+      'AuthenticationResponseJSON from navigator.credentials.get()',
+    ))
+    // The handler returns the standard auth result from
+    // `auth.completePluginAuth` — the same wire shape as /auth/login —
+    // not a bespoke {verified, userId} envelope. definePlugin's handler
+    // correlation rejects any drift from the actual return type.
+    .response(200, 'Authentication verified', authRef('AuthResult'))
     .response(401, 'Authentication failed')
     .handler('verifyAuthentication')
     .build(),
@@ -203,7 +348,7 @@ const webauthnRoutes = {
  * implements passkey registration, passwordless authentication, and a
  * second-factor mode using `@simplewebauthn/server`.
  */
-export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly name: 'webauthn' } {
+export function webauthn(config: WebAuthnConfig): FortressPlugin<'webauthn', WebAuthnMethods, WebAuthnRoutes> & { routes: WebAuthnRoutes } {
   const rpName = config.rpName;
   const rpID = config.rpID;
   const origin = config.origin;
@@ -294,7 +439,7 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
     return credentialRecord.userId;
   }
 
-  return {
+  return definePlugin({
     name: 'webauthn',
 
     models: [
@@ -540,15 +685,16 @@ export function webauthn(config: WebAuthnConfig): FortressPlugin & { readonly na
 
       async verifyAuthentication(
         input: { response: AuthenticationResponseJSON },
-        meta?: RequestMeta,
+        context?: RequestMeta | PluginRouteContext,
       ): Promise<AuthResult> {
         const userId = await verifyAuthenticationProof(ctx.db, input.response);
         if (!supportPasswordless)
           throw Errors.badRequest('Use completeAuthentication for second-factor WebAuthn');
         if (!ctx.auth)
           throw Errors.badRequest('Auth service is unavailable');
+        const meta = context && 'request' in context ? context.meta : context;
         return ctx.auth.completePluginAuth(userId, 'webauthn', meta);
       },
     }),
-  };
+  } satisfies FortressPlugin<'webauthn', WebAuthnMethods, WebAuthnRoutes>);
 }
