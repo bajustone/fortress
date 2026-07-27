@@ -39,11 +39,12 @@ bun add drizzle-orm @sveltejs/kit        # SvelteKit + Drizzle
 import { Hono } from 'hono';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { createFortress } from '@bajustone/fortress';
-import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
+import { createSqliteDrizzleAdapter } from '@bajustone/fortress/drizzle';
 import { mountFortress } from '@bajustone/fortress/hono';
 
+const database = createSqliteDrizzleAdapter(drizzle('app.db'));
 const fortress = createFortress({
-  database: createDrizzleAdapter(drizzle('app.db')),
+  database,
   jwt: {
     key: process.env.FORTRESS_JWT_SECRET!, // at least 32 UTF-8 bytes
     issuer: 'my-app',
@@ -604,7 +605,7 @@ Check live schema drift:
 ```typescript
 import { detectMigrationDrift, hasMigrationDrift } from '@bajustone/fortress';
 
-const drift = await detectMigrationDrift(fortress.config.database);
+const drift = await detectMigrationDrift(database);
 if (hasMigrationDrift(drift))
   throw new Error(JSON.stringify(drift));
 ```
@@ -615,14 +616,14 @@ See the [migration upgrade guide](docs/migrations/upgrade-guide.md).
 
 ```typescript
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
+import { createPostgresDrizzleAdapter } from '@bajustone/fortress/drizzle';
 import { fortressPgSchema } from '@bajustone/fortress/drizzle/pg';
 
 const drizzleDb = drizzle(connectionString, { schema: fortressPgSchema });
-const database = createDrizzleAdapter(drizzleDb, { dialect: 'pg' });
+const database = createPostgresDrizzleAdapter(drizzleDb);
 ```
 
-`@bajustone/fortress/drizzle/pg` exports the schema. Import `createDrizzleAdapter` from `@bajustone/fortress/drizzle`.
+`@bajustone/fortress/drizzle/pg` exports the schema. Import `createPostgresDrizzleAdapter` from `@bajustone/fortress/drizzle`.
 
 To use another datastore, implement `DatabaseAdapter`:
 
@@ -637,10 +638,15 @@ const database: DatabaseAdapter = {
   delete: async ({ model, where }) => remove(model, where),
   count: async ({ model, where }) => count(model, where),
   transaction: async fn => runTransaction(fn),
-  rawQuery: async (sql, params) => query(sql, params), // optional
-  dialect: 'pg',                                      // optional
+  rawQuery: async (sql, params) => query(sql, params), // optional for ordinary operations
+  dialect: 'pg',                                      // optional for ordinary operations
 };
 ```
+
+To run Fortress-managed migrations with a custom datastore, implement
+`MigratableDatabaseAdapter`. It requires both `rawQuery` and a literal
+`dialect`, and its transaction callback must receive the same migration
+capability. Drizzle users get this contract from the dialect-specific factories.
 
 ## Generate OpenAPI
 

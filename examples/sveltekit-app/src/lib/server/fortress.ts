@@ -16,7 +16,7 @@ export const fortress = createFortress({
     accessTokenExpirySeconds: 900,
     refreshTokenExpirySeconds: 60 * 60 * 24 * 7,
   },
-  // In a real project, swap this for createDrizzleAdapter(...).
+  // In a real project, swap this for createSqliteDrizzleAdapter(...).
   database: createTestAdapter(),
   plugins: [
     oauth({

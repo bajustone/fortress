@@ -77,8 +77,7 @@ describe('checkPublicRoutes', () => {
 
 describe('checkMigrationDrift', () => {
   it('reports a clean SQLite test adapter as upgraded', async () => {
-    const fortress = makeFortress();
-    const result = await checkMigrationDrift(fortress.config.database, 'sqlite');
+    const result = await checkMigrationDrift(createTestAdapter());
     // The test adapter installs the current schema and stamps the matching
     // migration version, so it is ready for checks without a redundant migrate.
     expect(result.drift.missingTables).toEqual([]);

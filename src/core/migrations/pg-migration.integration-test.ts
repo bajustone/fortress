@@ -10,12 +10,12 @@
 
 import type { Sql } from 'postgres';
 import type { StartedTestContainer } from 'testcontainers';
-import type { DatabaseAdapter } from '../../adapters/database';
+import type { MigratableDatabaseAdapter } from '../../adapters/database';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { GenericContainer, Wait } from 'testcontainers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDrizzleAdapter } from '../../drizzle/adapter';
+import { createPostgresDrizzleAdapter } from '../../drizzle/adapter';
 import {
   computeMigrationChecksum,
   detectMigrationDrift,
@@ -33,11 +33,11 @@ let container: StartedTestContainer;
 let pgClient: Sql;
 let connectionString: string;
 
-function adapterFor(client: Sql): DatabaseAdapter {
-  return createDrizzleAdapter(drizzle(client) as any, { dialect: 'pg' });
+function adapterFor(client: Sql): MigratableDatabaseAdapter<'pg'> {
+  return createPostgresDrizzleAdapter(drizzle(client) as any);
 }
 
-function adapter(): DatabaseAdapter {
+function adapter(): MigratableDatabaseAdapter<'pg'> {
   return adapterFor(pgClient);
 }
 
@@ -67,15 +67,15 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
   it('provisions a bare PG database end-to-end from the bundled migrations', async () => {
     const db = adapter();
 
-    const initial = await getMigrationStatus(db, 'pg');
+    const initial = await getMigrationStatus(db);
     expect(initial.hasVersionTable).toBe(false);
     expect(initial.currentVersion).toBe(0);
 
-    const initialDrift = await detectMigrationDrift(db, 'pg');
+    const initialDrift = await detectMigrationDrift(db);
     expect(hasMigrationDrift(initialDrift)).toBe(true);
     expect(initialDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
 
-    const baseline = await migrateUp(db, 'pg', 2);
+    const baseline = await migrateUp(db, 2);
     expect(baseline.fromVersion).toBe(0);
     expect(baseline.toVersion).toBe(2);
     expect(baseline.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema']);
@@ -146,7 +146,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     // Conversion must not depend on the session timezone: historical
     // timestamp-without-time-zone values are interpreted as UTC explicitly.
     await db.rawQuery!('SET TIME ZONE \'America/Los_Angeles\'');
-    const up = await migrateUp(db, 'pg');
+    const up = await migrateUp(db);
     await db.rawQuery!('SET TIME ZONE \'UTC\'');
     expect(up.fromVersion).toBe(2);
     expect(up.toVersion).toBe(10);
@@ -228,12 +228,12 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     );
     expect(defaulted.recent).toBe(true);
 
-    const after = await getMigrationStatus(db, 'pg');
+    const after = await getMigrationStatus(db);
     expect(after.currentVersion).toBe(10);
     expect(after.upToDate).toBe(true);
 
     // Real-engine schema check: no missing tables, no missing columns.
-    const afterDrift = await detectMigrationDrift(db, 'pg');
+    const afterDrift = await detectMigrationDrift(db);
     expect(hasMigrationDrift(afterDrift)).toBe(false);
     expect(afterDrift.missingTables).toEqual([]);
     expect(afterDrift.missingColumns).toEqual([]);
@@ -276,11 +276,11 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(user.createdAt).toBeInstanceOf(Date);
 
     // Re-running is idempotent.
-    const reapply = await migrateUp(db, 'pg');
+    const reapply = await migrateUp(db);
     expect(reapply.applied).toEqual([]);
 
     // A targeted rollback preserves refresh rows while removing v5 through v3.
-    const rollback = await migrateDown(db, 'pg', 2);
+    const rollback = await migrateDown(db, 2);
     expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['bigint_append_only_ids', 'encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
     expect(await db.count({ model: 'refresh_token' })).toBe(4);
     const v3Columns = await db.rawQuery!<{ columnName: string }>(
@@ -295,13 +295,13 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     );
     expect(continuationTables).toEqual([]);
 
-    const restore = await migrateUp(db, 'pg');
+    const restore = await migrateUp(db);
     expect(restore.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
 
     // Roll back drops every Fortress table (FK-safe via CASCADE ordering).
-    const down = await migrateDown(db, 'pg');
+    const down = await migrateDown(db);
     expect(down.toVersion).toBe(0);
-    const finalDrift = await detectMigrationDrift(db, 'pg');
+    const finalDrift = await detectMigrationDrift(db);
     expect(finalDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
   }, 60_000);
 
@@ -312,8 +312,8 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     const second = adapterFor(secondClient);
     try {
       const upResults = await Promise.all([
-        migrateUp(first, 'pg'),
-        migrateUp(second, 'pg'),
+        migrateUp(first),
+        migrateUp(second),
       ]);
       expect(upResults.map(result => result.applied.length).sort((a, b) => a - b)).toEqual([0, 10]);
       expect(upResults.map(result => result.fromVersion).sort((a, b) => a - b)).toEqual([0, 10]);
@@ -325,25 +325,25 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
       expect(journal.every(row => SHA256_HEX_RE.test(row.checksum))).toBe(true);
 
       const downResults = await Promise.all([
-        migrateDown(first, 'pg', 4),
-        migrateDown(second, 'pg', 4),
+        migrateDown(first, 4),
+        migrateDown(second, 4),
       ]);
       expect(downResults.map(result => result.rolledBack.length).sort((a, b) => a - b)).toEqual([0, 6]);
-      expect((await getMigrationStatus(first, 'pg')).currentVersion).toBe(4);
+      expect((await getMigrationStatus(first)).currentVersion).toBe(4);
 
       await first.rawQuery!(
         'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 3',
         ['f'.repeat(64)],
       );
-      await expect(migrateUp(second, 'pg')).rejects.toThrow(INTEGRITY_FAILURE_RE);
-      expect((await getMigrationStatus(first, 'pg')).currentVersion).toBe(4);
+      await expect(migrateUp(second)).rejects.toThrow(INTEGRITY_FAILURE_RE);
+      expect((await getMigrationStatus(first)).currentVersion).toBe(4);
 
       const migration3 = getFortressMigrations('pg').find(migration => migration.version === 3)!;
       await first.rawQuery!(
         'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 3',
         [await computeMigrationChecksum(migration3)],
       );
-      await migrateDown(first, 'pg', 0);
+      await migrateDown(first, 0);
     }
     finally {
       await firstClient.end();

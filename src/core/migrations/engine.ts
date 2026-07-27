@@ -1,4 +1,4 @@
-import type { DatabaseAdapter } from '../../adapters/database';
+import type { DatabaseAdapter, MigratableDatabaseAdapter } from '../../adapters/database';
 import type { FortressMigration, MigrationDialect } from './migrations';
 import { Errors } from '../errors';
 import { FORTRESS_INDEXES, FORTRESS_TABLES, getExpectedColumns, getFortressMigrations, getLatestMigrationVersion } from './migrations';
@@ -388,25 +388,29 @@ function assertTargetVersion(targetVersion: number): void {
 // the cross-process authority.
 let sqliteMigrationChain: Promise<void> = Promise.resolve();
 
-function withMigrationTransaction<T>(
-  db: DatabaseAdapter,
-  dialect: MigrationDialect,
-  fn: (tx: DatabaseAdapter) => Promise<T>,
+function withMigrationTransaction<T, D extends MigrationDialect>(
+  db: MigratableDatabaseAdapter<D>,
+  fn: (tx: MigratableDatabaseAdapter<D>) => Promise<T>,
 ): Promise<T> {
-  if (dialect === 'pg')
-    return db.transaction(fn);
-  const result = sqliteMigrationChain.then(
-    () => db.transaction(fn),
-    () => db.transaction(fn),
-  );
+  const run = (): Promise<T> => db.transaction(async (tx) => {
+    if (tx.dialect !== db.dialect || typeof tx.rawQuery !== 'function') {
+      throw Errors.badRequest(
+        'Migration transactions must preserve the adapter dialect and rawQuery capability',
+      );
+    }
+    return fn(tx);
+  });
+  if (db.dialect === 'pg')
+    return run();
+  const result = sqliteMigrationChain.then(run, run);
   sqliteMigrationChain = result.then(() => undefined, () => undefined);
   return result;
 }
 
 export async function getMigrationStatus(
-  db: DatabaseAdapter,
-  dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
+  db: MigratableDatabaseAdapter,
 ): Promise<MigrationStatus> {
+  const dialect = db.dialect;
   const migrations = getFortressMigrations(dialect);
   const latestVersion = getLatestMigrationVersion(dialect);
   const { version: currentVersion, hasVersionTable } = await readCurrentVersion(db, dialect);
@@ -422,12 +426,12 @@ export async function getMigrationStatus(
 }
 
 export async function migrateUp(
-  db: DatabaseAdapter,
-  dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
-  targetVersion: number = getLatestMigrationVersion(dialect),
+  db: MigratableDatabaseAdapter,
+  targetVersion: number = getLatestMigrationVersion(db.dialect),
 ): Promise<MigrationApplyResult> {
   assertTargetVersion(targetVersion);
-  return withMigrationTransaction(db, dialect, async (tx) => {
+  const dialect = db.dialect;
+  return withMigrationTransaction(db, async (tx) => {
     await ensureMigrationMetadata(tx, dialect);
     // Mandatory post-lock read: no plan computed before this point is trusted.
     const { version: currentVersion } = await readCurrentVersion(tx, dialect);
@@ -455,12 +459,12 @@ export async function migrateUp(
 }
 
 export async function migrateDown(
-  db: DatabaseAdapter,
-  dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
+  db: MigratableDatabaseAdapter,
   targetVersion: number = 0,
 ): Promise<MigrationDownResult> {
   assertTargetVersion(targetVersion);
-  return withMigrationTransaction(db, dialect, async (tx) => {
+  const dialect = db.dialect;
+  return withMigrationTransaction(db, async (tx) => {
     await ensureMigrationMetadata(tx, dialect);
     const { version: currentVersion } = await readCurrentVersion(tx, dialect);
     await verifyOrBackfillJournal(tx, dialect, currentVersion);
@@ -498,10 +502,10 @@ export async function migrateDown(
 }
 
 export async function detectMigrationDrift(
-  db: DatabaseAdapter,
-  dialect: MigrationDialect = db.dialect === 'pg' ? 'pg' : 'sqlite',
+  db: MigratableDatabaseAdapter,
 ): Promise<MigrationDrift> {
-  const status = await getMigrationStatus(db, dialect);
+  const dialect = db.dialect;
+  const status = await getMigrationStatus(db);
   const present = await listFortressTables(db, dialect);
   const missingTables = FORTRESS_TABLES.filter(name => !present.has(name));
 

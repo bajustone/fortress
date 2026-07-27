@@ -11,10 +11,10 @@
  * @example
  * ```ts
  * import { createFortress } from '@bajustone/fortress';
- * import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
+ * import { createPostgresDrizzleAdapter } from '@bajustone/fortress/drizzle';
  *
  * const fortress = createFortress({
- *   database: createDrizzleAdapter(db, { dialect: 'pg' }),
+ *   database: createPostgresDrizzleAdapter(db),
  *   jwt: { key: process.env.JWT_SECRET! },
  * });
  *
@@ -25,7 +25,7 @@
  */
 
 /** Generic CRUD database adapter interface — implement to back fortress with any datastore. */
-export type { DatabaseAdapter } from './adapters/database';
+export type { DatabaseAdapter, DatabaseDialect, MigratableDatabaseAdapter } from './adapters/database';
 
 /** Where-clause primitives used by adapters and `scopeRules` to express filters. */
 export type { CoreOperator, ScopeRule, WhereClause } from './adapters/database/types';

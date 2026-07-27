@@ -12,16 +12,16 @@
  * @example
  * ```ts
  * import { drizzle } from 'drizzle-orm/postgres-js';
- * import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
+ * import { createPostgresDrizzleAdapter } from '@bajustone/fortress/drizzle';
  *
  * const db = drizzle(sql);
- * const adapter = createDrizzleAdapter(db, { dialect: 'pg' });
+ * const adapter = createPostgresDrizzleAdapter(db);
  * ```
  *
  * @module
  */
 
-export { createDrizzleAdapter } from './adapter';
+export { createPostgresDrizzleAdapter, createSqliteDrizzleAdapter } from './adapter';
 export type { DrizzleAdapterOptions, DrizzleDialect } from './adapter';
 export { findSqlstate, rethrowDbError } from './pg-error-map';
 // Re-export only the schema objects — individual table exports cause JSR "slow types"

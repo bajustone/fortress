@@ -44,11 +44,6 @@ export interface MigrateOptions {
    * `db.migrate.latest()`, a hand-rolled SQL runner.
    */
   migrateApp?: () => Promise<void>;
-  /**
-   * Override the migration dialect. Defaults to the adapter's `dialect`
-   * property.
-   */
-  dialect?: 'sqlite' | 'pg';
   /** Stop applying Fortress migrations after this version. Defaults to the latest. */
   targetVersion?: number;
 }

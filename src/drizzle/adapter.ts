@@ -1,5 +1,5 @@
 import type { Column, SQL, Table } from 'drizzle-orm';
-import type { DatabaseAdapter } from '../adapters/database';
+import type { DatabaseDialect, MigratableDatabaseAdapter } from '../adapters/database';
 import type { WhereClause } from '../adapters/database/types';
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -9,13 +9,12 @@ import { rethrowDbError } from './pg-error-map';
 import { fortressPgSchema } from './pg/schema';
 import { fortressSchema } from './schema';
 
-export type DrizzleDialect = 'sqlite' | 'pg';
+export type DrizzleDialect = DatabaseDialect;
 
+/** Table overrides shared by the dialect-specific Drizzle factories. */
 export interface DrizzleAdapterOptions {
-  /** Override default fortress table definitions with your own Drizzle tables */
+  /** Override default Fortress table definitions with your own Drizzle tables. */
   tables?: Partial<Record<string, Table>>;
-  /** Database dialect — controls query execution and default table definitions (default: 'sqlite') */
-  dialect?: DrizzleDialect;
 }
 
 function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema): Record<string, Table> {
@@ -222,17 +221,13 @@ function sqliteStatementReturnsRows(sqlText: string): boolean {
 // eslint-disable-next-line ts/no-unsafe-function-type -- Drizzle DB methods have dialect-specific signatures
 interface DrizzleDB { insert: Function; select: Function; update: Function; delete: Function; transaction: Function }
 
-/**
- * Create a DatabaseAdapter backed by any Drizzle instance.
- * Works with PostgreSQL and SQLite (bun:sqlite, better-sqlite3).
- *
- * @param db - Any Drizzle database instance
- * @param options - Optional table overrides and dialect configuration
- */
-export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOptions): DatabaseAdapter {
-  const dialect = options?.dialect ?? 'sqlite';
+function createDialectDrizzleAdapter<D extends DrizzleDialect>(
+  db: DrizzleDB,
+  dialect: D,
+  options: DrizzleAdapterOptions = {},
+): MigratableDatabaseAdapter<D> {
   const defaults = dialect === 'pg' ? PG_DEFAULT_TABLE_MAP : SQLITE_DEFAULT_TABLE_MAP;
-  const tableMap: Record<string, Table> = { ...defaults, ...(options?.tables as Record<string, Table>) };
+  const tableMap: Record<string, Table> = { ...defaults, ...(options.tables as Record<string, Table>) };
   const isSqlite = dialect === 'sqlite';
   // SQLite drivers used by Drizzle (better-sqlite3 / bun:sqlite) expose a
   // single synchronous connection. Manual async transactions must therefore
@@ -291,9 +286,9 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
     return table;
   }
 
-  /** Build a DatabaseAdapter backed by a specific Drizzle instance (db or tx) */
-  function buildAdapter(drizzle: DrizzleDB): DatabaseAdapter {
-    const self: DatabaseAdapter = {
+  /** Build an adapter backed by a specific Drizzle instance (db or tx). */
+  function buildAdapter(drizzle: DrizzleDB): MigratableDatabaseAdapter<D> {
+    const self: MigratableDatabaseAdapter<D> = {
       get dialect() { return dialect; },
 
       async create<T>(params: { model: string; data: Record<string, unknown> }): Promise<T> {
@@ -430,7 +425,7 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
         });
       },
 
-      async transaction<T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> {
+      async transaction<T>(fn: (tx: MigratableDatabaseAdapter<D>) => Promise<T>): Promise<T> {
         if (dialect === 'sqlite') {
           // SQLite transactions are serialized on one connection. A nested
           // tx.transaction(...) from inside the callback would otherwise be
@@ -471,4 +466,20 @@ export function createDrizzleAdapter(db: DrizzleDB, options?: DrizzleAdapterOpti
   }
 
   return buildAdapter(db);
+}
+
+/** Create a migration-capable SQLite adapter backed by a Drizzle instance. */
+export function createSqliteDrizzleAdapter(
+  db: DrizzleDB,
+  options?: DrizzleAdapterOptions,
+): MigratableDatabaseAdapter<'sqlite'> {
+  return createDialectDrizzleAdapter(db, 'sqlite', options);
+}
+
+/** Create a migration-capable PostgreSQL adapter backed by a Drizzle instance. */
+export function createPostgresDrizzleAdapter(
+  db: DrizzleDB,
+  options?: DrizzleAdapterOptions,
+): MigratableDatabaseAdapter<'pg'> {
+  return createDialectDrizzleAdapter(db, 'pg', options);
 }

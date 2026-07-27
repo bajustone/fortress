@@ -38,10 +38,10 @@ peer directly for its strict public `Handle`/`Action` types and runtime
 
 | Driver | Adapter | Tested |
 |---|---|---|
-| PostgreSQL via `drizzle-orm/postgres-js` | `@bajustone/fortress/drizzle` (`dialect: 'pg'`) | `postgres@^3.4` |
-| PostgreSQL via `drizzle-orm/node-postgres` | same | `pg@^8` |
-| SQLite via `drizzle-orm/bun-sqlite` | same (`dialect: 'sqlite'`) | bundled with Bun |
-| SQLite via `drizzle-orm/better-sqlite3` | same | `better-sqlite3@^12.8` |
+| PostgreSQL via `drizzle-orm/postgres-js` | `createPostgresDrizzleAdapter` | `postgres@^3.4` |
+| PostgreSQL via `drizzle-orm/node-postgres` | `createPostgresDrizzleAdapter` | `pg@^8` |
+| SQLite via `drizzle-orm/bun-sqlite` | `createSqliteDrizzleAdapter` | bundled with Bun |
+| SQLite via `drizzle-orm/better-sqlite3` | `createSqliteDrizzleAdapter` | `better-sqlite3@^12.8` |
 
 Drizzle minimum: `drizzle-orm@^0.45`. Earlier versions are missing
 features Fortress relies on (`$dynamic()`, `getTableColumns`,
@@ -53,7 +53,9 @@ Custom adapters: implement the `DatabaseAdapter` interface in
 `src/adapters/database/index.ts` to back Fortress with any datastore.
 The IAM service uses a small set of generic operations
 (`create`/`findOne`/`findMany`/`update`/`delete`/`count`/`transaction`,
-optional `rawQuery`) so even non-SQL stores are workable.
+optional `rawQuery`) so even non-SQL stores are workable. Fortress-managed
+migrations require the stronger `MigratableDatabaseAdapter` contract with a
+required literal dialect and `rawQuery`; both named Drizzle factories provide it.
 
 ## Optional integrations
 

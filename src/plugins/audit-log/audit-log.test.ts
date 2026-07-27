@@ -1,4 +1,4 @@
-import type { DatabaseAdapter } from '../../adapters/database';
+import type { MigratableDatabaseAdapter } from '../../adapters/database';
 import type { AuditLogEntry, AuditLogMethods, AuditLogQueryOptions, ChainVerificationResult } from './index';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
@@ -356,7 +356,7 @@ describe('audit-log plugin', () => {
       await methods.logCustomEvent({ eventType: 'ROLE_CREATED' });
 
       const originalTransaction = db.transaction.bind(db);
-      db.transaction = <T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> => {
+      db.transaction = <T>(fn: (tx: MigratableDatabaseAdapter<'sqlite'>) => Promise<T>): Promise<T> => {
         return originalTransaction(tx => fn(new Proxy(tx, {
           get(target, property, receiver) {
             if (property === 'findMany') {
@@ -388,7 +388,7 @@ describe('audit-log plugin', () => {
       const started = new Promise<void>((resolve) => {
         entered = resolve;
       });
-      blockedDb.transaction = async <T>(fn: (tx: DatabaseAdapter) => Promise<T>): Promise<T> => {
+      blockedDb.transaction = async <T>(fn: (tx: MigratableDatabaseAdapter<'sqlite'>) => Promise<T>): Promise<T> => {
         entered();
         await gate;
         return originalTransaction(fn);

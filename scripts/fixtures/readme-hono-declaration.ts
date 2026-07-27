@@ -1,5 +1,5 @@
 import { createFortress } from '@bajustone/fortress';
-import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
+import { createSqliteDrizzleAdapter } from '@bajustone/fortress/drizzle';
 import { mountFortress } from '@bajustone/fortress/hono';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { Hono } from 'hono';
@@ -8,8 +8,9 @@ import { Hono } from 'hono';
  * Compiles README.md's "Start with Hono and SQLite" quickstart unchanged
  * against both source entrypoints and freshly generated package declarations.
  */
+const database = createSqliteDrizzleAdapter(drizzle('app.db'));
 const fortress = createFortress({
-  database: createDrizzleAdapter(drizzle('app.db')),
+  database,
   jwt: {
     key: process.env.FORTRESS_JWT_SECRET!, // at least 32 UTF-8 bytes
     issuer: 'my-app',

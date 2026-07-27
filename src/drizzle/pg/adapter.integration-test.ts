@@ -7,7 +7,7 @@ import { GenericContainer, Wait } from 'testcontainers';
 
 import { afterAll, beforeAll, beforeEach, describe } from 'vitest';
 import { runAdapterTests } from '../../testing/adapter-conformance.test';
-import { createDrizzleAdapter } from '../adapter';
+import { createPostgresDrizzleAdapter } from '../adapter';
 
 const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS fortress_user (
@@ -448,7 +448,7 @@ beforeEach(async () => {
 });
 
 function createPgTestAdapter(): DatabaseAdapter {
-  return createDrizzleAdapter(db as any, { dialect: 'pg' });
+  return createPostgresDrizzleAdapter(db as any);
 }
 
 describe('adapter conformance: PostgreSQL (drizzle)', () => {

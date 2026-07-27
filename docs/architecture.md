@@ -366,9 +366,18 @@ interface DatabaseAdapter {
   rawQuery?<T>(sql: string, params?: unknown[]): Promise<T[]>;
   dialect?: 'sqlite' | 'pg';
 }
+
+interface MigratableDatabaseAdapter<D extends 'sqlite' | 'pg'>
+  extends DatabaseAdapter {
+  readonly dialect: D;
+  rawQuery<T>(sql: string, params?: unknown[]): Promise<T[]>;
+  transaction<T>(fn: (tx: MigratableDatabaseAdapter<D>) => Promise<T>): Promise<T>;
+}
 ```
 
-Portable `rawQuery` SQL uses `?` placeholders. The adapter translates them for its driver.
+Fortress-managed migrations require `MigratableDatabaseAdapter`; ordinary
+CRUD operations continue to accept `DatabaseAdapter`. Portable `rawQuery` SQL
+uses `?` placeholders. The adapter translates them for its driver.
 
 Core operators:
 

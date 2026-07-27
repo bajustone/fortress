@@ -37,7 +37,7 @@ const status = await getMigrationStatus(adapter);
 const up = await migrateUp(adapter);
 //   { fromVersion, toVersion, applied: FortressMigration[] }
 
-const down = await migrateDown(adapter, 'sqlite', 0);
+const down = await migrateDown(adapter, 0);
 //   rolls back to version 0
 
 const drift = await detectMigrationDrift(adapter);
@@ -46,8 +46,10 @@ const drift = await detectMigrationDrift(adapter);
 if (hasMigrationDrift(drift)) throw new Error('Schema drift detected');
 ```
 
-Pass an explicit `dialect` when the adapter does not advertise one (most
-non-Drizzle adapters). Both `migrateUp` and `migrateDown` are idempotent and safe to run on every
+Migration entry points require a `MigratableDatabaseAdapter`, whose required
+`dialect` and `rawQuery` capabilities select the catalog and execute SQL.
+Ordinary CRUD-only `DatabaseAdapter` implementations remain valid outside
+Fortress-managed migrations. Both `migrateUp` and `migrateDown` are idempotent and safe to run on every
 deploy. Mutation runs acquire a database-backed lock, re-read the checkpoint
 only after locking, and execute transactionally. The engine maintains
 `fortress_migration_journal` with one SHA-256 checksum per applied migration;
@@ -113,7 +115,7 @@ parses expected columns from them, so the test adapter and a production
 
 ### Provisioning a new database
 
-1. Point Fortress at an empty database (any adapter with `rawQuery`).
+1. Point Fortress at an empty database using a `MigratableDatabaseAdapter` (required `dialect` and `rawQuery`).
 2. Call `migrateUp(adapter)` — this creates the checkpoint table, all
    Fortress tables, and stamps `fortress_schema_version` at the latest
    version.
@@ -137,7 +139,7 @@ parses expected columns from them, so the test adapter and a production
 
 ## Rollback
 
-`migrateDown(adapter, dialect, targetVersion)` rolls the schema back to
+`migrateDown(adapter, targetVersion)` rolls the schema back to
 the supplied version (default `0`). Each migration's `.down.sql` is
 applied in reverse order. The version row is updated last, so a failed
 rollback leaves the previous version recorded — re-run after fixing the

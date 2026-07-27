@@ -43,7 +43,7 @@ tables (e.g. provisioned from the Drizzle schema) is a no-op.
 ```ts
 import { migrateDown } from '@bajustone/fortress';
 
-await migrateDown(adapter, undefined, 1); // roll back to version 1
+await migrateDown(adapter, 1); // roll back to version 1
 ```
 
 Or apply `migrations/{sqlite,pg}/0002_initial_schema.down.sql`.

@@ -1,7 +1,7 @@
-import type { DatabaseAdapter } from '../../adapters/database';
+import type { DatabaseAdapter, DatabaseDialect } from '../../adapters/database';
 import { normalizeEmail } from '../auth/email';
 
-export type MigrationDialect = 'sqlite' | 'pg';
+export type MigrationDialect = DatabaseDialect;
 
 export interface FortressMigration {
   version: number;
