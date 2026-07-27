@@ -790,6 +790,7 @@ for down-SQL export, not a live rollback command. Live drift checks use
 - [Route manifest](docs/route-manifest.md)
 - [CI checks](docs/ci.md)
 - [Compatibility](docs/compatibility.md)
+- [npm/JSR publication policy](docs/publication.md)
 - [Architecture and plugin authoring](docs/architecture.md)
 
 ## License
