@@ -39,6 +39,7 @@ jobs:
       - run: bun run test:integration
       - run: bun run check:consumer-contract
       - run: bun run check:testing-esm
+      - run: bun run check:repository-publication-policy
       - run: bun run check:package-cli
 
   publish-jsr:
@@ -49,13 +50,16 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.4
       - uses: oven-sh/setup-bun@v2
       - run: bun install
       - name: Sync version from package.json to jsr.json
         run: |
           VERSION=$(node -p "require('./package.json').version")
           jq --arg v "$VERSION" '.version = $v' jsr.json > jsr.tmp && mv jsr.tmp jsr.json
-      - run: npx jsr publish --allow-dirty
+      - run: deno publish --allow-dirty
 
   publish-npm:
     needs: [verify-version, quality]

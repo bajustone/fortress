@@ -25,7 +25,9 @@ jobs:
         run: bun run check:consumer-contract
       - name: Pure Node ESM testing-subpath smoke test
         run: bun run check:testing-esm
-      - name: Packed npm CLI and migration artifacts
+      - name: TypeScript-branch publication policy
+        run: bun run check:repository-publication-policy
+      - name: Packed npm publication manifest and CLI
         run: bun run check:package-cli
 
   # Unit suite (SQLite test adapter) across every supported runtime. Bun is the

@@ -15,6 +15,7 @@
 - **Migration SQL artifacts are generated and release-gated.** `bun run generate:migrations` projects the canonical runtime catalog into all SQLite/PostgreSQL up/down files; `--check` fails on missing, extra, or byte-modified artifacts in CI and publish workflows.
 
 ### Changed
+- **npm and JSR publication contents are explicit and attested.** npm is the only channel that ships the Bun CLI; JSR remains source-first and programmatic. Both registry dry runs now enforce required entrypoints/migrations and reject tests, snapshots, project-only documents, and Rust rewrite material. npm no longer ships source tests, and tagged JSR publication uses the same pinned Deno toolchain as validation.
 - **Migration CLI execution is explicit and truthful.** `fortress migrate:up --module <path>` imports a trusted module's named `fortress` export and runs the complete adapter-backed migration path, while `migrate:export` owns review-only SQL output. `migrate:down` is retained as a deprecated down-export alias.
 
 ### Fixed

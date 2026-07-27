@@ -10,4 +10,31 @@ scratch/
 .pi-subagents/
 .DS_Store
 
-fortress-audit-report.html
+*.html
+/AUDIT*.md
+/AUDIT*.html
+/context.md
+/plan.md
+/planning.md
+/progress.md
+
+# The Rust rewrite lives on a separate branch, never on TypeScript/main.
+*.rs
+/Cargo.toml
+/Cargo.lock
+/rust-toolchain
+/rust-toolchain.toml
+/rustfmt.toml
+/clippy.toml
+/.cargo/
+/rust/
+/crates/
+/src-rust/
+/*-rust/
+/docs/rust.md
+/docs/**/rust.md
+/docs/rust/
+/docs/**/rust/
+/docs/rust-*
+/docs/**/*-rust.md
+/docs/**/*-rust-*
