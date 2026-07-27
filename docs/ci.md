@@ -10,8 +10,8 @@ you can gate deploys on them.
 
 | Check | API | CLI | Catches |
 |---|---|---|---|
-| Route-manifest drift | `checkRouteManifestDrift(fortress)` | `fortress manifest:check` / `fortress check:routes` | Mounted routes not in the manifest, manifest routes not mounted, RBAC permission/OpenAPI mismatches |
-| Public-route allow-list | `checkPublicRoutes(fortress, { allow })` | `fortress check:public-routes` | A new route marked `.security('none')` or `bearerKind:'oauth'` that wasn't reviewed |
+| Route-manifest drift | `checkRouteManifestDrift(fortress)` | `fortress manifest:check --module <path>` / `fortress check:routes --module <path>` | Mounted routes not in the manifest, manifest routes not mounted, RBAC permission/OpenAPI mismatches |
+| Public-route allow-list | `checkPublicRoutes(fortress, { allow })` | `fortress check:public-routes --module <path>` | A new route marked `.security('none')` or `bearerKind:'oauth'` that wasn't reviewed |
 | Live migration drift | `checkMigrationDrift(adapter)` | _(run from a test or deploy script)_ | Missing version table, pending migrations, missing Fortress tables, DB ahead of bundled catalog |
 | Bundled catalog consistency | _(internal catalog)_ | `fortress migrate:check` / `fortress check:migrations` | Duplicate versions, invalid dialect metadata, or missing up/down SQL in the selected installed catalog |
 | Generated artifact parity | _(repository maintenance)_ | `bun run generate:migrations --check` | Missing, extra, or byte-modified committed SQL projections |
@@ -53,17 +53,33 @@ This single test catches:
 
 ## As a CLI
 
+Point the route commands at a module that exports your configured instance so
+they cover your plugin and host-owned routes:
+
 ```sh
-fortress manifest:check         # route-security drift (also: check:routes)
-fortress check:public-routes    # public-route allow-list (core surface)
+fortress manifest:check --module ./src/lib/fortress.ts       # route-security drift (also: check:routes)
+fortress check:public-routes --module ./src/lib/fortress.ts  # public-route allow-list
 fortress migrate:check          # installed migration catalog (also: check:migrations)
 bun run generate:migrations --check  # Fortress-repository SQL artifact parity
 ```
 
-The route CLI runs against Fortress's **core auth + IAM** route surface, so it
-catches drift in Fortress itself but doesn't see your plugins. The migration
-CLI check validates the selected bundled catalog; it does not connect to a live
-database. For app-level route and live migration checks, use the APIs from a
+The module must export the instance as `export const fortress` (a default
+export also works) and may export `dispose()` to close database handles when
+the command finishes. `fortress init` scaffolds a `fortress.config.ts` in
+exactly this shape, and the same module works for `fortress migrate:up`.
+Building the instance needs no live database connection — Fortress only reads
+the adapter's dialect at construction — so these checks stay offline.
+
+**Without `--module`, the route commands cover Fortress's own auth + IAM
+surface only.** They catch drift in Fortress itself but cannot see your
+plugins or host-owned routes, and they say so in their output:
+
+```
+Scope: core-only (Fortress auth + IAM routes). Pass --module <path> to include plugin and host-owned routes.
+```
+
+The migration CLI check validates the selected bundled catalog; it does not
+connect to a live database. For live migration checks, use the APIs from a
 vitest or deploy script as shown above.
 
 ## GitHub Actions snippet
@@ -75,8 +91,8 @@ A drop-in workflow is committed at
 1. `bun run lint`
 2. `bun run typecheck`
 3. `bun run typecheck:examples`
-4. `bunx fortress manifest:check`
-5. `bunx fortress check:public-routes`
+4. `bunx fortress manifest:check --module ./src/lib/fortress.ts`
+5. `bunx fortress check:public-routes --module ./src/lib/fortress.ts`
 6. `bunx fortress migrate:check`
 7. `bun run test` (which should include `runFortressChecks(...)` from
    the snippet above)
@@ -109,7 +125,8 @@ checkPublicRoutes(fortress, {
 CLI usage repeats `--allow`:
 
 ```sh
-fortress check:public-routes --allow 'GET /health' --allow 'GET /robots.txt'
+fortress check:public-routes --module ./src/lib/fortress.ts \
+  --allow 'GET /health' --allow 'GET /robots.txt'
 ```
 
 If you want a stricter posture (e.g. fail on `oauth-protocol` routes

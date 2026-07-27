@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /* eslint-disable no-console -- CLI tool requires console output */
 
-import type { FortressMigrationRuntime, MigrateResult } from '../src/core/capabilities';
-import type { EndpointDefinition } from '../src/core/endpoint';
+import type { FortressManifestRuntime, FortressMigrationRuntime, MigrateResult } from '../src/core/capabilities';
+import type { ComponentSchemas, EndpointDefinition } from '../src/core/endpoint';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -47,20 +47,37 @@ Commands:
   migrate:diff        Explain live schema drift checking API
   migrate:check       Check bundled migration catalog consistency
 
+Route command scope:
+  openapi, schemas, manifest, manifest:check, check:routes, and
+  check:public-routes cover only Fortress's own auth + IAM routes unless you
+  pass --module <path>. Point them at a module exporting a configured
+  'fortress' instance to include your plugin and host-owned routes.
+
 Options:
   --help, -h          Show this help message
 
 openapi options:
+  --module <path>     Module exporting a configured 'fortress' instance
   --out, -o <file>    Output file (default: stdout)
   --title <title>     API title (default: 'Fortress Auth API')
   --version <ver>     API version (default: '1.0.0')
+  --operation-id <s>  operationId style: 'methodPath' | 'handler' (default: 'methodPath')
 
 schemas options:
+  --module <path>     Module exporting a configured 'fortress' instance
   --format <fmt>      Schema format: 'zod' | 'json-schema' (default: 'json-schema')
   --out, -o <file>    Output file (default: stdout)
 
 manifest options:
+  --module <path>     Module exporting a configured 'fortress' instance
   --out, -o <file>    Output file (default: stdout)
+
+manifest:check / check:routes options:
+  --module <path>     Module exporting a configured 'fortress' instance
+
+check:public-routes options:
+  --module <path>     Module exporting a configured 'fortress' instance
+  --allow "<M> <path>"  Allow one public route; repeatable
 
 live migration options:
   --module <path>     Trusted module exporting a configured 'fortress' value
@@ -78,9 +95,11 @@ Examples:
   fortress openapi --out openapi.json
   fortress schemas --format zod --out src/generated/fortress-schemas.ts
   fortress manifest --out route-manifest.json
-  fortress manifest:check
+  fortress manifest --module ./fortress.config.ts --out route-manifest.json
+  fortress manifest:check --module ./fortress.config.ts
   fortress check:routes
-  fortress check:public-routes
+  fortress check:public-routes --module ./fortress.config.ts
+  fortress check:public-routes --allow "GET /health"
   fortress check:migrations
   fortress migrate:up --module ./src/fortress.ts
   fortress migrate:export --dialect pg --direction up --out fortress-pg.sql
@@ -88,8 +107,9 @@ Examples:
 `.trim();
 
 const CONFIG_TEMPLATE = `import type { FortressConfig } from '@bajustone/fortress';
+import { createFortress } from '@bajustone/fortress';
 
-const config: FortressConfig = {
+export const config: FortressConfig = {
   database: undefined!, // Replace with your DatabaseAdapter (e.g. createSqliteDrizzleAdapter(db))
   jwt: {
     key: process.env.FORTRESS_JWT_SECRET!,
@@ -98,7 +118,22 @@ const config: FortressConfig = {
     refreshTokenExpirySeconds: 604800, // 7 days
   },
   plugins: [],
+  // routes: { ... }  // host-owned endpoint definitions; these show up in CLI checks too
 };
+
+/**
+ * The instance the CLI consumes:
+ *   fortress manifest --module ./fortress.config.ts
+ *   fortress check:public-routes --module ./fortress.config.ts
+ *   fortress migrate:up --module ./fortress.config.ts
+ *
+ * Without --module those commands only cover Fortress's own auth + IAM routes,
+ * not your plugins or host-owned routes.
+ */
+export const fortress = createFortress(config);
+
+/** Called by the CLI when it finishes; close database handles here so it exits cleanly. */
+export function dispose(): void {}
 
 export default config;
 `;
@@ -145,6 +180,7 @@ function cmdInit(): void {
   console.log('  2. Configure your database adapter in fortress.config.ts');
   console.log('  3. Define your resources in fortress.resources.json');
   console.log('  4. Run "fortress sync:types" to generate TypeScript types');
+  console.log('  5. Point the checks at your app: "fortress check:public-routes --module ./fortress.config.ts"');
 }
 
 function cmdSyncPush(): void {
@@ -234,112 +270,381 @@ function cmdGenerateSecret(): void {
   console.log(hex);
 }
 
-function parseArg(args: string[], flag: string, alias?: string): string | undefined {
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === flag || (alias && args[i] === alias)) {
-      return args[i + 1];
+// --- Argument parsing ---
+
+/**
+ * How one named option is spelled and how many times it may appear.
+ *
+ * Every command parses through {@link parseCliArgs} so an unrecognised flag is
+ * a hard error rather than a silent no-op. That matters most for the security
+ * checks: a typo like `--modul ./app.ts` must fail loudly instead of quietly
+ * reporting a core-only pass.
+ */
+interface CliOptionSpec {
+  /** Flags that select this option, e.g. `['--out', '-o']`. */
+  readonly flags: readonly string[];
+  /** Accumulate every occurrence instead of rejecting the second one. */
+  readonly repeatable?: boolean;
+  /**
+   * Accept a value beginning with `-`. Reserved for free-form text; a value
+   * that is itself a registered flag is still rejected.
+   */
+  readonly allowLeadingDash?: boolean;
+}
+
+type CliOptionRegistry<TOption extends string> = Readonly<Record<TOption, CliOptionSpec>>;
+
+interface ParsedCliArgs<TOption extends string> {
+  /** Single value for an option, or `undefined` when it was not supplied. */
+  get: (option: TOption) => string | undefined;
+  /** Every value supplied for a repeatable option, in argv order. */
+  getAll: (option: TOption) => string[];
+}
+
+/**
+ * Parse `--flag value` pairs against a registry, rejecting unknown flags,
+ * flags the command does not accept, duplicates of non-repeatable options,
+ * and missing values.
+ *
+ * Each command passes its own registry so error wording stays scoped: an
+ * option another command owns reports "cannot be used with", while a flag no
+ * command owns reports "Unknown argument".
+ */
+function parseCliArgs<TOption extends string>(
+  args: string[],
+  command: string,
+  registry: CliOptionRegistry<TOption>,
+  allowed: readonly TOption[],
+): ParsedCliArgs<TOption> {
+  const flagToOption = new Map<string, TOption>();
+  for (const [option, spec] of Object.entries(registry) as Array<[TOption, CliOptionSpec]>) {
+    for (const flag of spec.flags)
+      flagToOption.set(flag, option);
+  }
+
+  const allowedOptions = new Set(allowed);
+  const collected = new Map<TOption, string[]>();
+
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index]!;
+    const option = flagToOption.get(flag);
+    if (!option)
+      throw new Error(`Unknown argument '${flag}' for ${command}`);
+    if (!allowedOptions.has(option))
+      throw new Error(`${flag} cannot be used with ${command}`);
+
+    const spec = registry[option];
+    const existing = collected.get(option);
+    if (existing && !spec.repeatable)
+      throw new Error(`Duplicate argument '${flag}' for ${command}`);
+
+    const value = args[index + 1];
+    if (!value || (!spec.allowLeadingDash && value.startsWith('-')) || flagToOption.has(value))
+      throw new Error(`${flag} requires a value`);
+
+    if (existing)
+      existing.push(value);
+    else
+      collected.set(option, [value]);
+  }
+
+  return {
+    get: option => collected.get(option)?.[0],
+    getAll: option => collected.get(option) ?? [],
+  };
+}
+
+/** Options shared by the route-derived commands (manifest, OpenAPI, schemas, checks). */
+type RouteOption = 'allow' | 'format' | 'module' | 'operationId' | 'out' | 'title' | 'version';
+
+const ROUTE_OPTIONS = {
+  allow: { flags: ['--allow'], repeatable: true },
+  format: { flags: ['--format'] },
+  module: { flags: ['--module'] },
+  operationId: { flags: ['--operation-id'] },
+  out: { flags: ['--out', '-o'] },
+  title: { flags: ['--title'], allowLeadingDash: true },
+  version: { flags: ['--version'], allowLeadingDash: true },
+} as const satisfies CliOptionRegistry<RouteOption>;
+
+function parseRouteArgs(
+  args: string[],
+  command: string,
+  allowed: readonly RouteOption[],
+): ParsedCliArgs<RouteOption> {
+  return parseCliArgs(args, command, ROUTE_OPTIONS, allowed);
+}
+
+type PolicyOption = 'env' | 'file';
+
+const POLICY_OPTIONS = {
+  env: { flags: ['--env'] },
+  file: { flags: ['--file', '-f'] },
+} as const satisfies CliOptionRegistry<PolicyOption>;
+
+function parseOperationIdStyle(value: string | undefined): 'handler' | 'methodPath' {
+  const style = value ?? 'methodPath';
+  if (style !== 'handler' && style !== 'methodPath')
+    throw new Error(`Unknown operation-id style '${style}'. Use methodPath or handler.`);
+  return style;
+}
+
+/**
+ * Core auth + IAM component schemas.
+ *
+ * The spec is always built through {@link buildOpenAPISpec} with these merged
+ * in, rather than through `fortress.toOpenAPI()`, because the instance method
+ * forwards no component schemas — it would emit an empty `components.schemas`
+ * and leave every core `$ref` dangling. Plugin and host routes carry inline
+ * JSON Schema rather than component refs, so the core record stays sufficient.
+ */
+function coreComponentSchemas(): ComponentSchemas {
+  return { ...authComponentSchemas, ...iamComponentSchemas };
+}
+
+async function cmdOpenAPI(args: string[]): Promise<void> {
+  const parsed = parseRouteArgs(args, 'openapi', ['module', 'operationId', 'out', 'title', 'version']);
+  const title = parsed.get('title') ?? 'Fortress Auth API';
+  const version = parsed.get('version') ?? '1.0.0';
+  const outFile = parsed.get('out');
+  const operationId = parseOperationIdStyle(parsed.get('operationId'));
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
+    const spec = buildOpenAPISpec(fortress.endpoints, coreComponentSchemas(), {
+      title,
+      version,
+      operationId,
+    });
+    const json = JSON.stringify(spec, null, 2);
+
+    if (outFile) {
+      writeFileSync(outFile, json, 'utf-8');
+      console.log(`OpenAPI spec written to ${outFile}`);
+      console.log(`  ${Object.keys(spec.paths).length} path(s), OpenAPI 3.1.0`);
     }
-  }
-  return undefined;
+    else {
+      process.stdout.write(json);
+    }
+    printScope(scopeNote, !outFile);
+  });
 }
 
-function cmdOpenAPI(args: string[]): void {
-  const title = parseArg(args, '--title') ?? 'Fortress Auth API';
-  const version = parseArg(args, '--version') ?? '1.0.0';
-  const outFile = parseArg(args, '--out') ?? parseArg(args, '-o');
+// --- Route surface resolution ---
 
-  const allEndpoints = [
-    ...Object.values(authEndpoints),
-    ...Object.values(iamEndpoints),
-  ];
-  const componentSchemas = { ...authComponentSchemas, ...iamComponentSchemas };
+/**
+ * The introspection surface every route-derived command works against. A real
+ * `Fortress` instance satisfies this structurally, so `--module` output needs
+ * no casts and no library-side change.
+ */
+type CliRouteSurface = Pick<FortressManifestRuntime, 'config' | 'endpoints' | 'manifest'>;
 
-  const spec = buildOpenAPISpec(allEndpoints, componentSchemas, { title, version });
-  const json = JSON.stringify(spec, null, 2);
-
-  if (outFile) {
-    writeFileSync(outFile, json, 'utf-8');
-    console.log(`OpenAPI spec written to ${outFile}`);
-    const pathCount = Object.keys(spec.paths).length;
-    console.log(`  ${pathCount} endpoints, OpenAPI 3.1.0`);
-  }
-  else {
-    process.stdout.write(json);
-  }
-}
-
-function buildCoreFortressForCli(): { endpoints: EndpointDefinition[]; config: { plugins: []; csrf: undefined }; readonly manifest: ReturnType<typeof buildRouteManifest> } {
+/**
+ * Fortress's own auth + IAM routes, with no plugins and no host-owned routes.
+ * This is the deliberate fallback when the caller does not point the CLI at an
+ * application module; commands label it as such so a green check is never read
+ * as covering the caller's own routes.
+ */
+function buildCoreFortressForCli(): CliRouteSurface {
   const endpoints = [
     ...Object.values(authEndpoints) as EndpointDefinition[],
     ...Object.values(iamEndpoints) as EndpointDefinition[],
   ];
   return {
     endpoints,
-    config: { plugins: [], csrf: undefined },
+    config: { plugins: [], csrf: undefined } as unknown as FortressManifestRuntime['config'],
     get manifest() {
-      return buildRouteManifest(this as any);
+      return buildRouteManifest(this);
     },
   };
 }
 
-function cmdManifest(args: string[]): void {
-  const outFile = parseArg(args, '--out') ?? parseArg(args, '-o');
-  const fortress = buildCoreFortressForCli();
-  const manifest = buildRouteManifest(fortress as any);
-  const json = JSON.stringify(manifest, null, 2);
+const CORE_ONLY_NOTE
+  = 'Scope: core-only (Fortress auth + IAM routes). '
+    + 'Pass --module <path> to include plugin and host-owned routes.';
 
-  if (outFile) {
-    writeFileSync(outFile, json, 'utf-8');
-    console.log(`Route manifest written to ${outFile}`);
-    console.log(`  ${manifest.length} route(s)`);
+interface LoadedAppModule {
+  fortress: FortressManifestRuntime;
+  dispose?: () => void | Promise<void>;
+}
+
+/**
+ * A module is usable when it exposes the introspection capability. Accepts the
+ * named export `fortress` — the same convention `migrate:up` already uses, so
+ * one module serves both — and falls back to a default export.
+ */
+function selectAppInstance(value: Record<string, unknown>): unknown {
+  if (value.fortress !== undefined)
+    return value.fortress;
+  return value.default;
+}
+
+function validateAppModule(value: unknown, modulePath: string): LoadedAppModule {
+  if (!isRecord(value))
+    throw new Error(`Application module '${modulePath}' did not export an object`);
+
+  const instance = selectAppInstance(value);
+  if (!isRecord(instance) || !Array.isArray(instance.endpoints) || !isRecord(instance.config) || !Array.isArray(instance.manifest)) {
+    throw new Error(
+      `Application module '${modulePath}' must export a configured Fortress instance as named export 'fortress' `
+      + `(an object with 'endpoints', 'manifest', and 'config'). `
+      + `Add \`export const fortress = createFortress(config);\` to the module.`,
+    );
   }
-  else {
-    process.stdout.write(json);
+  if (value.dispose !== undefined && typeof value.dispose !== 'function')
+    throw new Error(`Application module export 'dispose' must be a function when provided`);
+
+  return {
+    fortress: instance as unknown as FortressManifestRuntime,
+    dispose: value.dispose as LoadedAppModule['dispose'],
+  };
+}
+
+async function loadAppModule(modulePath: string): Promise<LoadedAppModule> {
+  const imported = await importCliModule(modulePath);
+  try {
+    return validateAppModule(imported, modulePath);
+  }
+  catch (error) {
+    await disposeQuietly(imported, 'Application module cleanup also failed');
+    throw error;
   }
 }
 
-function cmdManifestCheck(): void {
-  const fortress = buildCoreFortressForCli();
-  const openapi = buildOpenAPISpec(
-    fortress.endpoints,
-    { ...authComponentSchemas, ...iamComponentSchemas },
-    { title: 'Fortress Auth API', version: '1.0.0' },
-  );
-  const drift = detectRouteManifestDrift(fortress as any, { openapi });
-
-  if (hasRouteManifestDrift(drift)) {
-    console.error('Route manifest drift detected:');
-    console.error(JSON.stringify(drift, null, 2));
-    process.exit(1);
-  }
-
-  console.log('Route manifest check passed.');
+interface ResolvedRouteSurface {
+  fortress: CliRouteSurface;
+  /** Printed before/alongside command output so scope is never implicit. */
+  scopeNote: string;
+  dispose?: () => void | Promise<void>;
 }
 
-function cmdCheckPublicRoutes(args: string[]): void {
-  // Optional `--allow <method> <path>` repeated entries augment the
-  // default Fortress allow-list. For app-level checks (with plugins
-  // mounted), call `checkPublicRoutes(fortress)` from your CI script
-  // against your real fortress instance.
-  const allow: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--allow' && args[i + 1])
-      allow.push(args[++i]);
+async function resolveRouteSurface(modulePath: string | undefined): Promise<ResolvedRouteSurface> {
+  if (!modulePath)
+    return { fortress: buildCoreFortressForCli(), scopeNote: CORE_ONLY_NOTE };
+
+  const loaded = await loadAppModule(modulePath);
+  const routeCount = loaded.fortress.manifest.length;
+  return {
+    fortress: loaded.fortress,
+    scopeNote: `Scope: application (${routeCount} route(s) from ${modulePath}).`,
+    dispose: loaded.dispose,
+  };
+}
+
+/**
+ * Run a route-derived command against the resolved surface, always disposing
+ * the loaded module afterwards. Failures set `process.exitCode` rather than
+ * calling `process.exit` so `dispose()` is not skipped.
+ */
+async function withRouteSurface(
+  modulePath: string | undefined,
+  run: (surface: ResolvedRouteSurface) => void,
+): Promise<void> {
+  const surface = await resolveRouteSurface(modulePath);
+  let runError: unknown;
+  let runFailed = false;
+  try {
+    run(surface);
   }
-  const fortress = buildCoreFortressForCli();
-  const result = checkPublicRoutes(fortress as any, { allow });
-  if (!result.ok) {
-    console.error('Public-route check failed:');
-    for (const msg of result.messages)
-      console.error(`  - ${msg}`);
-    process.exit(1);
+  catch (error) {
+    runFailed = true;
+    runError = error;
   }
-  console.log(`Public-route check passed (${result.unexpected.length} unexpected, allow-list ok).`);
+
+  let cleanupError: unknown;
+  let cleanupFailed = false;
+  try {
+    await surface.dispose?.();
+  }
+  catch (error) {
+    cleanupFailed = true;
+    cleanupError = error;
+  }
+
+  if (runFailed) {
+    if (cleanupFailed)
+      console.error(`Application module cleanup also failed: ${describeError(cleanupError)}`);
+    throw runError;
+  }
+  if (cleanupFailed)
+    throw cleanupError;
+}
+
+/** Emit the scope note without polluting stdout when stdout carries the payload. */
+function printScope(note: string, payloadOnStdout: boolean): void {
+  if (payloadOnStdout)
+    console.error(note);
+  else
+    console.log(note);
+}
+
+async function cmdManifest(args: string[]): Promise<void> {
+  const parsed = parseRouteArgs(args, 'manifest', ['module', 'out']);
+  const outFile = parsed.get('out');
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
+    const manifest = buildRouteManifest(fortress);
+    const json = JSON.stringify(manifest, null, 2);
+
+    if (outFile) {
+      writeFileSync(outFile, json, 'utf-8');
+      console.log(`Route manifest written to ${outFile}`);
+      console.log(`  ${manifest.length} route(s)`);
+    }
+    else {
+      process.stdout.write(json);
+    }
+    printScope(scopeNote, !outFile);
+  });
+}
+
+async function cmdManifestCheck(args: string[], command: string): Promise<void> {
+  const parsed = parseRouteArgs(args, command, ['module']);
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
+    const openapi = buildOpenAPISpec(fortress.endpoints, coreComponentSchemas(), {
+      title: 'Fortress Auth API',
+      version: '1.0.0',
+    });
+    const drift = detectRouteManifestDrift(fortress, { openapi });
+
+    if (hasRouteManifestDrift(drift)) {
+      console.error('Route manifest drift detected:');
+      console.error(JSON.stringify(drift, null, 2));
+      console.error(scopeNote);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log('Route manifest check passed.');
+    console.log(scopeNote);
+  });
+}
+
+async function cmdCheckPublicRoutes(args: string[]): Promise<void> {
+  // Repeated `--allow '<METHOD> <path>'` entries augment (never replace) the
+  // default Fortress allow-list. Without `--module` this only sees Fortress's
+  // own auth + IAM routes, so the scope note is part of the result.
+  const parsed = parseRouteArgs(args, 'check:public-routes', ['allow', 'module']);
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
+    const result = checkPublicRoutes(fortress, { allow: parsed.getAll('allow') });
+    if (!result.ok) {
+      console.error('Public-route check failed:');
+      for (const msg of result.messages)
+        console.error(`  - ${msg}`);
+      console.error(scopeNote);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Public-route check passed (${fortress.manifest.length} route(s) reviewed, allow-list ok).`);
+    console.log(scopeNote);
+  });
 }
 
 async function cmdPolicySummary(args: string[]): Promise<void> {
-  const filePath = parseArg(args, '--file') ?? parseArg(args, '-f');
-  const env = parseArg(args, '--env');
+  const parsed = parseCliArgs(args, 'policy:summary', POLICY_OPTIONS, ['env', 'file']);
+  const filePath = parsed.get('file');
+  const env = parsed.get('env');
   const resolved = await resolvePolicyPath({ filePath, env });
   if (!resolved) {
     console.error('No fortress.policy.json (or fortress.policy.<env>.json) found in the current directory.');
@@ -386,37 +691,31 @@ type MigrationOption = 'dialect' | 'direction' | 'module' | 'out' | 'targetVersi
 
 type ParsedMigrationArgs = Partial<Record<MigrationOption, string>>;
 
-const MIGRATION_OPTION_FLAGS: Readonly<Record<string, MigrationOption>> = {
-  '--dialect': 'dialect',
-  '--direction': 'direction',
-  '--module': 'module',
-  '--out': 'out',
-  '-o': 'out',
-  '--target-version': 'targetVersion',
-};
+const MIGRATION_OPTIONS = {
+  dialect: { flags: ['--dialect'] },
+  direction: { flags: ['--direction'] },
+  module: { flags: ['--module'] },
+  out: { flags: ['--out', '-o'] },
+  // A negative or otherwise malformed version reaches parseTargetVersion so it
+  // reports the numeric contract instead of a generic "requires a value".
+  targetVersion: { flags: ['--target-version'], allowLeadingDash: true },
+} as const satisfies CliOptionRegistry<MigrationOption>;
+
+const MIGRATION_OPTION_NAMES = Object.keys(MIGRATION_OPTIONS) as MigrationOption[];
 
 function parseMigrationArgs(
   args: string[],
   command: string,
   allowed: readonly MigrationOption[],
 ): ParsedMigrationArgs {
-  const allowedOptions = new Set(allowed);
-  const parsed: ParsedMigrationArgs = {};
-  for (let index = 0; index < args.length; index += 2) {
-    const flag = args[index]!;
-    const option = MIGRATION_OPTION_FLAGS[flag];
-    if (!option)
-      throw new Error(`Unknown argument '${flag}' for ${command}`);
-    if (!allowedOptions.has(option))
-      throw new Error(`${flag} cannot be used with ${command}`);
-    if (parsed[option] !== undefined)
-      throw new Error(`Duplicate argument '${flag}' for ${command}`);
-    const value = args[index + 1];
-    if (!value || (option !== 'targetVersion' && value.startsWith('-')) || MIGRATION_OPTION_FLAGS[value])
-      throw new Error(`${flag} requires a value`);
-    parsed[option] = value;
+  const parsed = parseCliArgs(args, command, MIGRATION_OPTIONS, allowed);
+  const result: ParsedMigrationArgs = {};
+  for (const option of MIGRATION_OPTION_NAMES) {
+    const value = parsed.get(option);
+    if (value !== undefined)
+      result[option] = value;
   }
-  return parsed;
+  return result;
 }
 
 function requireMigrationOption(
@@ -499,21 +798,39 @@ function validateMigrationModule(value: unknown): LoadedMigrationModule {
   return value as unknown as LoadedMigrationModule;
 }
 
-async function loadMigrationModule(modulePath: string): Promise<LoadedMigrationModule> {
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Import a caller-supplied module by cwd-relative path. The import error is
+ * deliberately left unwrapped so runtime diagnostics ("Cannot find module …")
+ * reach the operator verbatim.
+ */
+async function importCliModule(modulePath: string): Promise<unknown> {
   const specifier = pathToFileURL(resolve(process.cwd(), modulePath)).href;
-  const imported: unknown = await import(specifier);
+  return await import(specifier);
+}
+
+/** Best-effort `dispose()` on a module that failed validation. */
+async function disposeQuietly(imported: unknown, label: string): Promise<void> {
+  if (!isRecord(imported) || typeof imported.dispose !== 'function')
+    return;
+  try {
+    await imported.dispose();
+  }
+  catch (cleanupError) {
+    console.error(`${label}: ${describeError(cleanupError)}`);
+  }
+}
+
+async function loadMigrationModule(modulePath: string): Promise<LoadedMigrationModule> {
+  const imported = await importCliModule(modulePath);
   try {
     return validateMigrationModule(imported);
   }
   catch (error) {
-    if (isRecord(imported) && typeof imported.dispose === 'function') {
-      try {
-        await imported.dispose();
-      }
-      catch (cleanupError) {
-        console.error(`Migration module cleanup also failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
-      }
-    }
+    await disposeQuietly(imported, 'Migration module cleanup also failed');
     throw error;
   }
 }
@@ -618,31 +935,34 @@ function cmdMigrateCheck(args: string[]): void {
   console.log(`Migration catalog check passed (${dialect}, latest=${getLatestMigrationVersion(dialect)}).`);
 }
 
-function cmdSchemas(args: string[]): void {
-  const format = parseArg(args, '--format') ?? 'json-schema';
-  const outFile = parseArg(args, '--out') ?? parseArg(args, '-o');
+async function cmdSchemas(args: string[]): Promise<void> {
+  const parsed = parseRouteArgs(args, 'schemas', ['format', 'module', 'out']);
+  const format = parsed.get('format') ?? 'json-schema';
+  const outFile = parsed.get('out');
 
-  if (format === 'json-schema') {
-    const allSchemas = { ...authComponentSchemas, ...iamComponentSchemas };
-    const json = JSON.stringify(allSchemas, null, 2);
+  if (format !== 'json-schema' && format !== 'zod')
+    throw new Error(`Unknown format: ${format}. Supported: json-schema, zod`);
 
-    if (outFile) {
-      writeFileSync(outFile, json, 'utf-8');
-      console.log(`JSON Schema written to ${outFile}`);
-      console.log(`  ${Object.keys(allSchemas).length} component schemas`);
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
+    // Component schemas stay the core record even in module mode: plugin and
+    // host routes carry inline JSON Schema rather than `$ref`s to components.
+    const allSchemas = coreComponentSchemas();
+
+    if (format === 'json-schema') {
+      const json = JSON.stringify(allSchemas, null, 2);
+      if (outFile) {
+        writeFileSync(outFile, json, 'utf-8');
+        console.log(`JSON Schema written to ${outFile}`);
+        console.log(`  ${Object.keys(allSchemas).length} component schemas`);
+      }
+      else {
+        process.stdout.write(json);
+      }
+      printScope(scopeNote, !outFile);
+      return;
     }
-    else {
-      process.stdout.write(json);
-    }
-    return;
-  }
 
-  if (format === 'zod') {
-    const allSchemas = { ...authComponentSchemas, ...iamComponentSchemas };
-    const allEndpoints = [
-      ...Object.values(authEndpoints),
-      ...Object.values(iamEndpoints),
-    ];
+    const bodyEndpoints = fortress.endpoints.filter(ep => ep.input?.body);
 
     let output = '// Auto-generated by "fortress schemas --format zod" — do not edit manually\n';
     output += '// Requires: zod\n\n';
@@ -656,26 +976,21 @@ function cmdSchemas(args: string[]): void {
 
     // Generate endpoint input schemas
     output += '// ── Endpoint Input Schemas ────────────────────────────────────────\n\n';
-    for (const ep of allEndpoints) {
-      if (ep.input?.body) {
-        const handlerName = ep.handler.charAt(0).toUpperCase() + ep.handler.slice(1);
-        output += `export const ${handlerName}BodySchema = ${jsonSchemaToZodCodegen(ep.input.body)};\n\n`;
-      }
+    for (const ep of bodyEndpoints) {
+      const handlerName = ep.handler.charAt(0).toUpperCase() + ep.handler.slice(1);
+      output += `export const ${handlerName}BodySchema = ${jsonSchemaToZodCodegen(ep.input!.body)};\n\n`;
     }
 
     if (outFile) {
       writeFileSync(outFile, output, 'utf-8');
       console.log(`Zod schemas written to ${outFile}`);
-      console.log(`  ${Object.keys(allSchemas).length} component schemas, ${allEndpoints.filter((e: any) => e.input?.body).length} body schemas`);
+      console.log(`  ${Object.keys(allSchemas).length} component schemas, ${bodyEndpoints.length} body schemas`);
     }
     else {
       process.stdout.write(output);
     }
-    return;
-  }
-
-  console.error(`Unknown format: ${format}. Supported: json-schema, zod`);
-  process.exit(1);
+    printScope(scopeNote, !outFile);
+  });
 }
 
 /** Convert a JSON Schema object to Zod code string (codegen, not runtime). */
@@ -771,16 +1086,16 @@ async function main(): Promise<void> {
       cmdGenerateSecret();
       break;
     case 'openapi':
-      cmdOpenAPI(args.slice(1));
+      await cmdOpenAPI(args.slice(1));
       break;
     case 'schemas':
-      cmdSchemas(args.slice(1));
+      await cmdSchemas(args.slice(1));
       break;
     case 'manifest':
-      cmdManifest(args.slice(1));
+      await cmdManifest(args.slice(1));
       break;
     case 'manifest:check':
-      cmdManifestCheck();
+      await cmdManifestCheck(args.slice(1), 'manifest:check');
       break;
     case 'migrate:status':
       cmdMigrateStatus(args.slice(1));
@@ -801,10 +1116,10 @@ async function main(): Promise<void> {
       cmdMigrateCheck(args.slice(1));
       break;
     case 'check:routes':
-      cmdManifestCheck();
+      await cmdManifestCheck(args.slice(1), 'check:routes');
       break;
     case 'check:public-routes':
-      cmdCheckPublicRoutes(args.slice(1));
+      await cmdCheckPublicRoutes(args.slice(1));
       break;
     case 'check:migrations':
       cmdMigrateCheck(args.slice(1));

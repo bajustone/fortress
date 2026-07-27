@@ -156,6 +156,6 @@ Provide an independent reviewer with:
 - `bun run lint`
 - `bun run typecheck`
 - `bun run test`
-- `fortress manifest:check` for core surface plus app-level `detectRouteManifestDrift()`.
+- `fortress manifest:check --module <path>` for your full route surface (without `--module` it covers Fortress's core surface only), plus app-level `detectRouteManifestDrift()`.
 - `fortress migrate:check` plus live `detectMigrationDrift()` against deployment DBs.
 - OpenAPI diff review for newly-public endpoints.

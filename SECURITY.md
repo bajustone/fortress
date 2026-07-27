@@ -31,7 +31,7 @@ Until 1.0 final, breaking changes may ship in a release candidate or minor relea
 
 ### Route security manifest
 
-Use `fortress.manifest` (or `fortress manifest` for the core auth/IAM surface) to review which routes are public, authenticated, RBAC-protected, OAuth self-managed, CSRF-applicable, and rate-limited. Add `detectRouteManifestDrift()` to CI when generating OpenAPI specs or mounting plugin routes so route protection metadata cannot silently drift.
+Use `fortress.manifest` (or `fortress manifest --module <path>`; without `--module` the CLI covers the core auth/IAM surface only) to review which routes are public, authenticated, RBAC-protected, OAuth self-managed, CSRF-applicable, and rate-limited. Add `detectRouteManifestDrift()` to CI when generating OpenAPI specs or mounting plugin routes so route protection metadata cannot silently drift.
 
 For app-owned routes that call Fortress services directly, prefer `protect()` / adapter `protectedRoute()` wrappers so CSRF, auth, RBAC, validation, and plugin middleware still run from endpoint metadata. See [docs/host-owned-routes.md](docs/host-owned-routes.md).
 

@@ -7,10 +7,14 @@
 #   - Install command (`bun install` / `pnpm i` / `npm ci`).
 #
 # What it runs:
-#   - `fortress manifest:check`     → route-security manifest drift
-#   - `fortress check:public-routes` → catches `.security('none')` on routes
-#     that shouldn't be public (against the bundled Fortress allow-list)
+#   - `fortress manifest:check --module …`     → route-security manifest drift
+#   - `fortress check:public-routes --module …` → catches `.security('none')` on
+#     routes that shouldn't be public (against the bundled Fortress allow-list)
 #   - `fortress migrate:check`      → bundled migration catalog consistency
+#
+# `--module` is what makes the two route checks cover your plugin and
+# host-owned routes. Drop it and they only review Fortress's own auth + IAM
+# surface — a green run would say nothing about your routes.
 #   - `bun run test`                → your suite, which should include
 #     `runFortressChecks()` against your real fortress instance with the
 #     test adapter (see docs/ci.md for a sample test file).
@@ -43,10 +47,10 @@ jobs:
         run: bun run typecheck
 
       - name: Fortress route-manifest drift
-        run: bunx fortress manifest:check
+        run: bunx fortress manifest:check --module ./src/lib/fortress.ts
 
       - name: Fortress public-route allow-list
-        run: bunx fortress check:public-routes
+        run: bunx fortress check:public-routes --module ./src/lib/fortress.ts
 
       - name: Fortress migration catalog
         run: bunx fortress migrate:check

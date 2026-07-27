@@ -757,11 +757,11 @@ See [Observability](docs/observability.md).
 fortress init
 fortress generate-secret
 fortress sync:types
-fortress openapi --out openapi.json
-fortress schemas --format json-schema --out schemas.json
-fortress manifest --out route-manifest.json
-fortress manifest:check
-fortress check:public-routes
+fortress openapi --module ./src/fortress.ts --out openapi.json
+fortress schemas --module ./src/fortress.ts --format json-schema --out schemas.json
+fortress manifest --module ./src/fortress.ts --out route-manifest.json
+fortress manifest:check --module ./src/fortress.ts
+fortress check:public-routes --module ./src/fortress.ts
 fortress migrate:status --dialect pg       # bundled catalog status
 fortress migrate:check --dialect pg        # bundled catalog validation
 fortress migrate:up --module ./src/fortress.ts
@@ -769,8 +769,18 @@ fortress migrate:export --dialect pg --direction up --out fortress-pg.sql
 fortress policy:summary
 ```
 
+`openapi`, `schemas`, `manifest`, `manifest:check` (alias `check:routes`), and
+`check:public-routes` take `--module <path>`, pointing at a module that exports
+your configured instance as `export const fortress`. That is what makes them
+cover your plugin and host-owned routes; constructing the instance requires no
+database connection. **Omit `--module` and they only cover Fortress's own auth
+and IAM routes** — useful for checking Fortress itself, but a pass says nothing
+about your routes. Every one of them prints its scope. `fortress init`
+scaffolds a `fortress.config.ts` in the shape these commands expect.
+
 `migrate:up` is the live migration command and requires an explicit trusted
-module with a named `fortress` export. `migrate:export` emits deterministic SQL
+module with a named `fortress` export — the same module the route commands
+accept. `migrate:export` emits deterministic SQL
 for review or external tooling; it does not run JavaScript data steps and is not
 a substitute for the live command. `migrate:down` remains a deprecated alias
 for down-SQL export, not a live rollback command. Live drift checks use

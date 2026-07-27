@@ -37,12 +37,13 @@ Each item is "what to do" + "why" + "how to verify".
 
 - **Do:** Every Fortress-managed route should carry either `.security('none')` (intentional public) or `.permission(resource, action)` (default-deny). The mutual-exclusion check at boot will throw if you mix them.
 - **Why:** The plan's stated goal — operators should never have to remember to add a guard.
-- **Verify:** `fortress check:public-routes` in CI catches a stray `.security('none')`; the bootstrap allow-list covers only Fortress's intentional public surface.
+- **Verify:** `fortress check:public-routes --module ./src/lib/fortress.ts` in CI catches a stray `.security('none')`; the bootstrap allow-list covers only Fortress's intentional public surface, so your own public routes need an explicit `--allow`. **`--module` is required to see your routes** — without it the command only reviews Fortress's own auth + IAM surface and will pass while your plugin leaks a public route.
 
 ### RBAC drift
 
-- **Do:** Add `fortress manifest:check` to CI; also run `runFortressChecks({ fortress })` in a test that constructs your real `Fortress` instance.
+- **Do:** Add `fortress manifest:check --module ./src/lib/fortress.ts` to CI; also run `runFortressChecks({ fortress })` in a test that constructs your real `Fortress` instance.
 - **Why:** Manifest drift catches "I added a route and forgot the `.permission` decorator" before it ships.
+- **Note:** Drop `--module` and the check narrows to Fortress's own routes, which cannot catch a mistake in yours. Both forms print their scope.
 
 ### Policy as code
 
@@ -99,7 +100,7 @@ Each item is "what to do" + "why" + "how to verify".
 
 ## Deployment hygiene
 
-- **Do:** Run `bun run lint` + `bun run typecheck` + `bun run test` + `fortress migrate:check` + `fortress manifest:check` + `fortress check:public-routes` on every CI build. `migrate:check` validates the bundled catalog, not a live database; add an adapter-backed `checkMigrationDrift()` test for deployment state. Fortress contributors also run `bun run generate:migrations --check` in the repository CI workflow to gate the committed SQL projection. The [consumer workflow template](./ci/github-actions.yml) intentionally omits that maintainer-only step.
+- **Do:** Run `bun run lint` + `bun run typecheck` + `bun run test` + `fortress migrate:check` + `fortress manifest:check --module <path>` + `fortress check:public-routes --module <path>` on every CI build. Pass `--module` pointing at a module that exports your configured `fortress` instance, or the two route checks only cover Fortress's own auth + IAM routes. `migrate:check` validates the bundled catalog, not a live database; add an adapter-backed `checkMigrationDrift()` test for deployment state. Fortress contributors also run `bun run generate:migrations --check` in the repository CI workflow to gate the committed SQL projection. The [consumer workflow template](./ci/github-actions.yml) intentionally omits that maintainer-only step.
 - **Do:** Take a database backup before every deploy that bumps a migration version; test restores quarterly.
 - **Do:** Pin to a minor version (`@bajustone/fortress@~0.1`). Pre-1.0 Fortress reserves the right to ship breaking changes in any minor.
 

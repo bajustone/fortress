@@ -32,6 +32,68 @@ function runCli(
   });
 }
 
+const CORE_ONLY_SCOPE = 'Scope: core-only';
+const APP_SCOPE = 'Scope: application';
+
+/**
+ * Write a `--module` fixture: a Fortress instance with a plugin route and a
+ * host-owned route, backed by the in-memory test adapter so no database is
+ * needed. `leak: true` adds an unreviewed public plugin route.
+ */
+function writeAppModule(dir: string, file: string, opts: { leak: boolean }): void {
+  const fortressUrl = new URL('./core/fortress.ts', import.meta.url).href;
+  const builderUrl = new URL('./core/schema-builder.ts', import.meta.url).href;
+  const testingUrl = new URL('./testing/index.ts', import.meta.url).href;
+  const leakRoute = `
+        leak: endpoint('GET', '/reports/leak')
+          .summary('Unreviewed public plugin route')
+          .security('none')
+          .response(200, 'ok', obj({ ok: str() }, 'LeakResponse'))
+          .handler('leak')
+          .build(),`;
+
+  writeFileSync(join(dir, file), `
+    import { createFortress } from ${JSON.stringify(fortressUrl)};
+    import { endpoint, obj, str } from ${JSON.stringify(builderUrl)};
+    import { createTestAdapter } from ${JSON.stringify(testingUrl)};
+
+    const reportsPlugin = {
+      name: 'reports',
+      routes: {
+        createReport: endpoint('POST', '/reports')
+          .summary('Create a report')
+          .permission('report', 'create')
+          .body(obj({ title: str() }, 'CreateReportBody'))
+          .response(200, 'ok', obj({ ok: str() }, 'CreateReportResponse'))
+          .handler('createReport')
+          .build(),${opts.leak ? leakRoute : ''}
+      },
+      methods: () => ({
+        createReport: async () => ({ ok: 'yes' }),
+        leak: async () => ({ ok: 'yes' }),
+      }),
+    };
+
+    export const fortress = createFortress({
+      jwt: { key: 'cli-app-module-secret-at-least-32-chars' },
+      database: createTestAdapter(),
+      plugins: [reportsPlugin],
+      routes: {
+        hostStats: endpoint('GET', '/host/stats')
+          .summary('Host-owned stats route')
+          .permission('stats', 'read')
+          .response(200, 'ok', obj({ ok: str() }, 'HostStatsResponse'))
+          .handler('hostStats')
+          .build(),
+      },
+    });
+
+    export async function dispose() {
+      await Bun.write(${JSON.stringify(`${file}.disposed`)}, 'yes');
+    }
+  `);
+}
+
 describe('fortress CLI smoke tests', () => {
   let cwd: string;
 
@@ -67,10 +129,12 @@ describe('fortress CLI smoke tests', () => {
       { name: 'openapi', args: ['openapi', '--out', 'openapi.json'], output: 'openapi.json' },
       { name: 'schemas json-schema', args: ['schemas', '--format', 'json-schema', '--out', 'schemas.json'], output: 'schemas.json' },
       { name: 'schemas zod', args: ['schemas', '--format', 'zod', '--out', 'schemas.ts'], output: 'schemas.ts' },
+      { name: 'openapi operation-id handler', args: ['openapi', '--operation-id', 'handler', '--out', 'openapi-handler.json'], output: 'openapi-handler.json' },
       { name: 'manifest', args: ['manifest', '--out', 'manifest.json'], output: 'manifest.json' },
       { name: 'manifest:check', args: ['manifest:check'] },
       { name: 'check:routes', args: ['check:routes'] },
       { name: 'check:public-routes', args: ['check:public-routes'] },
+      { name: 'check:public-routes allow', args: ['check:public-routes', '--allow', 'GET /health'] },
       { name: 'policy:summary', args: ['policy:summary'] },
       { name: 'policy:diff', args: ['policy:diff'] },
       { name: 'policy:apply', args: ['policy:apply'] },
@@ -171,6 +235,150 @@ describe('fortress CLI smoke tests', () => {
     expect(readFileSync(join(cwd, 'rejection-disposed.txt'), 'utf8')).toBe('yes');
     expect(existsSync(join(cwd, 'typo-imported.txt'))).toBe(false);
   });
+
+  it('covers plugin and host-owned routes when given an application module', () => {
+    writeAppModule(cwd, 'app-module.ts', { leak: false });
+
+    const manifest = runCli(cwd, ['manifest', '--module', './app-module.ts', '--out', 'app-manifest.json']);
+    expect(manifest.status, String(manifest.stderr)).toBe(0);
+    expect(manifest.stdout).toContain(APP_SCOPE);
+    const entries = JSON.parse(readFileSync(join(cwd, 'app-manifest.json'), 'utf8')) as Array<{
+      method: string;
+      path: string;
+      plugin: string | null;
+      classification: string;
+      mounted: boolean;
+    }>;
+    const pluginRoute = entries.find(entry => entry.path === '/reports');
+    expect(pluginRoute).toMatchObject({ method: 'POST', plugin: 'reports', classification: 'rbac', mounted: true });
+    // Top-level `routes` are host-owned: tracked in the manifest, left unmounted.
+    const hostRoute = entries.find(entry => entry.path === '/host/stats');
+    expect(hostRoute).toMatchObject({ method: 'GET', plugin: null, classification: 'rbac', mounted: false });
+
+    const openapi = runCli(cwd, ['openapi', '--module', './app-module.ts', '--out', 'app-openapi.json']);
+    expect(openapi.status, String(openapi.stderr)).toBe(0);
+    const spec = JSON.parse(readFileSync(join(cwd, 'app-openapi.json'), 'utf8')) as {
+      paths: Record<string, Record<string, { operationId?: string }>>;
+      components: { schemas: Record<string, unknown> };
+    };
+    expect(Object.keys(spec.paths)).toEqual(expect.arrayContaining(['/reports', '/host/stats']));
+    // Core `$ref`s must still resolve — the CLI never emits a bare component-less spec.
+    expect(Object.keys(spec.components.schemas).length).toBeGreaterThan(0);
+    expect(spec.paths['/reports']?.post?.operationId).toBe('post_reports');
+
+    const handlerIds = runCli(cwd, ['openapi', '--module', './app-module.ts', '--operation-id', 'handler', '--out', 'handler-openapi.json']);
+    expect(handlerIds.status, String(handlerIds.stderr)).toBe(0);
+    const handlerSpec = JSON.parse(readFileSync(join(cwd, 'handler-openapi.json'), 'utf8')) as {
+      paths: Record<string, Record<string, { operationId?: string }>>;
+    };
+    expect(handlerSpec.paths['/reports']?.post?.operationId).toBe('createReport');
+
+    const schemas = runCli(cwd, ['schemas', '--format', 'zod', '--module', './app-module.ts', '--out', 'app-schemas.ts']);
+    expect(schemas.status, String(schemas.stderr)).toBe(0);
+    expect(readFileSync(join(cwd, 'app-schemas.ts'), 'utf8')).toContain('CreateReportBodySchema');
+
+    for (const command of ['manifest:check', 'check:routes', 'check:public-routes']) {
+      const result = runCli(cwd, [command, '--module', './app-module.ts']);
+      expect(result.status, `${command}: ${result.stderr}`).toBe(0);
+      expect(result.stdout, command).toContain(APP_SCOPE);
+    }
+
+    expect(readFileSync(join(cwd, 'app-module.ts.disposed'), 'utf8')).toBe('yes');
+  }, 30_000);
+
+  it('fails the public-route check on an unreviewed application route', () => {
+    writeAppModule(cwd, 'leaky-module.ts', { leak: true });
+
+    const result = runCli(cwd, ['check:public-routes', '--module', './leaky-module.ts']);
+    expect(result.status, String(result.stdout)).toBe(1);
+    expect(result.stderr).toContain('Public-route check failed:');
+    expect(result.stderr).toContain('GET /reports/leak');
+    expect(result.stderr).toContain('plugin=reports');
+    expect(`${result.stdout}\n${result.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
+    // The failure path must still dispose the loaded module.
+    expect(readFileSync(join(cwd, 'leaky-module.ts.disposed'), 'utf8')).toBe('yes');
+
+    const allowed = runCli(cwd, [
+      'check:public-routes',
+      '--module',
+      './leaky-module.ts',
+      '--allow',
+      'GET /reports/leak',
+    ]);
+    expect(allowed.status, String(allowed.stderr)).toBe(0);
+  }, 30_000);
+
+  it('labels no-module route output as core-only and keeps stdout pipeable', () => {
+    for (const args of [['manifest:check'], ['check:routes'], ['check:public-routes']]) {
+      const result = runCli(cwd, args);
+      expect(result.status, String(result.stderr)).toBe(0);
+      expect(result.stdout, args[0]).toContain(CORE_ONLY_SCOPE);
+    }
+
+    // With no --out the payload owns stdout, so the scope note goes to stderr.
+    for (const args of [['manifest'], ['openapi'], ['schemas']]) {
+      const result = runCli(cwd, args);
+      expect(result.status, String(result.stderr)).toBe(0);
+      expect(result.stderr, args[0]).toContain(CORE_ONLY_SCOPE);
+      expect(result.stdout, args[0]).not.toContain(CORE_ONLY_SCOPE);
+    }
+    expect(() => JSON.parse(String(runCli(cwd, ['manifest']).stdout))).not.toThrow();
+  }, 30_000);
+
+  it('scaffolds a module shaped for --module and reports unconfigured scaffolds cleanly', () => {
+    const scaffoldDir = mkdtempSync(join(tmpdir(), 'fortress-init-'));
+    try {
+      expect(runCli(scaffoldDir, ['init']).status).toBe(0);
+      const scaffold = readFileSync(join(scaffoldDir, 'fortress.config.ts'), 'utf8');
+      expect(scaffold).toContain('export const fortress = createFortress(config)');
+      expect(scaffold).toContain('export function dispose()');
+
+      // The scaffold ships `database: undefined!` and an unset JWT secret, so
+      // it cannot construct until the operator fills them in. The CLI must
+      // explain that rather than surface an uncaught runtime error.
+      const result = runCli(scaffoldDir, ['manifest', '--module', './fortress.config.ts']);
+      expect(result.status).toBe(1);
+      expect(String(result.stderr)).toContain('Error:');
+      expect(`${result.stdout}\n${result.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
+    }
+    finally {
+      rmSync(scaffoldDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('rejects malformed route-command invocations instead of silently passing', () => {
+    writeFileSync(join(cwd, 'no-instance-module.ts'), 'export const notFortress = {};');
+    writeFileSync(join(cwd, 'route-must-not-import.ts'), `
+      await Bun.write('route-typo-imported.txt', 'yes');
+      export const fortress = { endpoints: [], manifest: [], config: {} };
+    `);
+
+    const cases = [
+      // A mistyped flag used to be ignored, reporting a core-only pass with exit 0.
+      { args: ['check:public-routes', '--modul', './app-module.ts'], message: `Unknown argument '--modul'` },
+      { args: ['manifest:check', '--module'], message: '--module requires a value' },
+      { args: ['manifest', '--module', '-x'], message: '--module requires a value' },
+      { args: ['manifest', '--module', './missing-module.ts'], message: 'Cannot find module' },
+      { args: ['manifest', '--module', './no-instance-module.ts'], message: `named export 'fortress'` },
+      { args: ['openapi', '--module', './route-must-not-import.ts', '--operation-id', 'bogus'], message: 'Unknown operation-id style' },
+      { args: ['schemas', '--module', './route-must-not-import.ts', '--format', 'yaml'], message: 'Unknown format' },
+      { args: ['manifest', '--module', './route-must-not-import.ts', '--module', './app-module.ts'], message: `Duplicate argument '--module'` },
+      { args: ['manifest', '--module', './route-must-not-import.ts', 'trailing'], message: `Unknown argument 'trailing'` },
+      { args: ['check:public-routes', '--title', 'x'], message: '--title cannot be used with check:public-routes' },
+      { args: ['manifest:check', '--out', 'ignored.json'], message: '--out cannot be used with manifest:check' },
+      { args: ['check:routes', '--out', 'ignored.json'], message: '--out cannot be used with check:routes' },
+    ];
+
+    for (const testCase of cases) {
+      const result = runCli(cwd, testCase.args);
+      const diagnostic = `${result.stdout}\n${result.stderr}`;
+      expect(result.status, diagnostic).toBe(1);
+      expect(diagnostic, testCase.args.join(' ')).toContain(testCase.message);
+      expect(diagnostic, testCase.args.join(' ')).not.toMatch(RUNTIME_ERROR_RE);
+    }
+    // Argument validation must happen before the module is imported.
+    expect(existsSync(join(cwd, 'route-typo-imported.txt'))).toBe(false);
+  }, 30_000);
 
   it('exports deterministic review SQL with explicit data-step limitations', () => {
     const output = join(cwd, 'review.sql');
