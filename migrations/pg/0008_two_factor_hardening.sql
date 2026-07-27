@@ -1,4 +1,9 @@
--- Fortress migration 0008: bounded MFA continuation attempts.
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: pg
+-- version: 0008
+-- name: two_factor_hardening
+-- direction: up
+
 ALTER TABLE fortress_auth_continuation
   ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN last_failed_at TIMESTAMPTZ,

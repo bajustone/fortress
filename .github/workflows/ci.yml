@@ -17,12 +17,16 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run typecheck:examples
+      - name: Generated migration artifact parity
+        run: bun run check:migration-artifacts
       - name: Exports parity (jsr.json ⇄ package.json ⇄ tsup)
         run: bun run check:exports
       - name: Source and built-package consumer contract
         run: bun run check:consumer-contract
       - name: Pure Node ESM testing-subpath smoke test
         run: bun run check:testing-esm
+      - name: Packed npm CLI and migration artifacts
+        run: bun run check:package-cli
 
   # Unit suite (SQLite test adapter) across every supported runtime. Bun is the
   # primary runtime; the Node jobs run the same vitest suite under Node's

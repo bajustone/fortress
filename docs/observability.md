@@ -363,7 +363,7 @@ The handler is **synchronous and hot-path**. Keep it bounded — update a counte
 | Permission-check p99 latency | `p99 > 100ms` over 15m | warn |
 | Audit-log chain broken | `verifyChain().ok === false` from a scheduled job | **page** |
 | OAuth `invalid_client` surge | `>20/m` over 10m | warn |
-| Schema-version drift | `fortress migrate:check` non-zero exit in deploy preflight | **page** |
+| Schema-version drift | adapter-backed `checkMigrationDrift()` / `detectMigrationDrift()` fails in deploy preflight | **page** |
 
 All thresholds are starting points — tune to your traffic shape after a baseline week.
 

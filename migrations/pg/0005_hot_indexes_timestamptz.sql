@@ -1,3 +1,9 @@
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: pg
+-- version: 0005
+-- name: hot_indexes_timestamptz
+-- direction: up
+
 CREATE INDEX refresh_token_family_idx ON fortress_refresh_token (token_family);
 CREATE INDEX refresh_token_user_idx ON fortress_refresh_token (user_id);
 CREATE INDEX email_verification_token_token_idx ON fortress_email_verification_token (token);

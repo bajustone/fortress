@@ -31,6 +31,7 @@ jobs:
       - run: deno --version
       - run: bun run check:jsr
       - run: bun run check:exports
+      - run: bun run check:migration-artifacts
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run typecheck:examples
@@ -38,6 +39,7 @@ jobs:
       - run: bun run test:integration
       - run: bun run check:consumer-contract
       - run: bun run check:testing-esm
+      - run: bun run check:package-cli
 
   publish-jsr:
     needs: [verify-version, quality]

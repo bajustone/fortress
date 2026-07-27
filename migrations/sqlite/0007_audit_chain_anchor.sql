@@ -1,3 +1,9 @@
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: sqlite
+-- version: 0007
+-- name: audit_chain_anchor
+-- direction: up
+
 CREATE TABLE fortress_audit_chain_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   last_hash TEXT,

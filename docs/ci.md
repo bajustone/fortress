@@ -12,7 +12,9 @@ you can gate deploys on them.
 |---|---|---|---|
 | Route-manifest drift | `checkRouteManifestDrift(fortress)` | `fortress manifest:check` / `fortress check:routes` | Mounted routes not in the manifest, manifest routes not mounted, RBAC permission/OpenAPI mismatches |
 | Public-route allow-list | `checkPublicRoutes(fortress, { allow })` | `fortress check:public-routes` | A new route marked `.security('none')` or `bearerKind:'oauth'` that wasn't reviewed |
-| Migration drift | `checkMigrationDrift(adapter)` | `fortress migrate:check` / `fortress check:migrations` | Missing version table, pending migrations, missing Fortress tables, DB ahead of bundled catalog |
+| Live migration drift | `checkMigrationDrift(adapter)` | _(run from a test or deploy script)_ | Missing version table, pending migrations, missing Fortress tables, DB ahead of bundled catalog |
+| Bundled catalog consistency | _(internal catalog)_ | `fortress migrate:check` / `fortress check:migrations` | Duplicate versions, invalid dialect metadata, or missing up/down SQL in the selected installed catalog |
+| Generated artifact parity | _(repository maintenance)_ | `bun run generate:migrations --check` | Missing, extra, or byte-modified committed SQL projections |
 | Auth smoke test | `smokeTestAuth(fortress)` | _(run from a test file)_ | User creation/login/access-token verification/refresh/logout regression |
 | Aggregator | `runFortressChecks({ fortress })` | _(run from a test file)_ | All of the above with a single ok/messages roll-up |
 
@@ -54,13 +56,15 @@ This single test catches:
 ```sh
 fortress manifest:check         # route-security drift (also: check:routes)
 fortress check:public-routes    # public-route allow-list (core surface)
-fortress migrate:check          # migration catalog (also: check:migrations)
+fortress migrate:check          # installed migration catalog (also: check:migrations)
+bun run generate:migrations --check  # Fortress-repository SQL artifact parity
 ```
 
-The CLI runs against Fortress's **core auth + IAM** route surface, so it
-catches drift in Fortress itself but doesn't see your plugins. For
-app-level checks (plugin routes + your real config), use the API from a
-vitest test as shown above.
+The route CLI runs against Fortress's **core auth + IAM** route surface, so it
+catches drift in Fortress itself but doesn't see your plugins. The migration
+CLI check validates the selected bundled catalog; it does not connect to a live
+database. For app-level route and live migration checks, use the APIs from a
+vitest or deploy script as shown above.
 
 ## GitHub Actions snippet
 
@@ -78,6 +82,10 @@ A drop-in workflow is committed at
    the snippet above)
 8. `bun run test:integration` for PostgreSQL-backed projects
 9. `bun run build` (verifies distributable output)
+
+Fortress's own repository workflow additionally runs
+`bun run generate:migrations --check`. Consumer projects do not own the
+package's generated SQL projection and should not add that maintainer-only step.
 
 Adjust `oven-sh/setup-bun` to your preferred Node/PNPM/NPM setup; every
 step is plain shell.

@@ -1,3 +1,9 @@
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: pg
+-- version: 0005
+-- name: hot_indexes_timestamptz
+-- direction: down
+
 ALTER TABLE fortress_schema_version ALTER COLUMN applied_at TYPE TIMESTAMP USING applied_at AT TIME ZONE 'UTC';
 ALTER TABLE fortress_user ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC';
 ALTER TABLE fortress_user ALTER COLUMN updated_at TYPE TIMESTAMP USING updated_at AT TIME ZONE 'UTC';

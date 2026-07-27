@@ -1,4 +1,8 @@
--- Fortress migration 0002: initial Fortress schema (PostgreSQL) — rollback
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: pg
+-- version: 0002
+-- name: initial_schema
+-- direction: down
 
 DROP TABLE IF EXISTS fortress_webauthn_challenge CASCADE;
 DROP TABLE IF EXISTS fortress_webauthn_credential CASCADE;

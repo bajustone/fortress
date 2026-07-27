@@ -1,4 +1,8 @@
--- Fortress migration 0003 rollback: auth continuation + refresh-session metadata (SQLite)
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: sqlite
+-- version: 0003
+-- name: auth_continuation
+-- direction: down
 
 DROP TABLE IF EXISTS fortress_auth_continuation;
 CREATE TABLE fortress_refresh_token_v2 (

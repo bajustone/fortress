@@ -1,4 +1,8 @@
--- Fortress migration 0003: auth continuation + refresh-session metadata (SQLite)
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: sqlite
+-- version: 0003
+-- name: auth_continuation
+-- direction: up
 
 CREATE TABLE fortress_refresh_token_v3 (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
