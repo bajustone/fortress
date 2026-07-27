@@ -42,12 +42,14 @@ patterns alone:
 ```sh
 bun run check:npm-publication   # build + npm pack manifest + installed CLI smoke
 bun run check:jsr-publication   # pinned Deno/JSR selected-file manifest
-bun run check:publication-files # repository policy + both registry checks
+bun run check:publication-files # repository policy + migration parity + both registries
 ```
 
-The checks require every declared entrypoint and all generated migrations,
-reject test/repository debris, assert npm includes the CLI, and assert JSR does
-not. CI, release validation, and publication workflows run the same checks.
+The checks require every declared entrypoint, reject test/repository debris,
+assert npm includes the CLI, and assert JSR does not. Migration expectations
+come from the migration definitions rather than the `migrations/` tree, so a
+dropped migration cannot regenerate into a self-consistent short set. CI,
+release validation, and publication workflows run the same checks.
 
 ## TypeScript branch boundary
 

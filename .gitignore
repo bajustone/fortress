@@ -10,13 +10,25 @@ scratch/
 .pi-subagents/
 .DS_Store
 
+# Generated HTML is never a tracked format, so the .html forms are covered by
+# the rule above. The root planning globs mirror the policy's exact and
+# separator-suffix forms and stay deliberately narrower than it: an ignore
+# broader than the policy would silently swallow permitted names such as
+# plans.md or contextual.md, whereas a narrower one merely defers to
+# check:repository-publication-policy, which is the enforcing gate.
 *.html
-/AUDIT*.md
-/AUDIT*.html
+/audit.md
+/audit[-_.]*.md
+/AUDIT.md
+/AUDIT[-_.]*.md
 /context.md
+/context[-_.]*.md
 /plan.md
+/plan[-_.]*.md
 /planning.md
+/planning[-_.]*.md
 /progress.md
+/progress[-_.]*.md
 
 # The Rust rewrite lives on a separate branch, never on TypeScript/main.
 *.rs

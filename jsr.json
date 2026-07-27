@@ -25,6 +25,7 @@
       "**/*.test.ts",
       "**/*.spec.ts",
       "**/*.integration-test.ts",
+      "**/__tests__/**",
       "**/__snapshots__/**",
       "**/*.snap",
       "**/*.rs",

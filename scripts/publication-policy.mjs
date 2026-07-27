@@ -12,6 +12,9 @@ const NPM_ALLOWED_ROOTS = ['bin/', 'dist/', 'docs/', 'examples/', 'migrations/',
 const JSR_ALLOWED_ROOTS = ['docs/', 'examples/', 'migrations/', 'src/'];
 const TEST_FILE_RE = /(?:^|\/)[^/]+\.(?:integration-test|test|spec)\.[cm]?[jt]sx?$/i;
 const SNAPSHOT_RE = /(?:^|\/)__snapshots__\/|\.snap$/i;
+// Mirrors the `**/__tests__/**` exclusions in package.json and jsr.json. Test
+// filenames alone miss this layout, which both registries would otherwise ship.
+const TEST_DIRECTORY_RE = /(?:^|\/)__tests__\//i;
 const HTML_RE = /\.html$/i;
 const ROOT_PROJECT_DOCUMENT_RE = /^(?:audit|context|plan|planning|progress)(?:[-_.].*)?\.(?:md|html)$/i;
 const RUST_FILE_RE = /(?:^|\/)(?:Cargo\.(?:toml|lock)|rust-toolchain(?:\.toml)?|rustfmt\.toml|clippy\.toml|[^/]+\.rs)$/i;
@@ -38,16 +41,24 @@ function hasRustPathToken(path) {
     .some(segment => segment.toLowerCase().split(TOKEN_SPLIT_RE).includes('rust'));
 }
 
+function isRootProjectDocument(path) {
+  return !path.includes('/') && ROOT_PROJECT_DOCUMENT_RE.test(path);
+}
+
+function isRustOrGeneratedHtml(path) {
+  return HTML_RE.test(path)
+    || RUST_FILE_RE.test(path)
+    || RUST_METADATA_RE.test(path)
+    || hasRustPathToken(path);
+}
+
 export function isForbiddenProjectPath(path) {
   const normalized = normalizePath(path);
-  const basename = normalized.includes('/') ? undefined : normalized;
   return TEST_FILE_RE.test(normalized)
+    || TEST_DIRECTORY_RE.test(normalized)
     || SNAPSHOT_RE.test(normalized)
-    || HTML_RE.test(normalized)
-    || (basename !== undefined && ROOT_PROJECT_DOCUMENT_RE.test(basename))
-    || RUST_FILE_RE.test(normalized)
-    || RUST_METADATA_RE.test(normalized)
-    || hasRustPathToken(normalized);
+    || isRootProjectDocument(normalized)
+    || isRustOrGeneratedHtml(normalized);
 }
 
 export function validatePublicationFiles({
@@ -100,10 +111,16 @@ export function validatePublicationFiles({
 }
 
 export function validateTrackedRepositoryFiles(files) {
-  return Array.from(files, normalizePath)
-    .filter(path => HTML_RE.test(path) || RUST_FILE_RE.test(path) || RUST_METADATA_RE.test(path) || hasRustPathToken(path))
-    .sort()
-    .map(path => `Rust or generated HTML material must not be tracked on the TypeScript branch: ${path}`);
+  const errors = [];
+  for (const path of Array.from(files, normalizePath).sort()) {
+    if (isRustOrGeneratedHtml(path))
+      errors.push(`Rust or generated HTML material must not be tracked on the TypeScript branch: ${path}`);
+    // .gitignore globs are a convenience and cannot express the case-insensitive
+    // suffix forms, so this check is the enforcing gate for planning material.
+    else if (isRootProjectDocument(path))
+      errors.push(`Root project planning documents are inputs, not repository assets: ${path}`);
+  }
+  return errors;
 }
 
 export function relativeFileUrlPath(root, absolutePath) {

@@ -15,6 +15,12 @@ function printDrift(drift: Awaited<ReturnType<typeof checkMigrationArtifacts>>):
 
 async function main(): Promise<void> {
   const root = fileURLToPath(new URL('..', import.meta.url));
+  if (process.argv.includes('--list')) {
+    // Machine-readable catalog for the publication checks, which run under Node
+    // and cannot import this TypeScript module directly. Keep stdout pure JSON.
+    console.log(JSON.stringify([...getExpectedMigrationArtifacts().keys()].sort()));
+    return;
+  }
   if (process.argv.includes('--check')) {
     const drift = await checkMigrationArtifacts(root);
     if (hasMigrationArtifactDrift(drift)) {
