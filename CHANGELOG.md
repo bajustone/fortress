@@ -11,7 +11,14 @@
 - **Legacy call/plugin helpers are removed.** `getPluginMethods`, `CallableForEndpoints`, and `InferPluginCallMap` no longer ship; use inferred `fortress.plugins`, the namespaced `fortress.call` tree, and `resolvePlugin(name, validator)` for dynamic names.
 - **Built-in route capabilities reflect configuration.** OAuth consent calls exist only with literal `enableConsentApi: true`; OpenAPI `getUI` exists unless UI is literally disabled, without promising callables for widened configurations that may omit them.
 
+### Added
+- **Migration SQL artifacts are generated and release-gated.** `bun run generate:migrations` projects the canonical runtime catalog into all SQLite/PostgreSQL up/down files; `--check` fails on missing, extra, or byte-modified artifacts in CI and publish workflows.
+
+### Changed
+- **Migration CLI execution is explicit and truthful.** `fortress migrate:up --module <path>` imports a trusted module's named `fortress` export and runs the complete adapter-backed migration path, while `migrate:export` owns review-only SQL output. `migrate:down` is retained as a deprecated down-export alias.
+
 ### Fixed
+- Make runtime data-step journal checksums stable across Node, Bun, Deno, ESM, and CJS, with a narrow transactional upgrade bridge for recognized v1.0.2 migration-0006 checksums.
 - Restore Deno 2.6 declaration compatibility for outbound request headers by requiring `@bajustone/fetcher` 1.0.2, and pin the JSR validation toolchain for reproducible checks.
 - Accept Express 5 applications in `mountFortress` without casts while retaining support for lightweight Express-compatible hosts.
 

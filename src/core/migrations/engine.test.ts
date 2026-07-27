@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { createSqliteDrizzleAdapter } from '../../drizzle/adapter';
 import { createTestAdapter } from '../../testing';
 import {
+  computeMigrationChecksum,
   detectMigrationDrift,
   getMigrationStatus,
   hasMigrationDrift,
@@ -223,6 +224,41 @@ describe('migration engine', () => {
       'SELECT version FROM fortress_migration_journal ORDER BY version',
     );
     expect(remaining.map(row => Number(row.version))).toEqual([1, 2, 3, 4]);
+  });
+
+  it('uses runtime-stable data-step checksums and upgrades recognized legacy rows', async () => {
+    const migration = getFortressMigrations('sqlite')[5]!;
+    const checksum = await computeMigrationChecksum(migration);
+    const equivalentCallback = { ...migration, beforeUp: () => Promise.resolve() };
+    expect(await computeMigrationChecksum(equivalentCallback)).toBe(checksum);
+
+    const legacyChecksums = [
+      ['npm/node-esm-cjs', '3b43aeabaf3a2ddab829eb49397288cf4a16fc4c30051a23bc5e8b41a3c70bb4'],
+      ['npm/bun-esm', '0b60788f7af52b1280a785aee35b2523998f5841be87b3e88ccdb4072eef3930'],
+      ['npm/bun-cjs', '4b632501aa22102639d298ede9bcd34ca3f54eda104ac24f019b802c75acf20e'],
+      ['source/bun', 'dcd8db709d36a329c4ebae977cf4ad6a4498b3def840cfbc7327aa6fa4306995'],
+      ['jsr/deno', '44db7e1c6bf979f0a5f499e966ff1a8d273fd8b67c9c6aa543812cde0dbb3077'],
+      ['source/node-loader', 'c5077641e39bc61e6f71a6963bc2001df3dbc0cde720e17145e49ced1f4c584c'],
+    ] as const;
+    const db = createBareSqliteAdapter();
+    await migrateUp(db);
+    for (const [label, legacyChecksum] of legacyChecksums) {
+      await db.rawQuery!(
+        'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 6',
+        [legacyChecksum],
+      );
+      await expect(migrateUp(db), label).resolves.toMatchObject({ applied: [] });
+      const upgraded = await db.rawQuery!<{ checksum: string }>(
+        'SELECT checksum FROM fortress_migration_journal WHERE version = 6',
+      );
+      expect(upgraded[0]?.checksum, label).toBe(checksum);
+    }
+
+    await db.rawQuery!(
+      'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 6',
+      ['0'.repeat(64)],
+    );
+    await expect(migrateUp(db)).rejects.toThrow(/integrity check failed/);
   });
 
   it('fails closed on a corrupted or incomplete migration journal', async () => {

@@ -99,7 +99,7 @@ Each item is "what to do" + "why" + "how to verify".
 
 ## Deployment hygiene
 
-- **Do:** Run `bun run lint` + `bun run typecheck` + `bun run test` + `fortress migrate:check` + `fortress manifest:check` + `fortress check:public-routes` on every CI build. The shipped GitHub Actions workflow does all six (see [docs/ci/github-actions.yml](./ci/github-actions.yml)).
+- **Do:** Run `bun run lint` + `bun run typecheck` + `bun run test` + `fortress migrate:check` + `fortress manifest:check` + `fortress check:public-routes` on every CI build. `migrate:check` validates the bundled catalog, not a live database; add an adapter-backed `checkMigrationDrift()` test for deployment state. Fortress contributors also run `bun run generate:migrations --check` in the repository CI workflow to gate the committed SQL projection. The [consumer workflow template](./ci/github-actions.yml) intentionally omits that maintainer-only step.
 - **Do:** Take a database backup before every deploy that bumps a migration version; test restores quarterly.
 - **Do:** Pin to a minor version (`@bajustone/fortress@~0.1`). Pre-1.0 Fortress reserves the right to ship breaking changes in any minor.
 

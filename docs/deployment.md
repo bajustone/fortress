@@ -233,13 +233,16 @@ Key production knobs:
 
 ## 9. Migration runbook
 
-1. **Pre-deploy:** run `fortress migrate:check` in CI; non-zero exit
-   blocks the deploy. This catches "developer added a new bundled
-   migration but forgot to commit the SQL" before it reaches prod.
-2. **Deploy:** on application start, call
-   `migrateUp(adapter)` with a `MigratableDatabaseAdapter`. Its required
-   literal dialect selects the migration catalog; no separate dialect override
-   exists. Both `migrateUp` and `migrateDown` are idempotent.
+1. **Pre-deploy:** use `fortress migrate:check --dialect <dialect>` to
+   validate the installed bundled catalog. Fortress contributors additionally
+   run `bun run generate:migrations --check`; this fails on any missing, extra,
+   or byte-modified committed SQL projection. Neither command inspects a live
+   database.
+2. **Deploy:** call `migrateUp(adapter)` on application start or run
+   `fortress migrate:up --module ./src/fortress.ts` in a one-shot job. The
+   `MigratableDatabaseAdapter` selects the live dialect; no separate override
+   exists. Runtime data steps and their SQL execute atomically. Both
+   `migrateUp` and `migrateDown` are idempotent.
 3. **Post-deploy:** in your healthcheck, call
    `detectMigrationDrift(adapter)` and fail the healthcheck on
    `missingTables` / `missingVersionTable`. The load balancer pulls the
@@ -299,8 +302,8 @@ Use this before promoting a release to production:
       defaults; named rules cover `/api/*`.
 - [ ] Audit-log plugin mounted with `hashChain: true` for any flow
       that ships compliance evidence.
-- [ ] `fortress migrate:check` in CI; `migrateUp` + drift check in the
-      app's boot/healthcheck path.
+- [ ] Bundled catalog validation in CI; live `migrateUp` (or explicit-module
+      CLI migration) plus an adapter-backed drift check in the deploy path.
 - [ ] OpenTelemetry exporter or structured logger wired so security
       events leave the box.
 - [ ] Backup + restore tested for the database; signing keys included.

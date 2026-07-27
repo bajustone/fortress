@@ -6,11 +6,16 @@ back Fortress migrations across releases.
 
 ## Migration sources of truth
 
-- **Bundled migrations:** `migrations/{sqlite,pg}/<version>_<name>.sql`
-  and `<version>_<name>.down.sql`. Committed to the repo for review and
-  auditability. Mirrored as string constants in
-  `src/core/migrations/migrations.ts` so the runtime works without disk
-  access (serverless, bundled CLIs).
+- **Canonical runtime catalog:** `src/core/migrations/migrations.ts`. The
+  migration engine, test provisioning, SQL export, and artifact generator all
+  derive from these immutable `up` / `down` strings and runtime data-step
+  metadata.
+- **Generated SQL projection:**
+  `migrations/{sqlite,pg}/<version>_<name>.sql` and
+  `<version>_<name>.down.sql`. These files are committed and shipped for review
+  and auditability, but are generated rather than edited. Run
+  `bun run generate:migrations` to update them and
+  `bun run generate:migrations --check` to verify the exact path and byte set.
 - **Expected table list:** `FORTRESS_TABLES` in
   `src/core/migrations/migrations.ts`. Drives the live-DB drift checker.
   Kept in sync with `src/drizzle/schema.ts`, `src/drizzle/pg/schema.ts`,
@@ -54,23 +59,52 @@ deploy. Mutation runs acquire a database-backed lock, re-read the checkpoint
 only after locking, and execute transactionally. The engine maintains
 `fortress_migration_journal` with one SHA-256 checksum per applied migration;
 legacy checkpoints are backfilled once, while later missing or changed rows
-fail closed before any schema mutation.
+fail closed before any schema mutation. Runtime data steps use their stable
+`dataStep` identifier in checksums rather than runtime-dependent function source;
+recognized v1.0.2 migration-0006 hashes are upgraded transactionally.
 
 ## CLI
 
-```sh
-fortress migrate:status
-fortress migrate:down
-fortress migrate:diff
-fortress migrate:check     # exits non-zero on drift; suitable for CI
+Export a configured Fortress instance from a trusted application module:
+
+```ts
+// src/fortress.ts
+export const fortress = createFortress({ database, jwt, plugins });
+export async function migrateApp() { /* optional app-owned migration */ }
+export async function dispose() { /* optional pool/connection cleanup */ }
 ```
 
-The CLI commands operate on the bundled migration catalog and do **not**
-connect to a database. Migration v6 includes a Unicode-aware data step, so
-`fortress migrate:up` intentionally refuses to emit SQL-only output that would
-skip cleanup. Run the runtime API against your live database from application
-code; it executes data steps and constraints atomically using the configured
-adapter.
+Run the complete programmatic migration path, including runtime data steps:
+
+```sh
+fortress migrate:up --module ./src/fortress.ts
+fortress migrate:up --module ./src/fortress.ts --target-version 10
+```
+
+The module is resolved relative to the current working directory and imported
+only when explicitly requested. It is trusted code and runs with the CLI
+process's environment and database credentials. The configured adapter is the
+exclusive live dialect authority; `--dialect` and `--out` are rejected for
+`migrate:up`. The optional named `migrateApp` runs after Fortress migrations,
+and `dispose` is awaited after success or failure.
+
+Offline catalog and review commands never connect to a database:
+
+```sh
+fortress migrate:status --dialect pg
+fortress migrate:check --dialect pg
+fortress migrate:diff
+fortress migrate:export --dialect pg --direction up --out fortress-pg.sql
+fortress migrate:export --dialect pg --direction down --out fortress-pg-down.sql
+```
+
+`migrate:export` uses the generated-artifact renderer, but exported forward SQL
+does **not** perform JavaScript data steps. Migration 0006 is annotated and its
+SQL fails closed without the runtime step. Use the export only for review or
+tooling, not as a replacement for `migrate:up --module`. `migrate:down` is a
+deprecated compatibility alias for down-SQL export; it does not modify a live
+database. `migrate:check` validates catalog structure, while live schema drift
+requires `detectMigrationDrift(adapter)` or `checkMigrationDrift(adapter)`.
 
 ## Drift signals (`detectMigrationDrift`)
 
@@ -108,10 +142,11 @@ Ten migrations ship today:
 
 If `fortress_audit_log` already contains rows written without hash chaining, migration 0007 intentionally leaves the anchor at zero; SQL cannot establish a trustworthy cryptographic history. Before serving auth traffic with `auditLog({ hashChain: true })`, archive and externally attest those rows, create the hash-chain-enabled Fortress instance during a maintenance window, and call `await fortress.plugins['audit-log'].rebaselineChain()`. The method transactionally accepts only an uninitialized zero anchor and fully unchained rows, links them deterministically, advances the anchor, and verifies the result. See [Audit Log Plugin](../plugins/audit-log.md#enabling-hash-chaining-on-an-existing-log).
 
-The migrations are the SQL-first source of truth: `src/testing/index.ts`
-derives the test adapter's schema from them, and the column-drift checker
-parses expected columns from them, so the test adapter and a production
-`migrateUp` cannot diverge.
+The runtime catalog is the source of truth: `src/testing/index.ts` derives the
+test adapter's schema from it, the column-drift checker parses expected columns
+from it, and the committed SQL projection is checked byte-for-byte in CI and
+release gates. A missing, extra, or edited generated artifact fails
+`bun run generate:migrations --check`.
 
 ### Provisioning a new database
 
@@ -132,9 +167,9 @@ parses expected columns from them, so the test adapter and a production
 1. Pull the new Fortress version.
 2. Read the version-specific notes in `docs/migrations/<version>.md` for
    forward/rollback/backfill steps.
-3. Call `migrateUp(adapter)` on application start (or in a one-shot
-   deploy job).
-4. Confirm via `migrate:check` / `hasMigrationDrift()` that the
+3. Call `migrateUp(adapter)` on application start, or run
+   `fortress migrate:up --module <path>` in a one-shot deploy job.
+4. Confirm via `detectMigrationDrift(adapter)` / `hasMigrationDrift()` that the
    database is at the expected version with no missing tables.
 
 ## Rollback

@@ -1,4 +1,8 @@
--- Fortress migration 0002: initial Fortress schema (SQLite)
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: sqlite
+-- version: 0002
+-- name: initial_schema
+-- direction: up
 
 CREATE TABLE IF NOT EXISTS fortress_user (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

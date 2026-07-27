@@ -1,4 +1,8 @@
--- Fortress migration 0003: auth continuation + refresh-session metadata (PostgreSQL)
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: pg
+-- version: 0003
+-- name: auth_continuation
+-- direction: up
 
 ALTER TABLE fortress_refresh_token
   ADD COLUMN family_created_at TIMESTAMP;

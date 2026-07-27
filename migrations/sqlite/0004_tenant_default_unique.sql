@@ -1,3 +1,9 @@
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: sqlite
+-- version: 0004
+-- name: tenant_default_unique
+-- direction: up
+
 UPDATE fortress_tenant_user
 SET is_default = 0
 WHERE is_default = 1
@@ -7,7 +13,6 @@ WHERE is_default = 1
     WHERE is_default = 1
     GROUP BY user_id
   );
-
 CREATE UNIQUE INDEX IF NOT EXISTS fortress_tenant_user_one_default_idx
   ON fortress_tenant_user (user_id)
   WHERE is_default = 1;

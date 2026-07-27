@@ -305,6 +305,54 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(finalDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
   }, 60_000);
 
+  it('upgrades every recognized v1.0.2 data-step checksum transactionally', async () => {
+    const db = adapter();
+    await migrateUp(db);
+    const migration6 = getFortressMigrations('pg')[5]!;
+    const stableChecksum = await computeMigrationChecksum(migration6);
+    const legacyChecksums = [
+      ['npm/node-esm-cjs', '950057a392a8d3ee0d00ca78a77fff61747e9f223ad53cbcb1b8a43be7a264f7'],
+      ['npm/bun-esm', '61d81ba6370693e3ddec1ce7a5d7f5986da08c2f0287dc75bef510d8d31a335f'],
+      ['npm/bun-cjs', '26a25630a3e641cd5fda47654bf4cea13ad970be8bdfe9de099e8938b952c966'],
+      ['source/bun', '618e67c788691e06cdc9764214d0814c8811bbe0f7f5a456c396648567ae1302'],
+      ['jsr/deno', 'a8145340cec7ef778b69adef5d30bfb985c517d134c913a0114a36f99d9b720a'],
+      ['source/node-loader', 'd26ee6a75b93c1d1fb6e22b316173ecd7b31ebd4ebdeefd7f5b0b45ab5ab8316'],
+    ] as const;
+    for (const [label, legacyChecksum] of legacyChecksums) {
+      await db.rawQuery!(
+        'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 6',
+        [legacyChecksum],
+      );
+      await expect(migrateUp(db), label).resolves.toMatchObject({ applied: [] });
+      const [upgraded] = await db.rawQuery!<{ checksum: string }>(
+        'SELECT checksum FROM fortress_migration_journal WHERE version = 6',
+      );
+      expect(upgraded.checksum, label).toBe(stableChecksum);
+    }
+
+    const rollbackChecksum = legacyChecksums[0][1];
+    await db.rawQuery!(
+      'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 6',
+      [rollbackChecksum],
+    );
+    await db.rawQuery!(
+      'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 8',
+      ['0'.repeat(64)],
+    );
+    await expect(migrateUp(db)).rejects.toThrow(INTEGRITY_FAILURE_RE);
+    const [rolledBack] = await db.rawQuery!<{ checksum: string }>(
+      'SELECT checksum FROM fortress_migration_journal WHERE version = 6',
+    );
+    expect(rolledBack.checksum).toBe(rollbackChecksum);
+
+    const migration8 = getFortressMigrations('pg')[7]!;
+    await db.rawQuery!(
+      'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 8',
+      [await computeMigrationChecksum(migration8)],
+    );
+    await migrateDown(db, 0);
+  }, 60_000);
+
   it('serializes concurrent migrators and rejects journal tampering', async () => {
     const firstClient = postgres(connectionString);
     const secondClient = postgres(connectionString);

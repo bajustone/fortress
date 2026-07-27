@@ -1,4 +1,9 @@
--- Widen identifiers on unbounded/churn-heavy append tables before int4 exhaustion.
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: pg
+-- version: 0010
+-- name: bigint_append_only_ids
+-- direction: up
+
 ALTER SEQUENCE fortress_refresh_token_id_seq AS BIGINT;
 ALTER TABLE fortress_refresh_token ALTER COLUMN id TYPE BIGINT;
 ALTER SEQUENCE fortress_auth_continuation_id_seq AS BIGINT;

@@ -197,9 +197,15 @@ interface MigrationJournalRow {
   checksum: string;
 }
 
-/** SHA-256 of every immutable migration input, including runtime data-step identity. */
-export async function computeMigrationChecksum(migration: FortressMigration): Promise<string> {
-  const payload = JSON.stringify([
+async function sha256(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function migrationChecksumPayload(migration: FortressMigration, legacyFunctionSource = false): string {
+  if (migration.beforeUp && !migration.dataStep)
+    throw new Error(`Migration ${migration.version} (${migration.name}) must name its runtime data step`);
+  return JSON.stringify([
     migration.dialect,
     migration.version,
     migration.name,
@@ -207,10 +213,54 @@ export async function computeMigrationChecksum(migration: FortressMigration): Pr
     migration.down,
     migration.freshUp ?? null,
     migration.dataStep ?? null,
-    migration.beforeUp?.toString() ?? null,
+    legacyFunctionSource
+      ? migration.beforeUp?.toString() ?? null
+      : migration.beforeUp ? 'runtime-data-step' : null,
   ]);
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** SHA-256 of every immutable migration input, using a runtime-stable data-step identity. */
+export async function computeMigrationChecksum(migration: FortressMigration): Promise<string> {
+  return sha256(migrationChecksumPayload(migration));
+}
+
+// v1.0.2 serialized Function#toString into migration 0006's checksum. Its
+// output varies across Node, Bun, Deno, ESM, CJS, and source transforms. Keep a
+// narrow one-time bridge for hashes emitted by supported v1.0.2 package forms;
+// all new and upgraded rows use the runtime-stable checksum above.
+const LEGACY_DATA_STEP_CHECKSUMS: Readonly<Record<MigrationDialect, ReadonlySet<string>>> = {
+  sqlite: new Set([
+    '3b43aeabaf3a2ddab829eb49397288cf4a16fc4c30051a23bc5e8b41a3c70bb4',
+    '0b60788f7af52b1280a785aee35b2523998f5841be87b3e88ccdb4072eef3930',
+    '4b632501aa22102639d298ede9bcd34ca3f54eda104ac24f019b802c75acf20e',
+    'dcd8db709d36a329c4ebae977cf4ad6a4498b3def840cfbc7327aa6fa4306995',
+    '44db7e1c6bf979f0a5f499e966ff1a8d273fd8b67c9c6aa543812cde0dbb3077',
+    'c5077641e39bc61e6f71a6963bc2001df3dbc0cde720e17145e49ced1f4c584c',
+  ]),
+  pg: new Set([
+    '950057a392a8d3ee0d00ca78a77fff61747e9f223ad53cbcb1b8a43be7a264f7',
+    '61d81ba6370693e3ddec1ce7a5d7f5986da08c2f0287dc75bef510d8d31a335f',
+    '26a25630a3e641cd5fda47654bf4cea13ad970be8bdfe9de099e8938b952c966',
+    '618e67c788691e06cdc9764214d0814c8811bbe0f7f5a456c396648567ae1302',
+    'a8145340cec7ef778b69adef5d30bfb985c517d134c913a0114a36f99d9b720a',
+    'd26ee6a75b93c1d1fb6e22b316173ecd7b31ebd4ebdeefd7f5b0b45ab5ab8316',
+  ]),
+};
+
+async function isLegacyDataStepChecksum(
+  migration: FortressMigration,
+  checksum: string,
+): Promise<boolean> {
+  if (migration.version !== 6 || migration.name !== 'canonical_email'
+    || migration.dataStep !== 'normalize-email-v2' || !migration.beforeUp) {
+    return false;
+  }
+  if (LEGACY_DATA_STEP_CHECKSUMS[migration.dialect].has(checksum))
+    return true;
+  // Source consumers may use a loader transform not represented by the
+  // published npm/JSR forms. Accept only the exact legacy payload produced by
+  // this runtime; arbitrary checksums still fail closed.
+  return checksum === await sha256(migrationChecksumPayload(migration, true));
 }
 
 async function ensureMigrationMetadata(db: DatabaseAdapter, dialect: MigrationDialect): Promise<void> {
@@ -349,8 +399,13 @@ async function verifyOrBackfillJournal(
       throw Errors.badRequest(`Migration journal contains unexpected version ${version}`);
     }
     const checksum = await computeMigrationChecksum(migration);
-    if (row.name !== migration.name || row.dialect !== dialect || row.checksum !== checksum) {
+    if (row.name !== migration.name || row.dialect !== dialect) {
       throw Errors.badRequest(`Migration journal integrity check failed for version ${version}`);
+    }
+    if (row.checksum !== checksum) {
+      if (!await isLegacyDataStepChecksum(migration, row.checksum))
+        throw Errors.badRequest(`Migration journal integrity check failed for version ${version}`);
+      await updateJournalChecksum(db, version, checksum);
     }
   }
   for (const migration of migrations.filter(item => item.version <= currentVersion)) {
@@ -360,6 +415,17 @@ async function verifyOrBackfillJournal(
   }
   if (!initialized)
     await markJournalInitialized(db, dialect);
+}
+
+async function updateJournalChecksum(
+  db: DatabaseAdapter,
+  version: number,
+  checksum: string,
+): Promise<void> {
+  await assertRawQuery(db)(
+    'UPDATE fortress_migration_journal SET checksum = ? WHERE version = ?',
+    [checksum, version],
+  );
 }
 
 async function deleteJournalVersion(db: DatabaseAdapter, version: number): Promise<void> {

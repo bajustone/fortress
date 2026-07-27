@@ -15,15 +15,18 @@ Fortress runs on Bun, Deno, Node.js 20.19+, and edge runtimes. File-based helper
 ## Install
 
 ```bash
-# npm
+# JSR library (Node package manager, Bun, or Deno)
 npx jsr add @bajustone/fortress
-
-# Bun
 bunx jsr add @bajustone/fortress
-
-# Deno
 deno add jsr:@bajustone/fortress
+
+# npm registry package (includes the Bun `fortress` executable)
+bun add @bajustone/fortress
+# or: npm install @bajustone/fortress
 ```
+
+JSR publishes the runtime library but not an executable `bin`; install the npm
+registry package when using the `fortress` CLI.
 
 Install the integrations you use:
 
@@ -63,13 +66,15 @@ export default app;
 
 `mountFortress()` serves core auth, IAM, and registered plugin routes. Login and refresh responses set access and refresh cookies.
 
-Generate a key:
+Generate a key (npm registry installation):
 
 ```bash
 fortress generate-secret
 ```
 
-The `fortress` CLI uses Bun. Run database-bound operations from application code with your configured adapter.
+The `fortress` CLI uses Bun and is shipped by the npm registry package. JSR
+consumers use the programmatic APIs. Live migrations can explicitly load your
+configured adapter as described below.
 
 ## Use the service API
 
@@ -600,6 +605,25 @@ await fortress.syncPermissionsFromManifest({
 
 Fortress migrations run before `migrateApp`. Permission sync is idempotent and only adds missing manifest permissions and bindings.
 
+For a one-shot deploy job, export the configured instance from a trusted module:
+
+```typescript
+// src/fortress.ts
+export const fortress = createFortress({ database, jwt, plugins });
+export async function migrateApp() { /* optional application migration */ }
+export async function dispose() { /* optional pool/connection cleanup */ }
+```
+
+```bash
+fortress migrate:up --module ./src/fortress.ts
+fortress migrate:up --module ./src/fortress.ts --target-version 10
+```
+
+The module path is resolved from the current directory and loaded explicitly by
+Bun. Importing it executes trusted application code with that process's database
+credentials. The live dialect always comes from the configured adapter; the CLI
+rejects a separate `--dialect` override.
+
 Check live schema drift:
 
 ```typescript
@@ -738,12 +762,19 @@ fortress schemas --format json-schema --out schemas.json
 fortress manifest --out route-manifest.json
 fortress manifest:check
 fortress check:public-routes
-fortress migrate:status --dialect pg
-fortress migrate:check --dialect pg
+fortress migrate:status --dialect pg       # bundled catalog status
+fortress migrate:check --dialect pg        # bundled catalog validation
+fortress migrate:up --module ./src/fortress.ts
+fortress migrate:export --dialect pg --direction up --out fortress-pg.sql
 fortress policy:summary
 ```
 
-`sync:push`, `sync:pull`, `policy:diff`, `policy:apply`, `policy:check`, and live migration checks print code for the database-bound operation. Run that code inside your application so Fortress can use its configured adapter.
+`migrate:up` is the live migration command and requires an explicit trusted
+module with a named `fortress` export. `migrate:export` emits deterministic SQL
+for review or external tooling; it does not run JavaScript data steps and is not
+a substitute for the live command. `migrate:down` remains a deprecated alias
+for down-SQL export, not a live rollback command. Live drift checks use
+`detectMigrationDrift()` / `checkMigrationDrift()` against your adapter.
 
 ## Guides
 

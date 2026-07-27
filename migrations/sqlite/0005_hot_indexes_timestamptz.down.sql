@@ -1,3 +1,9 @@
+-- Generated from src/core/migrations/migrations.ts by `bun run generate:migrations`; DO NOT EDIT.
+-- dialect: sqlite
+-- version: 0005
+-- name: hot_indexes_timestamptz
+-- direction: down
+
 DROP INDEX IF EXISTS audit_log_timestamp_idx;
 DROP INDEX IF EXISTS webhook_delivery_retry_idx;
 DROP INDEX IF EXISTS trusted_device_user_idx;
