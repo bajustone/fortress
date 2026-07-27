@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS fortress_schema_version (
 The singleton version row (`id = 1`) is **not** written by this SQL — the
 migration runner (`migrateUp`) stamps it after each migration applies, so
 version tracking has a single source of truth. Applying the raw SQL by
-hand creates the table at version 0; run `migrateUp` (or the CLI) to stamp
-the current version.
+hand creates the table at version 0; run `migrateUp` with a
+`MigratableDatabaseAdapter` to stamp the current version.
 
 ## Rollback
 
@@ -49,6 +49,6 @@ No data backfill is required. Existing Fortress tables are not modified by this 
 ```ts
 import { getMigrationStatus } from '@bajustone/fortress';
 
-const status = await getMigrationStatus(fortress.config.database);
+const status = await getMigrationStatus(database);
 console.log(status.currentVersion, status.latestVersion);
 ```

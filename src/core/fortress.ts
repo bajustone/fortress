@@ -1,3 +1,4 @@
+import type { DatabaseAdapter, MigratableDatabaseAdapter } from '../adapters/database';
 import type { OpenAPISpec } from '../plugins/openapi/spec-builder';
 import type { AuthEvent } from './auth/auth-service';
 import type { CallTree } from './call-tree';
@@ -129,6 +130,19 @@ type ValidateConfiguredPlugins<C extends FortressConfig> = C extends {
 type PluginsFromConfig<C extends FortressConfig> = C extends { plugins: infer TPlugins }
   ? TPlugins extends readonly RuntimeFortressPlugin[] ? TPlugins : readonly []
   : C extends { plugins?: undefined } ? readonly [] : readonly RuntimeFortressPlugin[];
+
+function assertMigratableDatabaseAdapter(
+  database: DatabaseAdapter,
+): asserts database is MigratableDatabaseAdapter {
+  if (
+    (database.dialect !== 'sqlite' && database.dialect !== 'pg')
+    || typeof database.rawQuery !== 'function'
+  ) {
+    throw Errors.badRequest(
+      'Fortress migrations require a database adapter with dialect: \'sqlite\' | \'pg\' and rawQuery support; use a dialect-specific Drizzle factory or provide a MigratableDatabaseAdapter',
+    );
+  }
+}
 
 /**
  * Build a configured {@link Fortress} instance from a {@link FortressConfig}.
@@ -460,10 +474,11 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
         refresh: config.jwt.refreshTokenExpirySeconds ?? 604_800,
       }),
     async migrate(opts?: MigrateOptions): Promise<MigrateResult> {
-      // Fortress migrations first — app schemas commonly FK to fortress
-      // tables, so this order is the safe default. Unwrap the instrumented
-      // adapter so `db.dialect` reflects the underlying engine.
-      const fortressResult = await migrateUp(db, opts?.dialect, opts?.targetVersion);
+      // Fortress migrations first — app schemas commonly FK to Fortress
+      // tables, so this order is the safe default. The configured adapter
+      // owns the migration dialect; instrumentation preserves that capability.
+      assertMigratableDatabaseAdapter(db);
+      const fortressResult = await migrateUp(db, opts?.targetVersion);
       let appRan = false;
       if (opts?.migrateApp) {
         await opts.migrateApp();

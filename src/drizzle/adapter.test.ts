@@ -1,12 +1,46 @@
 import type { DatabaseAdapter } from '../adapters/database';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FortressError } from '../core/errors';
 import { createTestAdapter } from '../testing';
+import { createPostgresDrizzleAdapter } from './adapter';
 
 let db: DatabaseAdapter;
 
 beforeEach(() => {
   db = createTestAdapter();
+});
+
+describe('dialect-specific Drizzle factories', () => {
+  it('advertises SQLite for the test adapter', () => {
+    expect(createTestAdapter().dialect).toBe('sqlite');
+  });
+
+  it('advertises PostgreSQL and uses its native transaction path', async () => {
+    const run = vi.fn(() => {
+      throw new Error('PostgreSQL must not use SQLite .run()');
+    });
+    const execute = vi.fn(async () => []);
+    const drizzle = {
+      insert: vi.fn(),
+      select: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      run,
+      execute,
+      transaction: vi.fn(async (fn: (tx: typeof drizzle) => Promise<unknown>) => fn(drizzle)),
+    };
+    const adapter = createPostgresDrizzleAdapter(drizzle);
+
+    expect(adapter.dialect).toBe('pg');
+    await expect(adapter.transaction(async (tx) => {
+      expect(tx.dialect).toBe('pg');
+      await tx.rawQuery('SELECT 1');
+      return 'ok';
+    })).resolves.toBe('ok');
+    expect(drizzle.transaction).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(run).not.toHaveBeenCalled();
+  });
 });
 
 describe('drizzle adapter: buildWhereCondition edge cases', () => {

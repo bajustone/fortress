@@ -2,7 +2,7 @@
  * In-memory SQLite test adapter for fortress.
  *
  * Spins up a fresh `bun:sqlite` database with the full fortress schema and
- * returns a {@link DatabaseAdapter} ready to pass into `createFortress` from
+ * returns a {@link MigratableDatabaseAdapter} ready to pass into `createFortress` from
  * unit tests. Designed for fast, isolated test runs — every call creates a
  * new database, so tests cannot leak state into each other.
  *
@@ -17,11 +17,11 @@
  * @module
  */
 
-import type { DatabaseAdapter } from '../adapters/database';
+import type { MigratableDatabaseAdapter } from '../adapters/database';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { getLatestMigrationVersion, getMigrationUpSql } from '../core/migrations/migrations';
-import { createDrizzleAdapter } from '../drizzle/adapter';
+import { createSqliteDrizzleAdapter } from '../drizzle/adapter';
 
 export {
   checkMigrationDrift,
@@ -68,14 +68,14 @@ const runtimeRequire = (globalThis as typeof globalThis & { require?: NodeRequir
  *   import { createTestAdapter } from '@bajustone/fortress/testing';
  *   const fortress = createFortress({ database: createTestAdapter(), jwt: { key: 'test' } });
  */
-export function createTestAdapter(): DatabaseAdapter {
+export function createTestAdapter(): MigratableDatabaseAdapter<'sqlite'> {
   if (isBun) {
     return createBunAdapter();
   }
   return createNodeAdapter();
 }
 
-function createBunAdapter(): DatabaseAdapter {
+function createBunAdapter(): MigratableDatabaseAdapter<'sqlite'> {
   // Dynamic import to avoid loading bun:sqlite in Node
   const { Database } = runtimeRequire('bun:sqlite');
   const { drizzle } = runtimeRequire('drizzle-orm/bun-sqlite');
@@ -87,10 +87,10 @@ function createBunAdapter(): DatabaseAdapter {
   sqlite.exec(STAMP_SCHEMA_VERSION_SQL);
 
   const db = drizzle(sqlite);
-  return createDrizzleAdapter(db);
+  return createSqliteDrizzleAdapter(db);
 }
 
-function createNodeAdapter(): DatabaseAdapter {
+function createNodeAdapter(): MigratableDatabaseAdapter<'sqlite'> {
   // runtimeRequire works in both package formats while keeping the native
   // dependency lazy and out of Bun's runtime branch.
   const BetterSqlite3 = runtimeRequire('better-sqlite3');
@@ -103,5 +103,5 @@ function createNodeAdapter(): DatabaseAdapter {
   sqlite.exec(STAMP_SCHEMA_VERSION_SQL);
 
   const db = drizzle(sqlite);
-  return createDrizzleAdapter(db);
+  return createSqliteDrizzleAdapter(db);
 }

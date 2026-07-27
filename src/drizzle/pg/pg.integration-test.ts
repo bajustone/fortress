@@ -25,7 +25,7 @@ import { socialLogin } from '../../plugins/social-login';
 import { tenancy } from '../../plugins/tenancy';
 import { generateTOTP, twoFactor } from '../../plugins/two-factor';
 import { webhook } from '../../plugins/webhook';
-import { createDrizzleAdapter } from '../adapter';
+import { createPostgresDrizzleAdapter } from '../adapter';
 
 const WEBHOOK_SECRET_PREFIX = /^whsec_/;
 
@@ -453,7 +453,7 @@ let pgClient: Sql;
 let db: ReturnType<typeof drizzle>;
 
 function createPgAdapter(): DatabaseAdapter {
-  return createDrizzleAdapter(db as any, { dialect: 'pg' });
+  return createPostgresDrizzleAdapter(db as any);
 }
 
 beforeAll(async () => {

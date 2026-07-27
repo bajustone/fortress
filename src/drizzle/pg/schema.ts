@@ -496,7 +496,7 @@ const webauthnChallenges = pgTable('fortress_webauthn_challenge', {
  * column types. The fortress drizzle adapter accesses tables generically,
  * so column-level inference is not needed internally. Consumers who need
  * column-level types should declare their own typed Drizzle schema and
- * pass it via `createDrizzleAdapter(db, { tables })`.
+ * pass it via `createPostgresDrizzleAdapter(db, { tables })`.
  */
 export const fortressPgSchema: Record<string, AnyPgTable> = {
   schemaVersion,

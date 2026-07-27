@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Changed (breaking)
+- **Drizzle construction is dialect-specific.** `createDrizzleAdapter` is removed; use `createSqliteDrizzleAdapter` or `createPostgresDrizzleAdapter`. Both return a `MigratableDatabaseAdapter` with a literal dialect and required `rawQuery` capability.
+- **Migration dialects come exclusively from the adapter.** Standalone migration APIs require `MigratableDatabaseAdapter` and no longer accept dialect overrides; `fortress.migrate()` validates the capability at runtime while CRUD-only `DatabaseAdapter` implementations remain supported for non-migration operations.
 - **Calls are definition-derived and namespaced.** Core calls move to `fortress.call.auth.*` / `fortress.call.iam.*`; plugin calls move to `fortress.call.plugins[pluginName].*`. Top-level host routes remain metadata-only and are not in-process callables.
 - **The public Fortress type is now one-generic and capability-oriented.** `Fortress<TPlugins>` derives plugin methods and calls from one configured tuple. `AnyFortress` and `TypedCall` are removed; adapters/helpers accept focused capability `Pick`s instead of an erased full instance.
 - **Plugin authoring is definition-derived and fail closed.** `definePlugin()` and `defineEndpoints()` preserve literal names/routes and validate callable method implementations, full dispatch-call arguments, and the body correlated with the lowest numeric exact 2xx status. Exact methodless plugins expose no method or call namespace, route-only plugins fail startup, widened names use `resolvePlugin()`, and prototype-poisoned/inherited handlers are rejected safely.

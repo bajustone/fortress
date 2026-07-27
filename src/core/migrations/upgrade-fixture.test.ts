@@ -9,9 +9,9 @@
  * guard that catches a migration that silently fails to install a table.
  */
 
-import type { DatabaseAdapter } from '../../adapters/database';
+import type { MigratableDatabaseAdapter } from '../../adapters/database';
 import { describe, expect, it } from 'vitest';
-import { createDrizzleAdapter } from '../../drizzle/adapter';
+import { createSqliteDrizzleAdapter } from '../../drizzle/adapter';
 import {
   detectMigrationDrift,
   getMigrationStatus,
@@ -23,7 +23,7 @@ import { FORTRESS_TABLES } from './migrations';
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';
 
-function createBareSqliteAdapter(): DatabaseAdapter {
+function createBareSqliteAdapter(): MigratableDatabaseAdapter<'sqlite'> {
   if (isBun) {
     // eslint-disable-next-line ts/no-require-imports
     const { Database } = require('bun:sqlite');
@@ -31,7 +31,7 @@ function createBareSqliteAdapter(): DatabaseAdapter {
     const { drizzle } = require('drizzle-orm/bun-sqlite');
     const sqlite = new Database(':memory:');
     sqlite.exec('PRAGMA foreign_keys = ON;');
-    return createDrizzleAdapter(drizzle(sqlite));
+    return createSqliteDrizzleAdapter(drizzle(sqlite));
   }
   // eslint-disable-next-line ts/no-require-imports
   const BetterSqlite3 = require('better-sqlite3');
@@ -39,35 +39,35 @@ function createBareSqliteAdapter(): DatabaseAdapter {
   const { drizzle } = require('drizzle-orm/better-sqlite3');
   const sqlite = new BetterSqlite3(':memory:');
   sqlite.pragma('foreign_keys = ON');
-  return createDrizzleAdapter(drizzle(sqlite));
+  return createSqliteDrizzleAdapter(drizzle(sqlite));
 }
 
 describe('migration upgrade fixture (bare sqlite)', () => {
   it('provisions a bare DB end-to-end from the bundled migrations', async () => {
     const db = createBareSqliteAdapter();
 
-    const initial = await getMigrationStatus(db, 'sqlite');
+    const initial = await getMigrationStatus(db);
     expect(initial.hasVersionTable).toBe(false);
     expect(initial.currentVersion).toBe(0);
 
-    const initialDrift = await detectMigrationDrift(db, 'sqlite');
+    const initialDrift = await detectMigrationDrift(db);
     expect(hasMigrationDrift(initialDrift)).toBe(true);
     expect(initialDrift.missingVersionTable).toBe(true);
     // A bare DB is missing every Fortress table.
     expect(initialDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
 
-    const up = await migrateUp(db, 'sqlite');
+    const up = await migrateUp(db);
     expect(up.fromVersion).toBe(0);
     expect(up.toVersion).toBe(10);
     expect(up.applied.map(migration => migration.name)).toEqual(['schema_version', 'initial_schema', 'auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
 
-    const after = await getMigrationStatus(db, 'sqlite');
+    const after = await getMigrationStatus(db);
     expect(after.hasVersionTable).toBe(true);
     expect(after.currentVersion).toBe(10);
     expect(after.upToDate).toBe(true);
 
     // The full schema is now installed: no missing tables, no missing columns.
-    const afterDrift = await detectMigrationDrift(db, 'sqlite');
+    const afterDrift = await detectMigrationDrift(db);
     expect(hasMigrationDrift(afterDrift)).toBe(false);
     expect(afterDrift.missingTables).toEqual([]);
     expect(afterDrift.missingColumns).toEqual([]);
@@ -94,22 +94,22 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     expect(continuation.consumedAt).toBeNull();
 
     // Re-running is idempotent.
-    const reapply = await migrateUp(db, 'sqlite');
+    const reapply = await migrateUp(db);
     expect(reapply.applied).toEqual([]);
 
     // Roll back below 0 drops every Fortress table again.
-    const down = await migrateDown(db, 'sqlite');
+    const down = await migrateDown(db);
     expect(down.toVersion).toBe(0);
     expect(down.rolledBack.map(migration => migration.name)).toEqual(['bigint_append_only_ids', 'encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation', 'initial_schema', 'schema_version']);
-    const final = await getMigrationStatus(db, 'sqlite');
+    const final = await getMigrationStatus(db);
     expect(final.hasVersionTable).toBe(false);
-    const finalDrift = await detectMigrationDrift(db, 'sqlite');
+    const finalDrift = await detectMigrationDrift(db);
     expect(finalDrift.missingTables.length).toBe(FORTRESS_TABLES.length);
   });
 
   it('migration 0009 removes legacy plaintext TOTP enrolments irreversibly', async () => {
     const db = createBareSqliteAdapter();
-    await migrateUp(db, 'sqlite', 8);
+    await migrateUp(db, 8);
     await db.rawQuery!('INSERT INTO fortress_user (email, name) VALUES (\'mfa@example.com\', \'MFA\')');
     const [user] = await db.rawQuery!<{ id: string }>('SELECT id FROM fortress_user WHERE email = \'mfa@example.com\'');
     await db.rawQuery!(
@@ -125,19 +125,19 @@ describe('migration upgrade fixture (bare sqlite)', () => {
       [user.id, 'device-hash', 1_900_000_000, 1_800_000_000],
     );
 
-    const result = await migrateUp(db, 'sqlite');
+    const result = await migrateUp(db);
     expect(result.applied.map(migration => migration.name)).toEqual(['encrypt_totp_secrets', 'bigint_append_only_ids']);
     expect(await db.count({ model: 'two_factor_secret' })).toBe(0);
     expect(await db.count({ model: 'backup_code' })).toBe(0);
     expect(await db.count({ model: 'trusted_device' })).toBe(0);
 
-    await migrateDown(db, 'sqlite', 8);
+    await migrateDown(db, 8);
     expect(await db.count({ model: 'two_factor_secret' })).toBe(0);
   });
 
   it('canonicalizes legacy emails and quarantines duplicate accounts before v6 indexes', async () => {
     const db = createBareSqliteAdapter();
-    await migrateUp(db, 'sqlite', 5);
+    await migrateUp(db, 5);
 
     await db.rawQuery!(
       `INSERT INTO fortress_user (email, name, is_active) VALUES (?, ?, 1), (?, ?, 1)`,
@@ -180,7 +180,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
       ['oauth-duplicate-session', 'oauth-duplicate-family', 'client', users[1].id, 1_700_000_000, 1_900_000_000],
     );
 
-    const upgrade = await migrateUp(db, 'sqlite');
+    const upgrade = await migrateUp(db);
     expect(upgrade.applied.map(migration => migration.name)).toEqual(['canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
 
     const migrated = await db.rawQuery!<{ id: string; email: string; is_active: number }>(
@@ -231,7 +231,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
 
   it('rolls back email cleanup atomically when a v6 constraint cannot be installed', async () => {
     const db = createBareSqliteAdapter();
-    await migrateUp(db, 'sqlite', 5);
+    await migrateUp(db, 5);
     await db.rawQuery!(
       `INSERT INTO fortress_user (email, name, is_active)
        VALUES ('Dup@Example.com', 'Winner', 1), ('dup@example.com', 'Loser', 1)`,
@@ -245,7 +245,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     // Force the DDL step to fail after cleanup by occupying its index name.
     await db.rawQuery!('CREATE INDEX user_email_ci_unique ON fortress_user (name)');
 
-    await expect(migrateUp(db, 'sqlite')).rejects.toThrow();
+    await expect(migrateUp(db)).rejects.toThrow();
     const after = await db.rawQuery!<{ email: string; is_active: number }>(
       'SELECT email, is_active FROM fortress_user ORDER BY id',
     );
@@ -253,14 +253,14 @@ describe('migration upgrade fixture (bare sqlite)', () => {
       { email: 'Dup@Example.com', is_active: 1 },
       { email: 'dup@example.com', is_active: 1 },
     ]);
-    expect((await getMigrationStatus(db, 'sqlite')).currentVersion).toBe(5);
+    expect((await getMigrationStatus(db)).currentVersion).toBe(5);
     const columns = await db.rawQuery!<{ name: string }>('PRAGMA index_info(user_email_ci_unique)');
     expect(columns.map(column => column.name)).toEqual(['name']);
   });
 
   it('upgrades v2 refresh families without resetting their age', async () => {
     const db = createBareSqliteAdapter();
-    await migrateUp(db, 'sqlite', 2);
+    await migrateUp(db, 2);
 
     await db.rawQuery!(
       `INSERT INTO fortress_user (email, name, password_hash, is_active, created_at, updated_at)
@@ -305,7 +305,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
       [tenants[0].id, user.id, tenants[1].id, user.id],
     );
 
-    const upgrade = await migrateUp(db, 'sqlite');
+    const upgrade = await migrateUp(db);
     expect(upgrade.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
     const [defaultCount] = await db.rawQuery!<{ count: number }>(
       `SELECT COUNT(*) AS count FROM fortress_tenant_user WHERE user_id = ? AND is_default = 1`,
@@ -353,10 +353,10 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     );
     expect(defaulted.family_created_at).toBeGreaterThanOrEqual(beforeDefaultInsert);
 
-    const drift = await detectMigrationDrift(db, 'sqlite');
+    const drift = await detectMigrationDrift(db);
     expect(hasMigrationDrift(drift)).toBe(false);
 
-    const rollback = await migrateDown(db, 'sqlite', 2);
+    const rollback = await migrateDown(db, 2);
     expect(rollback.rolledBack.map(migration => migration.name)).toEqual(['bigint_append_only_ids', 'encrypt_totp_secrets', 'two_factor_hardening', 'audit_chain_anchor', 'canonical_email', 'hot_indexes_timestamptz', 'tenant_default_unique', 'auth_continuation']);
     expect(await db.count({ model: 'refresh_token' })).toBe(3);
     const columns = await db.rawQuery!<{ name: string }>('PRAGMA table_info(fortress_refresh_token)');

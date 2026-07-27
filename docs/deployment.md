@@ -237,8 +237,9 @@ Key production knobs:
    blocks the deploy. This catches "developer added a new bundled
    migration but forgot to commit the SQL" before it reaches prod.
 2. **Deploy:** on application start, call
-   `migrateUp(adapter)` from your boot script. Both `migrateUp` and
-   `migrateDown` are idempotent.
+   `migrateUp(adapter)` with a `MigratableDatabaseAdapter`. Its required
+   literal dialect selects the migration catalog; no separate dialect override
+   exists. Both `migrateUp` and `migrateDown` are idempotent.
 3. **Post-deploy:** in your healthcheck, call
    `detectMigrationDrift(adapter)` and fail the healthcheck on
    `missingTables` / `missingVersionTable`. The load balancer pulls the

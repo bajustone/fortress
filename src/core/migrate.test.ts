@@ -1,6 +1,6 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import { describe, expect, it, vi } from 'vitest';
-import { createDrizzleAdapter } from '../drizzle/adapter';
+import { createSqliteDrizzleAdapter } from '../drizzle/adapter';
 import { createTestAdapter } from '../testing';
 import { createFortress } from './fortress';
 
@@ -11,7 +11,7 @@ function createBareSqliteAdapter(): DatabaseAdapter {
   const BetterSqlite3 = require('better-sqlite3');
   // eslint-disable-next-line ts/no-require-imports
   const { drizzle } = require('drizzle-orm/better-sqlite3');
-  return createDrizzleAdapter(drizzle(new BetterSqlite3(':memory:')));
+  return createSqliteDrizzleAdapter(drizzle(new BetterSqlite3(':memory:')));
 }
 
 describe('fortress.migrate', () => {
@@ -68,5 +68,38 @@ describe('fortress.migrate', () => {
     await expect(
       fortress.migrate({ migrateApp: async () => { throw err; } }),
     ).rejects.toThrow('app migration failed');
+  });
+
+  it('rejects a CRUD-only adapter with an actionable capability error', async () => {
+    const migratable = createTestAdapter();
+    const database: DatabaseAdapter = {
+      create: migratable.create,
+      findOne: migratable.findOne,
+      findMany: migratable.findMany,
+      update: migratable.update,
+      delete: migratable.delete,
+      count: migratable.count,
+      transaction: migratable.transaction,
+    };
+    const fortress = createFortress({ jwt: { key: SECRET }, database });
+
+    await expect(fortress.migrate()).rejects.toThrow(
+      'dialect: \'sqlite\' | \'pg\' and rawQuery support',
+    );
+  });
+
+  it('rejects adapters that provide only one migration capability', async () => {
+    const migratable = createTestAdapter();
+    const missingDialect: DatabaseAdapter = { ...migratable, dialect: undefined };
+    const missingRawQuery: DatabaseAdapter = { ...migratable, rawQuery: undefined };
+
+    const fortressMissingDialect = createFortress({ jwt: { key: SECRET }, database: missingDialect });
+    const fortressMissingRawQuery = createFortress({ jwt: { key: SECRET }, database: missingRawQuery });
+    await expect(fortressMissingDialect.migrate()).rejects.toThrow(
+      'dialect: \'sqlite\' | \'pg\' and rawQuery support',
+    );
+    await expect(fortressMissingRawQuery.migrate()).rejects.toThrow(
+      'dialect: \'sqlite\' | \'pg\' and rawQuery support',
+    );
   });
 });

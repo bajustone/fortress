@@ -79,7 +79,7 @@ Examples:
 const CONFIG_TEMPLATE = `import type { FortressConfig } from '@bajustone/fortress';
 
 const config: FortressConfig = {
-  database: undefined!, // Replace with your DatabaseAdapter (e.g. createDrizzleAdapter(db))
+  database: undefined!, // Replace with your DatabaseAdapter (e.g. createSqliteDrizzleAdapter(db))
   jwt: {
     key: process.env.FORTRESS_JWT_SECRET!,
     issuer: 'my-app',
@@ -413,7 +413,7 @@ function cmdMigrateUp(args: string[]): void {
   if (dataMigration) {
     console.error(
       `Cannot export SQL-only migrations: ${dataMigration.name} includes the Unicode-aware data step '${dataMigration.dataStep}'. `
-      + 'Run fortress.migrate() with your DatabaseAdapter so cleanup and constraints execute atomically.',
+      + 'Run fortress.migrate() with your MigratableDatabaseAdapter so cleanup and constraints execute atomically.',
     );
     process.exit(1);
   }
@@ -436,7 +436,7 @@ function cmdMigrateDiff(): void {
   console.log('Live migration drift checks require your application database adapter.');
   console.log('Use this in application or CI code:');
   console.log('  import { detectMigrationDrift, hasMigrationDrift } from \'@bajustone/fortress\';');
-  console.log('  const drift = await detectMigrationDrift(fortress.config.database);');
+  console.log('  const drift = await detectMigrationDrift(database);');
   console.log('  if (hasMigrationDrift(drift)) process.exit(1);');
 }
 

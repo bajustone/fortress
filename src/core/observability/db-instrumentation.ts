@@ -1,4 +1,4 @@
-import type { DatabaseAdapter } from '../../adapters/database';
+import type { DatabaseAdapter, DatabaseDialect, MigratableDatabaseAdapter } from '../../adapters/database';
 import type { Histogram, Span, TelemetryProvider } from './types';
 
 /**
@@ -23,6 +23,14 @@ import type { Histogram, Span, TelemetryProvider } from './types';
  * the wrapper imposes essentially zero overhead beyond the monotonic
  * `performance.now()` pair.
  */
+export function instrumentAdapter<D extends DatabaseDialect>(
+  adapter: MigratableDatabaseAdapter<D>,
+  telemetry: TelemetryProvider,
+): MigratableDatabaseAdapter<D>;
+export function instrumentAdapter(
+  adapter: DatabaseAdapter,
+  telemetry: TelemetryProvider,
+): DatabaseAdapter;
 export function instrumentAdapter(
   adapter: DatabaseAdapter,
   telemetry: TelemetryProvider,

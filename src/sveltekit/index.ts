@@ -20,10 +20,10 @@
  * ```ts
  * // src/lib/server/fortress.ts
  * import { createFortress } from '@bajustone/fortress';
- * import { createDrizzleAdapter } from '@bajustone/fortress/drizzle';
+ * import { createSqliteDrizzleAdapter } from '@bajustone/fortress/drizzle';
  *
  * export const fortress = createFortress({
- *   database: createDrizzleAdapter(...),
+ *   database: createSqliteDrizzleAdapter(...),
  *   jwt: { key: process.env.JWT_SECRET! },
  * });
  *

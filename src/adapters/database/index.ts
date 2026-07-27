@@ -2,6 +2,9 @@ import type { WhereClause } from './types';
 
 export type { CoreOperator, ScopeRule, WhereClause } from './types';
 
+/** Database dialects supported by Fortress-managed migrations. */
+export type DatabaseDialect = 'sqlite' | 'pg';
+
 /**
  * Generic CRUD database adapter interface fortress uses to talk to any
  * datastore. Implement seven required methods (create, findOne, findMany,
@@ -59,5 +62,22 @@ export interface DatabaseAdapter {
   rawQuery?: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
 
   /** Database dialect hint for adapters that implement rawQuery */
-  readonly dialect?: 'sqlite' | 'pg';
+  readonly dialect?: DatabaseDialect;
+}
+
+/**
+ * Database capability required by Fortress-managed migrations.
+ *
+ * Ordinary CRUD adapters may omit `dialect` and `rawQuery`; migration entry
+ * points require this stronger contract. Transactions preserve the same
+ * literal dialect and raw-query capability for their callback adapter.
+ */
+export interface MigratableDatabaseAdapter<
+  D extends DatabaseDialect = DatabaseDialect,
+> extends DatabaseAdapter {
+  readonly dialect: D;
+  rawQuery: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
+  transaction: <T>(
+    fn: (tx: MigratableDatabaseAdapter<D>) => Promise<T>,
+  ) => Promise<T>;
 }

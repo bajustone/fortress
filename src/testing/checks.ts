@@ -14,12 +14,12 @@
  * @module
  */
 
-import type { DatabaseAdapter } from '../adapters/database';
+import type { DatabaseAdapter, MigratableDatabaseAdapter } from '../adapters/database';
 import type { FortressAuthRuntime, FortressManifestRuntime } from '../core/capabilities';
 import type { RouteManifestDrift } from '../core/manifest/drift';
 import type { RouteClassification, RouteManifestEntry } from '../core/manifest/route-manifest';
 import type { MigrationDrift } from '../core/migrations/engine';
-import type { MigrationDialect } from '../core/migrations/migrations';
+import { Errors } from '../core/errors';
 import { detectRouteManifestDrift, hasRouteManifestDrift } from '../core/manifest/drift';
 import { buildRouteManifest } from '../core/manifest/route-manifest';
 import { detectMigrationDrift, hasMigrationDrift } from '../core/migrations/engine';
@@ -140,6 +140,19 @@ export function checkPublicRoutes(
 
 // ── Migration drift ─────────────────────────────────────────────────
 
+function assertMigratableDatabaseAdapter(
+  database: DatabaseAdapter,
+): asserts database is MigratableDatabaseAdapter {
+  if (
+    (database.dialect !== 'sqlite' && database.dialect !== 'pg')
+    || typeof database.rawQuery !== 'function'
+  ) {
+    throw Errors.badRequest(
+      'Migration checks require a database adapter with dialect: \'sqlite\' | \'pg\' and rawQuery support',
+    );
+  }
+}
+
 /**
  * Run the migration drift detector and return a {@link CheckResult}.
  * Reports missing version table, pending migrations, an unknown
@@ -147,10 +160,9 @@ export function checkPublicRoutes(
  * Fortress-owned tables, and present-but-stale tables missing columns.
  */
 export async function checkMigrationDrift(
-  db: DatabaseAdapter,
-  dialect?: MigrationDialect,
+  db: MigratableDatabaseAdapter,
 ): Promise<CheckResult & { drift: MigrationDrift }> {
-  const drift = await detectMigrationDrift(db, dialect);
+  const drift = await detectMigrationDrift(db);
   const messages: string[] = [];
   if (drift.missingVersionTable)
     messages.push('Schema version table is missing — run fortress.migrate()');
@@ -276,9 +288,12 @@ export async function runFortressChecks(
 ): Promise<FortressChecksResult> {
   const manifest = checkRouteManifestDrift(options.fortress);
   const publicRoutes = checkPublicRoutes(options.fortress, options.publicRoutes);
-  const migrations = options.skipMigrations
-    ? undefined
-    : await checkMigrationDrift(options.db ?? options.fortress.config.database);
+  const migrationDb = options.db ?? options.fortress.config.database;
+  let migrations: Awaited<ReturnType<typeof checkMigrationDrift>> | undefined;
+  if (!options.skipMigrations) {
+    assertMigratableDatabaseAdapter(migrationDb);
+    migrations = await checkMigrationDrift(migrationDb);
+  }
   const authSmokeTest = options.skipAuthSmokeTest
     ? undefined
     : await smokeTestAuth(options.fortress, options.smokeTest);
