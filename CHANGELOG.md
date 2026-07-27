@@ -10,6 +10,7 @@
 - **Built-in route capabilities reflect configuration.** OAuth consent calls exist only with literal `enableConsentApi: true`; OpenAPI `getUI` exists unless UI is literally disabled, without promising callables for widened configurations that may omit them.
 
 ### Fixed
+- Restore Deno 2.6 declaration compatibility for outbound request headers by requiring `@bajustone/fetcher` 1.0.2, and pin the JSR validation toolchain for reproducible checks.
 - Accept Express 5 applications in `mountFortress` without casts while retaining support for lightweight Express-compatible hosts.
 
 ## [1.0.2] - 2026-07-14

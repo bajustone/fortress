@@ -106,7 +106,9 @@ describe('social-login plugin', () => {
           });
         }
         if (request.url === 'https://api.github.com/user')
-          return Response.json({ id: 123, login: 'octocat', email: 'octocat@example.com', name: 'Octo Cat' });
+          return Response.json({ id: 123, login: 'octocat', email: null, name: 'Octo Cat' });
+        if (request.url === 'https://api.github.com/user/emails')
+          return Response.json([{ email: 'octocat@example.com', primary: true, verified: true }]);
         throw new Error(`unexpected fetch ${request.url}`);
       }));
 
@@ -122,6 +124,11 @@ describe('social-login plugin', () => {
       expect(result.profile.id).toBe('123');
       expect(result.user.email).toBe('octocat@example.com');
       expect(requests[0]?.headers.get('accept')).toBe('application/json');
+      expect(requests[0]?.headers.get('content-type')).toBe('application/x-www-form-urlencoded');
+      expect(requests[1]?.headers.get('authorization')).toBe('Bearer gho_test');
+      expect(requests[1]?.headers.get('accept')).toBe('application/vnd.github+json');
+      expect(requests[2]?.headers.get('authorization')).toBe('Bearer gho_test');
+      expect(requests[2]?.headers.get('accept')).toBe('application/vnd.github+json');
     });
 
     it('rejects a token response missing access_token (schema-validated via fetcher)', async () => {
@@ -493,7 +500,8 @@ describe('social-login plugin', () => {
         .sign(privateKey);
 
       vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
-        const href = input instanceof Request ? input.url : String(input);
+        const request = input instanceof Request ? input : new Request(String(input));
+        const href = request.url;
         if (href === 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration') {
           return Response.json({
             issuer: 'https://login.microsoftonline.com/{tenantid}/v2.0',
@@ -506,8 +514,10 @@ describe('social-login plugin', () => {
           return Response.json({ access_token: 'microsoft-access', id_token: idToken });
         if (href === 'https://login.microsoftonline.com/common/discovery/v2.0/keys')
           return Response.json({ keys: [{ ...jwk, kid: 'microsoft-kid', alg: 'RS256', use: 'sig' }] });
-        if (href === 'https://graph.microsoft.com/v1.0/me')
+        if (href === 'https://graph.microsoft.com/v1.0/me') {
+          expect(request.headers.get('authorization')).toBe('Bearer microsoft-access');
           return Response.json({ id: 'microsoft-sub', mail: 'microsoft@example.com', displayName: 'Microsoft User' });
+        }
         throw new Error(`unexpected fetch ${href}`);
       }));
 

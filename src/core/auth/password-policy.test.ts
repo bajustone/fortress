@@ -55,11 +55,13 @@ describe('password-policy', () => {
     it('detects a breached password', async () => {
       // "password" is SHA-1: 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
       // prefix: 5BAA6, suffix: 1E4C9B93F3F0682250B6CF8331B7EE68FD8
-      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-        new Response('1E4C9B93F3F0682250B6CF8331B7EE68FD8:3861493\r\nABCDEF1234567890ABCDEF1234567890ABC:5', {
+      vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (input) => {
+        const request = input instanceof Request ? input : new Request(input);
+        expect(request.headers.get('Add-Padding')).toBe('true');
+        return new Response('1E4C9B93F3F0682250B6CF8331B7EE68FD8:3861493\r\nABCDEF1234567890ABCDEF1234567890ABC:5', {
           status: 200,
-        }),
-      );
+        });
+      });
 
       const result = await isPasswordBreached('password');
       expect(result).toBe(true);
