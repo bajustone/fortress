@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { ssrfSafeFetch } from './delivery';
+import { createDeliveryClient, deliver, ssrfSafeFetch } from './delivery';
+
+describe('webhook delivery request', () => {
+  it('forwards the JSON body and caller-supplied signing headers', async () => {
+    let captured: Request | undefined;
+    const client = createDeliveryClient({
+      retryMode: 'pluginScheduled',
+      fetch: async (request) => {
+        captured = request;
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await expect(deliver(
+      client,
+      'https://hooks.example.com/fortress',
+      '{"event":"user.created"}',
+      { 'webhook-id': 'evt-1', 'webhook-signature': 'signature' },
+    )).resolves.toEqual({ ok: true, status: 204 });
+
+    expect(captured).toBeDefined();
+    expect(captured?.headers.get('content-type')).toBe('application/json');
+    expect(captured?.headers.get('webhook-id')).toBe('evt-1');
+    expect(captured?.headers.get('webhook-signature')).toBe('signature');
+    await expect(captured?.text()).resolves.toBe('{"event":"user.created"}');
+  });
+});
 
 // The SSRF guard MUST live inside the delivery transport: validation and the
 // pinned connection use the same resolved IP, so there is no rebinding window.
