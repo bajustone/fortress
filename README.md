@@ -771,16 +771,23 @@ fortress policy:summary
 
 `openapi`, `schemas`, `manifest`, `manifest:check` (alias `check:routes`), and
 `check:public-routes` take `--module <path>`, pointing at a module that exports
-your configured instance as `export const fortress`. That is what makes them
-cover your plugin and host-owned routes; constructing the instance requires no
-database connection. **Omit `--module` and they only cover Fortress's own auth
-and IAM routes** — useful for checking Fortress itself, but a pass says nothing
-about your routes. Every one of them prints its scope. `fortress init`
-scaffolds a `fortress.config.ts` in the shape these commands expect.
+your configuration as `export const config`. That is what makes them cover your
+plugin and host-owned routes. The route surface is derived from the config
+without calling `createFortress()`, so no plugin is constructed and no plugin
+worker starts — relevant because plugins do real work in their `methods()`
+factory (the webhook queue runs a startup recovery sweep there). Keep such a
+module free of side effects at import time. A configured instance exported as
+`export const fortress` is also accepted, at the cost of constructing your app.
+Export `componentSchemas` to add your own reusable schemas to `openapi` and
+`schemas` output.
 
-`migrate:up` is the live migration command and requires an explicit trusted
-module with a named `fortress` export — the same module the route commands
-accept. `migrate:export` emits deterministic SQL
+**Omit `--module` and they only cover Fortress's own auth and IAM routes** —
+useful for checking Fortress itself, but a pass says nothing about your routes.
+Every one of them prints its scope. `fortress init` scaffolds a
+`fortress.config.ts` in the shape these commands expect.
+
+`migrate:up` is the live migration command and needs a real instance, so it
+requires an explicit trusted module with a named `fortress` export. `migrate:export` emits deterministic SQL
 for review or external tooling; it does not run JavaScript data steps and is not
 a substitute for the live command. `migrate:down` remains a deprecated alias
 for down-SQL export, not a live rollback command. Live drift checks use

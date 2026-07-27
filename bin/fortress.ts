@@ -2,7 +2,10 @@
 /* eslint-disable no-console -- CLI tool requires console output */
 
 import type { FortressManifestRuntime, FortressMigrationRuntime, MigrateResult } from '../src/core/capabilities';
+import type { FortressConfig } from '../src/core/config';
 import type { ComponentSchemas, EndpointDefinition } from '../src/core/endpoint';
+import type { RouteManifestEntry } from '../src/core/manifest/route-manifest';
+import type { OpenAPISpec } from '../src/plugins/openapi/spec-builder';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,6 +14,7 @@ import { iamComponentSchemas, iamEndpoints } from '../src/core/iam/iam-endpoints
 import { parseResourceFile } from '../src/core/iam/resource-sync';
 import { detectRouteManifestDrift, hasRouteManifestDrift } from '../src/core/manifest/drift';
 import { buildRouteManifest } from '../src/core/manifest/route-manifest';
+import { describeRouteSurface } from '../src/core/manifest/route-surface';
 import { renderMigrationSqlExport } from '../src/core/migrations/artifacts';
 import { getFortressMigrations, getLatestMigrationVersion } from '../src/core/migrations/migrations';
 import { loadPolicy, resolvePolicyPath } from '../src/core/policy/loader';
@@ -50,33 +54,36 @@ Commands:
 Route command scope:
   openapi, schemas, manifest, manifest:check, check:routes, and
   check:public-routes cover only Fortress's own auth + IAM routes unless you
-  pass --module <path>. Point them at a module exporting a configured
-  'fortress' instance to include your plugin and host-owned routes.
+  pass --module <path>. Point them at a module exporting your 'config' to
+  include your plugin and host-owned routes; the route surface is derived
+  without calling createFortress(), so no plugin worker starts. A module
+  exporting a configured 'fortress' instance also works, at the cost of
+  constructing your app. Optional exports: 'componentSchemas', 'dispose'.
 
 Options:
   --help, -h          Show this help message
 
 openapi options:
-  --module <path>     Module exporting a configured 'fortress' instance
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
   --out, -o <file>    Output file (default: stdout)
   --title <title>     API title (default: 'Fortress Auth API')
   --version <ver>     API version (default: '1.0.0')
   --operation-id <s>  operationId style: 'methodPath' | 'handler' (default: 'methodPath')
 
 schemas options:
-  --module <path>     Module exporting a configured 'fortress' instance
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
   --format <fmt>      Schema format: 'zod' | 'json-schema' (default: 'json-schema')
   --out, -o <file>    Output file (default: stdout)
 
 manifest options:
-  --module <path>     Module exporting a configured 'fortress' instance
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
   --out, -o <file>    Output file (default: stdout)
 
 manifest:check / check:routes options:
-  --module <path>     Module exporting a configured 'fortress' instance
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
 
 check:public-routes options:
-  --module <path>     Module exporting a configured 'fortress' instance
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
   --allow "<M> <path>"  Allow one public route; repeatable
 
 live migration options:
@@ -101,14 +108,27 @@ Examples:
   fortress check:public-routes --module ./fortress.config.ts
   fortress check:public-routes --allow "GET /health"
   fortress check:migrations
-  fortress migrate:up --module ./src/fortress.ts
+  fortress migrate:up --module ./fortress.migrate.ts
   fortress migrate:export --dialect pg --direction up --out fortress-pg.sql
   fortress policy:summary --file fortress.policy.production.json
 `.trim();
 
 const CONFIG_TEMPLATE = `import type { FortressConfig } from '@bajustone/fortress';
-import { createFortress } from '@bajustone/fortress';
 
+/**
+ * Fortress configuration, and the module the route CLI reads:
+ *
+ *   fortress manifest --module ./fortress.config.ts
+ *   fortress check:public-routes --module ./fortress.config.ts
+ *   fortress openapi --module ./fortress.config.ts --out openapi.json
+ *
+ * Those commands derive your route surface from this \`config\` export without
+ * calling createFortress(), so importing this file must stay free of side
+ * effects — no createFortress() at module scope, no opening a database.
+ *
+ * Without --module they cover Fortress's own auth + IAM routes only, not your
+ * plugins or host-owned routes.
+ */
 export const config: FortressConfig = {
   database: undefined!, // Replace with your DatabaseAdapter (e.g. createSqliteDrizzleAdapter(db))
   jwt: {
@@ -122,18 +142,19 @@ export const config: FortressConfig = {
 };
 
 /**
- * The instance the CLI consumes:
- *   fortress manifest --module ./fortress.config.ts
- *   fortress check:public-routes --module ./fortress.config.ts
- *   fortress migrate:up --module ./fortress.config.ts
+ * \`fortress migrate:up\` needs a real instance, which means constructing the
+ * app (and starting any plugin workers). Keep that in its own module so the
+ * route checks above never pay for it:
  *
- * Without --module those commands only cover Fortress's own auth + IAM routes,
- * not your plugins or host-owned routes.
+ *   // fortress.migrate.ts
+ *   import { createFortress } from '@bajustone/fortress';
+ *   import { config } from './fortress.config';
+ *
+ *   export const fortress = createFortress(config);
+ *   export function dispose() { /* close database handles *\\/ }
+ *
+ *   $ fortress migrate:up --module ./fortress.migrate.ts
  */
-export const fortress = createFortress(config);
-
-/** Called by the CLI when it finishes; close database handles here so it exits cleanly. */
-export function dispose(): void {}
 
 export default config;
 `;
@@ -395,11 +416,38 @@ function parseOperationIdStyle(value: string | undefined): 'handler' | 'methodPa
  * The spec is always built through {@link buildOpenAPISpec} with these merged
  * in, rather than through `fortress.toOpenAPI()`, because the instance method
  * forwards no component schemas — it would emit an empty `components.schemas`
- * and leave every core `$ref` dangling. Plugin and host routes carry inline
- * JSON Schema rather than component refs, so the core record stays sufficient.
+ * and leave every core `$ref` dangling. An application module can contribute
+ * its own via a `componentSchemas` export, which is merged on top.
  */
 function coreComponentSchemas(): ComponentSchemas {
   return { ...authComponentSchemas, ...iamComponentSchemas };
+}
+
+/**
+ * OpenAPI requires operationId to be unique across the document. Handler names
+ * are only unique within a plugin, so `--operation-id handler` on an app with
+ * two plugins that both define `submit` would emit an invalid spec. Report the
+ * clash with the routes involved instead.
+ */
+function assertUniqueOperationIds(spec: OpenAPISpec): void {
+  const seen = new Map<string, string>();
+  for (const [path, operations] of Object.entries(spec.paths)) {
+    for (const [method, operation] of Object.entries(operations)) {
+      const id = operation.operationId;
+      if (id === undefined)
+        continue;
+      const route = `${method.toUpperCase()} ${path}`;
+      const previous = seen.get(id);
+      if (previous) {
+        throw new Error(
+          `Duplicate operationId '${id}' generated for ${previous} and ${route}. `
+          + `Handler names are unique per plugin, not per application — `
+          + `re-run without --operation-id handler, or rename one of the handlers.`,
+        );
+      }
+      seen.set(id, route);
+    }
+  }
 }
 
 async function cmdOpenAPI(args: string[]): Promise<void> {
@@ -409,12 +457,13 @@ async function cmdOpenAPI(args: string[]): Promise<void> {
   const outFile = parsed.get('out');
   const operationId = parseOperationIdStyle(parsed.get('operationId'));
 
-  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
-    const spec = buildOpenAPISpec(fortress.endpoints, coreComponentSchemas(), {
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote, componentSchemas }) => {
+    const spec = buildOpenAPISpec(fortress.endpoints, componentSchemas, {
       title,
       version,
       operationId,
     });
+    assertUniqueOperationIds(spec);
     const json = JSON.stringify(spec, null, 2);
 
     if (outFile) {
@@ -463,40 +512,65 @@ const CORE_ONLY_NOTE
     + 'Pass --module <path> to include plugin and host-owned routes.';
 
 interface LoadedAppModule {
-  fortress: FortressManifestRuntime;
+  fortress: CliRouteSurface;
+  /** How the surface was obtained, so the scope note can be precise. */
+  source: 'config' | 'instance';
+  /** Application component schemas to merge with Fortress's own. */
+  componentSchemas: ComponentSchemas;
   dispose?: () => void | Promise<void>;
 }
 
-/**
- * A module is usable when it exposes the introspection capability. Accepts the
- * named export `fortress` — the same convention `migrate:up` already uses, so
- * one module serves both — and falls back to a default export.
- */
-function selectAppInstance(value: Record<string, unknown>): unknown {
-  if (value.fortress !== undefined)
-    return value.fortress;
-  return value.default;
+const MODULE_CONTRACT_HINT
+  = `must export either a Fortress config as named export 'config' (preferred — read without constructing the app) `
+    + `or a configured instance as named export 'fortress'`;
+
+function isRouteSurface(value: unknown): value is CliRouteSurface {
+  return isRecord(value)
+    && Array.isArray(value.endpoints)
+    && Array.isArray(value.manifest)
+    && isRecord(value.config);
 }
 
+/**
+ * Resolve a loaded module to a route surface.
+ *
+ * `config` wins over `fortress` because deriving the surface from config never
+ * calls a plugin's `methods()` factory. Constructing an instance does, and
+ * plugins start workers there — the webhook plugin's queue runs a startup
+ * recovery sweep against the database — so the CLI avoids construction
+ * whenever the module gives it the declarative input instead.
+ */
 function validateAppModule(value: unknown, modulePath: string): LoadedAppModule {
   if (!isRecord(value))
     throw new Error(`Application module '${modulePath}' did not export an object`);
 
-  const instance = selectAppInstance(value);
-  if (!isRecord(instance) || !Array.isArray(instance.endpoints) || !isRecord(instance.config) || !Array.isArray(instance.manifest)) {
-    throw new Error(
-      `Application module '${modulePath}' must export a configured Fortress instance as named export 'fortress' `
-      + `(an object with 'endpoints', 'manifest', and 'config'). `
-      + `Add \`export const fortress = createFortress(config);\` to the module.`,
-    );
-  }
+  if (value.componentSchemas !== undefined && !isRecord(value.componentSchemas))
+    throw new Error(`Application module export 'componentSchemas' must be an object when provided`);
   if (value.dispose !== undefined && typeof value.dispose !== 'function')
     throw new Error(`Application module export 'dispose' must be a function when provided`);
 
-  return {
-    fortress: instance as unknown as FortressManifestRuntime,
+  const common = {
+    componentSchemas: (value.componentSchemas ?? {}) as ComponentSchemas,
     dispose: value.dispose as LoadedAppModule['dispose'],
   };
+
+  if (isRecord(value.config))
+    return { fortress: describeRouteSurface(value.config as FortressConfig), source: 'config', ...common };
+
+  if (isRouteSurface(value.fortress))
+    return { fortress: value.fortress, source: 'instance', ...common };
+
+  if (value.fortress !== undefined) {
+    throw new Error(
+      `Application module '${modulePath}' export 'fortress' is not a configured Fortress instance `
+      + `(expected 'endpoints', 'manifest', and 'config').`,
+    );
+  }
+
+  throw new Error(
+    `Application module '${modulePath}' ${MODULE_CONTRACT_HINT}. `
+    + `Add \`export const config = { ... };\` to the module.`,
+  );
 }
 
 async function loadAppModule(modulePath: string): Promise<LoadedAppModule> {
@@ -514,18 +588,27 @@ interface ResolvedRouteSurface {
   fortress: CliRouteSurface;
   /** Printed before/alongside command output so scope is never implicit. */
   scopeNote: string;
+  /** Fortress component schemas plus anything the module contributed. */
+  componentSchemas: ComponentSchemas;
   dispose?: () => void | Promise<void>;
 }
 
 async function resolveRouteSurface(modulePath: string | undefined): Promise<ResolvedRouteSurface> {
-  if (!modulePath)
-    return { fortress: buildCoreFortressForCli(), scopeNote: CORE_ONLY_NOTE };
+  if (!modulePath) {
+    return {
+      fortress: buildCoreFortressForCli(),
+      scopeNote: CORE_ONLY_NOTE,
+      componentSchemas: coreComponentSchemas(),
+    };
+  }
 
   const loaded = await loadAppModule(modulePath);
   const routeCount = loaded.fortress.manifest.length;
+  const via = loaded.source === 'config' ? 'config' : 'constructed instance';
   return {
     fortress: loaded.fortress,
-    scopeNote: `Scope: application (${routeCount} route(s) from ${modulePath}).`,
+    scopeNote: `Scope: application (${routeCount} route(s) from ${modulePath}, via ${via}).`,
+    componentSchemas: { ...coreComponentSchemas(), ...loaded.componentSchemas },
     dispose: loaded.dispose,
   };
 }
@@ -600,8 +683,8 @@ async function cmdManifest(args: string[]): Promise<void> {
 async function cmdManifestCheck(args: string[], command: string): Promise<void> {
   const parsed = parseRouteArgs(args, command, ['module']);
 
-  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
-    const openapi = buildOpenAPISpec(fortress.endpoints, coreComponentSchemas(), {
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote, componentSchemas }) => {
+    const openapi = buildOpenAPISpec(fortress.endpoints, componentSchemas, {
       title: 'Fortress Auth API',
       version: '1.0.0',
     });
@@ -935,6 +1018,59 @@ function cmdMigrateCheck(args: string[]): void {
   console.log(`Migration catalog check passed (${dialect}, latest=${getLatestMigrationVersion(dialect)}).`);
 }
 
+const NON_IDENTIFIER_RUN_RE = /[^\w$]+(.)?/g;
+const LEADING_DIGITS_RE = /^\d+/;
+
+/** Strip anything that cannot appear in a TypeScript identifier, PascalCasing across the removals. */
+function toIdentifierPart(value: string): string {
+  const cleaned = value
+    .replace(NON_IDENTIFIER_RUN_RE, (_, next: string | undefined) => (next ? next.toUpperCase() : ''))
+    .replace(LEADING_DIGITS_RE, '');
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/**
+ * Pick a unique, valid export name per endpoint body schema.
+ *
+ * Handler names are only unique within a plugin — two plugins may each define
+ * `submit` — and nothing stops one containing punctuation (`schools.get`).
+ * Emitting them verbatim produces a file that does not compile, so qualify a
+ * clashing name with its owning plugin and fail loudly if that still collides.
+ */
+function resolveSchemaExportNames(
+  endpoints: EndpointDefinition[],
+  manifest: RouteManifestEntry[],
+  componentSchemas: ComponentSchemas,
+): Map<EndpointDefinition, string> {
+  const originByRoute = new Map(manifest.map(entry => [`${entry.method} ${entry.path}`, entry.plugin]));
+  // Component schemas are emitted into the same module namespace.
+  const taken = new Map<string, string>(
+    Object.keys(componentSchemas).map(name => [`${name}Schema`, `component schema '${name}'`]),
+  );
+  const names = new Map<EndpointDefinition, string>();
+
+  for (const endpoint of endpoints) {
+    const route = `${endpoint.method} ${endpoint.path}`;
+    const owner = originByRoute.get(route);
+    const base = toIdentifierPart(endpoint.handler);
+    const qualified = `${toIdentifierPart(owner ?? 'host')}${base}`;
+
+    const candidate = [`${base}BodySchema`, `${qualified}BodySchema`].find(name => !taken.has(name));
+    if (!candidate) {
+      throw new Error(
+        `Cannot generate a unique schema export for ${route} (handler '${endpoint.handler}'): `
+        + `'${base}BodySchema' is already used by ${taken.get(`${base}BodySchema`)} and the `
+        + `plugin-qualified fallback '${qualified}BodySchema' is used by ${taken.get(`${qualified}BodySchema`)}. `
+        + `Rename one of the handlers.`,
+      );
+    }
+    taken.set(candidate, `${route} (handler '${endpoint.handler}')`);
+    names.set(endpoint, candidate);
+  }
+
+  return names;
+}
+
 async function cmdSchemas(args: string[]): Promise<void> {
   const parsed = parseRouteArgs(args, 'schemas', ['format', 'module', 'out']);
   const format = parsed.get('format') ?? 'json-schema';
@@ -943,10 +1079,8 @@ async function cmdSchemas(args: string[]): Promise<void> {
   if (format !== 'json-schema' && format !== 'zod')
     throw new Error(`Unknown format: ${format}. Supported: json-schema, zod`);
 
-  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
-    // Component schemas stay the core record even in module mode: plugin and
-    // host routes carry inline JSON Schema rather than `$ref`s to components.
-    const allSchemas = coreComponentSchemas();
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote, componentSchemas }) => {
+    const allSchemas = componentSchemas;
 
     if (format === 'json-schema') {
       const json = JSON.stringify(allSchemas, null, 2);
@@ -963,6 +1097,7 @@ async function cmdSchemas(args: string[]): Promise<void> {
     }
 
     const bodyEndpoints = fortress.endpoints.filter(ep => ep.input?.body);
+    const exportNames = resolveSchemaExportNames(bodyEndpoints, fortress.manifest, allSchemas);
 
     let output = '// Auto-generated by "fortress schemas --format zod" — do not edit manually\n';
     output += '// Requires: zod\n\n';
@@ -977,8 +1112,7 @@ async function cmdSchemas(args: string[]): Promise<void> {
     // Generate endpoint input schemas
     output += '// ── Endpoint Input Schemas ────────────────────────────────────────\n\n';
     for (const ep of bodyEndpoints) {
-      const handlerName = ep.handler.charAt(0).toUpperCase() + ep.handler.slice(1);
-      output += `export const ${handlerName}BodySchema = ${jsonSchemaToZodCodegen(ep.input!.body)};\n\n`;
+      output += `export const ${exportNames.get(ep)!} = ${jsonSchemaToZodCodegen(ep.input!.body)};\n\n`;
     }
 
     if (outFile) {

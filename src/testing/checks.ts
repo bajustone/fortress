@@ -131,8 +131,10 @@ export function checkPublicRoutes(
       && !allow.has(`${entry.method} ${entry.path}`),
   );
 
+  // A null origin means the route came from top-level `routes`, not from
+  // Fortress core — core entries are tagged `auth`/`iam` by the manifest.
   const messages = unexpected.map(
-    entry => `Unexpected ${entry.classification} route: ${entry.method} ${entry.path} (plugin=${entry.plugin ?? 'core'})`,
+    entry => `Unexpected ${entry.classification} route: ${entry.method} ${entry.path} (plugin=${entry.plugin ?? 'host'})`,
   );
 
   return { ok: unexpected.length === 0, unexpected, messages };

@@ -57,18 +57,35 @@ Point the route commands at a module that exports your configured instance so
 they cover your plugin and host-owned routes:
 
 ```sh
-fortress manifest:check --module ./src/lib/fortress.ts       # route-security drift (also: check:routes)
-fortress check:public-routes --module ./src/lib/fortress.ts  # public-route allow-list
+fortress manifest:check --module ./fortress.config.ts       # route-security drift (also: check:routes)
+fortress check:public-routes --module ./fortress.config.ts  # public-route allow-list
 fortress migrate:check          # installed migration catalog (also: check:migrations)
 bun run generate:migrations --check  # Fortress-repository SQL artifact parity
 ```
 
-The module must export the instance as `export const fortress` (a default
-export also works) and may export `dispose()` to close database handles when
-the command finishes. `fortress init` scaffolds a `fortress.config.ts` in
-exactly this shape, and the same module works for `fortress migrate:up`.
-Building the instance needs no live database connection — Fortress only reads
-the adapter's dialect at construction — so these checks stay offline.
+The module should export your configuration as `export const config`. The CLI
+derives the route surface from it directly and **never calls
+`createFortress()`**, so no plugin is constructed and no plugin worker starts.
+That matters: constructing an instance runs every plugin's `methods()` factory,
+and plugins do real work there — the webhook plugin's queue, for example, runs
+a startup recovery sweep that queries pending deliveries and can dispatch them.
+`fortress init` scaffolds a `fortress.config.ts` in exactly this shape.
+
+A module exporting a configured instance as `export const fortress` is also
+accepted, and is what `fortress migrate:up` requires. Prefer `config` for the
+route checks: an instance export means importing the module constructs your
+application, with whatever that entails. A `dispose()` export is awaited when
+the command finishes, on both the pass and the fail path.
+
+The CLI never constructs your app when it is given `config`, but importing any
+module runs that module's top-level code. Keep a CLI-facing config module free
+of side effects — no `createFortress()` at module scope, no opening a database
+connection — and put the constructed instance in a separate module for
+`migrate:up`.
+
+Optionally export `componentSchemas` to contribute your own reusable schemas;
+they are merged with Fortress's for `openapi` and `schemas` output, so an
+endpoint that `$ref`s an application schema still resolves.
 
 **Without `--module`, the route commands cover Fortress's own auth + IAM
 surface only.** They catch drift in Fortress itself but cannot see your
@@ -91,8 +108,8 @@ A drop-in workflow is committed at
 1. `bun run lint`
 2. `bun run typecheck`
 3. `bun run typecheck:examples`
-4. `bunx fortress manifest:check --module ./src/lib/fortress.ts`
-5. `bunx fortress check:public-routes --module ./src/lib/fortress.ts`
+4. `bunx fortress manifest:check --module ./fortress.config.ts`
+5. `bunx fortress check:public-routes --module ./fortress.config.ts`
 6. `bunx fortress migrate:check`
 7. `bun run test` (which should include `runFortressChecks(...)` from
    the snippet above)
@@ -125,7 +142,7 @@ checkPublicRoutes(fortress, {
 CLI usage repeats `--allow`:
 
 ```sh
-fortress check:public-routes --module ./src/lib/fortress.ts \
+fortress check:public-routes --module ./fortress.config.ts \
   --allow 'GET /health' --allow 'GET /robots.txt'
 ```
 

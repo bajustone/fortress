@@ -26,14 +26,17 @@ Each entry contains:
 ## CLI
 
 ```sh
-fortress manifest --module ./src/lib/fortress.ts --out route-manifest.json
-fortress manifest:check --module ./src/lib/fortress.ts
+fortress manifest --module ./fortress.config.ts --out route-manifest.json
+fortress manifest:check --module ./fortress.config.ts
 ```
 
-`--module` points at a module exporting your configured instance as
-`export const fortress` (a default export also works); an optional `dispose()`
-export is called when the command finishes. Constructing the instance needs no
-database connection, so this stays offline.
+`--module` points at a module exporting your configuration as
+`export const config`. The manifest is derived from it without calling
+`createFortress()`, so no plugin is constructed and no plugin worker starts. A
+module exporting a configured instance as `export const fortress` is also
+accepted — that is what `migrate:up` requires — but it means importing the
+module constructs your application. An optional `dispose()` export is awaited
+when the command finishes.
 
 Without `--module` both commands emit/check the core auth + IAM manifest only —
 they cannot see your plugins or host-owned routes, and they label their output

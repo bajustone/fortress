@@ -35,24 +35,76 @@ function runCli(
 const CORE_ONLY_SCOPE = 'Scope: core-only';
 const APP_SCOPE = 'Scope: application';
 
+interface AppModuleOptions {
+  /** Add an unreviewed public plugin route. */
+  leak?: boolean;
+  /** Which export shape the module presents to `--module`. */
+  shape?: 'config' | 'instance' | 'default';
+  /** Add a second plugin reusing a handler name, plus a punctuated handler. */
+  collide?: boolean;
+  /** Export application component schemas and a route that `$ref`s one. */
+  componentSchemas?: boolean;
+}
+
 /**
- * Write a `--module` fixture: a Fortress instance with a plugin route and a
- * host-owned route, backed by the in-memory test adapter so no database is
- * needed. `leak: true` adds an unreviewed public plugin route.
+ * Write a `--module` fixture: a plugin route plus a host-owned route.
+ *
+ * The plugin's `methods()` factory writes a marker file. That is how the tests
+ * tell the two loading paths apart — deriving the surface from `config` must
+ * never run it, while constructing an instance necessarily does.
  */
-function writeAppModule(dir: string, file: string, opts: { leak: boolean }): void {
+function writeAppModule(dir: string, file: string, opts: AppModuleOptions = {}): void {
   const fortressUrl = new URL('./core/fortress.ts', import.meta.url).href;
   const builderUrl = new URL('./core/schema-builder.ts', import.meta.url).href;
   const testingUrl = new URL('./testing/index.ts', import.meta.url).href;
+  const marker = `${file}.methods-ran`;
+
   const leakRoute = `
         leak: endpoint('GET', '/reports/leak')
           .summary('Unreviewed public plugin route')
           .security('none')
-          .response(200, 'ok', obj({ ok: str() }, 'LeakResponse'))
+          .response(200, 'ok', obj({ ok: str() }, 'ok'))
           .handler('leak')
           .build(),`;
 
+  // A second plugin whose handler name collides with the first, and a handler
+  // that is not a valid TypeScript identifier.
+  const collidingPlugin = `
+    const exportsPlugin = {
+      name: 'exports',
+      routes: {
+        createReport: endpoint('POST', '/exports')
+          .summary('Colliding handler name')
+          .permission('export', 'create')
+          .body(obj({ title: str() }, 'title'))
+          .response(200, 'ok', obj({ ok: str() }, 'ok'))
+          .handler('createReport')
+          .build(),
+        'schools.get': endpoint('POST', '/exports/schools')
+          .summary('Handler that is not an identifier')
+          .permission('export', 'read')
+          .body(obj({ id: str() }, 'id'))
+          .response(200, 'ok', obj({ ok: str() }, 'ok'))
+          .handler('schools.get')
+          .build(),
+      },
+      methods: () => ({ createReport: async () => ({ ok: 'yes' }), 'schools.get': async () => ({ ok: 'yes' }) }),
+    };`;
+
+  // Authored as a literal definition because the fluent builder takes a
+  // Standard Schema validator, and the point here is a raw component `$ref`.
+  const refRoute = `
+        refRoute: {
+          method: 'POST',
+          path: '/reports/ref',
+          handler: 'refRoute',
+          meta: { summary: 'Route referencing an application component schema', permission: { resource: 'report', action: 'create' } },
+          input: { body: { $ref: '#/components/schemas/AppReport' } },
+          responses: { 200: { description: 'ok' } },
+        },`;
+
   writeFileSync(join(dir, file), `
+    import { writeFileSync } from 'node:fs';
     import { createFortress } from ${JSON.stringify(fortressUrl)};
     import { endpoint, obj, str } from ${JSON.stringify(builderUrl)};
     import { createTestAdapter } from ${JSON.stringify(testingUrl)};
@@ -63,30 +115,45 @@ function writeAppModule(dir: string, file: string, opts: { leak: boolean }): voi
         createReport: endpoint('POST', '/reports')
           .summary('Create a report')
           .permission('report', 'create')
-          .body(obj({ title: str() }, 'CreateReportBody'))
-          .response(200, 'ok', obj({ ok: str() }, 'CreateReportResponse'))
+          .body(obj({ title: str() }, 'title'))
+          .response(200, 'ok', obj({ ok: str() }, 'ok'))
           .handler('createReport')
-          .build(),${opts.leak ? leakRoute : ''}
+          .build(),${opts.leak ? leakRoute : ''}${opts.componentSchemas ? refRoute : ''}
       },
-      methods: () => ({
-        createReport: async () => ({ ok: 'yes' }),
-        leak: async () => ({ ok: 'yes' }),
-      }),
+      // Stands in for a plugin that starts a worker or touches the database
+      // here, as the bundled webhook plugin's queue does.
+      methods: () => {
+        writeFileSync(${JSON.stringify(marker)}, 'yes');
+        return {
+          createReport: async () => ({ ok: 'yes' }),
+          leak: async () => ({ ok: 'yes' }),
+          refRoute: async () => ({ ok: 'yes' }),
+        };
+      },
     };
+    ${opts.collide ? collidingPlugin : ''}
 
-    export const fortress = createFortress({
+    const appConfig = {
       jwt: { key: 'cli-app-module-secret-at-least-32-chars' },
       database: createTestAdapter(),
-      plugins: [reportsPlugin],
+      plugins: [reportsPlugin${opts.collide ? ', exportsPlugin' : ''}],
       routes: {
         hostStats: endpoint('GET', '/host/stats')
           .summary('Host-owned stats route')
-          .permission('stats', 'read')
-          .response(200, 'ok', obj({ ok: str() }, 'HostStatsResponse'))
+          ${opts.leak ? `.security('none')` : `.permission('stats', 'read')`}
+          .response(200, 'ok', obj({ ok: str() }, 'ok'))
           .handler('hostStats')
           .build(),
       },
-    });
+    };
+    ${opts.componentSchemas
+      ? `export const componentSchemas = { AppReport: obj({ title: str() }, 'title') };`
+      : ''}
+    ${opts.shape === 'instance'
+      ? 'export const fortress = createFortress(appConfig);'
+      : opts.shape === 'default'
+        ? 'export default createFortress(appConfig);'
+        : 'export const config = appConfig;'}
 
     export async function dispose() {
       await Bun.write(${JSON.stringify(`${file}.disposed`)}, 'yes');
@@ -236,6 +303,102 @@ describe('fortress CLI smoke tests', () => {
     expect(existsSync(join(cwd, 'typo-imported.txt'))).toBe(false);
   });
 
+  it('derives the route surface from config without constructing the application', () => {
+    writeAppModule(cwd, 'pure-module.ts', { shape: 'config' });
+    writeAppModule(cwd, 'instance-module.ts', { shape: 'instance' });
+
+    const pure = runCli(cwd, ['manifest', '--module', './pure-module.ts', '--out', 'pure-manifest.json']);
+    expect(pure.status, String(pure.stderr)).toBe(0);
+    expect(pure.stdout).toContain('via config');
+    // Plugin `methods()` is where plugins start workers and hit the database
+    // (the webhook queue's startup recovery sweep, for example). The config
+    // path must never reach it.
+    expect(existsSync(join(cwd, 'pure-module.ts.methods-ran'))).toBe(false);
+
+    const constructed = runCli(cwd, ['manifest', '--module', './instance-module.ts', '--out', 'instance-manifest.json']);
+    expect(constructed.status, String(constructed.stderr)).toBe(0);
+    expect(constructed.stdout).toContain('via constructed instance');
+    expect(existsSync(join(cwd, 'instance-module.ts.methods-ran'))).toBe(true);
+
+    // Both paths must describe the same routes.
+    const normalise = (file: string): string => {
+      const entries = JSON.parse(readFileSync(join(cwd, file), 'utf8')) as Array<Record<string, unknown>>;
+      return JSON.stringify(entries.map(entry => `${entry.method} ${entry.path} ${entry.plugin} ${entry.classification}`).sort());
+    };
+    expect(normalise('pure-manifest.json')).toBe(normalise('instance-manifest.json'));
+  }, 30_000);
+
+  it('merges application component schemas supplied by the module', () => {
+    writeAppModule(cwd, 'schemas-module.ts', { componentSchemas: true });
+
+    const core = runCli(cwd, ['schemas', '--format', 'json-schema', '--out', 'core-components.json']);
+    expect(core.status, String(core.stderr)).toBe(0);
+    const app = runCli(cwd, ['schemas', '--format', 'json-schema', '--module', './schemas-module.ts', '--out', 'app-components.json']);
+    expect(app.status, String(app.stderr)).toBe(0);
+
+    const coreSchemas = JSON.parse(readFileSync(join(cwd, 'core-components.json'), 'utf8')) as Record<string, unknown>;
+    const appSchemas = JSON.parse(readFileSync(join(cwd, 'app-components.json'), 'utf8')) as Record<string, unknown>;
+    expect(coreSchemas.AppReport).toBeUndefined();
+    expect(appSchemas.AppReport).toBeDefined();
+
+    // An endpoint referencing an application component must resolve.
+    const openapi = runCli(cwd, ['openapi', '--module', './schemas-module.ts', '--out', 'ref-openapi.json']);
+    expect(openapi.status, String(openapi.stderr)).toBe(0);
+    const spec = JSON.parse(readFileSync(join(cwd, 'ref-openapi.json'), 'utf8')) as {
+      components: { schemas: Record<string, unknown> };
+    };
+    const refs = Array.from(
+      readFileSync(join(cwd, 'ref-openapi.json'), 'utf8').matchAll(/"\$ref":\s*"#\/components\/schemas\/([^"]+)"/g),
+      match => match[1]!,
+    );
+    expect(refs).toContain('AppReport');
+    for (const ref of new Set(refs))
+      expect(spec.components.schemas[ref], `dangling $ref: ${ref}`).toBeDefined();
+  }, 30_000);
+
+  it('generates unique, compilable Zod identifiers across plugins', () => {
+    writeAppModule(cwd, 'collide-module.ts', { collide: true });
+
+    const result = runCli(cwd, ['schemas', '--format', 'zod', '--module', './collide-module.ts', '--out', 'collide-schemas.ts']);
+    expect(result.status, String(result.stderr)).toBe(0);
+    const generated = readFileSync(join(cwd, 'collide-schemas.ts'), 'utf8');
+
+    // Two plugins both declare a `createReport` handler; the second must be
+    // qualified rather than redeclared, and `schools.get` must be sanitised.
+    const declared = Array.from(generated.matchAll(/^export const (\w+) = /gm), match => match[1]!);
+    expect(new Set(declared).size, `duplicate declarations in:\n${generated}`).toBe(declared.length);
+    for (const name of declared)
+      expect(name, 'invalid TypeScript identifier').toMatch(/^[A-Z_$][\w$]*$/);
+    expect(declared).toContain('CreateReportBodySchema');
+    expect(declared).toContain('ExportsCreateReportBodySchema');
+    expect(declared).toContain('SchoolsGetBodySchema');
+
+    // The generated file must actually compile. `zod` is external because it
+    // is not a dependency of this repo; the check here is the generated code.
+    const parsed = spawnSync('bun', ['build', '--target', 'node', '--external', 'zod', join(cwd, 'collide-schemas.ts'), '--outfile', join(cwd, 'collide-build.js')], {
+      cwd,
+      encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1' },
+      timeout: 20_000,
+    });
+    expect(parsed.status, `${parsed.stdout}\n${parsed.stderr}`).toBe(0);
+  }, 30_000);
+
+  it('refuses to emit an OpenAPI document with duplicate operation IDs', () => {
+    writeAppModule(cwd, 'opid-module.ts', { collide: true });
+
+    const result = runCli(cwd, ['openapi', '--module', './opid-module.ts', '--operation-id', 'handler']);
+    expect(result.status, String(result.stdout)).toBe(1);
+    expect(result.stderr).toContain(`Duplicate operationId 'createReport'`);
+    expect(result.stderr).toContain('POST /reports');
+    expect(result.stderr).toContain('POST /exports');
+    expect(`${result.stdout}\n${result.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
+
+    // The default methodPath strategy stays collision-free.
+    const fallback = runCli(cwd, ['openapi', '--module', './opid-module.ts', '--out', 'opid-openapi.json']);
+    expect(fallback.status, String(fallback.stderr)).toBe(0);
+  }, 30_000);
+
   it('covers plugin and host-owned routes when given an application module', () => {
     writeAppModule(cwd, 'app-module.ts', { leak: false });
 
@@ -294,6 +457,10 @@ describe('fortress CLI smoke tests', () => {
     expect(result.stderr).toContain('Public-route check failed:');
     expect(result.stderr).toContain('GET /reports/leak');
     expect(result.stderr).toContain('plugin=reports');
+    // A top-level route is host-owned, not core; the manifest records its
+    // origin as null and the diagnostic must not call that "core".
+    expect(result.stderr).toContain('GET /host/stats');
+    expect(result.stderr).toContain('plugin=host');
     expect(`${result.stdout}\n${result.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
     // The failure path must still dispose the loaded module.
     expect(readFileSync(join(cwd, 'leaky-module.ts.disposed'), 'utf8')).toBe('yes');
@@ -304,6 +471,8 @@ describe('fortress CLI smoke tests', () => {
       './leaky-module.ts',
       '--allow',
       'GET /reports/leak',
+      '--allow',
+      'GET /host/stats',
     ]);
     expect(allowed.status, String(allowed.stderr)).toBe(0);
   }, 30_000);
@@ -325,21 +494,27 @@ describe('fortress CLI smoke tests', () => {
     expect(() => JSON.parse(String(runCli(cwd, ['manifest']).stdout))).not.toThrow();
   }, 30_000);
 
-  it('scaffolds a module shaped for --module and reports unconfigured scaffolds cleanly', () => {
+  it('scaffolds a config module the route commands can read as-is', () => {
     const scaffoldDir = mkdtempSync(join(tmpdir(), 'fortress-init-'));
     try {
       expect(runCli(scaffoldDir, ['init']).status).toBe(0);
       const scaffold = readFileSync(join(scaffoldDir, 'fortress.config.ts'), 'utf8');
-      expect(scaffold).toContain('export const fortress = createFortress(config)');
-      expect(scaffold).toContain('export function dispose()');
+      expect(scaffold).toContain('export const config: FortressConfig');
+      // Importing the scaffold must not construct the app: the route commands
+      // read `config`, and constructing is what starts plugin workers.
+      expect(scaffold).not.toMatch(/^\s*(?:export const \w+ = )?createFortress\(/m);
 
-      // The scaffold ships `database: undefined!` and an unset JWT secret, so
-      // it cannot construct until the operator fills them in. The CLI must
-      // explain that rather than surface an uncaught runtime error.
-      const result = runCli(scaffoldDir, ['manifest', '--module', './fortress.config.ts']);
-      expect(result.status).toBe(1);
-      expect(String(result.stderr)).toContain('Error:');
+      // The scaffold ships `database: undefined!` and an unset JWT secret, yet
+      // the route commands still work, because they never build the instance.
+      const result = runCli(scaffoldDir, ['manifest', '--module', './fortress.config.ts', '--out', 'scaffold-manifest.json']);
+      expect(result.status, String(result.stderr)).toBe(0);
+      expect(result.stdout).toContain('via config');
       expect(`${result.stdout}\n${result.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
+      const entries = JSON.parse(readFileSync(join(scaffoldDir, 'scaffold-manifest.json'), 'utf8')) as unknown[];
+      expect(entries.length).toBeGreaterThan(0);
+
+      const check = runCli(scaffoldDir, ['check:public-routes', '--module', './fortress.config.ts']);
+      expect(check.status, String(check.stderr)).toBe(0);
     }
     finally {
       rmSync(scaffoldDir, { recursive: true, force: true });
@@ -348,10 +523,14 @@ describe('fortress CLI smoke tests', () => {
 
   it('rejects malformed route-command invocations instead of silently passing', () => {
     writeFileSync(join(cwd, 'no-instance-module.ts'), 'export const notFortress = {};');
+    writeFileSync(join(cwd, 'bad-instance-module.ts'), 'export const fortress = { endpoints: [] };');
     writeFileSync(join(cwd, 'route-must-not-import.ts'), `
       await Bun.write('route-typo-imported.txt', 'yes');
       export const fortress = { endpoints: [], manifest: [], config: {} };
     `);
+    // Route commands and migrate:up must agree on the export contract, so a
+    // default-only export is rejected by both rather than one of them.
+    writeAppModule(cwd, 'default-only-module.ts', { shape: 'default' });
 
     const cases = [
       // A mistyped flag used to be ignored, reporting a core-only pass with exit 0.
@@ -359,7 +538,10 @@ describe('fortress CLI smoke tests', () => {
       { args: ['manifest:check', '--module'], message: '--module requires a value' },
       { args: ['manifest', '--module', '-x'], message: '--module requires a value' },
       { args: ['manifest', '--module', './missing-module.ts'], message: 'Cannot find module' },
-      { args: ['manifest', '--module', './no-instance-module.ts'], message: `named export 'fortress'` },
+      { args: ['manifest', '--module', './no-instance-module.ts'], message: `named export 'config'` },
+      { args: ['manifest', '--module', './bad-instance-module.ts'], message: `is not a configured Fortress instance` },
+      { args: ['manifest', '--module', './default-only-module.ts'], message: `named export 'config'` },
+      { args: ['migrate:up', '--module', './default-only-module.ts'], message: `named export 'fortress'` },
       { args: ['openapi', '--module', './route-must-not-import.ts', '--operation-id', 'bogus'], message: 'Unknown operation-id style' },
       { args: ['schemas', '--module', './route-must-not-import.ts', '--format', 'yaml'], message: 'Unknown format' },
       { args: ['manifest', '--module', './route-must-not-import.ts', '--module', './app-module.ts'], message: `Duplicate argument '--module'` },
