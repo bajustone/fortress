@@ -13,6 +13,7 @@ import { pathToFileURL } from 'node:url';
 import { authComponentSchemas, authEndpoints } from '../src/core/auth/auth-endpoints';
 import { iamComponentSchemas, iamEndpoints } from '../src/core/iam/iam-endpoints';
 import { parseResourceFile } from '../src/core/iam/resource-sync';
+import { cleanJsonSchema, visitSchemaRefs } from '../src/core/json-schema-utils';
 import { detectRouteManifestDrift, hasRouteManifestDrift } from '../src/core/manifest/drift';
 import { buildRouteManifest } from '../src/core/manifest/route-manifest';
 import { describeRouteSurface } from '../src/core/manifest/route-surface';
@@ -425,30 +426,11 @@ function coreComponentSchemas(): ComponentSchemas {
   return { ...authComponentSchemas, ...iamComponentSchemas };
 }
 
-/**
- * Drop Fortress-internal fields (the `~standard` validator, functions,
- * `undefined`) so emitted JSON Schema is portable.
- */
-function stripInternalSchemaFields<T>(value: T, ancestors: Set<object> = new Set()): T {
-  if (typeof value !== 'object' || value === null)
-    return value;
-  if (ancestors.has(value))
-    throw new Error('Schema contains a reference cycle and cannot be serialized.');
-  ancestors.add(value);
-
-  try {
-    if (Array.isArray(value))
-      return value.map(entry => stripInternalSchemaFields(entry, ancestors)) as T;
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([key]) => !key.startsWith('~'))
-        .filter(([, entry]) => typeof entry !== 'function' && entry !== undefined)
-        .map(([key, entry]) => [key, stripInternalSchemaFields(entry, ancestors)]),
-    ) as T;
-  }
-  finally {
-    ancestors.delete(value);
-  }
+/** Drop runtime metadata from each schema node without altering schema data. */
+function stripInternalSchemaFields(schemas: ComponentSchemas): ComponentSchemas {
+  return Object.fromEntries(
+    Object.entries(schemas).map(([name, schema]) => [name, cleanJsonSchema(schema)]),
+  );
 }
 
 /**
@@ -505,44 +487,30 @@ function assertUniqueOperationIds(spec: OpenAPISpec, strategy: 'handler' | 'meth
   }
 }
 
-/**
- * Collect every `$ref` reachable from a schema fragment, keyed by its raw
- * value so diagnostics can quote what the author actually wrote.
- *
- * Every `$ref` is collected, not just the ones matching the component prefix —
- * a malformed or unresolvable pointer has to be reported, and skipping it is
- * how one silently shipped before.
- */
-function collectRefs(value: unknown, into: Map<string, ParsedRef>, seen: WeakSet<object> = new WeakSet()): void {
-  if (typeof value !== 'object' || value === null)
-    return;
-  // A self-referential schema object would recurse forever. Skipping the
-  // revisit lets code generation report the cycle with a useful message
-  // instead of the walk dying with a stack overflow first.
-  if (seen.has(value))
-    return;
-  seen.add(value);
-
-  if (Array.isArray(value)) {
-    for (const item of value)
-      collectRefs(item, into, seen);
-    return;
-  }
-
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === '$ref')
-      into.set(typeof entry === 'string' ? entry : String(entry), parseSchemaRef(entry));
-    else
-      collectRefs(entry, into, seen);
-  }
+/** A single `$ref` occurrence: the raw value the author wrote and its parse. */
+interface CollectedRef {
+  raw: string;
+  parsed: ParsedRef;
 }
 
-/** Resolve a `/`-rooted JSON Pointer against the generated document. */
-function pointerResolves(spec: OpenAPISpec, pointer: string): boolean {
-  if (pointer === '')
-    return true;
+/**
+ * Collect every `$ref` occurrence from actual schema nodes.
+ *
+ * Occurrences accumulate into an array, not a map keyed by the raw value: a
+ * legal string ref (`'null'`) and a malformed non-string ref (`null`)
+ * stringify to the same key, so a map would let the legal one silently mask
+ * the malformed one and skip its error. Every occurrence is validated.
+ */
+function collectRefs(schema: unknown, into: CollectedRef[]): void {
+  visitSchemaRefs(schema, (ref) => {
+    into.push({ raw: typeof ref === 'string' ? ref : String(ref), parsed: parseSchemaRef(ref) });
+  });
+}
+
+/** Resolve decoded JSON Pointer tokens against the generated document. */
+function pointerResolves(spec: OpenAPISpec, tokens: readonly string[]): boolean {
   let cursor: unknown = spec;
-  for (const token of pointer.slice(1).split('/')) {
+  for (const token of tokens) {
     if (typeof cursor !== 'object' || cursor === null)
       return false;
     if (!Object.hasOwn(cursor, token))
@@ -561,16 +529,25 @@ function pointerResolves(spec: OpenAPISpec, pointer: string): boolean {
  * the consumer to resolve.
  */
 function assertResolvableRefs(spec: OpenAPISpec): void {
-  const refs = new Map<string, ParsedRef>();
-  collectRefs(spec.paths, refs);
+  const refs: CollectedRef[] = [];
+  for (const operations of Object.values(spec.paths)) {
+    for (const operation of Object.values(operations)) {
+      for (const parameter of operation.parameters ?? [])
+        collectRefs(parameter.schema, refs);
+      collectRefs(operation.requestBody?.content['application/json'].schema, refs);
+      for (const response of Object.values(operation.responses))
+        collectRefs(response.content?.['application/json'].schema, refs);
+    }
+  }
   // A component may reference another component.
-  collectRefs(spec.components?.schemas ?? {}, refs);
+  for (const schema of Object.values(spec.components?.schemas ?? {}))
+    collectRefs(schema, refs);
 
   const defined = spec.components?.schemas ?? {};
   const undefinedComponents: string[] = [];
   const unresolvablePointers: string[] = [];
 
-  for (const [raw, parsed] of refs) {
+  for (const { raw, parsed } of refs) {
     switch (parsed.kind) {
       case 'malformed':
         throw new Error(`Invalid $ref '${raw}': ${parsed.reason}.`);
@@ -579,7 +556,7 @@ function assertResolvableRefs(spec: OpenAPISpec): void {
           undefinedComponents.push(parsed.name);
         break;
       case 'other-local':
-        if (!pointerResolves(spec, parsed.pointer))
+        if (!pointerResolves(spec, parsed.tokens))
           unresolvablePointers.push(raw);
         break;
       case 'external':
@@ -697,6 +674,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && !Array.isArray(value);
 }
 
+/** A JSON-style record, excluding arrays and class instances. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value))
+    return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 /** `jwt.key` is `string | string[]`; `undefined` is the unset-env placeholder. */
 function isJwtKeyMaterial(key: unknown): boolean {
   return key === undefined
@@ -758,13 +743,25 @@ function validateAppModule(value: unknown, modulePath: string): LoadedAppModule 
   if (!isRecord(value))
     throw new Error(`Application module '${modulePath}' did not export an object`);
 
-  if (value.componentSchemas !== undefined && !isRecord(value.componentSchemas))
-    throw new Error(`Application module export 'componentSchemas' must be an object when provided`);
+  if (value.componentSchemas !== undefined && !isPlainRecord(value.componentSchemas)) {
+    throw new Error(
+      `Application module export 'componentSchemas' must be a plain object when provided; arrays are not schema records`,
+    );
+  }
+  const componentSchemas = value.componentSchemas ?? {};
+  for (const [name, schema] of Object.entries(componentSchemas)) {
+    if (!isPlainRecord(schema)) {
+      throw new Error(
+        `Application module componentSchemas[${JSON.stringify(name)}] must be a schema object; `
+        + `received ${Array.isArray(schema) ? 'an array' : schema === null ? 'null' : typeof schema}`,
+      );
+    }
+  }
   if (value.dispose !== undefined && typeof value.dispose !== 'function')
     throw new Error(`Application module export 'dispose' must be a function when provided`);
 
   const common = {
-    componentSchemas: (value.componentSchemas ?? {}) as ComponentSchemas,
+    componentSchemas: componentSchemas as ComponentSchemas,
     dispose: value.dispose as LoadedAppModule['dispose'],
   };
 
@@ -1254,17 +1251,63 @@ function cmdMigrateCheck(args: string[]): void {
   console.log(`Migration catalog check passed (${dialect}, latest=${getLatestMigrationVersion(dialect)}).`);
 }
 
+const IDENTITY_HELPER = `/** Validate like JSON Schema: never replace or transform a successful input value. */
+function validateIdentity<T extends z.ZodTypeAny>(
+  schema: T,
+  prepare: (input: unknown) => unknown = input => input,
+  check: (prepared: unknown) => boolean = () => true,
+): z.ZodType<z.output<T>, unknown> {
+  return z.any().superRefine((input: unknown, ctx: z.RefinementCtx) => {
+    const prepared = prepare(input);
+    if (!check(prepared) || !schema.safeParse(prepared).success)
+      ctx.addIssue({ code: 'custom', message: 'JSON Schema validation failed' });
+  }) as z.ZodType<z.output<T>, unknown>;
+}
+`;
+
+const JSON_VALUE_HELPER = `/** JSON Schema const/enum equality for structured JSON values. */
+function jsonDeepEqual(left: unknown, right: unknown, seen = new WeakMap<object, WeakSet<object>>()): boolean {
+  if (left === right)
+    return true;
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null)
+    return false;
+  if (Array.isArray(left) !== Array.isArray(right))
+    return false;
+
+  let rights = seen.get(left);
+  if (rights?.has(right))
+    return true;
+  if (!rights) {
+    rights = new WeakSet<object>();
+    seen.set(left, rights);
+  }
+  rights.add(right);
+
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length)
+    return false;
+  return leftKeys.every(key => Object.hasOwn(right, key)
+    && jsonDeepEqual(Reflect.get(left, key), Reflect.get(right, key), seen));
+}
+
+function jsonValue<T>(expected: T): z.ZodType<T, unknown> {
+  return z.custom<T>(value => jsonDeepEqual(value, expected), { message: 'Expected a deep-equal JSON value' });
+}
+`;
+
 const EXACTLY_ONE_HELPER = `/** JSON Schema \`oneOf\`: exactly one variant must match — a plain z.union is any-match. */
 function matchExactlyOne<T extends readonly [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]]>(...variants: T) {
-  return z.union(variants).superRefine((value: unknown, ctx: z.RefinementCtx) => {
+  const union = z.union(variants);
+  return z.any().superRefine((input: unknown, ctx: z.RefinementCtx) => {
     let matched = 0;
     for (const variant of variants) {
-      if (variant.safeParse(value).success)
+      if (variant.safeParse(input).success)
         matched += 1;
     }
     if (matched !== 1)
       ctx.addIssue({ code: 'custom', message: \`Expected exactly one oneOf variant to match, but \${matched} did\` });
-  });
+  }).pipe(validateIdentity(union));
 }
 `;
 
@@ -1312,10 +1355,10 @@ function buildComponentIdentifiers(componentSchemas: ComponentSchemas): Componen
 
 /** Local component names a schema fragment refers to. */
 function componentDependencies(schema: unknown): Set<string> {
-  const refs = new Map<string, ParsedRef>();
+  const refs: CollectedRef[] = [];
   collectRefs(schema, refs);
   const names = new Set<string>();
-  for (const parsed of refs.values()) {
+  for (const { parsed } of refs) {
     if (parsed.kind === 'component')
       names.add(parsed.name);
   }
@@ -1470,6 +1513,9 @@ async function cmdSchemas(args: string[]): Promise<void> {
     let output = '// Auto-generated by "fortress schemas --format zod" — do not edit manually\n';
     output += '// Requires: zod\n\n';
     output += 'import { z } from \'zod\';\n\n';
+    output += `${IDENTITY_HELPER}\n`;
+    if (ctx.usesJsonValue)
+      output += `${JSON_VALUE_HELPER}\n`;
     if (ctx.usesExactlyOne)
       output += `${EXACTLY_ONE_HELPER}\n`;
     output += declarations;
@@ -1501,6 +1547,8 @@ async function cmdSchemas(args: string[]): Promise<void> {
  */
 interface ZodCodegenContext {
   components: ComponentIdentifiers;
+  /** Set when structured const/enum values need deep JSON equality. */
+  usesJsonValue: boolean;
   /** Set when any emitted expression needs the exactly-one helper. */
   usesExactlyOne: boolean;
   /** Schemas on the current path, for cycle detection by object identity. */
@@ -1508,7 +1556,48 @@ interface ZodCodegenContext {
 }
 
 function createZodCodegenContext(components: ComponentIdentifiers): ZodCodegenContext {
-  return { components, usesExactlyOne: false, path: new Set() };
+  return { components, usesJsonValue: false, usesExactlyOne: false, path: new Set() };
+}
+
+/** Emit a typed JavaScript expression for a JSON data value. */
+function jsonDataExpression(value: unknown, keyword: string, where: string, path = new Set<object>()): string {
+  if (value === null)
+    return 'null';
+  if (typeof value === 'string' || typeof value === 'boolean')
+    return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (Number.isFinite(value))
+      return String(value);
+    throw new TypeError(`Schema keyword '${keyword}' in ${where} must contain only finite JSON numbers.`);
+  }
+  if (typeof value !== 'object')
+    throw new TypeError(`Schema keyword '${keyword}' in ${where} must contain only JSON values.`);
+  if (path.has(value))
+    throw new TypeError(`Schema keyword '${keyword}' in ${where} contains a cycle.`);
+
+  path.add(value);
+  try {
+    if (Array.isArray(value))
+      return `([${value.map(item => jsonDataExpression(item, keyword, where, path)).join(', ')}] as const)`;
+    if (!isPlainRecord(value))
+      throw new TypeError(`Schema keyword '${keyword}' in ${where} must contain only plain JSON objects.`);
+    const fields = Object.keys(value).map(key =>
+      `${quotePropertyKey(key)}: ${jsonDataExpression(value[key], keyword, where, path)}`);
+    return `({ ${fields.join(', ')} } as const)`;
+  }
+  finally {
+    path.delete(value);
+  }
+}
+
+function generateJsonValueSchema(value: unknown, keyword: string, ctx: ZodCodegenContext, where: string): string {
+  const expression = jsonDataExpression(value, keyword, where);
+  if (value === null)
+    return 'z.null()';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+    return `z.literal(${expression})`;
+  ctx.usesJsonValue = true;
+  return `jsonValue(${expression})`;
 }
 
 /** Interpolate a numeric keyword, refusing anything that is not a finite number. */
@@ -1529,7 +1618,12 @@ function unionOf(parts: string[]): string {
 }
 
 function intersectionOf(parts: string[]): string {
-  return parts.reduce((left, right) => `z.intersection(${left}, ${right})`);
+  if (parts.length === 1)
+    return parts[0]!;
+  // Retain Zod's inferred intersection output while discarding its reconstructed
+  // value. validateIdentity returns the original input after every member passes.
+  const intersection = parts.reduce((left, right) => `z.intersection(${left}, ${right})`);
+  return `validateIdentity(${intersection})`;
 }
 
 function generateParts(branches: unknown, keyword: string, ctx: ZodCodegenContext, where: string): string[] {
@@ -1540,32 +1634,75 @@ function generateParts(branches: unknown, keyword: string, ctx: ZodCodegenContex
 
 function generateObject(schema: any, ctx: ZodCodegenContext, where: string): string {
   const additional = schema.additionalProperties;
-  const additionalIsSchema = typeof additional === 'object' && additional !== null;
-  const propertyNames = schema.properties ? Object.keys(schema.properties) : [];
+  const additionalIsSchema = isPlainRecord(additional);
+  const additionalExpression = additionalIsSchema
+    ? jsonSchemaToZodCodegen(additional, ctx, `${where} additionalProperties`)
+    : undefined;
+  const declaredPropertyNames = schema.properties ? Object.keys(schema.properties) : [];
+  const required = new Set<unknown>(Array.isArray(schema.required) ? schema.required : []);
+  const requiredPropertyNames = Array.from(required).filter((key): key is string => typeof key === 'string');
+  const propertyNames = [...new Set([...declaredPropertyNames, ...requiredPropertyNames])];
 
+  // A required name that properties does not declare is still required. If
+  // additional properties are forbidden, however, no object can satisfy both
+  // assertions.
+  if (additional === false && requiredPropertyNames.some(key => !declaredPropertyNames.includes(key)))
+    return 'z.never()';
+
+  let expression: string;
   if (propertyNames.length === 0) {
-    if (additionalIsSchema)
-      return `z.record(z.string(), ${jsonSchemaToZodCodegen(additional, ctx, `${where} additionalProperties`)})`;
-    if (additional === false)
-      return 'z.object({}).strict()';
+    if (additionalExpression)
+      expression = 'z.object({}).passthrough()';
+    else if (additional === false)
+      expression = 'z.object({}).strict()';
     // An empty `properties: {}` used to emit `z.object({\n,\n})` — a syntax error.
-    return additional ? 'z.record(z.string(), z.any())' : 'z.object({})';
+    // JSON Schema allows additional properties unless explicitly disabled.
+    else
+      expression = additional ? 'z.record(z.string(), z.any())' : 'z.object({}).passthrough()';
+  }
+  else {
+    const fields = propertyNames.map((key) => {
+      const declared = Object.hasOwn(schema.properties ?? {}, key);
+      const property = declared
+        ? jsonSchemaToZodCodegen(schema.properties[key], ctx, `${where}.${key}`)
+        : additionalExpression ?? 'z.any()';
+      // Property names come from application schemas and need not be valid
+      // identifiers — `first-name` and `2fa` are both legal JSON Schema.
+      return `  ${quotePropertyKey(key)}: ${required.has(key) ? property : `${property}.optional()`}`;
+    });
+
+    expression = `z.object({\n${fields.join(',\n')},\n})`;
+    if (additional === false)
+      expression += '.strict()';
+    else
+      // additionalProperties schemas are enforced by the explicit own-key
+      // check below. Passthrough keeps declared fields sound and types extras
+      // as unknown instead of producing the impossible T & Record<string, U>.
+      expression += '.passthrough()';
   }
 
-  const required = new Set<unknown>(Array.isArray(schema.required) ? schema.required : []);
-  const fields = propertyNames.map((key) => {
-    const property = jsonSchemaToZodCodegen(schema.properties[key], ctx, `${where}.${key}`);
-    // Property names come from application schemas and need not be valid
-    // identifiers — `first-name` and `2fa` are both legal JSON Schema.
-    return `  ${quotePropertyKey(key)}: ${required.has(key) ? property : `${property}.optional()`}`;
-  });
+  // Zod's unknown-key processing skips `__proto__` and non-enumerable own
+  // properties. Apply additionalProperties to every own string key before Zod
+  // reconstructs the object. Declared keys are handled by the object shape.
+  const declaredNames = JSON.stringify(declaredPropertyNames);
+  let additionalPropertyCheck: string | undefined;
+  if (additional === false) {
+    additionalPropertyCheck = `(value: unknown) => typeof value !== 'object' || value === null || Object.getOwnPropertyNames(value).every(key => new Set<string>(${declaredNames}).has(key))`;
+  }
+  else if (additionalExpression) {
+    additionalPropertyCheck = `(value: unknown) => typeof value !== 'object' || value === null || Object.getOwnPropertyNames(value).every(key => new Set<string>(${declaredNames}).has(key) || (${additionalExpression}).safeParse(Reflect.get(value, key)).success)`;
+  }
 
-  let expression = `z.object({\n${fields.join(',\n')},\n})`;
-  if (additional === false)
-    expression += '.strict()';
-  else if (additionalIsSchema)
-    expression += `.catchall(${jsonSchemaToZodCodegen(additional, ctx, `${where} additionalProperties`)})`;
-  return expression;
+  // JSON Schema validates data without transforming it. Zod object parsing
+  // rebuilds output objects and can lose an own `__proto__` property; it also
+  // reads inherited values when deciding whether a shape key is present. Copy
+  // own enumerable input keys onto a null-prototype object for validation, then
+  // return the untouched input through z.any(). This preserves output identity
+  // and makes required/optional checks depend on ownership, as JSON data does.
+  return `validateIdentity(${expression}, (value: unknown) =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? Object.defineProperties(Object.create(null), Object.getOwnPropertyDescriptors(value))
+    : value${additionalPropertyCheck ? `,\n${additionalPropertyCheck}` : ''})`;
 }
 
 function generateForType(schema: any, type: string, ctx: ZodCodegenContext, where: string): string {
@@ -1576,10 +1713,10 @@ function generateForType(schema: any, type: string, ctx: ZodCodegenContext, wher
         expression += `.regex(new RegExp(${JSON.stringify(schema.pattern)}))`;
       const min = numericLiteral(schema.minLength, 'minLength', where);
       if (min !== undefined)
-        expression += `.min(${min})`;
+        expression += `.refine(value => [...value].length >= ${min}, { message: 'String is too short' })`;
       const max = numericLiteral(schema.maxLength, 'maxLength', where);
       if (max !== undefined)
-        expression += `.max(${max})`;
+        expression += `.refine(value => [...value].length <= ${max}, { message: 'String is too long' })`;
       return expression;
     }
     case 'number':
@@ -1601,12 +1738,12 @@ function generateForType(schema: any, type: string, ctx: ZodCodegenContext, wher
       if (Array.isArray(schema.items)) {
         const members = schema.items.map((item: unknown, index: number) =>
           jsonSchemaToZodCodegen(item, ctx, `${where}.items[${index}]`));
-        return `z.tuple([${members.join(', ')}])`;
+        return `validateIdentity(z.tuple([${members.join(', ')}]))`;
       }
       const items = schema.items
         ? jsonSchemaToZodCodegen(schema.items, ctx, `${where}.items`)
         : 'z.any()';
-      return `z.array(${items})`;
+      return `validateIdentity(z.array(${items}))`;
     }
     case 'object':
       return generateObject(schema, ctx, where);
@@ -1615,35 +1752,68 @@ function generateForType(schema: any, type: string, ctx: ZodCodegenContext, wher
   }
 }
 
-/** The schema's own constraints, ignoring composition keywords. */
-function generateOwn(schema: any, ctx: ZodCodegenContext, where: string): string | undefined {
-  if (Array.isArray(schema.enum)) {
-    if (schema.enum.length === 0)
-      return 'z.never()';
-    // z.enum only accepts string members; anything else has to be a union of
-    // literals, which is what a numeric or mixed JSON Schema enum needs.
-    if (schema.enum.every((value: unknown) => typeof value === 'string'))
-      return `z.enum([${schema.enum.map((value: unknown) => JSON.stringify(value)).join(', ')}])`;
-    return unionOf(schema.enum.map((value: unknown) => `z.literal(${JSON.stringify(value)})`));
+/**
+ * Type-specific assertion keywords without a `type` sibling apply only when
+ * the instance has that JSON type. Emit conditional refinements so `$ref`,
+ * `const`, and `enum` can still combine with standalone bounds.
+ */
+function generateUntypedAssertions(
+  schema: any,
+  ctx: ZodCodegenContext,
+  where: string,
+): string | undefined {
+  const refinements: string[] = [];
+
+  if (schema.pattern !== undefined) {
+    if (typeof schema.pattern !== 'string')
+      throw new TypeError(`Schema keyword 'pattern' in ${where} must be a string.`);
+    refinements.push(`.refine((value: unknown) => typeof value !== 'string' || new RegExp(${JSON.stringify(schema.pattern)}).test(value), { message: 'String does not match pattern' })`);
+  }
+  const minLength = numericLiteral(schema.minLength, 'minLength', where);
+  if (minLength !== undefined)
+    refinements.push(`.refine((value: unknown) => typeof value !== 'string' || [...value].length >= ${minLength}, { message: 'String is too short' })`);
+  const maxLength = numericLiteral(schema.maxLength, 'maxLength', where);
+  if (maxLength !== undefined)
+    refinements.push(`.refine((value: unknown) => typeof value !== 'string' || [...value].length <= ${maxLength}, { message: 'String is too long' })`);
+
+  const minimum = numericLiteral(schema.minimum, 'minimum', where);
+  if (minimum !== undefined)
+    refinements.push(`.refine((value: unknown) => typeof value !== 'number' || value >= ${minimum}, { message: 'Number is too small' })`);
+  const maximum = numericLiteral(schema.maximum, 'maximum', where);
+  if (maximum !== undefined)
+    refinements.push(`.refine((value: unknown) => typeof value !== 'number' || value <= ${maximum}, { message: 'Number is too large' })`);
+
+  // Object assertion keywords are conditional in JSON Schema: they constrain
+  // objects and are ignored for strings, numbers, arrays, booleans, and null.
+  if (schema.properties !== undefined || schema.required !== undefined || schema.additionalProperties !== undefined) {
+    const object = generateObject(schema, ctx, where);
+    refinements.push(`.refine((value: unknown) => typeof value !== 'object' || value === null || Array.isArray(value) || (${object}).safeParse(value).success, { message: 'Object assertions failed' })`);
   }
 
+  // `items` similarly applies only to arrays. Parsing inside a refinement
+  // checks element assertions without transforming the original value.
+  if (schema.items !== undefined) {
+    const array = generateForType(schema, 'array', ctx, where);
+    refinements.push(`.refine((value: unknown) => !Array.isArray(value) || (${array}).safeParse(value).success, { message: 'Array items failed validation' })`);
+  }
+
+  // `unknown` composes without erasing a typed $ref/composition sibling's
+  // inferred output. `any & T` would collapse z.infer back to unsafe any.
+  return refinements.length > 0 ? `z.unknown()${refinements.join('')}` : undefined;
+}
+
+/** The schema's own type/shape constraints, ignoring independent keywords. */
+function generateOwn(schema: any, ctx: ZodCodegenContext, where: string): string | undefined {
   if (Array.isArray(schema.type)) {
-    const types = schema.type.filter((type: unknown) => type !== 'null');
-    const branches = types.map((type: string) => generateForType(schema, type, ctx, where));
-    if (branches.length === 0)
-      return 'z.null()';
-    const expression = unionOf(branches);
-    return schema.type.includes('null') ? `${expression}.nullable()` : expression;
+    throw new TypeError(
+      `Cannot generate Zod for ${where}: JSONSchema.type arrays are not supported by Fortress's public schema subset; use oneOf/anyOf or nullable instead.`,
+    );
   }
 
   if (typeof schema.type === 'string')
     return generateForType(schema, schema.type, ctx, where);
 
-  // No declared type, but object-shaped keywords are present.
-  if (schema.properties || schema.additionalProperties !== undefined)
-    return generateObject(schema, ctx, where);
-
-  return undefined;
+  return generateUntypedAssertions(schema, ctx, where);
 }
 
 function jsonSchemaToZodCodegen(schema: any, ctx: ZodCodegenContext, where: string): string {
@@ -1658,7 +1828,13 @@ function jsonSchemaToZodCodegen(schema: any, ctx: ZodCodegenContext, where: stri
   }
   ctx.path.add(schema);
   try {
-    return applyNullable(buildZodExpression(schema, ctx, where), schema);
+    // Schema objects are application input and may have polluted/custom
+    // prototypes. Only own keywords participate in JSON Schema evaluation.
+    const ownSchema = Object.defineProperties(
+      Object.create(null),
+      Object.getOwnPropertyDescriptors(schema),
+    );
+    return applyNullable(buildZodExpression(ownSchema, ctx, where), ownSchema);
   }
   finally {
     ctx.path.delete(schema);
@@ -1670,6 +1846,11 @@ function applyNullable(expression: string, schema: any): string {
 }
 
 function buildZodExpression(schema: any, ctx: ZodCodegenContext, where: string): string {
+  // Every assertion keyword is one member of the same intersection. JSON
+  // Schema 2020-12 applies siblings next to `$ref`, `const`, and `enum`; none
+  // of them may short-circuit the rest of the schema.
+  const members: string[] = [];
+
   // `'$ref' in schema`, not `schema.$ref`: an empty-string ref is falsy and
   // used to fall through to `z.any()`, silently accepting everything.
   if ('$ref' in schema) {
@@ -1689,16 +1870,32 @@ function buildZodExpression(schema: any, ctx: ZodCodegenContext, where: string):
         + `Export it from your module as 'componentSchemas'.`,
       );
     }
-    return identifier;
+    members.push(identifier);
   }
 
-  // `const` is checked by presence: `const: null` and `const: 0` are both falsy.
+  // Presence checks matter: `const: null` and `const: 0` are both falsy.
   if ('const' in schema)
-    return schema.const === null ? 'z.null()' : `z.literal(${JSON.stringify(schema.const)})`;
+    members.push(generateJsonValueSchema(schema.const, 'const', ctx, where));
+
+  if (schema.enum !== undefined) {
+    if (!Array.isArray(schema.enum))
+      throw new TypeError(`Schema keyword 'enum' in ${where} must be an array.`);
+    if (schema.enum.length === 0) {
+      members.push('z.never()');
+    }
+    else if (schema.enum.every((value: unknown) => typeof value === 'string')) {
+      members.push(`z.enum([${schema.enum.map((value: unknown) => JSON.stringify(value)).join(', ')}])`);
+    }
+    else {
+      // z.enum only accepts string members. Primitive values use literals;
+      // structured JSON values require deep equality rather than identity.
+      members.push(unionOf(schema.enum.map((value: unknown) =>
+        generateJsonValueSchema(value, 'enum', ctx, where))));
+    }
+  }
 
   // Composition keywords combine with each other and with the schema's own
   // constraints rather than short-circuiting past them.
-  const members: string[] = [];
   if (schema.allOf !== undefined)
     members.push(...generateParts(schema.allOf, 'allOf', ctx, where));
   if (schema.anyOf !== undefined)

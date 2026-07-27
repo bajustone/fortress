@@ -13,7 +13,7 @@ import type { EndpointDefinition } from './endpoint';
 import { describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../testing/index';
 import { createFortress } from './fortress';
-import { assembleEndpoints, normalizePlugins } from './route-assembly';
+import { assembleEndpoints, CORE_ENDPOINT_OWNER, normalizePlugins } from './route-assembly';
 import { endpoint, obj, str } from './schema-builder';
 
 const SECRET = 'route-assembly-test-secret-32-chars!';
@@ -126,6 +126,35 @@ describe('plugin factories cannot escape route validation', () => {
     expect(fortress.endpoints.some(ep => ep.path === '/ghost/gone')).toBe(false);
   });
 
+  it('does not assemble conflicting endpoints until factories have run', () => {
+    const firstRoutes: Record<string, EndpointDefinition> = {
+      first: makeEndpoint('/initial-conflict', 'first'),
+    };
+    let factoryRan = 0;
+    const first = {
+      name: 'first',
+      routes: firstRoutes,
+      methods: () => {
+        factoryRan += 1;
+        delete firstRoutes.first;
+        return { first: async () => ({ ok: 'yes' }) };
+      },
+    };
+    const second = {
+      name: 'second',
+      routes: { second: makeEndpoint('/initial-conflict', 'second') },
+      methods: () => {
+        factoryRan += 1;
+        return { second: async () => ({ ok: 'yes' }) };
+      },
+    };
+
+    const fortress = build([first, second]);
+    expect(factoryRan).toBe(2);
+    expect(fortress.endpoints.filter(ep => ep.path === '/initial-conflict')).toHaveLength(1);
+    expect(fortress.manifest.find(entry => entry.path === '/initial-conflict')?.plugin).toBe('second');
+  });
+
   it('still constructs a well-behaved plugin', () => {
     const wellBehaved = {
       name: 'fine',
@@ -171,5 +200,60 @@ describe('phase separation', () => {
     const { endpoints, endpointOwners } = assembleEndpoints(plugins);
     expect(endpoints.some(ep => ep.path === '/two/ping')).toBe(true);
     expect(endpointOwners.get('GET /two/ping')).toBe('two');
+  });
+});
+
+describe('endpoint owner sentinels', () => {
+  it('reserves \'__host\' as a plugin name even when no top-level routes exist', () => {
+    // The synthetic __host plugin backs top-level `routes`. Even with none
+    // declared, a user plugin may not take the name: a later `routes` addition
+    // would collide, and until then its routes would look host-owned.
+    expect(() => normalizePlugins({
+      plugins: [{
+        name: '__host',
+        routes: { ping: makeEndpoint('/host-clash/ping', 'ping') },
+        methods: () => ({ ping: async () => ({ ok: 'yes' }) }),
+      }] as never,
+    })).toThrow(/reserved for top-level/);
+  });
+
+  it('owns built-in routes with a sentinel a plugin named \'core\' cannot forge', () => {
+    // A plugin literally named 'core' owns its routes under the string 'core',
+    // which must stay distinct from the built-in owner marker so the core call
+    // tree never mistakes the plugin's routes for Fortress's own.
+    const plugins = normalizePlugins({
+      plugins: [{
+        name: 'core',
+        routes: { ping: makeEndpoint('/core-plugin/ping', 'ping') },
+        methods: () => ({ ping: async () => ({ ok: 'yes' }) }),
+      }] as never,
+    });
+    const { endpointOwners } = assembleEndpoints(plugins);
+    expect(endpointOwners.get('GET /core-plugin/ping')).toBe('core');
+    const builtinOwner = endpointOwners.get('GET /auth/me');
+    expect(builtinOwner).toBe(CORE_ENDPOINT_OWNER);
+    expect(builtinOwner).not.toBe('core');
+  });
+
+  it('does not let a plugin named \'core\' shield a route from duplicate detection', () => {
+    // With a string 'core' sentinel the first plugin's route would look
+    // built-in, so a second plugin could 'override' it — by declaring the
+    // handler in coreOverrides — and slip past the duplicate-plugin check.
+    const plugins = normalizePlugins({
+      plugins: [
+        {
+          name: 'core',
+          routes: { ping: makeEndpoint('/shared/ping', 'ping') },
+          methods: () => ({ ping: async () => ({ ok: 'yes' }) }),
+        },
+        {
+          name: 'impostor',
+          coreOverrides: ['ping'],
+          routes: { ping: makeEndpoint('/shared/ping', 'ping') },
+          methods: () => ({ ping: async () => ({ ok: 'yes' }) }),
+        },
+      ] as never,
+    });
+    expect(() => assembleEndpoints(plugins)).toThrow(/Duplicate endpoint GET \/shared\/ping/);
   });
 });

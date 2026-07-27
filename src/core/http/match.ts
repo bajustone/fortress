@@ -54,6 +54,29 @@ export function canonicalizeRouteShape(pathname: string): string {
     .join('/');
 }
 
+/** One parsed path segment: a literal, or a `:param` capture with its name. */
+export interface PathSegment {
+  /** The canonical segment text, e.g. `users` or `:userId`. */
+  raw: string;
+  /** The capture name (segment without its leading `:`) when this is a param. */
+  param?: string;
+}
+
+/**
+ * Split a route path into segments using the exact rules {@link matchRoute}
+ * matches with: a segment is a `:param` capture iff it starts with `:`, and its
+ * name is the whole remainder of the segment (so `:item-id` captures
+ * `item-id`, not `item`). Everything else is a literal. Sharing this with the
+ * OpenAPI spec builder keeps the documented path shape aligned with the one the
+ * router actually matches.
+ */
+export function parsePathSegments(path: string): PathSegment[] {
+  return canonicalizePath(path)
+    .split('/')
+    .filter(Boolean)
+    .map(raw => raw.startsWith(':') ? { raw, param: raw.slice(1) } : { raw });
+}
+
 /**
  * Pre-build a route table from endpoint definitions. Adapters call this once
  * at startup and hand the result to {@link matchRoute} on every request.

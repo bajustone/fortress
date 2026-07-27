@@ -10,6 +10,22 @@ import { iamEndpoints } from './iam/iam-endpoints';
 /** Reserved plugin name backing top-level `routes`. */
 export const HOST_ROUTES_PLUGIN_NAME = '__host';
 
+/**
+ * Owner marker for Fortress's built-in auth/IAM routes in
+ * {@link AssembledRoutes.endpointOwners}.
+ *
+ * A unique symbol, deliberately not the string `'core'`: plugin owners are
+ * stored as their (string) name, and a plugin may legitimately be named
+ * `core`. A string sentinel would make that plugin's routes indistinguishable
+ * from built-in ones — letting a second plugin silently "override" them
+ * (bypassing duplicate detection) and letting them leak into the core call
+ * tree as if Fortress owned them.
+ */
+export const CORE_ENDPOINT_OWNER: unique symbol = Symbol('fortress.core-endpoint-owner');
+
+/** An endpoint's owner: a built-in route, or the plugin name that declared it. */
+export type EndpointOwner = string | typeof CORE_ENDPOINT_OWNER;
+
 /** The declarative half of a Fortress config — everything route assembly reads. */
 export type RouteAssemblyConfig = Pick<FortressConfig, 'plugins' | 'routes'>;
 
@@ -19,11 +35,12 @@ export interface AssembledRoutes {
   /** Deduplicated endpoint set, in registration order. */
   endpoints: EndpointDefinition[];
   /**
-   * Owner per canonical `METHOD /path` key: `'core'`, a plugin name, or
-   * `'__host'`. The call tree uses this to drop core callables a plugin has
+   * Owner per canonical `METHOD /path` key: {@link CORE_ENDPOINT_OWNER} for a
+   * built-in route, or the owning plugin's name (top-level `routes` are owned
+   * by `'__host'`). The call tree uses this to drop core callables a plugin has
    * taken over.
    */
-  endpointOwners: Map<string, string>;
+  endpointOwners: Map<string, EndpointOwner>;
 }
 
 /**
@@ -64,13 +81,14 @@ export function assembleRoutes(config: RouteAssemblyConfig): AssembledRoutes {
  */
 export function normalizePlugins(config: RouteAssemblyConfig): readonly RuntimeFortressPlugin[] {
   const userPlugins = config.plugins ?? [];
-  if (config.routes) {
-    const collision = userPlugins.find(plugin => plugin.name === HOST_ROUTES_PLUGIN_NAME);
-    if (collision) {
-      throw Errors.badRequest(
-        `Plugin name '${HOST_ROUTES_PLUGIN_NAME}' is reserved for top-level \`routes\`; rename your plugin.`,
-      );
-    }
+  // `__host` names the synthetic plugin backing top-level `routes`. Reserve it
+  // unconditionally, even when no `routes` are declared: a user plugin holding
+  // the name would collide the moment `routes` were added, and until then its
+  // routes would masquerade as host-owned in the owner map.
+  if (userPlugins.some(plugin => plugin.name === HOST_ROUTES_PLUGIN_NAME)) {
+    throw Errors.badRequest(
+      `Plugin name '${HOST_ROUTES_PLUGIN_NAME}' is reserved for top-level \`routes\`; rename your plugin.`,
+    );
   }
   const hostRoutesPlugin: FortressPlugin | null = config.routes
     ? { name: HOST_ROUTES_PLUGIN_NAME, routes: config.routes }
@@ -147,7 +165,7 @@ function mergeEndpoints(
   plugins: readonly RuntimeFortressPlugin[],
 ): Pick<AssembledRoutes, 'endpointOwners' | 'endpoints'> {
   const endpointMap = new Map<string, EndpointDefinition>();
-  const endpointOwners = new Map<string, string>();
+  const endpointOwners = new Map<string, EndpointOwner>();
 
   const routeKeyOf = (endpoint: EndpointDefinition): string =>
     `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
@@ -159,7 +177,7 @@ function mergeEndpoints(
   for (const endpoint of coreEndpoints) {
     const routeKey = routeKeyOf(endpoint);
     endpointMap.set(routeKey, endpoint);
-    endpointOwners.set(routeKey, 'core');
+    endpointOwners.set(routeKey, CORE_ENDPOINT_OWNER);
   }
 
   for (const plugin of plugins) {
@@ -168,12 +186,12 @@ function mergeEndpoints(
       const endpoint = value as EndpointDefinition;
       const routeKey = routeKeyOf(endpoint);
       const owner = endpointOwners.get(routeKey);
-      if (owner && owner !== 'core') {
+      if (owner !== undefined && owner !== CORE_ENDPOINT_OWNER) {
         throw Errors.badRequest(
           `Duplicate endpoint ${routeKey} declared by plugins "${owner}" and "${plugin.name}"`,
         );
       }
-      if (owner === 'core') {
+      if (owner === CORE_ENDPOINT_OWNER) {
         if (plugin.name === HOST_ROUTES_PLUGIN_NAME) {
           throw Errors.badRequest(
             `Top-level route ${routeKey} collides with a Fortress core route; use an explicit plugin for intentional overrides.`,

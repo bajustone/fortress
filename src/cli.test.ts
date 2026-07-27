@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -170,7 +170,7 @@ function writeAppModule(dir: string, file: string, opts: AppModuleOptions = {}):
  * enough: the defects these tests cover (a `__proto__` key that never becomes
  * a property, a `oneOf` that accepts two matches) all compile perfectly.
  */
-async function importGenerated(file: string): Promise<Record<string, { safeParse: (value: unknown) => { success: boolean } }>> {
+async function importGenerated(file: string): Promise<Record<string, { safeParse: (value: unknown) => { success: boolean; data?: unknown } }>> {
   const zodUrl = import.meta.resolve('zod');
   const source = readFileSync(file, 'utf8').replace(`from 'zod'`, `from ${JSON.stringify(zodUrl)}`);
   const executable = `${file.replace(/\.ts$/, '')}.executable.ts`;
@@ -466,6 +466,87 @@ describe('fortress CLI smoke tests', () => {
     expect(shadow.stderr).toContain('redefines Fortress component schema(s): User');
   }, 30_000);
 
+  it('rejects non-record component schemas and non-object schema values', () => {
+    const cases = [
+      { name: 'array-record', schemas: `[{ type: 'string' }]`, message: 'must be a plain object' },
+      { name: 'array-value', schemas: `{ Thing: [] }`, message: 'must be a schema object' },
+      { name: 'number-value', schemas: `{ Thing: 42 }`, message: 'must be a schema object' },
+      { name: 'null-value', schemas: `{ Thing: null }`, message: 'must be a schema object' },
+    ];
+    for (const testCase of cases) {
+      writeFileSync(join(cwd, `invalid-components-${testCase.name}.ts`), `
+        export const config = { database: undefined, jwt: { key: 'components-secret-at-least-32-chars-ok' } };
+        export const componentSchemas = ${testCase.schemas};
+      `);
+      for (const command of [
+        ['openapi'],
+        ['schemas', '--format', 'json-schema'],
+        ['schemas', '--format', 'zod'],
+      ]) {
+        const result = runCli(cwd, [...command, '--module', `./invalid-components-${testCase.name}.ts`]);
+        const diagnostic = `${result.stdout}\n${result.stderr}`;
+        expect(result.status, `${testCase.name} ${command.join(' ')}: ${diagnostic}`).toBe(1);
+        expect(diagnostic).toContain(testCase.message);
+        expect(diagnostic).not.toMatch(RUNTIME_ERROR_RE);
+      }
+    }
+  }, 30_000);
+
+  it('treats property and annotation data as data while cleaning schema nodes', () => {
+    writeFileSync(join(cwd, 'schema-data-locations.ts'), `
+      export const config = {
+        database: undefined,
+        jwt: { key: 'schema-data-secret-at-least-32-chars' },
+      };
+      export const componentSchemas = {
+        DataLocations: {
+          type: 'object',
+          properties: {
+            '$ref': { type: 'string' },
+            '~field': {
+              type: 'string',
+              default: { '$ref': '#/components/schemas/Missing', '~field': 'nested-default' },
+            },
+          },
+          default: { '$ref': '#/components/schemas/Missing', '~field': 'root-default' },
+          '~extension': { '~field': 'schema-extension-data' },
+          '~standard': { validate() { throw new Error('runtime-only'); } },
+        },
+      };
+    `);
+
+    const openapi = runCli(cwd, ['openapi', '--module', './schema-data-locations.ts', '--out', 'schema-data-openapi.json']);
+    expect(openapi.status, String(openapi.stderr)).toBe(0);
+    const spec = JSON.parse(readFileSync(join(cwd, 'schema-data-openapi.json'), 'utf8')) as {
+      components: { schemas: Record<string, any> };
+    };
+    const openapiSchema = spec.components.schemas.DataLocations;
+    expect(openapiSchema.properties).toHaveProperty('$ref');
+    expect(openapiSchema.properties).toHaveProperty('~field');
+    expect(openapiSchema.default).toEqual({ '$ref': '#/components/schemas/Missing', '~field': 'root-default' });
+    expect(openapiSchema.properties['~field'].default).toEqual({
+      '$ref': '#/components/schemas/Missing',
+      '~field': 'nested-default',
+    });
+    expect(openapiSchema['~extension']).toEqual({ '~field': 'schema-extension-data' });
+    expect(openapiSchema).not.toHaveProperty('~standard');
+
+    const jsonSchema = runCli(cwd, ['schemas', '--format', 'json-schema', '--module', './schema-data-locations.ts', '--out', 'schema-data.json']);
+    expect(jsonSchema.status, String(jsonSchema.stderr)).toBe(0);
+    const emitted = JSON.parse(readFileSync(join(cwd, 'schema-data.json'), 'utf8')) as Record<string, any>;
+    expect(emitted.DataLocations.properties).toHaveProperty('$ref');
+    expect(emitted.DataLocations.properties).toHaveProperty('~field');
+    expect(emitted.DataLocations.default['~field']).toBe('root-default');
+    expect(emitted.DataLocations.properties['~field'].default['~field']).toBe('nested-default');
+    expect(emitted.DataLocations['~extension']).toEqual({ '~field': 'schema-extension-data' });
+    expect(emitted.DataLocations).not.toHaveProperty('~standard');
+
+    // Dependency ordering/codegen use the same schema-aware walker and must
+    // not mistake the legal `$ref` property name or default data for a ref.
+    const zod = runCli(cwd, ['schemas', '--format', 'zod', '--module', './schema-data-locations.ts', '--out', 'schema-data-zod.ts']);
+    expect(zod.status, String(zod.stderr)).toBe(0);
+  }, 30_000);
+
   it('generates compilable Zod for hostile component and property names', () => {
     writeFileSync(join(cwd, 'hostile-module.ts'), `
       export const config = {
@@ -550,39 +631,149 @@ describe('fortress CLI smoke tests', () => {
     // the key would vanish before the CLI ever saw it.
     writeFileSync(join(cwd, 'semantics-module.ts'), `
       const parse = (json) => JSON.parse(json);
+      Object.defineProperties(Object.prototype, {
+        nullable: { value: true, configurable: true },
+        additionalProperties: { value: false, configurable: true },
+      });
       export const config = {
         database: undefined,
         jwt: { key: 'semantics-secret-at-least-32-chars-ok' },
       };
       export const componentSchemas = {
         Proto: parse('{"type":"object","required":["__proto__"],"properties":{"__proto__":{"type":"string"}}}'),
+        OptionalProto: { type: 'object', properties: parse('{"__proto__":{"type":"string"}}') },
+        NestedOptionalProto: {
+          type: 'object',
+          required: ['child'],
+          properties: { child: { type: 'object', properties: parse('{"__proto__":{"type":"string"}}') } },
+        },
+        ProtoAllOf: { allOf: [
+          { type: 'object', properties: parse('{"__proto__":{"type":"string"}}') },
+          { type: 'object', properties: {} },
+        ] },
+        ProtoAnyOf: { anyOf: [
+          { type: 'object', properties: parse('{"__proto__":{"type":"string"}}') },
+          { type: 'string' },
+        ] },
         Overlapping: { oneOf: [{ type: 'number' }, { type: 'integer' }] },
+        OverlappingObjects: { oneOf: [
+          { type: 'object', required: ['a'], properties: { a: { type: 'string' } } },
+          { type: 'object', required: ['b'], properties: { b: { type: 'number' } } },
+        ] },
         Both: { allOf: [
           { type: 'object', required: ['a'], properties: { a: { type: 'string' } } },
           { type: 'object', required: ['b'], properties: { b: { type: 'number' } } },
         ] },
         EmptyProps: { type: 'object', properties: {} },
+        EmptyPropsRef: { $ref: '#/components/schemas/EmptyProps' },
+        AdditionalSchemaIdentity: { type: 'object', additionalProperties: { type: 'string' } },
+        KnownWithNumericExtras: {
+          type: 'object',
+          required: ['known'],
+          properties: { known: { type: 'string' } },
+          additionalProperties: { type: 'number' },
+        },
+        InheritedNullable: { type: 'string' },
+        InheritedStrictness: { type: 'object', properties: {} },
         Constant: { const: 'only-this' },
+        ConstantObject: { const: { a: 1, nested: { ok: true } } },
+        ConstantArray: { const: [1] },
+        ConstantProto: parse('{"const":{"__proto__":"x"}}'),
+        StructuredEnum: { enum: [{ a: 1 }, [1], 'primitive'] },
+        ArrayIdentity: { type: 'array', items: { type: 'number' } },
+        TupleIdentity: { type: 'array', items: [{ type: 'string' }, { type: 'number' }] },
+        ArrayAllOfIdentity: { allOf: [
+          { type: 'array', items: { type: 'number' } },
+          { type: 'array', items: { type: 'integer' } },
+        ] },
+        ArrayAnyOfIdentity: { anyOf: [
+          { type: 'array', items: { type: 'number' } },
+          { type: 'string' },
+        ] },
+        IntegerArray: { type: 'array', items: { type: 'integer' } },
+        IntegerArrayRefSibling: { $ref: '#/components/schemas/IntegerArray', items: { type: 'integer' } },
+        KnownObject: { type: 'object', required: ['known'], properties: { known: { type: 'string' } } },
+        KnownObjectRefSibling: { $ref: '#/components/schemas/KnownObject', required: ['known'] },
+        BaseString: { type: 'string' },
+        RefSibling: { $ref: '#/components/schemas/BaseString', minLength: 3 },
+        TypelessRequired: { required: ['x'] },
+        RefWithRequired: { $ref: '#/components/schemas/BaseString', required: ['x'] },
+        TypelessItems: { items: { type: 'string' } },
+        UnicodeBounds: { minLength: 2, maxLength: 2 },
+        ExplicitUnicodeBounds: { type: 'string', minLength: 2, maxLength: 2 },
+        ConstSibling: { const: 'x', minLength: 2 },
+        EnumTypeSibling: { type: 'string', enum: ['ok', 1] },
+        EnumLengthSibling: { enum: ['x'], minLength: 2 },
+        RequiredUndeclared: { type: 'object', required: ['x'], properties: {} },
+        Passthrough: { type: 'object', required: ['known'], properties: { known: { type: 'string' } } },
+        EmptyPassthrough: { type: 'object', properties: {} },
         Bounded: { type: 'object', required: ['s', 'n'], properties: {
           s: { type: 'string', pattern: '^ab+c$', maxLength: 4 },
           n: { type: 'integer', minimum: 0, maximum: 0 },
         } },
         Strict: { type: 'object', required: ['a'], properties: { a: { type: 'string' } }, additionalProperties: false },
-        Nullable: { type: ['string', 'null'] },
+        Nullable: { type: 'string', nullable: true },
       };
+      export async function dispose() {
+        delete Object.prototype.nullable;
+        delete Object.prototype.additionalProperties;
+      }
     `);
 
     const result = runCli(cwd, ['schemas', '--format', 'zod', '--module', './semantics-module.ts', '--out', 'semantics.ts']);
     expect(result.status, String(result.stderr)).toBe(0);
     const schemas = await importGenerated(join(cwd, 'semantics.ts'));
 
-    // A required `__proto__` must actually be required.
+    // A required `__proto__` must actually be required and must survive a
+    // successful parse as an own property. Zod's normal object reconstruction
+    // otherwise triggers the legacy prototype setter and drops the key.
     expect(schemas.ProtoSchema!.safeParse({}).success, 'required __proto__ was not enforced').toBe(false);
-    expect(schemas.ProtoSchema!.safeParse(JSON.parse('{"__proto__":"x"}')).success).toBe(true);
+    const protoInput = JSON.parse('{"__proto__":"x"}');
+    const protoResult = schemas.ProtoSchema!.safeParse(protoInput);
+    expect(protoResult.success).toBe(true);
+    expect(protoResult.data).toBe(protoInput);
+    expect(Object.hasOwn(protoResult.data as object, '__proto__')).toBe(true);
+    expect(Reflect.get(protoResult.data as object, '__proto__')).toBe('x');
+
+    // Presence is based on own properties, never Object.prototype or a custom
+    // prototype. Optional/nested/composed schemas preserve identity too.
+    const inheritedProto = Object.create(JSON.parse('{"__proto__":"inherited"}')) as object;
+    expect(Object.hasOwn(inheritedProto, '__proto__')).toBe(false);
+    expect(schemas.ProtoSchema!.safeParse(inheritedProto).success, 'inherited __proto__ satisfied required').toBe(false);
+
+    const optionalInput = {};
+    const optionalResult = schemas.OptionalProtoSchema!.safeParse(optionalInput);
+    expect(optionalResult).toEqual({ success: true, data: optionalInput });
+    expect(optionalResult.data).toBe(optionalInput);
+    const optionalOwnInput = JSON.parse('{"__proto__":"x"}');
+    expect(schemas.OptionalProtoSchema!.safeParse(optionalOwnInput)).toEqual({ success: true, data: optionalOwnInput });
+    expect(schemas.OptionalProtoSchema!.safeParse(JSON.parse('{"__proto__":1}')).success).toBe(false);
+
+    const nestedInput = { child: {} };
+    const nestedResult = schemas.NestedOptionalProtoSchema!.safeParse(nestedInput);
+    expect(nestedResult).toEqual({ success: true, data: nestedInput });
+    expect(nestedResult.data).toBe(nestedInput);
+    const composedInput = {};
+    const allOfResult = schemas.ProtoAllOfSchema!.safeParse(composedInput);
+    const anyOfResult = schemas.ProtoAnyOfSchema!.safeParse(composedInput);
+    expect(allOfResult).toEqual({ success: true, data: composedInput });
+    expect(anyOfResult).toEqual({ success: true, data: composedInput });
+    expect(allOfResult.data).toBe(composedInput);
+    expect(anyOfResult.data).toBe(composedInput);
+    const composedOwnInput = JSON.parse('{"__proto__":"x"}');
+    for (const name of ['ProtoAllOfSchema', 'ProtoAnyOfSchema'] as const) {
+      const composedOwnResult = schemas[name]!.safeParse(composedOwnInput);
+      expect(composedOwnResult.success).toBe(true);
+      expect(composedOwnResult.data).toBe(composedOwnInput);
+      expect(Object.hasOwn(composedOwnResult.data as object, '__proto__')).toBe(true);
+    }
 
     // JSON Schema `oneOf` is exactly-one; 1 matches both number and integer.
     expect(schemas.OverlappingSchema!.safeParse(1).success, 'value matching two variants was accepted').toBe(false);
     expect(schemas.OverlappingSchema!.safeParse(1.5).success).toBe(true);
+    // Exactness must be checked before Zod's first object branch strips `b`.
+    expect(schemas.OverlappingObjectsSchema!.safeParse({ a: 'x', b: 1 }).success, 'raw input matching both object variants was accepted').toBe(false);
+    expect(schemas.OverlappingObjectsSchema!.safeParse({ a: 'x' }).success).toBe(true);
 
     // `allOf` must require every member, not accept anything.
     expect(schemas.BothSchema!.safeParse({ a: 'x', b: 1 }).success).toBe(true);
@@ -590,8 +781,116 @@ describe('fortress CLI smoke tests', () => {
     expect(schemas.BothSchema!.safeParse('anything').success).toBe(false);
 
     expect(schemas.EmptyPropsSchema!.safeParse({}).success).toBe(true);
+    for (const name of ['EmptyPropsSchema', 'EmptyPropsRefSchema', 'AdditionalSchemaIdentitySchema'] as const) {
+      const identityInput = JSON.parse('{"__proto__":"x"}');
+      const identityResult = schemas[name]!.safeParse(identityInput);
+      expect(identityResult.success, `${name} rejected an allowed own __proto__`).toBe(true);
+      expect(identityResult.data).toBe(identityInput);
+      expect(Object.hasOwn(identityResult.data as object, '__proto__')).toBe(true);
+    }
+    expect(schemas.AdditionalSchemaIdentitySchema!.safeParse({ bad: 1 }).success).toBe(false);
+    expect(schemas.AdditionalSchemaIdentitySchema!.safeParse(JSON.parse('{"__proto__":1}')).success, 'schema-valued additionalProperties skipped __proto__').toBe(false);
+    const hiddenValidAdditional = {};
+    Object.defineProperty(hiddenValidAdditional, '__proto__', { value: 'x', enumerable: false });
+    const hiddenValidResult = schemas.AdditionalSchemaIdentitySchema!.safeParse(hiddenValidAdditional);
+    expect(hiddenValidResult.success).toBe(true);
+    expect(hiddenValidResult.data).toBe(hiddenValidAdditional);
+    const hiddenInvalidAdditional = {};
+    Object.defineProperty(hiddenInvalidAdditional, '__proto__', { value: 1, enumerable: false });
+    expect(schemas.AdditionalSchemaIdentitySchema!.safeParse(hiddenInvalidAdditional).success, 'schema-valued additionalProperties skipped non-enumerable __proto__').toBe(false);
+    const hiddenInvalidOrdinary = {};
+    Object.defineProperty(hiddenInvalidOrdinary, 'extra', { value: 1, enumerable: false });
+    expect(schemas.AdditionalSchemaIdentitySchema!.safeParse(hiddenInvalidOrdinary).success, 'schema-valued additionalProperties skipped a non-enumerable key').toBe(false);
+
+    const numericExtrasInput = { known: 'x', extra: 1 };
+    const numericExtrasResult = schemas.KnownWithNumericExtrasSchema!.safeParse(numericExtrasInput);
+    expect(numericExtrasResult.success).toBe(true);
+    expect(numericExtrasResult.data).toBe(numericExtrasInput);
+    expect(schemas.KnownWithNumericExtrasSchema!.safeParse({ known: 'x', extra: 'wrong' }).success).toBe(false);
+
+    // Only own schema keywords apply; custom/polluted prototypes cannot add
+    // nullable, additionalProperties, or other assertions.
+    expect(schemas.InheritedNullableSchema!.safeParse('x').success).toBe(true);
+    expect(schemas.InheritedNullableSchema!.safeParse(null).success, 'inherited nullable weakened the schema').toBe(false);
+    expect(schemas.InheritedStrictnessSchema!.safeParse({ extra: 1 }).success, 'inherited additionalProperties was applied').toBe(true);
+
     expect(schemas.ConstantSchema!.safeParse('only-this').success).toBe(true);
     expect(schemas.ConstantSchema!.safeParse('other').success, 'const was dropped').toBe(false);
+
+    const constantObjectInput = { a: 1, nested: { ok: true } };
+    const constantObjectResult = schemas.ConstantObjectSchema!.safeParse(constantObjectInput);
+    expect(constantObjectResult.success).toBe(true);
+    expect(constantObjectResult.data).toBe(constantObjectInput);
+    expect(schemas.ConstantObjectSchema!.safeParse({ a: 1, nested: { ok: false } }).success).toBe(false);
+    const constantArrayInput = [1];
+    const constantArrayResult = schemas.ConstantArraySchema!.safeParse(constantArrayInput);
+    expect(constantArrayResult.success).toBe(true);
+    expect(constantArrayResult.data).toBe(constantArrayInput);
+    expect(schemas.ConstantArraySchema!.safeParse(1).success, 'array const incorrectly matched a scalar').toBe(false);
+    expect(schemas.ConstantArraySchema!.safeParse([2]).success).toBe(false);
+    const constantProtoInput = JSON.parse('{"__proto__":"x"}');
+    const constantProtoResult = schemas.ConstantProtoSchema!.safeParse(constantProtoInput);
+    expect(constantProtoResult.success).toBe(true);
+    expect(constantProtoResult.data).toBe(constantProtoInput);
+    expect(Object.hasOwn(constantProtoResult.data as object, '__proto__')).toBe(true);
+    expect(schemas.StructuredEnumSchema!.safeParse({ a: 1 }).success).toBe(true);
+    expect(schemas.StructuredEnumSchema!.safeParse([1]).success).toBe(true);
+    expect(schemas.StructuredEnumSchema!.safeParse({ a: 2 }).success).toBe(false);
+    expect(schemas.StructuredEnumSchema!.safeParse(1).success).toBe(false);
+
+    // Array and tuple validation, including composition, must not clone output.
+    for (const [name, input] of [
+      ['ArrayIdentitySchema', [1, 2]],
+      ['TupleIdentitySchema', ['x', 1]],
+      ['ArrayAllOfIdentitySchema', [1, 2]],
+      ['ArrayAnyOfIdentitySchema', [1, 2]],
+      ['IntegerArrayRefSiblingSchema', [1, 2]],
+    ] as const) {
+      const arrayResult = schemas[name]!.safeParse(input);
+      expect(arrayResult.success, `${name} rejected a valid array`).toBe(true);
+      expect(arrayResult.data).toBe(input);
+    }
+
+    // `$ref`, `const`, and `enum` assertions combine with every sibling.
+    expect(schemas.RefSiblingSchema!.safeParse('abc').success).toBe(true);
+    expect(schemas.RefSiblingSchema!.safeParse('x').success, '$ref discarded minLength').toBe(false);
+
+    // Typeless assertion keywords constrain only instances of their type.
+    expect(schemas.TypelessRequiredSchema!.safeParse('not-an-object').success).toBe(true);
+    expect(schemas.TypelessRequiredSchema!.safeParse({}).success).toBe(false);
+    expect(schemas.TypelessRequiredSchema!.safeParse({ x: 1 }).success).toBe(true);
+    expect(schemas.RefWithRequiredSchema!.safeParse('text').success, 'typeless required incorrectly rejected a referenced string').toBe(true);
+    expect(schemas.TypelessItemsSchema!.safeParse('not-an-array').success).toBe(true);
+    expect(schemas.TypelessItemsSchema!.safeParse(['ok']).success).toBe(true);
+    expect(schemas.TypelessItemsSchema!.safeParse([1]).success, 'typeless items ignored an invalid array element').toBe(false);
+
+    // JSON Schema string lengths count Unicode code points, not UTF-16 units.
+    for (const name of ['UnicodeBoundsSchema', 'ExplicitUnicodeBoundsSchema'] as const) {
+      expect(schemas[name]!.safeParse('😀').success, `${name} counted one code point as two`).toBe(false);
+      expect(schemas[name]!.safeParse('😀a').success).toBe(true);
+      expect(schemas[name]!.safeParse('😀ab').success).toBe(false);
+    }
+    expect(schemas.UnicodeBoundsSchema!.safeParse(1).success).toBe(true);
+
+    expect(schemas.ConstSiblingSchema!.safeParse('x').success, 'const discarded minLength').toBe(false);
+    expect(schemas.EnumTypeSiblingSchema!.safeParse('ok').success).toBe(true);
+    expect(schemas.EnumTypeSiblingSchema!.safeParse(1).success, 'enum discarded type').toBe(false);
+    expect(schemas.EnumLengthSiblingSchema!.safeParse('x').success, 'enum discarded minLength').toBe(false);
+    expect(schemas.RequiredUndeclaredSchema!.safeParse({}).success, 'required key absent from properties was ignored').toBe(false);
+    expect(schemas.RequiredUndeclaredSchema!.safeParse({ x: 1 }).success).toBe(true);
+
+    // Allowed additional properties survive parsing, not merely validation.
+    const passthroughInput = { known: 'x', extra: 1 };
+    const passthroughResult = schemas.PassthroughSchema!.safeParse(passthroughInput);
+    expect(passthroughResult).toEqual({ success: true, data: passthroughInput });
+    expect(passthroughResult.data).toBe(passthroughInput);
+    const emptyPassthroughInput = { extra: 1 };
+    const emptyPassthroughResult = schemas.EmptyPassthroughSchema!.safeParse(emptyPassthroughInput);
+    expect(emptyPassthroughResult).toEqual({
+      success: true,
+      data: emptyPassthroughInput,
+    });
+    expect(emptyPassthroughResult.data).toBe(emptyPassthroughInput);
 
     // Bounds of 0 are falsy and used to be skipped entirely.
     expect(schemas.BoundedSchema!.safeParse({ s: 'abc', n: 0 }).success).toBe(true);
@@ -601,10 +900,156 @@ describe('fortress CLI smoke tests', () => {
 
     expect(schemas.StrictSchema!.safeParse({ a: 'x' }).success).toBe(true);
     expect(schemas.StrictSchema!.safeParse({ a: 'x', extra: 1 }).success, 'additionalProperties:false was dropped').toBe(false);
+    expect(schemas.StrictSchema!.safeParse(JSON.parse('{"a":"x","__proto__":"bypass"}')).success, 'additionalProperties:false skipped __proto__').toBe(false);
+    const hiddenStrictProto = { a: 'x' };
+    Object.defineProperty(hiddenStrictProto, '__proto__', { value: 'bypass', enumerable: false });
+    expect(schemas.StrictSchema!.safeParse(hiddenStrictProto).success, 'additionalProperties:false skipped non-enumerable __proto__').toBe(false);
+    const hiddenStrictOrdinary = { a: 'x' };
+    Object.defineProperty(hiddenStrictOrdinary, 'extra', { value: 'bypass', enumerable: false });
+    expect(schemas.StrictSchema!.safeParse(hiddenStrictOrdinary).success, 'additionalProperties:false skipped a non-enumerable key').toBe(false);
 
     expect(schemas.NullableSchema!.safeParse(null).success).toBe(true);
     expect(schemas.NullableSchema!.safeParse('x').success).toBe(true);
     expect(schemas.NullableSchema!.safeParse(1).success).toBe(false);
+
+    // Identity-preserving wrappers must retain the wrapped schema's output
+    // type; unused @ts-expect-error directives catch a regression to `any`.
+    const projectNodeModules = fileURLToPath(new URL('../node_modules', import.meta.url));
+    if (!existsSync(join(cwd, 'node_modules')))
+      symlinkSync(projectNodeModules, join(cwd, 'node_modules'), 'dir');
+    writeFileSync(join(cwd, 'semantics-inference.ts'), `
+      import { z } from 'zod';
+      import { ArrayIdentitySchema, ConstantObjectSchema, IntegerArrayRefSiblingSchema, KnownObjectRefSiblingSchema, KnownWithNumericExtrasSchema, PassthroughSchema } from './semantics';
+
+      type ObjectOutput = z.infer<typeof PassthroughSchema>;
+      const goodObject: ObjectOutput = { known: 'x', extra: 1 };
+      // @ts-expect-error known remains a required string, not any
+      const badObject: ObjectOutput = { known: 1 };
+
+      type ArrayOutput = z.infer<typeof ArrayIdentitySchema>;
+      const goodArray: ArrayOutput = [1, 2];
+      // @ts-expect-error array items remain numbers, not any
+      const badArray: ArrayOutput = ['x'];
+
+      type RefSiblingOutput = z.infer<typeof IntegerArrayRefSiblingSchema>;
+      type IsAny<T> = 0 extends (1 & T) ? true : false;
+      const refSiblingIsTyped: IsAny<RefSiblingOutput> = false;
+      const goodRefSibling: RefSiblingOutput = [1, 2];
+      // @ts-expect-error an untyped items sibling must not erase the referenced item type
+      const badRefSibling: RefSiblingOutput = ['x'];
+
+      type NumericExtrasOutput = z.infer<typeof KnownWithNumericExtrasSchema>;
+      const goodNumericExtras: NumericExtrasOutput = { known: 'x', extra: 1 };
+      declare const parsedNumericExtras: NumericExtrasOutput;
+      const safeExtra: unknown = parsedNumericExtras.extra;
+      // @ts-expect-error manually validated extras remain unknown, never falsely number-typed
+      const unsafeExtra: number = parsedNumericExtras.extra;
+      // @ts-expect-error declared fields retain their own types
+      const badKnownWithExtras: NumericExtrasOutput = { known: 1, extra: 2 };
+
+      type ObjectRefSiblingOutput = z.infer<typeof KnownObjectRefSiblingSchema>;
+      const objectRefSiblingIsTyped: IsAny<ObjectRefSiblingOutput> = false;
+      const goodObjectRefSibling: ObjectRefSiblingOutput = { known: 'x' };
+      // @ts-expect-error a required sibling must not erase the referenced property type
+      const badObjectRefSibling: ObjectRefSiblingOutput = { known: 1 };
+
+      type ConstOutput = z.infer<typeof ConstantObjectSchema>;
+      const goodConst: ConstOutput = { a: 1, nested: { ok: true } };
+      // @ts-expect-error structured const retains its literal output type
+      const badConst: ConstOutput = { a: 2, nested: { ok: true } };
+      void [goodObject, badObject, goodArray, badArray, refSiblingIsTyped, goodRefSibling, badRefSibling, goodNumericExtras, safeExtra, unsafeExtra, badKnownWithExtras, objectRefSiblingIsTyped, goodObjectRefSibling, badObjectRefSibling, goodConst, badConst];
+    `);
+    const inferred = spawnSync(join(projectNodeModules, '.bin', 'tsc'), [
+      '--noEmit',
+      '--strict',
+      '--skipLibCheck',
+      '--moduleResolution',
+      'Bundler',
+      '--module',
+      'ESNext',
+      '--target',
+      'ES2022',
+      'semantics-inference.ts',
+    ], { cwd, encoding: 'utf8', timeout: 20_000 });
+    expect(inferred.status, `${inferred.stdout}\n${inferred.stderr}`).toBe(0);
+  }, 30_000);
+
+  it('conforms to the public JSONSchema assertion subset, including typeless and sibling behavior', async () => {
+    writeFileSync(join(cwd, 'conformance-module.ts'), `
+      export const config = {
+        database: undefined,
+        jwt: { key: 'conformance-secret-at-least-32-chars' },
+      };
+      export const componentSchemas = {
+        Anything: {},
+        BaseString: { type: 'string' },
+        TypeString: { type: 'string' },
+        PropertiesOnly: { properties: { x: { type: 'string' } } },
+        RequiredOnly: { required: ['x'] },
+        AdditionalFalseOnly: { additionalProperties: false },
+        AdditionalSchemaOnly: { additionalProperties: { type: 'string' } },
+        ItemsOnly: { items: { type: 'string' } },
+        EnumOnly: { enum: ['x', 1] },
+        ConstOnly: { const: 'x' },
+        MinimumOnly: { minimum: 1 },
+        MaximumOnly: { maximum: 1 },
+        PatternOnly: { pattern: '^x+$' },
+        UnicodeLengthOnly: { minLength: 2, maxLength: 2 },
+        AnyOfOnly: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+        OneOfOnly: { oneOf: [{ type: 'number' }, { type: 'integer' }] },
+        AllOfOnly: { allOf: [{ minimum: 0 }, { maximum: 1 }] },
+        NullableString: { type: 'string', nullable: true },
+        RefRequired: { $ref: '#/components/schemas/BaseString', required: ['x'] },
+        RefItems: { $ref: '#/components/schemas/Anything', items: { type: 'string' } },
+        CompositionItems: { anyOf: [{}], items: { type: 'string' } },
+        ObjectAndArrayKeywords: { required: ['x'], items: { type: 'string' } },
+        EnumTypeSibling: { enum: ['x', 1], type: 'string' },
+        ConstBoundSibling: { const: 'x', minLength: 2 },
+        RefBoundSibling: { $ref: '#/components/schemas/BaseString', minLength: 2 },
+      };
+    `);
+
+    const result = runCli(cwd, ['schemas', '--format', 'zod', '--module', './conformance-module.ts', '--out', 'conformance.ts']);
+    expect(result.status, String(result.stderr)).toBe(0);
+    const schemas = await importGenerated(join(cwd, 'conformance.ts'));
+
+    const cases: Array<{
+      schema: string;
+      valid: unknown[];
+      invalid: unknown[];
+    }> = [
+      { schema: 'TypeStringSchema', valid: ['x'], invalid: [1, null, {}] },
+      { schema: 'PropertiesOnlySchema', valid: ['primitive', 1, null, [], {}, { x: 'ok' }], invalid: [{ x: 1 }] },
+      { schema: 'RequiredOnlySchema', valid: ['primitive', 1, null, [], { x: 1 }], invalid: [{}] },
+      { schema: 'AdditionalFalseOnlySchema', valid: ['primitive', 1, null, [], {}], invalid: [{ x: 1 }] },
+      { schema: 'AdditionalSchemaOnlySchema', valid: ['primitive', 1, null, [], {}, { x: 'ok' }], invalid: [{ x: 1 }] },
+      { schema: 'ItemsOnlySchema', valid: ['primitive', 1, null, {}, [], ['ok']], invalid: [[1]] },
+      { schema: 'EnumOnlySchema', valid: ['x', 1], invalid: ['y', 2, null] },
+      { schema: 'ConstOnlySchema', valid: ['x'], invalid: ['y', 1] },
+      { schema: 'MinimumOnlySchema', valid: ['ignored', 1, 2], invalid: [0] },
+      { schema: 'MaximumOnlySchema', valid: ['ignored', 0, 1], invalid: [2] },
+      { schema: 'PatternOnlySchema', valid: [1, 'x', 'xxx'], invalid: ['xy'] },
+      { schema: 'UnicodeLengthOnlySchema', valid: [1, '😀a'], invalid: ['😀', '😀ab'] },
+      { schema: 'AnyOfOnlySchema', valid: ['x', 1], invalid: [true, null] },
+      { schema: 'OneOfOnlySchema', valid: [1.5], invalid: [1, 'x'] },
+      { schema: 'AllOfOnlySchema', valid: ['ignored', 0, 1], invalid: [-1, 2] },
+      { schema: 'NullableStringSchema', valid: ['x', null], invalid: [1] },
+      { schema: 'RefRequiredSchema', valid: ['x'], invalid: [1, {}] },
+      { schema: 'RefItemsSchema', valid: ['non-array', ['x']], invalid: [[1]] },
+      { schema: 'CompositionItemsSchema', valid: ['non-array', ['x']], invalid: [[1]] },
+      { schema: 'ObjectAndArrayKeywordsSchema', valid: ['primitive', { x: 1 }, ['x']], invalid: [{}, [1]] },
+      { schema: 'EnumTypeSiblingSchema', valid: ['x'], invalid: [1] },
+      { schema: 'ConstBoundSiblingSchema', valid: [], invalid: ['x', 'xx'] },
+      { schema: 'RefBoundSiblingSchema', valid: ['xx'], invalid: ['x', 1] },
+    ];
+
+    for (const testCase of cases) {
+      const schema = schemas[testCase.schema]!;
+      for (const value of testCase.valid)
+        expect(schema.safeParse(value).success, `${testCase.schema} rejected ${JSON.stringify(value)}`).toBe(true);
+      for (const value of testCase.invalid)
+        expect(schema.safeParse(value).success, `${testCase.schema} accepted ${JSON.stringify(value)}`).toBe(false);
+    }
   }, 30_000);
 
   it('generates Zod for the core surface that parses real payloads', async () => {
@@ -634,6 +1079,7 @@ describe('fortress CLI smoke tests', () => {
   it('refuses to generate a weaker validator than the schema declares', () => {
     const cases = [
       { name: 'unsupported-type', schema: `{ type: 'geo-point' }`, message: `unsupported JSON Schema type 'geo-point'` },
+      { name: 'type-array', schema: `{ type: ['string', 'null'] }`, message: `type arrays are not supported` },
       { name: 'empty-oneof', schema: `{ oneOf: [] }`, message: `'oneOf' is empty` },
       { name: 'empty-allof', schema: `{ allOf: [] }`, message: `'allOf' is empty` },
       { name: 'bad-minlength', schema: `{ type: 'string', minLength: '3' }`, message: `must be a finite number` },
@@ -690,6 +1136,62 @@ describe('fortress CLI smoke tests', () => {
     const encoded = runCli(cwd, ['openapi', '--module', './encoded-ref.ts', '--out', 'encoded.json']);
     expect(encoded.status, String(encoded.stderr)).toBe(0);
 
+    // A decoded '/' inside one JSON Pointer token must not become a new path
+    // segment when the resolver traverses the document.
+    writeFileSync(join(cwd, 'escaped-token-ref.ts'), `
+      export const config = {
+        database: undefined,
+        jwt: { key: 'escaped-token-secret-at-least-32-chars' },
+        routes: { e: { method: 'POST', path: '/escaped', handler: 'e',
+          meta: { summary: 'e', permission: { resource: 'x', action: 'y' } },
+          input: { body: { $ref: '#/components/schemas/Thing/properties/a~1b' } },
+          responses: { 200: { description: 'ok' } } } },
+      };
+      export const componentSchemas = {
+        Thing: { type: 'object', properties: { 'a/b': { type: 'string' } } },
+      };
+    `);
+    const escapedToken = runCli(cwd, ['openapi', '--module', './escaped-token-ref.ts', '--out', 'escaped-token.json']);
+    expect(escapedToken.status, String(escapedToken.stderr)).toBe(0);
+
+    // Invalid RFC 6901 escapes must fail even when treating them literally
+    // would happen to resolve to an existing property.
+    for (const [name, token] of [['invalid-tilde', 'a~2'], ['trailing-tilde', 'a~']] as const) {
+      writeFileSync(join(cwd, `${name}-ref.ts`), `
+        export const config = {
+          database: undefined,
+          jwt: { key: 'malformed-local-ref-secret-at-least-32-chars' },
+          routes: { e: { method: 'POST', path: '/malformed', handler: 'e',
+            meta: { summary: 'e', permission: { resource: 'x', action: 'y' } },
+            input: { body: { $ref: '#/components/schemas/Thing/properties/${token}' } },
+            responses: { 200: { description: 'ok' } } } },
+        };
+        export const componentSchemas = {
+          Thing: { type: 'object', properties: { ${JSON.stringify(token)}: { type: 'string' } } },
+        };
+      `);
+      const malformed = runCli(cwd, ['openapi', '--module', `./${name}-ref.ts`]);
+      expect(malformed.status, String(malformed.stdout)).toBe(1);
+      expect(malformed.stderr).toContain('Invalid $ref');
+      expect(malformed.stderr).toContain('invalid JSON Pointer escape');
+    }
+
+    // Malformed external URI-references are not deferred to consumers.
+    writeFileSync(join(cwd, 'malformed-external-ref.ts'), `
+      export const config = {
+        database: undefined,
+        jwt: { key: 'malformed-external-ref-secret-at-least-32-chars' },
+        routes: { e: { method: 'POST', path: '/external', handler: 'e',
+          meta: { summary: 'e', permission: { resource: 'x', action: 'y' } },
+          input: { body: { $ref: 'other schema.json#/Thing' } },
+          responses: { 200: { description: 'ok' } } } },
+      };
+    `);
+    const malformedExternal = runCli(cwd, ['openapi', '--module', './malformed-external-ref.ts']);
+    expect(malformedExternal.status, String(malformedExternal.stdout)).toBe(1);
+    expect(malformedExternal.stderr).toContain('Invalid $ref');
+    expect(malformedExternal.stderr).toContain('characters not permitted in a URI-reference');
+
     // A local pointer into a bucket the document does not define must fail.
     writeFileSync(join(cwd, 'other-local-ref.ts'), `
       export const config = {
@@ -704,6 +1206,26 @@ describe('fortress CLI smoke tests', () => {
     const otherLocal = runCli(cwd, ['openapi', '--module', './other-local-ref.ts']);
     expect(otherLocal.status, String(otherLocal.stdout)).toBe(1);
     expect(otherLocal.stderr).toContain('unresolvable $ref');
+
+    // A malformed non-string $ref must not be masked by a later, legal ref that
+    // stringifies to the same value. `$ref: null` and `$ref: 'null'` both
+    // stringify to "null"; collecting refs into a map keyed by that string let
+    // the legal external ref overwrite — and hide — the malformed one, so the
+    // spec shipped with an invalid reference and the command still exited 0.
+    writeFileSync(join(cwd, 'masked-ref.ts'), `
+      export const config = {
+        database: undefined,
+        jwt: { key: 'masked-ref-secret-at-least-32-chars-ok' },
+      };
+      export const componentSchemas = {
+        Masked: { type: 'object', properties: { bad: { $ref: null } } },
+        Legit: { type: 'object', properties: { ok: { $ref: 'null' } } },
+      };
+    `);
+    const masked = runCli(cwd, ['openapi', '--module', './masked-ref.ts']);
+    expect(masked.status, String(masked.stdout)).toBe(1);
+    expect(masked.stderr).toContain('Invalid $ref');
+    expect(`${masked.stdout}\n${masked.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
   }, 30_000);
 
   it('refuses to emit an OpenAPI document with duplicate operation IDs', () => {

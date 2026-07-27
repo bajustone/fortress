@@ -20,12 +20,14 @@ export type RouteSurface = Pick<FortressManifestRuntime, 'config' | 'endpoints' 
  * top-level `routes`) and never touches a plugin's runtime.
  *
  * Assembly and validation are shared with `createFortress()` via
- * {@link assembleRoutes}, so this throws on exactly the conflicts construction
- * throws on — duplicate plugin routes, host/core collisions, undeclared or
- * malformed core overrides, `security('none')` combined with a permission.
+ * {@link assembleRoutes}, so this throws on the same conflicts present in the
+ * declarative route inputs — duplicate plugin routes, host/core collisions,
+ * undeclared or malformed core overrides, and `security('none')` combined with
+ * a permission. Construction can observe additional conflicts when a plugin's
+ * `methods()` factory mutates routes before final assembly.
  *
- * The guarantee is about the route surface only: a conflict that would hide a
- * route from an app-aware check fails here exactly as it fails at boot. It is
+ * The guarantee is about the declared route surface only: a conflict that
+ * would hide a declared route from an app-aware check fails here. It is
  * **not** a boot check. A config this accepts can still fail `createFortress()`
  * on a short or unset JWT key, a non-positive `jwt.session.*` value, a
  * contradictory `cookies` config, a missing database adapter, or a plugin route

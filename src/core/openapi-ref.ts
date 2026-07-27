@@ -16,7 +16,7 @@ export type ParsedRef
   /** `#/components/schemas/<name>` — the only form this codebase emits. */
   = | { kind: 'component'; name: string }
   /** Some other pointer into the current document. Legal, but not a schema. */
-    | { kind: 'other-local'; pointer: string }
+    | { kind: 'other-local'; tokens: string[] }
   /** Anything not rooted at `#`. Legal OpenAPI; resolved by the consumer. */
     | { kind: 'external' }
     | { kind: 'malformed'; reason: string };
@@ -34,15 +34,100 @@ export type ParsedRef
  * costs nothing and turns a confusing "undefined component" into an accurate
  * error.
  */
-function decodeReferenceToken(token: string): string | null {
+const INVALID_JSON_POINTER_ESCAPE_RE = /~(?:[^01]|$)/;
+const URI_SCHEME_RE = /^[a-z][a-z\d+.-]*$/i;
+const URI_SCHEME_PREFIX_RE = /^[a-z][a-z\d+.-]*:/i;
+const INVALID_PERCENT_ESCAPE_RE = /%(?![\da-f]{2})/i;
+const URI_PORT_SUFFIX_RE = /^:\d*$/;
+const URI_PORT_RE = /^\d*$/;
+const URI_IP_FUTURE_RE = /^v[\da-f]+\.[\w.!$&'()*+,;=:-]+$/i;
+const URI_SPECIAL_CHARACTERS = new Set(`-._~:/?#[]@!$&'()*+,;=%`);
+
+function decodeReferenceToken(token: string): { value: string } | { reason: string } {
   let decoded: string;
   try {
     decoded = decodeURIComponent(token);
   }
   catch {
-    return null;
+    return { reason: `invalid percent-encoding in '${token}'` };
   }
-  return decoded.replace(/~1/g, '/').replace(/~0/g, '~');
+  if (INVALID_JSON_POINTER_ESCAPE_RE.test(decoded))
+    return { reason: `invalid JSON Pointer escape in '${token}'` };
+  return { value: decoded.replace(/~1/g, '/').replace(/~0/g, '~') };
+}
+
+function isUriReferenceCharacter(character: string): boolean {
+  const code = character.charCodeAt(0);
+  const isDigit = code >= 48 && code <= 57;
+  const isUppercase = code >= 65 && code <= 90;
+  const isLowercase = code >= 97 && code <= 122;
+  return isDigit || isUppercase || isLowercase || URI_SPECIAL_CHARACTERS.has(character);
+}
+
+function isValidIpLiteral(value: string): boolean {
+  if (URI_IP_FUTURE_RE.test(value))
+    return true;
+  // WHATWG and RFC 3986 use the same bracketed IPv6 syntax. The fixed
+  // scheme/authority wrapper makes URL useful here without its otherwise
+  // lenient path and percent-encoding normalization.
+  return URL.canParse(`http://[${value}]/`);
+}
+
+/** Return why a string is not an RFC 3986 URI-reference, if anything. */
+function invalidUriReference(ref: string): string | undefined {
+  if (INVALID_PERCENT_ESCAPE_RE.test(ref))
+    return 'invalid percent-encoding';
+  if (![...ref].every(isUriReferenceCharacter))
+    return 'contains characters not permitted in a URI-reference';
+  if (ref.indexOf('#') !== ref.lastIndexOf('#'))
+    return 'contains more than one \'#\' fragment delimiter';
+
+  const beforeFragment = ref.split('#', 1)[0]!;
+  const beforeQuery = beforeFragment.split('?', 1)[0]!;
+  if (!beforeQuery.startsWith('//')) {
+    const firstSegment = beforeQuery.split('/', 1)[0]!;
+    const colon = firstSegment.indexOf(':');
+    if (colon >= 0 && !URI_SCHEME_RE.test(firstSegment.slice(0, colon)))
+      return `has an invalid URI scheme '${firstSegment.slice(0, colon)}'`;
+  }
+
+  // '[' and ']' are only legal around an IP-literal in an authority host.
+  const schemeEnd = beforeQuery.match(URI_SCHEME_PREFIX_RE)?.[0].length ?? 0;
+  const hierarchy = beforeQuery.slice(schemeEnd);
+  const authority = hierarchy.startsWith('//') ? hierarchy.slice(2).split('/', 1)[0]! : undefined;
+  if (authority === undefined) {
+    if (ref.includes('[') || ref.includes(']'))
+      return 'contains an IP-literal bracket outside a URI authority';
+  }
+  else {
+    const lastAt = authority.lastIndexOf('@');
+    const userInfo = lastAt >= 0 ? authority.slice(0, lastAt) : '';
+    const hostAndPort = authority.slice(lastAt + 1);
+    const pathAfterAuthority = hierarchy.slice(2 + authority.length);
+    const queryOrFragment = ref.slice(beforeQuery.length);
+    if (userInfo.includes('@') || userInfo.includes('[') || userInfo.includes(']')
+      || pathAfterAuthority.includes('[') || pathAfterAuthority.includes(']')
+      || queryOrFragment.includes('[') || queryOrFragment.includes(']')) {
+      return 'contains an IP-literal bracket outside an authority host';
+    }
+    if (hostAndPort.includes('[') || hostAndPort.includes(']')) {
+      const closing = hostAndPort.indexOf(']');
+      if (!hostAndPort.startsWith('[') || closing <= 1 || hostAndPort.slice(1).includes('[')
+        || hostAndPort.slice(closing + 1).includes(']')
+        || !isValidIpLiteral(hostAndPort.slice(1, closing))
+        || (hostAndPort.slice(closing + 1) !== '' && !URI_PORT_SUFFIX_RE.test(hostAndPort.slice(closing + 1)))) {
+        return 'contains malformed IP-literal brackets';
+      }
+    }
+    else {
+      const portSeparator = hostAndPort.lastIndexOf(':');
+      if (portSeparator >= 0 && !URI_PORT_RE.test(hostAndPort.slice(portSeparator + 1)))
+        return 'contains a non-numeric URI port';
+      if (portSeparator >= 0 && hostAndPort.slice(0, portSeparator).includes(':'))
+        return 'contains an unbracketed IP-literal';
+    }
+  }
+  return undefined;
 }
 
 /** Classify a `$ref` value. Never throws. */
@@ -51,12 +136,16 @@ export function parseSchemaRef(ref: unknown): ParsedRef {
     return { kind: 'malformed', reason: `expected a string, got ${typeof ref}` };
   if (ref === '')
     return { kind: 'malformed', reason: 'empty reference' };
+
+  const uriError = invalidUriReference(ref);
+  if (uriError)
+    return { kind: 'malformed', reason: uriError };
   if (!ref.startsWith('#'))
     return { kind: 'external' };
 
   const fragment = ref.slice(1);
   if (fragment === '')
-    return { kind: 'other-local', pointer: '' };
+    return { kind: 'other-local', tokens: [] };
   if (!fragment.startsWith('/'))
     return { kind: 'malformed', reason: `fragment must start with '/', got '${fragment}'` };
 
@@ -65,16 +154,20 @@ export function parseSchemaRef(ref: unknown): ParsedRef {
   const rawTokens = fragment.slice(1).split('/');
   const tokens: string[] = [];
   for (const rawToken of rawTokens) {
-    const token = decodeReferenceToken(rawToken);
-    if (token === null)
-      return { kind: 'malformed', reason: `invalid percent-encoding in '${rawToken}'` };
-    tokens.push(token);
+    const decoded = decodeReferenceToken(rawToken);
+    if ('reason' in decoded)
+      return { kind: 'malformed', reason: decoded.reason };
+    tokens.push(decoded.value);
   }
 
   if (tokens.length === 3 && tokens[0] === 'components' && tokens[1] === 'schemas' && tokens[2] !== '')
     return { kind: 'component', name: tokens[2]! };
 
-  return { kind: 'other-local', pointer: `/${tokens.join('/')}` };
+  // Keep decoded tokens rather than joining them back into a pointer string.
+  // A token may itself contain '/' (encoded as ~1 or %2F); re-splitting a
+  // reconstructed string would invent a segment boundary that was never in
+  // the reference.
+  return { kind: 'other-local', tokens };
 }
 
 /** Throw unless `name` is a legal OpenAPI Components key. */

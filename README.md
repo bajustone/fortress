@@ -773,9 +773,9 @@ fortress policy:summary
 `check:public-routes` take `--module <path>`, pointing at a module that exports
 your configuration as `export const config`. That is what makes them cover your
 plugin and host-owned routes. The route surface is derived from the config
-without calling `createFortress()`, so no plugin is constructed and no plugin
-worker starts — relevant because plugins do real work in their `methods()`
-factory (the webhook queue runs a startup recovery sweep there). Keep such a
+without calling `createFortress()`, so no Fortress instance is created and no
+plugin's `methods()` factory runs — relevant because plugins do real work in
+that factory (the webhook queue runs a startup recovery sweep there). Keep such a
 module free of side effects at import time. A configured instance exported as
 `export const fortress` is also accepted, at the cost of constructing your app.
 Export `componentSchemas` to add your own reusable schemas to `openapi` and

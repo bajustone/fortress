@@ -49,7 +49,7 @@ import { SILENT_LOGGER } from './observability/logger';
 import { NO_OP_TELEMETRY } from './observability/types';
 import { toOpenAPI as endpointsToOpenAPI } from './openapi';
 import { processPlugins } from './plugin-runner';
-import { assembleEndpoints, assembleRoutes, HOST_ROUTES_PLUGIN_NAME } from './route-assembly';
+import { assembleEndpoints, CORE_ENDPOINT_OWNER, HOST_ROUTES_PLUGIN_NAME, normalizePlugins } from './route-assembly';
 
 /**
  * Configured fortress instance returned by {@link createFortress}.
@@ -184,7 +184,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // early pass is fail-fast only: a malformed config is rejected before any
   // plugin factory runs. The authoritative endpoint set is re-derived after
   // the factories, below.
-  const { plugins } = assembleRoutes(config);
+  const plugins = normalizePlugins(config);
 
   // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
   // zero-allocation singletons — if the caller doesn't opt in, Fortress
@@ -391,7 +391,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     const effective = Object.create(null) as Record<string, EndpointDefinition>;
     for (const [name, endpoint] of Object.entries(routes)) {
       const key = `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
-      if (endpointOwners.get(key) === 'core')
+      if (endpointOwners.get(key) === CORE_ENDPOINT_OWNER)
         effective[name] = endpoint;
     }
     return effective;
