@@ -82,28 +82,129 @@ describe('describeRouteSurface', () => {
     expect(summarise(surface.manifest)).toEqual(summarise(fortress.manifest));
   });
 
-  it('lets a plugin route override a host route, matching construction order', () => {
-    const collidingPlugin = {
-      name: 'stats',
-      routes: {
-        hostStats: endpoint('GET', '/host/stats')
-          .summary('Plugin-owned override')
-          .permission('stats', 'read')
-          .response(200, 'ok', obj({ ok: str() }, 'ok'))
-          .handler('hostStats')
-          .build(),
+  // A silently-dropped route is a hidden route: an app-aware check would
+  // report a clean manifest for a config the app cannot actually boot. Every
+  // conflict createFortress() rejects must be rejected here too.
+  describe('route conflicts', () => {
+    function pluginWithRoute(name: string, path: string, handler = 'dup') {
+      return {
+        name,
+        routes: {
+          [handler]: endpoint('GET', path)
+            .summary(`${name} route`)
+            .permission('dup', 'read')
+            .response(200, 'ok', obj({ ok: str() }, 'ok'))
+            .handler(handler)
+            .build(),
+        },
+        methods: () => ({ [handler]: async () => ({ ok: 'yes' }) }),
+      };
+    }
+
+    const cases: Array<{ name: string; config: () => Parameters<typeof describeRouteSurface>[0]; message: string }> = [
+      {
+        name: 'two plugins claiming the same method and path',
+        config: () => ({
+          jwt: { key: SECRET },
+          database: undefined as never,
+          plugins: [pluginWithRoute('first', '/dup'), pluginWithRoute('second', '/dup')],
+        }),
+        message: 'Duplicate endpoint GET /dup declared by plugins "first" and "second"',
       },
-      methods: () => ({ hostStats: async () => ({ ok: 'yes' }) }),
-    };
+      {
+        name: 'a plugin colliding with a host-owned route',
+        config: () => ({
+          jwt: { key: SECRET },
+          database: undefined as never,
+          plugins: [pluginWithRoute('stats', '/host/stats', 'hostStats')],
+          routes: { hostStats: hostRoute },
+        }),
+        message: 'Duplicate endpoint GET /host/stats declared by plugins "__host" and "stats"',
+      },
+      {
+        name: 'a host route colliding with a core route',
+        config: () => ({
+          jwt: { key: SECRET },
+          database: undefined as never,
+          routes: {
+            login: endpoint('POST', '/auth/login')
+              .summary('Host override of a core route')
+              .security('none')
+              .response(200, 'ok', obj({ ok: str() }, 'ok'))
+              .handler('login')
+              .build(),
+          },
+        }),
+        message: 'collides with a Fortress core route',
+      },
+      {
+        name: 'an undeclared core override',
+        config: () => ({
+          jwt: { key: SECRET },
+          database: undefined as never,
+          plugins: [{
+            name: 'override',
+            routes: {
+              login: endpoint('POST', '/auth/login')
+                .summary('Undeclared core override')
+                .security('none')
+                .response(200, 'ok', obj({ ok: str() }, 'ok'))
+                .handler('login')
+                .build(),
+            },
+            methods: () => ({ login: async () => ({ ok: 'yes' }) }),
+          }],
+        }),
+        message: 'declare "login" in coreOverrides',
+      },
+      {
+        name: 'an unused declared core override',
+        config: () => ({
+          jwt: { key: SECRET },
+          database: undefined as never,
+          plugins: [{ ...pluginWithRoute('unused', '/unused'), coreOverrides: ['login'] }],
+        }),
+        message: 'declares unused core override "login"',
+      },
+      {
+        name: 'a reserved __host plugin name',
+        config: () => ({
+          jwt: { key: SECRET },
+          database: undefined as never,
+          plugins: [pluginWithRoute('__host', '/reserved')],
+          routes: { hostStats: hostRoute },
+        }),
+        message: `Plugin name '__host' is reserved`,
+      },
+      {
+        name: 'security none combined with a permission',
+        config: () => ({
+          jwt: { key: SECRET },
+          database: undefined as never,
+          plugins: [{
+            name: 'contradiction',
+            routes: {
+              both: endpoint('GET', '/both')
+                .summary('Contradictory security')
+                .security('none')
+                .permission('both', 'read')
+                .response(200, 'ok', obj({ ok: str() }, 'ok'))
+                .handler('both')
+                .build(),
+            },
+            methods: () => ({ both: async () => ({ ok: 'yes' }) }),
+          }],
+        }),
+        message: 'mutually',
+      },
+    ];
 
-    const surface = describeRouteSurface({
-      jwt: { key: SECRET },
-      database: undefined as never,
-      plugins: [collidingPlugin],
-      routes: { hostStats: hostRoute },
-    });
-
-    const entry = surface.manifest.find(candidate => candidate.path === '/host/stats');
-    expect(entry).toMatchObject({ plugin: 'stats', mounted: true });
+    for (const testCase of cases) {
+      it(`rejects ${testCase.name}`, () => {
+        expect(() => describeRouteSurface(testCase.config())).toThrow(testCase.message);
+        // createFortress() must agree — that is the point of sharing assembly.
+        expect(() => createFortress({ ...testCase.config(), database: {} as never })).toThrow(testCase.message);
+      });
+    }
   });
 });

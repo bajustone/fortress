@@ -424,12 +424,37 @@ function coreComponentSchemas(): ComponentSchemas {
 }
 
 /**
- * OpenAPI requires operationId to be unique across the document. Handler names
- * are only unique within a plugin, so `--operation-id handler` on an app with
- * two plugins that both define `submit` would emit an invalid spec. Report the
- * clash with the routes involved instead.
+ * Merge application component schemas over Fortress's own, refusing to
+ * redefine a core name.
+ *
+ * Silently letting an application `User` replace the core `User` would change
+ * the meaning of core operations in the emitted spec without any signal.
  */
-function assertUniqueOperationIds(spec: OpenAPISpec): void {
+function mergeComponentSchemas(appSchemas: ComponentSchemas, modulePath: string): ComponentSchemas {
+  const core = coreComponentSchemas();
+  const collisions = Object.keys(appSchemas).filter(name => Object.hasOwn(core, name));
+  if (collisions.length > 0) {
+    throw new Error(
+      `Application module '${modulePath}' redefines Fortress component schema(s): ${collisions.join(', ')}. `
+      + `Core operations reference these by name, so overriding them would silently change their meaning. `
+      + `Rename the application schema(s).`,
+    );
+  }
+  return { ...core, ...appSchemas };
+}
+
+/**
+ * OpenAPI requires operationId to be unique across the document. Neither
+ * strategy guarantees that on its own: handler names are unique per plugin,
+ * not per application, and `methodPath` normalisation maps `/foo-bar` and
+ * `/foo_bar` onto the same id. Report the clash with both routes and advice
+ * that matches the strategy in use.
+ */
+function assertUniqueOperationIds(spec: OpenAPISpec, strategy: 'handler' | 'methodPath'): void {
+  const advice = strategy === 'handler'
+    ? `Handler names are unique per plugin, not per application — re-run without --operation-id handler, or rename one of the handlers.`
+    : `Generated IDs normalise punctuation, so these paths collide — try --operation-id handler, or rename one of the routes.`;
+
   const seen = new Map<string, string>();
   for (const [path, operations] of Object.entries(spec.paths)) {
     for (const [method, operation] of Object.entries(operations)) {
@@ -438,15 +463,53 @@ function assertUniqueOperationIds(spec: OpenAPISpec): void {
         continue;
       const route = `${method.toUpperCase()} ${path}`;
       const previous = seen.get(id);
-      if (previous) {
-        throw new Error(
-          `Duplicate operationId '${id}' generated for ${previous} and ${route}. `
-          + `Handler names are unique per plugin, not per application — `
-          + `re-run without --operation-id handler, or rename one of the handlers.`,
-        );
-      }
+      if (previous)
+        throw new Error(`Duplicate operationId '${id}' generated for ${previous} and ${route}. ${advice}`);
       seen.set(id, route);
     }
+  }
+}
+
+const LOCAL_COMPONENT_REF_PREFIX = '#/components/schemas/';
+
+/** Collect every local component `$ref` reachable from a schema fragment. */
+function collectLocalRefs(value: unknown, into: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const item of value)
+      collectLocalRefs(item, into);
+    return;
+  }
+  if (typeof value !== 'object' || value === null)
+    return;
+
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === '$ref' && typeof entry === 'string' && entry.startsWith(LOCAL_COMPONENT_REF_PREFIX))
+      into.add(entry.slice(LOCAL_COMPONENT_REF_PREFIX.length));
+    else
+      collectLocalRefs(entry, into);
+  }
+}
+
+/**
+ * Fail on a `$ref` that points at a component the document does not define.
+ *
+ * A spec with a dangling reference is invalid but still serializes happily, so
+ * without this the command exits 0 and the breakage surfaces in whatever
+ * consumes the spec later.
+ */
+function assertResolvableRefs(spec: OpenAPISpec): void {
+  const referenced = new Set<string>();
+  collectLocalRefs(spec.paths, referenced);
+  const defined = spec.components?.schemas ?? {};
+  // A component may reference another component.
+  collectLocalRefs(defined, referenced);
+
+  const dangling = [...referenced].filter(name => !Object.hasOwn(defined, name)).sort();
+  if (dangling.length > 0) {
+    throw new Error(
+      `OpenAPI spec references undefined component schema(s): ${dangling.join(', ')}. `
+      + `Export them from your module as 'componentSchemas' so the spec resolves.`,
+    );
   }
 }
 
@@ -463,7 +526,8 @@ async function cmdOpenAPI(args: string[]): Promise<void> {
       version,
       operationId,
     });
-    assertUniqueOperationIds(spec);
+    assertUniqueOperationIds(spec, operationId);
+    assertResolvableRefs(spec);
     const json = JSON.stringify(spec, null, 2);
 
     if (outFile) {
@@ -532,6 +596,28 @@ function isRouteSurface(value: unknown): value is CliRouteSurface {
 }
 
 /**
+ * Does this export actually look like a Fortress config?
+ *
+ * `config` is a common export name — framework configs, build configs, app
+ * settings. Accepting any object under that name would silently derive the
+ * bare core surface and report it as `Scope: application`: a green check that
+ * covered none of the caller's routes, which is precisely the failure #15
+ * exists to remove. Require the shape `FortressConfig` mandates instead.
+ */
+function isFortressConfig(value: unknown): value is FortressConfig {
+  if (!isRecord(value) || Array.isArray(value))
+    return false;
+  if (!isRecord(value.jwt) || Array.isArray(value.jwt) || !('key' in value.jwt))
+    return false;
+  if (value.plugins !== undefined && !Array.isArray(value.plugins))
+    return false;
+  // `routes` is a record of endpoint definitions; an array is a different shape.
+  if (value.routes !== undefined && (!isRecord(value.routes) || Array.isArray(value.routes)))
+    return false;
+  return true;
+}
+
+/**
  * Resolve a loaded module to a route surface.
  *
  * `config` wins over `fortress` because deriving the surface from config never
@@ -554,16 +640,26 @@ function validateAppModule(value: unknown, modulePath: string): LoadedAppModule 
     dispose: value.dispose as LoadedAppModule['dispose'],
   };
 
-  if (isRecord(value.config))
-    return { fortress: describeRouteSurface(value.config as FortressConfig), source: 'config', ...common };
+  if (isFortressConfig(value.config))
+    return { fortress: describeRouteSurface(value.config), source: 'config', ...common };
 
   if (isRouteSurface(value.fortress))
     return { fortress: value.fortress, source: 'instance', ...common };
 
+  // Past this point neither export is usable. Say which one was wrong rather
+  // than falling back to a surface that does not describe the caller's app.
   if (value.fortress !== undefined) {
     throw new Error(
       `Application module '${modulePath}' export 'fortress' is not a configured Fortress instance `
       + `(expected 'endpoints', 'manifest', and 'config').`,
+    );
+  }
+
+  if (value.config !== undefined) {
+    throw new Error(
+      `Application module '${modulePath}' export 'config' is not a Fortress config `
+      + `(expected a 'jwt' object with a 'key', and 'plugins'/'routes' of the right shape). `
+      + `Refusing to report application scope for a surface that would not include your routes.`,
     );
   }
 
@@ -593,22 +689,21 @@ interface ResolvedRouteSurface {
   dispose?: () => void | Promise<void>;
 }
 
-async function resolveRouteSurface(modulePath: string | undefined): Promise<ResolvedRouteSurface> {
-  if (!modulePath) {
-    return {
-      fortress: buildCoreFortressForCli(),
-      scopeNote: CORE_ONLY_NOTE,
-      componentSchemas: coreComponentSchemas(),
-    };
-  }
-
-  const loaded = await loadAppModule(modulePath);
+/**
+ * Finish resolving a loaded module into a runnable surface.
+ *
+ * This can still throw: `manifest` is a lazy getter, so a malformed
+ * `csrf.skipPaths` (or any other config the manifest builder rejects) surfaces
+ * here rather than at load time. It runs inside the cleanup boundary so the
+ * module's `dispose()` is not skipped when it does.
+ */
+function describeLoadedSurface(loaded: LoadedAppModule, modulePath: string): ResolvedRouteSurface {
   const routeCount = loaded.fortress.manifest.length;
   const via = loaded.source === 'config' ? 'config' : 'constructed instance';
   return {
     fortress: loaded.fortress,
     scopeNote: `Scope: application (${routeCount} route(s) from ${modulePath}, via ${via}).`,
-    componentSchemas: { ...coreComponentSchemas(), ...loaded.componentSchemas },
+    componentSchemas: mergeComponentSchemas(loaded.componentSchemas, modulePath),
     dispose: loaded.dispose,
   };
 }
@@ -617,16 +712,28 @@ async function resolveRouteSurface(modulePath: string | undefined): Promise<Reso
  * Run a route-derived command against the resolved surface, always disposing
  * the loaded module afterwards. Failures set `process.exitCode` rather than
  * calling `process.exit` so `dispose()` is not skipped.
+ *
+ * Everything after a successful import happens under the cleanup boundary —
+ * including manifest construction and schema merging, both of which can throw.
  */
 async function withRouteSurface(
   modulePath: string | undefined,
   run: (surface: ResolvedRouteSurface) => void,
 ): Promise<void> {
-  const surface = await resolveRouteSurface(modulePath);
+  if (!modulePath) {
+    run({
+      fortress: buildCoreFortressForCli(),
+      scopeNote: CORE_ONLY_NOTE,
+      componentSchemas: coreComponentSchemas(),
+    });
+    return;
+  }
+
+  const loaded = await loadAppModule(modulePath);
   let runError: unknown;
   let runFailed = false;
   try {
-    run(surface);
+    run(describeLoadedSurface(loaded, modulePath));
   }
   catch (error) {
     runFailed = true;
@@ -636,7 +743,7 @@ async function withRouteSurface(
   let cleanupError: unknown;
   let cleanupFailed = false;
   try {
-    await surface.dispose?.();
+    await loaded.dispose?.();
   }
   catch (error) {
     cleanupFailed = true;
@@ -1020,6 +1127,82 @@ function cmdMigrateCheck(args: string[]): void {
 
 const NON_IDENTIFIER_RUN_RE = /[^\w$]+(.)?/g;
 const LEADING_DIGITS_RE = /^\d+/;
+const VALID_IDENTIFIER_RE = /^[a-z_$][\w$]*$/i;
+
+/** Component schema name → the exported const it is emitted as. */
+type ComponentIdentifiers = Map<string, string>;
+
+function quotePropertyKey(key: string): string {
+  return VALID_IDENTIFIER_RE.test(key) ? key : JSON.stringify(key);
+}
+
+/**
+ * Map every component schema name onto a unique, valid export identifier.
+ *
+ * Component names are free-form in JSON Schema — `Foo-Bar` and `123.Name` are
+ * both legal and neither is a TypeScript identifier. One map serves both the
+ * declarations and every `$ref` that resolves to them, so the two cannot drift.
+ */
+function buildComponentIdentifiers(componentSchemas: ComponentSchemas): ComponentIdentifiers {
+  const taken = new Set<string>();
+  const identifiers: ComponentIdentifiers = new Map();
+
+  for (const name of Object.keys(componentSchemas)) {
+    const base = toIdentifierPart(name) || 'Component';
+    let candidate = `${base}Schema`;
+    for (let suffix = 2; taken.has(candidate); suffix += 1)
+      candidate = `${base}${suffix}Schema`;
+    taken.add(candidate);
+    identifiers.set(name, candidate);
+  }
+
+  return identifiers;
+}
+
+/** Local component names a schema fragment refers to. */
+function componentDependencies(schema: unknown): Set<string> {
+  const refs = new Set<string>();
+  collectLocalRefs(schema, refs);
+  return refs;
+}
+
+/**
+ * Order component declarations so each is defined before it is used.
+ *
+ * A component referring to one declared later would hit the temporal dead
+ * zone at import time. Kahn's algorithm emits everything it can order; what
+ * remains is a cycle (or something depending on one) and is emitted through
+ * `z.lazy()`, whose body is not evaluated until first use.
+ */
+function orderComponents(componentSchemas: ComponentSchemas): { eager: string[]; lazy: string[] } {
+  const names = Object.keys(componentSchemas);
+  const known = new Set(names);
+  // A self-reference counts as a dependency: it can never be satisfied
+  // eagerly, which is exactly what forces a recursive schema to be deferred.
+  const pending = new Map(
+    names.map(name => [
+      name,
+      new Set(Array.from(componentDependencies(componentSchemas[name])).filter(ref => known.has(ref))),
+    ]),
+  );
+
+  const eager: string[] = [];
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const [name, deps] of pending) {
+      if (deps.size > 0)
+        continue;
+      eager.push(name);
+      pending.delete(name);
+      for (const remaining of pending.values())
+        remaining.delete(name);
+      progressed = true;
+    }
+  }
+
+  return { eager, lazy: [...pending.keys()] };
+}
 
 /** Strip anything that cannot appear in a TypeScript identifier, PascalCasing across the removals. */
 function toIdentifierPart(value: string): string {
@@ -1040,12 +1223,13 @@ function toIdentifierPart(value: string): string {
 function resolveSchemaExportNames(
   endpoints: EndpointDefinition[],
   manifest: RouteManifestEntry[],
-  componentSchemas: ComponentSchemas,
+  components: ComponentIdentifiers,
 ): Map<EndpointDefinition, string> {
   const originByRoute = new Map(manifest.map(entry => [`${entry.method} ${entry.path}`, entry.plugin]));
-  // Component schemas are emitted into the same module namespace.
+  // Component schemas are emitted into the same module namespace, so their
+  // resolved identifiers are already spoken for.
   const taken = new Map<string, string>(
-    Object.keys(componentSchemas).map(name => [`${name}Schema`, `component schema '${name}'`]),
+    Array.from(components, ([name, identifier]) => [identifier, `component schema '${name}'`]),
   );
   const names = new Map<EndpointDefinition, string>();
 
@@ -1097,22 +1281,33 @@ async function cmdSchemas(args: string[]): Promise<void> {
     }
 
     const bodyEndpoints = fortress.endpoints.filter(ep => ep.input?.body);
-    const exportNames = resolveSchemaExportNames(bodyEndpoints, fortress.manifest, allSchemas);
+    const components = buildComponentIdentifiers(allSchemas);
+    const exportNames = resolveSchemaExportNames(bodyEndpoints, fortress.manifest, components);
+    const { eager, lazy } = orderComponents(allSchemas);
 
     let output = '// Auto-generated by "fortress schemas --format zod" — do not edit manually\n';
     output += '// Requires: zod\n\n';
     output += 'import { z } from \'zod\';\n\n';
 
-    // Generate component schemas
+    // Generate component schemas, dependencies first.
     output += '// ── Component Schemas ─────────────────────────────────────────────\n\n';
-    for (const [name, schema] of Object.entries(allSchemas)) {
-      output += `export const ${name}Schema = ${jsonSchemaToZodCodegen(schema as any)};\n\n`;
+    for (const name of eager) {
+      const body = jsonSchemaToZodCodegen(allSchemas[name] as any, components);
+      output += `export const ${components.get(name)!} = ${body};\n\n`;
+    }
+    if (lazy.length > 0) {
+      output += '// Recursive or mutually-referential schemas; deferred so each\n';
+      output += '// reference resolves after every declaration is in scope.\n\n';
+      for (const name of lazy) {
+        const body = jsonSchemaToZodCodegen(allSchemas[name] as any, components);
+        output += `export const ${components.get(name)!}: z.ZodTypeAny = z.lazy(() => ${body});\n\n`;
+      }
     }
 
     // Generate endpoint input schemas
     output += '// ── Endpoint Input Schemas ────────────────────────────────────────\n\n';
     for (const ep of bodyEndpoints) {
-      output += `export const ${exportNames.get(ep)!} = ${jsonSchemaToZodCodegen(ep.input!.body)};\n\n`;
+      output += `export const ${exportNames.get(ep)!} = ${jsonSchemaToZodCodegen(ep.input!.body, components)};\n\n`;
     }
 
     if (outFile) {
@@ -1128,25 +1323,38 @@ async function cmdSchemas(args: string[]): Promise<void> {
 }
 
 /** Convert a JSON Schema object to Zod code string (codegen, not runtime). */
-function jsonSchemaToZodCodegen(schema: any): string {
+function jsonSchemaToZodCodegen(schema: any, components: ComponentIdentifiers): string {
   if (schema.$ref) {
-    const name = schema.$ref.replace('#/components/schemas/', '');
-    return `${name}Schema`;
+    if (typeof schema.$ref !== 'string' || !schema.$ref.startsWith(LOCAL_COMPONENT_REF_PREFIX))
+      throw new Error(`Cannot generate Zod for non-local $ref '${String(schema.$ref)}'.`);
+    const name = schema.$ref.slice(LOCAL_COMPONENT_REF_PREFIX.length);
+    const identifier = components.get(name);
+    if (!identifier) {
+      throw new Error(
+        `Schema references undefined component '${name}'. `
+        + `Export it from your module as 'componentSchemas'.`,
+      );
+    }
+    return identifier;
   }
 
   if (schema.oneOf) {
-    const variants = schema.oneOf.map((s: any) => jsonSchemaToZodCodegen(s));
+    const variants = schema.oneOf.map((s: any) => jsonSchemaToZodCodegen(s, components));
     return `z.union([${variants.join(', ')}])`;
   }
 
   if (schema.anyOf) {
-    const variants = schema.anyOf.map((s: any) => jsonSchemaToZodCodegen(s));
+    const variants = schema.anyOf.map((s: any) => jsonSchemaToZodCodegen(s, components));
     return `z.union([${variants.join(', ')}])`;
   }
 
   if (schema.enum) {
     const values = schema.enum.map((v: any) => JSON.stringify(v));
-    return `z.enum([${values.join(', ')}])`;
+    // z.enum only accepts string members; anything else has to be a union of
+    // literals, which is what a numeric or mixed JSON Schema enum needs.
+    if (schema.enum.every((v: unknown) => typeof v === 'string'))
+      return `z.enum([${values.join(', ')}])`;
+    return `z.union([${values.map((v: string) => `z.literal(${v})`).join(', ')}])`;
   }
 
   switch (schema.type) {
@@ -1173,7 +1381,7 @@ function jsonSchemaToZodCodegen(schema: any): string {
     case 'null':
       return 'z.null()';
     case 'array': {
-      const items = schema.items ? jsonSchemaToZodCodegen(schema.items) : 'z.any()';
+      const items = schema.items ? jsonSchemaToZodCodegen(schema.items, components) : 'z.any()';
       return `z.array(${items})`;
     }
     case 'object': {
@@ -1182,8 +1390,10 @@ function jsonSchemaToZodCodegen(schema: any): string {
       }
       const required = new Set(schema.required ?? []);
       const fields = Object.entries(schema.properties).map(([key, propSchema]: [string, any]) => {
-        const zodType = jsonSchemaToZodCodegen(propSchema);
-        return required.has(key) ? `  ${key}: ${zodType}` : `  ${key}: ${zodType}.optional()`;
+        const zodType = jsonSchemaToZodCodegen(propSchema, components);
+        // Property names come from application schemas and need not be valid
+        // identifiers — `first-name` and `2fa` are both legal JSON Schema.
+        return `  ${quotePropertyKey(key)}: ${required.has(key) ? zodType : `${zodType}.optional()`}`;
       });
       return `z.object({\n${fields.join(',\n')},\n})`;
     }

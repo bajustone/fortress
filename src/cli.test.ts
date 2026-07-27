@@ -384,6 +384,146 @@ describe('fortress CLI smoke tests', () => {
     expect(parsed.status, `${parsed.stdout}\n${parsed.stderr}`).toBe(0);
   }, 30_000);
 
+  it('refuses to treat an unrelated `config` export as an application surface', () => {
+    // `config` is a common export name. Accepting any object under it would
+    // derive the bare core surface and label it `Scope: application` — a green
+    // check covering none of the caller's routes.
+    writeFileSync(join(cwd, 'foreign-config.ts'), `export const config = { build: { outDir: 'dist' } };`);
+    const foreign = runCli(cwd, ['check:public-routes', '--module', './foreign-config.ts']);
+    expect(foreign.status, String(foreign.stdout)).toBe(1);
+    expect(foreign.stderr).toContain(`export 'config' is not a Fortress config`);
+    expect(String(foreign.stdout)).not.toContain(APP_SCOPE);
+
+    for (const malformed of [
+      `export const config = { jwt: { key: 'k' }, plugins: 'nope' };`,
+      `export const config = { jwt: { key: 'k' }, routes: [] };`,
+      `export const config = { jwt: {} };`,
+    ]) {
+      writeFileSync(join(cwd, 'malformed-config.ts'), malformed);
+      const result = runCli(cwd, ['manifest', '--module', './malformed-config.ts']);
+      expect(result.status, malformed).toBe(1);
+      expect(`${result.stdout}\n${result.stderr}`, malformed).not.toMatch(RUNTIME_ERROR_RE);
+    }
+
+    // A module whose `config` is unusable but which exports a real instance
+    // must fall through to the instance rather than fail or report core-only.
+    writeAppModule(cwd, 'competing-module.ts', { shape: 'instance' });
+    const competing = readFileSync(join(cwd, 'competing-module.ts'), 'utf8');
+    writeFileSync(join(cwd, 'competing-module.ts'), `${competing}\nexport const config = { unrelated: true };\n`);
+    const result = runCli(cwd, ['manifest', '--module', './competing-module.ts', '--out', 'competing.json']);
+    expect(result.status, String(result.stderr)).toBe(0);
+    expect(result.stdout).toContain('via constructed instance');
+    const entries = JSON.parse(readFileSync(join(cwd, 'competing.json'), 'utf8')) as Array<{ path: string }>;
+    expect(entries.some(entry => entry.path === '/reports')).toBe(true);
+  }, 30_000);
+
+  it('rejects dangling and colliding component schemas', () => {
+    // A `$ref` with no matching component serializes fine but is invalid.
+    writeFileSync(join(cwd, 'dangling-module.ts'), `
+      export const config = {
+        jwt: { key: 'dangling-secret-at-least-32-chars-long' },
+        routes: {
+          broken: {
+            method: 'POST',
+            path: '/broken',
+            handler: 'broken',
+            meta: { summary: 'Dangling ref', permission: { resource: 'x', action: 'y' } },
+            input: { body: { $ref: '#/components/schemas/Missing' } },
+            responses: { 200: { description: 'ok' } },
+          },
+        },
+      };
+    `);
+    const dangling = runCli(cwd, ['openapi', '--module', './dangling-module.ts', '--out', 'dangling.json']);
+    expect(dangling.status, String(dangling.stdout)).toBe(1);
+    expect(dangling.stderr).toContain('undefined component schema(s): Missing');
+
+    // Redefining a core component would silently change core operations.
+    writeFileSync(join(cwd, 'shadow-module.ts'), `
+      export const config = { jwt: { key: 'shadow-secret-at-least-32-chars-long!' } };
+      export const componentSchemas = { User: { type: 'object', properties: {} } };
+    `);
+    const shadow = runCli(cwd, ['openapi', '--module', './shadow-module.ts']);
+    expect(shadow.status, String(shadow.stdout)).toBe(1);
+    expect(shadow.stderr).toContain('redefines Fortress component schema(s): User');
+  }, 30_000);
+
+  it('generates compilable Zod for hostile component and property names', () => {
+    writeFileSync(join(cwd, 'hostile-module.ts'), `
+      export const config = {
+        jwt: { key: 'hostile-secret-at-least-32-chars-long' },
+        routes: {
+          hostile: {
+            method: 'POST',
+            path: '/hostile',
+            handler: 'hostile',
+            meta: { summary: 'Hostile names', permission: { resource: 'x', action: 'y' } },
+            input: { body: { $ref: '#/components/schemas/Foo-Bar' } },
+            responses: { 200: { description: 'ok' } },
+          },
+        },
+      };
+      export const componentSchemas = {
+        'Foo-Bar': {
+          type: 'object',
+          required: ['first-name'],
+          properties: {
+            'first-name': { type: 'string' },
+            '2fa': { type: 'boolean' },
+            'kind': { enum: [1, 2, 3] },
+            'child': { $ref: '#/components/schemas/123.Name' },
+          },
+        },
+        '123.Name': {
+          type: 'object',
+          properties: { 'self': { $ref: '#/components/schemas/123.Name' } },
+        },
+        'Foo_Bar': { type: 'object', properties: { ok: { type: 'string' } } },
+      };
+    `);
+
+    const result = runCli(cwd, ['schemas', '--format', 'zod', '--module', './hostile-module.ts', '--out', 'hostile-schemas.ts']);
+    expect(result.status, String(result.stderr)).toBe(0);
+    const generated = readFileSync(join(cwd, 'hostile-schemas.ts'), 'utf8');
+
+    const declared = Array.from(generated.matchAll(/^export const (\w+)/gm), match => match[1]!);
+    expect(new Set(declared).size, `duplicate declarations in:\n${generated}`).toBe(declared.length);
+    for (const name of declared)
+      expect(name, 'invalid TypeScript identifier').toMatch(/^[A-Z_$][\w$]*$/i);
+    // Invalid property names must be quoted, not emitted bare.
+    expect(generated).toContain('"first-name"');
+    expect(generated).toContain('"2fa"');
+    // A numeric enum cannot be z.enum.
+    expect(generated).not.toMatch(/z\.enum\(\[1/);
+    // The self-referential component must be deferred.
+    expect(generated).toContain('z.lazy(');
+
+    const built = spawnSync('bun', ['build', '--target', 'node', '--external', 'zod', join(cwd, 'hostile-schemas.ts'), '--outfile', join(cwd, 'hostile-build.js')], {
+      cwd,
+      encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1' },
+      timeout: 20_000,
+    });
+    expect(built.status, `${built.stdout}\n${built.stderr}\n---\n${generated}`).toBe(0);
+  }, 30_000);
+
+  it('disposes the module when resolution itself fails', () => {
+    // `manifest` is a lazy getter, so a config the manifest builder rejects
+    // throws after the module is loaded but before the command runs.
+    writeFileSync(join(cwd, 'late-failure-module.ts'), `
+      export const config = {
+        jwt: { key: 'late-failure-secret-at-least-32-chars' },
+        csrf: { get skipPaths() { throw new Error('malformed csrf config'); } },
+      };
+      export async function dispose() { await Bun.write('late-failure.disposed', 'yes'); }
+    `);
+
+    const result = runCli(cwd, ['manifest', '--module', './late-failure-module.ts']);
+    expect(result.status, String(result.stdout)).toBe(1);
+    expect(result.stderr).toContain('malformed csrf config');
+    expect(readFileSync(join(cwd, 'late-failure.disposed'), 'utf8')).toBe('yes');
+  }, 30_000);
+
   it('refuses to emit an OpenAPI document with duplicate operation IDs', () => {
     writeAppModule(cwd, 'opid-module.ts', { collide: true });
 

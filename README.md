@@ -757,14 +757,14 @@ See [Observability](docs/observability.md).
 fortress init
 fortress generate-secret
 fortress sync:types
-fortress openapi --module ./src/fortress.ts --out openapi.json
-fortress schemas --module ./src/fortress.ts --format json-schema --out schemas.json
-fortress manifest --module ./src/fortress.ts --out route-manifest.json
-fortress manifest:check --module ./src/fortress.ts
-fortress check:public-routes --module ./src/fortress.ts
+fortress openapi --module ./fortress.config.ts --out openapi.json
+fortress schemas --module ./fortress.config.ts --format json-schema --out schemas.json
+fortress manifest --module ./fortress.config.ts --out route-manifest.json
+fortress manifest:check --module ./fortress.config.ts
+fortress check:public-routes --module ./fortress.config.ts
 fortress migrate:status --dialect pg       # bundled catalog status
 fortress migrate:check --dialect pg        # bundled catalog validation
-fortress migrate:up --module ./src/fortress.ts
+fortress migrate:up --module ./fortress.migrate.ts   # needs a real instance
 fortress migrate:export --dialect pg --direction up --out fortress-pg.sql
 fortress policy:summary
 ```

@@ -1,10 +1,7 @@
 import type { FortressManifestRuntime } from '../capabilities';
 import type { FortressConfig } from '../config';
-import type { EndpointDefinition } from '../endpoint';
 import type { RouteManifestEntry } from './route-manifest';
-import { authEndpoints } from '../auth/auth-endpoints';
-import { canonicalizeRouteShape } from '../http/match';
-import { iamEndpoints } from '../iam/iam-endpoints';
+import { assembleRoutes } from '../route-assembly';
 import { buildRouteManifest } from './route-manifest';
 
 /** The introspection surface, derived without constructing a Fortress instance. */
@@ -22,30 +19,19 @@ export type RouteSurface = Pick<FortressManifestRuntime, 'config' | 'endpoints' 
  * only the declarative inputs (core endpoints, `plugin.routes`, and
  * top-level `routes`) and never touches a plugin's runtime.
  *
- * Endpoints resolve in the same precedence order `createFortress()` uses:
- * core, then top-level host `routes`, then configured plugins in order,
- * keyed by canonical method + path shape. Construction-time validation
- * (duplicate plugin routes, undeclared core overrides, `security('none')`
- * combined with a permission) remains `createFortress()`'s job — this is a
- * description of the route surface, not a substitute for booting the app.
+ * Assembly and validation are shared with `createFortress()` via
+ * {@link assembleRoutes}, so this throws on exactly the conflicts construction
+ * throws on — duplicate plugin routes, host/core collisions, undeclared or
+ * malformed core overrides, `security('none')` combined with a permission.
+ * A config the CLI accepts is therefore one the app can boot, and a conflict
+ * that would hide a route from an app-aware check fails here too.
+ *
+ * What stays with `createFortress()` is what genuinely needs an instance:
+ * JWT/session and cookie resolution, database adapter instrumentation, and
+ * the check that every plugin route has a matching callable method.
  */
 export function describeRouteSurface(config: FortressConfig): RouteSurface {
-  const byRoute = new Map<string, EndpointDefinition>();
-
-  const declareAll = (routes: object | undefined): void => {
-    for (const endpoint of Object.values(routes ?? {}) as EndpointDefinition[])
-      byRoute.set(`${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`, endpoint);
-  };
-
-  declareAll(authEndpoints);
-  declareAll(iamEndpoints);
-  // Top-level `routes` are registered ahead of user plugins, matching the
-  // synthetic `__host` plugin createFortress() prepends.
-  declareAll(config.routes);
-  for (const plugin of config.plugins ?? [])
-    declareAll(plugin.routes);
-
-  const endpoints = [...byRoute.values()];
+  const { endpoints } = assembleRoutes(config);
   let manifest: RouteManifestEntry[] | undefined;
 
   return {
