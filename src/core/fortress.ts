@@ -49,7 +49,7 @@ import { SILENT_LOGGER } from './observability/logger';
 import { NO_OP_TELEMETRY } from './observability/types';
 import { toOpenAPI as endpointsToOpenAPI } from './openapi';
 import { processPlugins } from './plugin-runner';
-import { assembleRoutes, HOST_ROUTES_PLUGIN_NAME } from './route-assembly';
+import { assembleEndpoints, assembleRoutes, HOST_ROUTES_PLUGIN_NAME } from './route-assembly';
 
 /**
  * Configured fortress instance returned by {@link createFortress}.
@@ -178,12 +178,13 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     }
   }
 
-  // Synthesize a virtual plugin from any top-level `routes` field, validate
-  // plugin/route declarations, and merge the endpoint set. This is shared with
-  // `describeRouteSurface()` so tooling that reads a config without booting the
-  // app sees exactly the routes — and exactly the conflicts — this instance
-  // would have.
-  const { plugins, endpoints, endpointOwners } = assembleRoutes(config);
+  // Synthesize a virtual plugin from any top-level `routes` field and validate
+  // the declaration, sharing the rules with `describeRouteSurface()` so tooling
+  // that reads a config without booting the app sees the same conflicts. This
+  // early pass is fail-fast only: a malformed config is rejected before any
+  // plugin factory runs. The authoritative endpoint set is re-derived after
+  // the factories, below.
+  const { plugins } = assembleRoutes(config);
 
   // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
   // zero-allocation singletons — if the caller doesn't opt in, Fortress
@@ -227,6 +228,14 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
       }
     }
   }
+
+  // Derive the authoritative route set now that every plugin factory has run.
+  // Factories are handed the live route objects (their own closures, and
+  // `ctx.config.plugins[…].routes`), so a factory can flip `bearerKind`,
+  // rewrite a path onto a core route, or add and remove routes. Merging and
+  // re-checking the security invariants here — not before `processPlugins` —
+  // is what stops a mutated route from being published unvalidated.
+  const { endpoints, endpointOwners } = assembleEndpoints(plugins);
 
   // --- Wire built-in telemetry observers ------------------------------
   //

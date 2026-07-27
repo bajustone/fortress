@@ -23,12 +23,20 @@ export type RouteSurface = Pick<FortressManifestRuntime, 'config' | 'endpoints' 
  * {@link assembleRoutes}, so this throws on exactly the conflicts construction
  * throws on — duplicate plugin routes, host/core collisions, undeclared or
  * malformed core overrides, `security('none')` combined with a permission.
- * A config the CLI accepts is therefore one the app can boot, and a conflict
- * that would hide a route from an app-aware check fails here too.
  *
- * What stays with `createFortress()` is what genuinely needs an instance:
- * JWT/session and cookie resolution, database adapter instrumentation, and
- * the check that every plugin route has a matching callable method.
+ * The guarantee is about the route surface only: a conflict that would hide a
+ * route from an app-aware check fails here exactly as it fails at boot. It is
+ * **not** a boot check. A config this accepts can still fail `createFortress()`
+ * on a short or unset JWT key, a non-positive `jwt.session.*` value, a
+ * contradictory `cookies` config, a missing database adapter, or a plugin route
+ * with no matching own callable method. That is deliberate: `fortress init`
+ * scaffolds `database: undefined!` and `key: process.env.FORTRESS_JWT_SECRET!`,
+ * so requiring a bootable config would break codegen in CI — the one place
+ * these commands most need to run.
+ *
+ * One more difference from construction: a plugin's `methods()` factory can
+ * mutate its routes, and no factory runs here. This describes the routes a
+ * config *declares*.
  */
 export function describeRouteSurface(config: FortressConfig): RouteSurface {
   const { endpoints } = assembleRoutes(config);

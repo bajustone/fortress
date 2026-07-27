@@ -5,6 +5,7 @@ import type { FortressManifestRuntime, FortressMigrationRuntime, MigrateResult }
 import type { FortressConfig } from '../src/core/config';
 import type { ComponentSchemas, EndpointDefinition } from '../src/core/endpoint';
 import type { RouteManifestEntry } from '../src/core/manifest/route-manifest';
+import type { ParsedRef } from '../src/core/openapi-ref';
 import type { OpenAPISpec } from '../src/plugins/openapi/spec-builder';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -17,6 +18,7 @@ import { buildRouteManifest } from '../src/core/manifest/route-manifest';
 import { describeRouteSurface } from '../src/core/manifest/route-surface';
 import { renderMigrationSqlExport } from '../src/core/migrations/artifacts';
 import { getFortressMigrations, getLatestMigrationVersion } from '../src/core/migrations/migrations';
+import { assertComponentName, parseSchemaRef } from '../src/core/openapi-ref';
 import { loadPolicy, resolvePolicyPath } from '../src/core/policy/loader';
 import { buildOpenAPISpec } from '../src/plugins/openapi/spec-builder';
 import { checkPublicRoutes } from '../src/testing/checks';
@@ -424,6 +426,32 @@ function coreComponentSchemas(): ComponentSchemas {
 }
 
 /**
+ * Drop Fortress-internal fields (the `~standard` validator, functions,
+ * `undefined`) so emitted JSON Schema is portable.
+ */
+function stripInternalSchemaFields<T>(value: T, ancestors: Set<object> = new Set()): T {
+  if (typeof value !== 'object' || value === null)
+    return value;
+  if (ancestors.has(value))
+    throw new Error('Schema contains a reference cycle and cannot be serialized.');
+  ancestors.add(value);
+
+  try {
+    if (Array.isArray(value))
+      return value.map(entry => stripInternalSchemaFields(entry, ancestors)) as T;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !key.startsWith('~'))
+        .filter(([, entry]) => typeof entry !== 'function' && entry !== undefined)
+        .map(([key, entry]) => [key, stripInternalSchemaFields(entry, ancestors)]),
+    ) as T;
+  }
+  finally {
+    ancestors.delete(value);
+  }
+}
+
+/**
  * Merge application component schemas over Fortress's own, refusing to
  * redefine a core name.
  *
@@ -432,6 +460,13 @@ function coreComponentSchemas(): ComponentSchemas {
  */
 function mergeComponentSchemas(appSchemas: ComponentSchemas, modulePath: string): ComponentSchemas {
   const core = coreComponentSchemas();
+  // Validate before merging, and before anything strips the record: a name
+  // OpenAPI forbids must be reported as the author wrote it. This is the one
+  // choke point all three schema-consuming commands pass through, so they
+  // accept an identical input set.
+  for (const name of Object.keys(appSchemas))
+    assertComponentName(name, `application module '${modulePath}'`);
+
   const collisions = Object.keys(appSchemas).filter(name => Object.hasOwn(core, name));
   if (collisions.length > 0) {
     throw new Error(
@@ -470,45 +505,99 @@ function assertUniqueOperationIds(spec: OpenAPISpec, strategy: 'handler' | 'meth
   }
 }
 
-const LOCAL_COMPONENT_REF_PREFIX = '#/components/schemas/';
-
-/** Collect every local component `$ref` reachable from a schema fragment. */
-function collectLocalRefs(value: unknown, into: Set<string>): void {
-  if (Array.isArray(value)) {
-    for (const item of value)
-      collectLocalRefs(item, into);
-    return;
-  }
+/**
+ * Collect every `$ref` reachable from a schema fragment, keyed by its raw
+ * value so diagnostics can quote what the author actually wrote.
+ *
+ * Every `$ref` is collected, not just the ones matching the component prefix —
+ * a malformed or unresolvable pointer has to be reported, and skipping it is
+ * how one silently shipped before.
+ */
+function collectRefs(value: unknown, into: Map<string, ParsedRef>, seen: WeakSet<object> = new WeakSet()): void {
   if (typeof value !== 'object' || value === null)
     return;
+  // A self-referential schema object would recurse forever. Skipping the
+  // revisit lets code generation report the cycle with a useful message
+  // instead of the walk dying with a stack overflow first.
+  if (seen.has(value))
+    return;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value)
+      collectRefs(item, into, seen);
+    return;
+  }
 
   for (const [key, entry] of Object.entries(value)) {
-    if (key === '$ref' && typeof entry === 'string' && entry.startsWith(LOCAL_COMPONENT_REF_PREFIX))
-      into.add(entry.slice(LOCAL_COMPONENT_REF_PREFIX.length));
+    if (key === '$ref')
+      into.set(typeof entry === 'string' ? entry : String(entry), parseSchemaRef(entry));
     else
-      collectLocalRefs(entry, into);
+      collectRefs(entry, into, seen);
   }
 }
 
+/** Resolve a `/`-rooted JSON Pointer against the generated document. */
+function pointerResolves(spec: OpenAPISpec, pointer: string): boolean {
+  if (pointer === '')
+    return true;
+  let cursor: unknown = spec;
+  for (const token of pointer.slice(1).split('/')) {
+    if (typeof cursor !== 'object' || cursor === null)
+      return false;
+    if (!Object.hasOwn(cursor, token))
+      return false;
+    cursor = (cursor as Record<string, unknown>)[token];
+  }
+  return true;
+}
+
 /**
- * Fail on a `$ref` that points at a component the document does not define.
+ * Fail on a `$ref` the generated document cannot resolve.
  *
  * A spec with a dangling reference is invalid but still serializes happily, so
  * without this the command exits 0 and the breakage surfaces in whatever
- * consumes the spec later.
+ * consumes the spec later. External refs are legal OpenAPI and are left for
+ * the consumer to resolve.
  */
 function assertResolvableRefs(spec: OpenAPISpec): void {
-  const referenced = new Set<string>();
-  collectLocalRefs(spec.paths, referenced);
-  const defined = spec.components?.schemas ?? {};
+  const refs = new Map<string, ParsedRef>();
+  collectRefs(spec.paths, refs);
   // A component may reference another component.
-  collectLocalRefs(defined, referenced);
+  collectRefs(spec.components?.schemas ?? {}, refs);
 
-  const dangling = [...referenced].filter(name => !Object.hasOwn(defined, name)).sort();
-  if (dangling.length > 0) {
+  const defined = spec.components?.schemas ?? {};
+  const undefinedComponents: string[] = [];
+  const unresolvablePointers: string[] = [];
+
+  for (const [raw, parsed] of refs) {
+    switch (parsed.kind) {
+      case 'malformed':
+        throw new Error(`Invalid $ref '${raw}': ${parsed.reason}.`);
+      case 'component':
+        if (!Object.hasOwn(defined, parsed.name))
+          undefinedComponents.push(parsed.name);
+        break;
+      case 'other-local':
+        if (!pointerResolves(spec, parsed.pointer))
+          unresolvablePointers.push(raw);
+        break;
+      case 'external':
+        break;
+    }
+  }
+
+  if (undefinedComponents.length > 0) {
     throw new Error(
-      `OpenAPI spec references undefined component schema(s): ${dangling.join(', ')}. `
+      `OpenAPI spec references undefined component schema(s): ${[...new Set(undefinedComponents)].sort().join(', ')}. `
       + `Export them from your module as 'componentSchemas' so the spec resolves.`,
+    );
+  }
+  if (unresolvablePointers.length > 0) {
+    throw new Error(
+      `OpenAPI spec contains unresolvable $ref(s): ${[...new Set(unresolvablePointers)].sort().join(', ')}. `
+      + `A local $ref must resolve against the generated document, which defines only `
+      + `components.schemas and components.securitySchemes.`,
     );
   }
 }
@@ -604,16 +693,55 @@ function isRouteSurface(value: unknown): value is CliRouteSurface {
  * covered none of the caller's routes, which is precisely the failure #15
  * exists to remove. Require the shape `FortressConfig` mandates instead.
  */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && !Array.isArray(value);
+}
+
+/** `jwt.key` is `string | string[]`; `undefined` is the unset-env placeholder. */
+function isJwtKeyMaterial(key: unknown): boolean {
+  return key === undefined
+    || typeof key === 'string'
+    || (Array.isArray(key) && key.every(entry => typeof entry === 'string'));
+}
+
+/** Duck-typed DatabaseAdapter; `undefined` is the `fortress init` scaffold placeholder. */
+function isDatabaseAdapterLike(database: unknown): boolean {
+  return database === undefined
+    || (isPlainObject(database)
+      && typeof database.findOne === 'function'
+      && typeof database.transaction === 'function');
+}
+
 function isFortressConfig(value: unknown): value is FortressConfig {
-  if (!isRecord(value) || Array.isArray(value))
+  if (!isPlainObject(value))
     return false;
-  if (!isRecord(value.jwt) || Array.isArray(value.jwt) || !('key' in value.jwt))
+
+  // `database` and `jwt.key` are both required by FortressConfig, so a real
+  // config module declares them. Their *values* stay unconstrained-or-undefined
+  // on purpose: `fortress init` scaffolds `database: undefined!` and
+  // `key: process.env.FORTRESS_JWT_SECRET!`. Presence is the discriminator;
+  // value typing applies only once a value is actually there.
+  if (!('database' in value))
     return false;
-  if (value.plugins !== undefined && !Array.isArray(value.plugins))
+  // Read the value only from a data property — a `get database()` could open a
+  // connection, which is the side effect this whole path exists to avoid.
+  const database = Object.getOwnPropertyDescriptor(value, 'database');
+  if (database && 'value' in database && !isDatabaseAdapterLike(database.value))
     return false;
+
+  if (!isPlainObject(value.jwt) || !('key' in value.jwt) || !isJwtKeyMaterial(value.jwt.key))
+    return false;
+
+  if (value.plugins !== undefined
+    && (!Array.isArray(value.plugins)
+      || !value.plugins.every(plugin => isPlainObject(plugin) && typeof plugin.name === 'string'))) {
+    return false;
+  }
+
   // `routes` is a record of endpoint definitions; an array is a different shape.
-  if (value.routes !== undefined && (!isRecord(value.routes) || Array.isArray(value.routes)))
+  if (value.routes !== undefined && !isPlainObject(value.routes))
     return false;
+
   return true;
 }
 
@@ -658,7 +786,8 @@ function validateAppModule(value: unknown, modulePath: string): LoadedAppModule 
   if (value.config !== undefined) {
     throw new Error(
       `Application module '${modulePath}' export 'config' is not a Fortress config `
-      + `(expected a 'jwt' object with a 'key', and 'plugins'/'routes' of the right shape). `
+      + `(expected a 'database' property and a 'jwt' object with a 'key' — either may be an `
+      + `undefined placeholder — plus 'plugins'/'routes' of the right shape). `
       + `Refusing to report application scope for a surface that would not include your routes.`,
     );
   }
@@ -1125,6 +1254,20 @@ function cmdMigrateCheck(args: string[]): void {
   console.log(`Migration catalog check passed (${dialect}, latest=${getLatestMigrationVersion(dialect)}).`);
 }
 
+const EXACTLY_ONE_HELPER = `/** JSON Schema \`oneOf\`: exactly one variant must match — a plain z.union is any-match. */
+function matchExactlyOne<T extends readonly [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]]>(...variants: T) {
+  return z.union(variants).superRefine((value: unknown, ctx: z.RefinementCtx) => {
+    let matched = 0;
+    for (const variant of variants) {
+      if (variant.safeParse(value).success)
+        matched += 1;
+    }
+    if (matched !== 1)
+      ctx.addIssue({ code: 'custom', message: \`Expected exactly one oneOf variant to match, but \${matched} did\` });
+  });
+}
+`;
+
 const NON_IDENTIFIER_RUN_RE = /[^\w$]+(.)?/g;
 const LEADING_DIGITS_RE = /^\d+/;
 const VALID_IDENTIFIER_RE = /^[a-z_$][\w$]*$/i;
@@ -1133,6 +1276,14 @@ const VALID_IDENTIFIER_RE = /^[a-z_$][\w$]*$/i;
 type ComponentIdentifiers = Map<string, string>;
 
 function quotePropertyKey(key: string): string {
+  // `__proto__` as a plain object-literal key — bare or quoted, however it is
+  // spelled — is prototype-setter syntax (ECMA-262 B.3.1), not a property
+  // definition. It creates no own key, so `z.object()` never sees the field and
+  // a required `__proto__` goes unvalidated. A computed key is the only form
+  // that defines a property. (Reachable via JSON.parse, which does create
+  // `__proto__` as an own property.)
+  if (key === '__proto__')
+    return `[${JSON.stringify(key)}]`;
   return VALID_IDENTIFIER_RE.test(key) ? key : JSON.stringify(key);
 }
 
@@ -1161,9 +1312,14 @@ function buildComponentIdentifiers(componentSchemas: ComponentSchemas): Componen
 
 /** Local component names a schema fragment refers to. */
 function componentDependencies(schema: unknown): Set<string> {
-  const refs = new Set<string>();
-  collectLocalRefs(schema, refs);
-  return refs;
+  const refs = new Map<string, ParsedRef>();
+  collectRefs(schema, refs);
+  const names = new Set<string>();
+  for (const parsed of refs.values()) {
+    if (parsed.kind === 'component')
+      names.add(parsed.name);
+  }
+  return names;
 }
 
 /**
@@ -1267,7 +1423,10 @@ async function cmdSchemas(args: string[]): Promise<void> {
     const allSchemas = componentSchemas;
 
     if (format === 'json-schema') {
-      const json = JSON.stringify(allSchemas, null, 2);
+      // Fortress attaches a `~standard` validator to its schema objects; that
+      // is an internal runtime detail and must not appear in a published JSON
+      // Schema document.
+      const json = JSON.stringify(stripInternalSchemaFields(allSchemas), null, 2);
       if (outFile) {
         writeFileSync(outFile, json, 'utf-8');
         console.log(`JSON Schema written to ${outFile}`);
@@ -1285,30 +1444,35 @@ async function cmdSchemas(args: string[]): Promise<void> {
     const exportNames = resolveSchemaExportNames(bodyEndpoints, fortress.manifest, components);
     const { eager, lazy } = orderComponents(allSchemas);
 
-    let output = '// Auto-generated by "fortress schemas --format zod" — do not edit manually\n';
-    output += '// Requires: zod\n\n';
-    output += 'import { z } from \'zod\';\n\n';
-
-    // Generate component schemas, dependencies first.
-    output += '// ── Component Schemas ─────────────────────────────────────────────\n\n';
+    // Bodies are generated first so the preamble can be emitted only when
+    // something in the file actually needs it.
+    const ctx = createZodCodegenContext(components);
+    let declarations = '// ── Component Schemas ─────────────────────────────────────────────\n\n';
     for (const name of eager) {
-      const body = jsonSchemaToZodCodegen(allSchemas[name] as any, components);
-      output += `export const ${components.get(name)!} = ${body};\n\n`;
+      const body = jsonSchemaToZodCodegen(allSchemas[name], ctx, `component '${name}'`);
+      declarations += `export const ${components.get(name)!} = ${body};\n\n`;
     }
     if (lazy.length > 0) {
-      output += '// Recursive or mutually-referential schemas; deferred so each\n';
-      output += '// reference resolves after every declaration is in scope.\n\n';
+      declarations += '// Recursive or mutually-referential schemas; deferred so each\n';
+      declarations += '// reference resolves after every declaration is in scope.\n\n';
       for (const name of lazy) {
-        const body = jsonSchemaToZodCodegen(allSchemas[name] as any, components);
-        output += `export const ${components.get(name)!}: z.ZodTypeAny = z.lazy(() => ${body});\n\n`;
+        const body = jsonSchemaToZodCodegen(allSchemas[name], ctx, `component '${name}'`);
+        declarations += `export const ${components.get(name)!}: z.ZodTypeAny = z.lazy(() => ${body});\n\n`;
       }
     }
 
-    // Generate endpoint input schemas
-    output += '// ── Endpoint Input Schemas ────────────────────────────────────────\n\n';
+    declarations += '// ── Endpoint Input Schemas ────────────────────────────────────────\n\n';
     for (const ep of bodyEndpoints) {
-      output += `export const ${exportNames.get(ep)!} = ${jsonSchemaToZodCodegen(ep.input!.body, components)};\n\n`;
+      const where = `${ep.method} ${ep.path} body`;
+      declarations += `export const ${exportNames.get(ep)!} = ${jsonSchemaToZodCodegen(ep.input!.body, ctx, where)};\n\n`;
     }
+
+    let output = '// Auto-generated by "fortress schemas --format zod" — do not edit manually\n';
+    output += '// Requires: zod\n\n';
+    output += 'import { z } from \'zod\';\n\n';
+    if (ctx.usesExactlyOne)
+      output += `${EXACTLY_ONE_HELPER}\n`;
+    output += declarations;
 
     if (outFile) {
       writeFileSync(outFile, output, 'utf-8');
@@ -1322,84 +1486,242 @@ async function cmdSchemas(args: string[]): Promise<void> {
   });
 }
 
-/** Convert a JSON Schema object to Zod code string (codegen, not runtime). */
-function jsonSchemaToZodCodegen(schema: any, components: ComponentIdentifiers): string {
-  if (schema.$ref) {
-    if (typeof schema.$ref !== 'string' || !schema.$ref.startsWith(LOCAL_COMPONENT_REF_PREFIX))
-      throw new Error(`Cannot generate Zod for non-local $ref '${String(schema.$ref)}'.`);
-    const name = schema.$ref.slice(LOCAL_COMPONENT_REF_PREFIX.length);
-    const identifier = components.get(name);
+/**
+ * The JSON Schema → Zod generator.
+ *
+ * Governing rule: never silently weaken a constraint. Application schemas now
+ * reach this through `--module`, so a keyword this cannot represent is an
+ * error rather than a quietly permissive `z.any()`. Composition keywords are
+ * folded together with their siblings instead of short-circuiting, because a
+ * schema may carry `allOf` *and* `properties`.
+ *
+ * Known residual: keywords outside the public `JSONSchema` type (`minItems`,
+ * `uniqueItems`, `multipleOf`, `patternProperties`, `not`, `if`/`then`/`else`)
+ * are ignored for raw JSON input.
+ */
+interface ZodCodegenContext {
+  components: ComponentIdentifiers;
+  /** Set when any emitted expression needs the exactly-one helper. */
+  usesExactlyOne: boolean;
+  /** Schemas on the current path, for cycle detection by object identity. */
+  path: Set<object>;
+}
+
+function createZodCodegenContext(components: ComponentIdentifiers): ZodCodegenContext {
+  return { components, usesExactlyOne: false, path: new Set() };
+}
+
+/** Interpolate a numeric keyword, refusing anything that is not a finite number. */
+function numericLiteral(value: unknown, keyword: string, where: string): string | undefined {
+  if (value === undefined)
+    return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(
+      `Schema keyword '${keyword}' in ${where} must be a finite number (received ${JSON.stringify(value)}).`,
+    );
+  }
+  return String(value);
+}
+
+function unionOf(parts: string[]): string {
+  // `z.union([X])` with one member is a type error under zod v3.
+  return parts.length === 1 ? parts[0]! : `z.union([${parts.join(', ')}])`;
+}
+
+function intersectionOf(parts: string[]): string {
+  return parts.reduce((left, right) => `z.intersection(${left}, ${right})`);
+}
+
+function generateParts(branches: unknown, keyword: string, ctx: ZodCodegenContext, where: string): string[] {
+  if (!Array.isArray(branches) || branches.length === 0)
+    throw new Error(`Cannot generate Zod for ${where}: '${keyword}' is empty.`);
+  return branches.map((branch, index) => jsonSchemaToZodCodegen(branch, ctx, `${where} ${keyword}[${index}]`));
+}
+
+function generateObject(schema: any, ctx: ZodCodegenContext, where: string): string {
+  const additional = schema.additionalProperties;
+  const additionalIsSchema = typeof additional === 'object' && additional !== null;
+  const propertyNames = schema.properties ? Object.keys(schema.properties) : [];
+
+  if (propertyNames.length === 0) {
+    if (additionalIsSchema)
+      return `z.record(z.string(), ${jsonSchemaToZodCodegen(additional, ctx, `${where} additionalProperties`)})`;
+    if (additional === false)
+      return 'z.object({}).strict()';
+    // An empty `properties: {}` used to emit `z.object({\n,\n})` — a syntax error.
+    return additional ? 'z.record(z.string(), z.any())' : 'z.object({})';
+  }
+
+  const required = new Set<unknown>(Array.isArray(schema.required) ? schema.required : []);
+  const fields = propertyNames.map((key) => {
+    const property = jsonSchemaToZodCodegen(schema.properties[key], ctx, `${where}.${key}`);
+    // Property names come from application schemas and need not be valid
+    // identifiers — `first-name` and `2fa` are both legal JSON Schema.
+    return `  ${quotePropertyKey(key)}: ${required.has(key) ? property : `${property}.optional()`}`;
+  });
+
+  let expression = `z.object({\n${fields.join(',\n')},\n})`;
+  if (additional === false)
+    expression += '.strict()';
+  else if (additionalIsSchema)
+    expression += `.catchall(${jsonSchemaToZodCodegen(additional, ctx, `${where} additionalProperties`)})`;
+  return expression;
+}
+
+function generateForType(schema: any, type: string, ctx: ZodCodegenContext, where: string): string {
+  switch (type) {
+    case 'string': {
+      let expression = 'z.string()';
+      if (typeof schema.pattern === 'string')
+        expression += `.regex(new RegExp(${JSON.stringify(schema.pattern)}))`;
+      const min = numericLiteral(schema.minLength, 'minLength', where);
+      if (min !== undefined)
+        expression += `.min(${min})`;
+      const max = numericLiteral(schema.maxLength, 'maxLength', where);
+      if (max !== undefined)
+        expression += `.max(${max})`;
+      return expression;
+    }
+    case 'number':
+    case 'integer': {
+      let expression = type === 'integer' ? 'z.number().int()' : 'z.number()';
+      const min = numericLiteral(schema.minimum, 'minimum', where);
+      if (min !== undefined)
+        expression += `.min(${min})`;
+      const max = numericLiteral(schema.maximum, 'maximum', where);
+      if (max !== undefined)
+        expression += `.max(${max})`;
+      return expression;
+    }
+    case 'boolean':
+      return 'z.boolean()';
+    case 'null':
+      return 'z.null()';
+    case 'array': {
+      if (Array.isArray(schema.items)) {
+        const members = schema.items.map((item: unknown, index: number) =>
+          jsonSchemaToZodCodegen(item, ctx, `${where}.items[${index}]`));
+        return `z.tuple([${members.join(', ')}])`;
+      }
+      const items = schema.items
+        ? jsonSchemaToZodCodegen(schema.items, ctx, `${where}.items`)
+        : 'z.any()';
+      return `z.array(${items})`;
+    }
+    case 'object':
+      return generateObject(schema, ctx, where);
+    default:
+      throw new Error(`Cannot generate Zod for ${where}: unsupported JSON Schema type '${type}'.`);
+  }
+}
+
+/** The schema's own constraints, ignoring composition keywords. */
+function generateOwn(schema: any, ctx: ZodCodegenContext, where: string): string | undefined {
+  if (Array.isArray(schema.enum)) {
+    if (schema.enum.length === 0)
+      return 'z.never()';
+    // z.enum only accepts string members; anything else has to be a union of
+    // literals, which is what a numeric or mixed JSON Schema enum needs.
+    if (schema.enum.every((value: unknown) => typeof value === 'string'))
+      return `z.enum([${schema.enum.map((value: unknown) => JSON.stringify(value)).join(', ')}])`;
+    return unionOf(schema.enum.map((value: unknown) => `z.literal(${JSON.stringify(value)})`));
+  }
+
+  if (Array.isArray(schema.type)) {
+    const types = schema.type.filter((type: unknown) => type !== 'null');
+    const branches = types.map((type: string) => generateForType(schema, type, ctx, where));
+    if (branches.length === 0)
+      return 'z.null()';
+    const expression = unionOf(branches);
+    return schema.type.includes('null') ? `${expression}.nullable()` : expression;
+  }
+
+  if (typeof schema.type === 'string')
+    return generateForType(schema, schema.type, ctx, where);
+
+  // No declared type, but object-shaped keywords are present.
+  if (schema.properties || schema.additionalProperties !== undefined)
+    return generateObject(schema, ctx, where);
+
+  return undefined;
+}
+
+function jsonSchemaToZodCodegen(schema: any, ctx: ZodCodegenContext, where: string): string {
+  if (typeof schema !== 'object' || schema === null)
+    throw new Error(`Cannot generate Zod for ${where}: expected a schema object, got ${JSON.stringify(schema)}.`);
+
+  if (ctx.path.has(schema)) {
+    throw new Error(
+      `Schema for ${where} contains a reference cycle; use a local $ref `
+      + `('#/components/schemas/<name>') instead of a self-referential object.`,
+    );
+  }
+  ctx.path.add(schema);
+  try {
+    return applyNullable(buildZodExpression(schema, ctx, where), schema);
+  }
+  finally {
+    ctx.path.delete(schema);
+  }
+}
+
+function applyNullable(expression: string, schema: any): string {
+  return schema.nullable === true ? `${expression}.nullable()` : expression;
+}
+
+function buildZodExpression(schema: any, ctx: ZodCodegenContext, where: string): string {
+  // `'$ref' in schema`, not `schema.$ref`: an empty-string ref is falsy and
+  // used to fall through to `z.any()`, silently accepting everything.
+  if ('$ref' in schema) {
+    const parsed = parseSchemaRef(schema.$ref);
+    if (parsed.kind === 'malformed')
+      throw new Error(`Invalid $ref '${String(schema.$ref)}': ${parsed.reason}.`);
+    if (parsed.kind !== 'component') {
+      throw new Error(
+        `Cannot generate Zod for $ref '${String(schema.$ref)}': `
+        + `only '#/components/schemas/<name>' refs are supported.`,
+      );
+    }
+    const identifier = ctx.components.get(parsed.name);
     if (!identifier) {
       throw new Error(
-        `Schema references undefined component '${name}'. `
+        `Schema references undefined component '${parsed.name}'. `
         + `Export it from your module as 'componentSchemas'.`,
       );
     }
     return identifier;
   }
 
-  if (schema.oneOf) {
-    const variants = schema.oneOf.map((s: any) => jsonSchemaToZodCodegen(s, components));
-    return `z.union([${variants.join(', ')}])`;
+  // `const` is checked by presence: `const: null` and `const: 0` are both falsy.
+  if ('const' in schema)
+    return schema.const === null ? 'z.null()' : `z.literal(${JSON.stringify(schema.const)})`;
+
+  // Composition keywords combine with each other and with the schema's own
+  // constraints rather than short-circuiting past them.
+  const members: string[] = [];
+  if (schema.allOf !== undefined)
+    members.push(...generateParts(schema.allOf, 'allOf', ctx, where));
+  if (schema.anyOf !== undefined)
+    members.push(unionOf(generateParts(schema.anyOf, 'anyOf', ctx, where)));
+  if (schema.oneOf !== undefined) {
+    const parts = generateParts(schema.oneOf, 'oneOf', ctx, where);
+    if (parts.length === 1) {
+      members.push(parts[0]!);
+    }
+    else {
+      // JSON Schema `oneOf` is exactly-one; z.union is any-match.
+      ctx.usesExactlyOne = true;
+      members.push(`matchExactlyOne(${parts.join(', ')})`);
+    }
   }
 
-  if (schema.anyOf) {
-    const variants = schema.anyOf.map((s: any) => jsonSchemaToZodCodegen(s, components));
-    return `z.union([${variants.join(', ')}])`;
-  }
+  const own = generateOwn(schema, ctx, where);
+  if (own !== undefined)
+    members.push(own);
 
-  if (schema.enum) {
-    const values = schema.enum.map((v: any) => JSON.stringify(v));
-    // z.enum only accepts string members; anything else has to be a union of
-    // literals, which is what a numeric or mixed JSON Schema enum needs.
-    if (schema.enum.every((v: unknown) => typeof v === 'string'))
-      return `z.enum([${values.join(', ')}])`;
-    return `z.union([${values.map((v: string) => `z.literal(${v})`).join(', ')}])`;
-  }
-
-  switch (schema.type) {
-    case 'string': {
-      let s = 'z.string()';
-      if (schema.format === 'email')
-        s += '.email()';
-      if (schema.format === 'uri')
-        s += '.url()';
-      if (schema.minLength)
-        s += `.min(${schema.minLength})`;
-      if (schema.maxLength)
-        s += `.max(${schema.maxLength})`;
-      if (schema.nullable)
-        s += '.nullable()';
-      return s;
-    }
-    case 'number':
-      return schema.nullable ? 'z.number().nullable()' : 'z.number()';
-    case 'integer':
-      return schema.nullable ? 'z.number().int().nullable()' : 'z.number().int()';
-    case 'boolean':
-      return schema.nullable ? 'z.boolean().nullable()' : 'z.boolean()';
-    case 'null':
-      return 'z.null()';
-    case 'array': {
-      const items = schema.items ? jsonSchemaToZodCodegen(schema.items, components) : 'z.any()';
-      return `z.array(${items})`;
-    }
-    case 'object': {
-      if (!schema.properties) {
-        return schema.additionalProperties ? 'z.record(z.string(), z.any())' : 'z.object({})';
-      }
-      const required = new Set(schema.required ?? []);
-      const fields = Object.entries(schema.properties).map(([key, propSchema]: [string, any]) => {
-        const zodType = jsonSchemaToZodCodegen(propSchema, components);
-        // Property names come from application schemas and need not be valid
-        // identifiers — `first-name` and `2fa` are both legal JSON Schema.
-        return `  ${quotePropertyKey(key)}: ${required.has(key) ? zodType : `${zodType}.optional()`}`;
-      });
-      return `z.object({\n${fields.join(',\n')},\n})`;
-    }
-    default:
-      return 'z.any()';
-  }
+  if (members.length === 0)
+    return 'z.any()';
+  return intersectionOf(members);
 }
 
 // --- Main ---

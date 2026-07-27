@@ -36,15 +36,33 @@ export interface AssembledRoutes {
  * factory, so no plugin worker starts and no database is touched.
  *
  * Both `createFortress()` and `describeRouteSurface()` go through here, so a
- * configuration the CLI accepts is one the application can actually boot —
- * and, critically, a conflict that would hide a route from an app-aware check
- * is rejected in both.
+ * route conflict that would hide a route from an app-aware check is rejected
+ * in both. This is parity of the *route surface*, not a boot check — see
+ * {@link describeRouteSurface} for what construction still validates on top.
  *
- * Validation that genuinely needs a constructed instance stays in
- * `createFortress()`: JWT/session/cookie resolution, adapter instrumentation,
- * and the handler-must-be-an-own-callable check that requires plugin methods.
+ * The work splits into two phases because a plugin's `methods()` factory can
+ * mutate the route objects it was declared with. {@link normalizePlugins}
+ * validates the declaration and is safe to run first; {@link assembleEndpoints}
+ * derives and validates the resulting route set and must run after the
+ * factories, which is what `createFortress()` does. Calling `assembleRoutes()`
+ * runs both in one pass, which is correct for config-only tooling because no
+ * factory has run — or ever will.
  */
 export function assembleRoutes(config: RouteAssemblyConfig): AssembledRoutes {
+  const plugins = normalizePlugins(config);
+  return { plugins, ...assembleEndpoints(plugins) };
+}
+
+/**
+ * Phase 1 — properties of the *declaration*, derivable from config alone.
+ *
+ * Synthesizes the `__host` plugin and validates what a plugin declares:
+ * reserved names, duplicate plugin names, malformed endpoint definitions,
+ * route-key/handler mismatches, non-object body/query/params schemas. Safe to
+ * run before plugin factories, and `createFortress()` does exactly that so a
+ * malformed config is rejected before any plugin worker starts.
+ */
+export function normalizePlugins(config: RouteAssemblyConfig): readonly RuntimeFortressPlugin[] {
   const userPlugins = config.plugins ?? [];
   if (config.routes) {
     const collision = userPlugins.find(plugin => plugin.name === HOST_ROUTES_PLUGIN_NAME);
@@ -60,11 +78,28 @@ export function assembleRoutes(config: RouteAssemblyConfig): AssembledRoutes {
   const plugins = hostRoutesPlugin ? [hostRoutesPlugin, ...userPlugins] : userPlugins;
 
   validatePluginRouteShapes(plugins);
+  return plugins;
+}
 
-  const { endpoints, endpointOwners } = mergeEndpoints(plugins);
-  assertRouteSecurityInvariants(endpoints);
-
-  return { plugins, endpoints, endpointOwners };
+/**
+ * Phase 2 — properties of the resulting route *set*, and the authoritative
+ * one. **Must run after plugin factories.**
+ *
+ * A plugin's `methods()` factory receives the live route objects — via its own
+ * closure and via `ctx.config.plugins[…].routes` — and can mutate them: flip
+ * `bearerKind`, rewrite a path onto a core route, add a route, remove one.
+ * Merge precedence and the security invariants are only meaningful once that
+ * has happened, so `createFortress()` re-derives here and publishes *this*
+ * set. Route shapes are re-validated too, since a factory may have added
+ * routes that were never checked in phase 1.
+ */
+export function assembleEndpoints(
+  plugins: readonly RuntimeFortressPlugin[],
+): Pick<AssembledRoutes, 'endpointOwners' | 'endpoints'> {
+  validatePluginRouteShapes(plugins);
+  const merged = mergeEndpoints(plugins);
+  assertRouteSecurityInvariants(merged.endpoints);
+  return merged;
 }
 
 function validatePluginRouteShapes(plugins: readonly RuntimeFortressPlugin[]): void {

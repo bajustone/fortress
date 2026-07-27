@@ -53,8 +53,8 @@ This single test catches:
 
 ## As a CLI
 
-Point the route commands at a module that exports your configured instance so
-they cover your plugin and host-owned routes:
+Point the route commands at a module that exports your `config` so they cover
+your plugin and host-owned routes:
 
 ```sh
 fortress manifest:check --module ./fortress.config.ts       # route-security drift (also: check:routes)

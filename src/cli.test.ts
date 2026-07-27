@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -159,6 +159,23 @@ function writeAppModule(dir: string, file: string, opts: AppModuleOptions = {}):
       await Bun.write(${JSON.stringify(`${file}.disposed`)}, 'yes');
     }
   `);
+}
+
+/**
+ * Import a generated Zod module and return its exports.
+ *
+ * The file is written into a temp cwd where `zod` does not resolve, so the
+ * bare specifier is rewritten to the resolved URL — the same trick the live
+ * migration fixture uses for `drizzle-orm`. Transpiling the output is not
+ * enough: the defects these tests cover (a `__proto__` key that never becomes
+ * a property, a `oneOf` that accepts two matches) all compile perfectly.
+ */
+async function importGenerated(file: string): Promise<Record<string, { safeParse: (value: unknown) => { success: boolean } }>> {
+  const zodUrl = import.meta.resolve('zod');
+  const source = readFileSync(file, 'utf8').replace(`from 'zod'`, `from ${JSON.stringify(zodUrl)}`);
+  const executable = `${file.replace(/\.ts$/, '')}.executable.ts`;
+  writeFileSync(executable, source);
+  return await import(pathToFileURL(executable).href) as never;
 }
 
 describe('fortress CLI smoke tests', () => {
@@ -395,9 +412,9 @@ describe('fortress CLI smoke tests', () => {
     expect(String(foreign.stdout)).not.toContain(APP_SCOPE);
 
     for (const malformed of [
-      `export const config = { jwt: { key: 'k' }, plugins: 'nope' };`,
-      `export const config = { jwt: { key: 'k' }, routes: [] };`,
-      `export const config = { jwt: {} };`,
+      `export const config = { database: undefined, jwt: { key: 'k' }, plugins: 'nope' };`,
+      `export const config = { database: undefined, jwt: { key: 'k' }, routes: [] };`,
+      `export const config = { database: undefined, jwt: {} };`,
     ]) {
       writeFileSync(join(cwd, 'malformed-config.ts'), malformed);
       const result = runCli(cwd, ['manifest', '--module', './malformed-config.ts']);
@@ -421,6 +438,7 @@ describe('fortress CLI smoke tests', () => {
     // A `$ref` with no matching component serializes fine but is invalid.
     writeFileSync(join(cwd, 'dangling-module.ts'), `
       export const config = {
+        database: undefined,
         jwt: { key: 'dangling-secret-at-least-32-chars-long' },
         routes: {
           broken: {
@@ -440,7 +458,7 @@ describe('fortress CLI smoke tests', () => {
 
     // Redefining a core component would silently change core operations.
     writeFileSync(join(cwd, 'shadow-module.ts'), `
-      export const config = { jwt: { key: 'shadow-secret-at-least-32-chars-long!' } };
+      export const config = { database: undefined, jwt: { key: 'shadow-secret-at-least-32-chars-long!' } };
       export const componentSchemas = { User: { type: 'object', properties: {} } };
     `);
     const shadow = runCli(cwd, ['openapi', '--module', './shadow-module.ts']);
@@ -451,6 +469,7 @@ describe('fortress CLI smoke tests', () => {
   it('generates compilable Zod for hostile component and property names', () => {
     writeFileSync(join(cwd, 'hostile-module.ts'), `
       export const config = {
+        database: undefined,
         jwt: { key: 'hostile-secret-at-least-32-chars-long' },
         routes: {
           hostile: {
@@ -512,6 +531,7 @@ describe('fortress CLI smoke tests', () => {
     // throws after the module is loaded but before the command runs.
     writeFileSync(join(cwd, 'late-failure-module.ts'), `
       export const config = {
+        database: undefined,
         jwt: { key: 'late-failure-secret-at-least-32-chars' },
         csrf: { get skipPaths() { throw new Error('malformed csrf config'); } },
       };
@@ -522,6 +542,168 @@ describe('fortress CLI smoke tests', () => {
     expect(result.status, String(result.stdout)).toBe(1);
     expect(result.stderr).toContain('malformed csrf config');
     expect(readFileSync(join(cwd, 'late-failure.disposed'), 'utf8')).toBe('yes');
+  }, 30_000);
+
+  it('generates Zod that actually enforces what the schema declares', async () => {
+    // `properties` is built through JSON.parse so `__proto__` is a real own
+    // property — a plain object literal would set the prototype instead, and
+    // the key would vanish before the CLI ever saw it.
+    writeFileSync(join(cwd, 'semantics-module.ts'), `
+      const parse = (json) => JSON.parse(json);
+      export const config = {
+        database: undefined,
+        jwt: { key: 'semantics-secret-at-least-32-chars-ok' },
+      };
+      export const componentSchemas = {
+        Proto: parse('{"type":"object","required":["__proto__"],"properties":{"__proto__":{"type":"string"}}}'),
+        Overlapping: { oneOf: [{ type: 'number' }, { type: 'integer' }] },
+        Both: { allOf: [
+          { type: 'object', required: ['a'], properties: { a: { type: 'string' } } },
+          { type: 'object', required: ['b'], properties: { b: { type: 'number' } } },
+        ] },
+        EmptyProps: { type: 'object', properties: {} },
+        Constant: { const: 'only-this' },
+        Bounded: { type: 'object', required: ['s', 'n'], properties: {
+          s: { type: 'string', pattern: '^ab+c$', maxLength: 4 },
+          n: { type: 'integer', minimum: 0, maximum: 0 },
+        } },
+        Strict: { type: 'object', required: ['a'], properties: { a: { type: 'string' } }, additionalProperties: false },
+        Nullable: { type: ['string', 'null'] },
+      };
+    `);
+
+    const result = runCli(cwd, ['schemas', '--format', 'zod', '--module', './semantics-module.ts', '--out', 'semantics.ts']);
+    expect(result.status, String(result.stderr)).toBe(0);
+    const schemas = await importGenerated(join(cwd, 'semantics.ts'));
+
+    // A required `__proto__` must actually be required.
+    expect(schemas.ProtoSchema!.safeParse({}).success, 'required __proto__ was not enforced').toBe(false);
+    expect(schemas.ProtoSchema!.safeParse(JSON.parse('{"__proto__":"x"}')).success).toBe(true);
+
+    // JSON Schema `oneOf` is exactly-one; 1 matches both number and integer.
+    expect(schemas.OverlappingSchema!.safeParse(1).success, 'value matching two variants was accepted').toBe(false);
+    expect(schemas.OverlappingSchema!.safeParse(1.5).success).toBe(true);
+
+    // `allOf` must require every member, not accept anything.
+    expect(schemas.BothSchema!.safeParse({ a: 'x', b: 1 }).success).toBe(true);
+    expect(schemas.BothSchema!.safeParse({ a: 'x' }).success, 'allOf accepted a partial value').toBe(false);
+    expect(schemas.BothSchema!.safeParse('anything').success).toBe(false);
+
+    expect(schemas.EmptyPropsSchema!.safeParse({}).success).toBe(true);
+    expect(schemas.ConstantSchema!.safeParse('only-this').success).toBe(true);
+    expect(schemas.ConstantSchema!.safeParse('other').success, 'const was dropped').toBe(false);
+
+    // Bounds of 0 are falsy and used to be skipped entirely.
+    expect(schemas.BoundedSchema!.safeParse({ s: 'abc', n: 0 }).success).toBe(true);
+    expect(schemas.BoundedSchema!.safeParse({ s: 'xyz', n: 0 }).success, 'pattern was dropped').toBe(false);
+    expect(schemas.BoundedSchema!.safeParse({ s: 'abbbbc', n: 0 }).success, 'maxLength was dropped').toBe(false);
+    expect(schemas.BoundedSchema!.safeParse({ s: 'abc', n: 1 }).success, 'maximum: 0 was dropped').toBe(false);
+
+    expect(schemas.StrictSchema!.safeParse({ a: 'x' }).success).toBe(true);
+    expect(schemas.StrictSchema!.safeParse({ a: 'x', extra: 1 }).success, 'additionalProperties:false was dropped').toBe(false);
+
+    expect(schemas.NullableSchema!.safeParse(null).success).toBe(true);
+    expect(schemas.NullableSchema!.safeParse('x').success).toBe(true);
+    expect(schemas.NullableSchema!.safeParse(1).success).toBe(false);
+  }, 30_000);
+
+  it('generates Zod for the core surface that parses real payloads', async () => {
+    const result = runCli(cwd, ['schemas', '--format', 'zod', '--out', 'core-schemas.ts']);
+    expect(result.status, String(result.stderr)).toBe(0);
+    const schemas = await importGenerated(join(cwd, 'core-schemas.ts'));
+
+    // AuthResult is core's only `oneOf`; its branches are discriminated by a
+    // literal `status`, so exactly-one semantics must still accept each one.
+    const user = { id: '1', email: 'a@b.c', name: 'A', isActive: true, emailVerified: true, createdAt: 'x', updatedAt: 'y' };
+    expect(schemas.AuthResultSchema!.safeParse({
+      status: 'success',
+      user,
+      method: 'password',
+      accessToken: 't',
+      refreshToken: 'r',
+    }).success, 'exactly-one oneOf rejected a valid core AuthResult').toBe(true);
+    expect(schemas.AuthResultSchema!.safeParse({
+      status: 'impersonation',
+      user,
+      accessToken: 't',
+      refreshToken: null,
+    }).success).toBe(true);
+    expect(schemas.AuthResultSchema!.safeParse({ status: 'nope' }).success).toBe(false);
+  }, 30_000);
+
+  it('refuses to generate a weaker validator than the schema declares', () => {
+    const cases = [
+      { name: 'unsupported-type', schema: `{ type: 'geo-point' }`, message: `unsupported JSON Schema type 'geo-point'` },
+      { name: 'empty-oneof', schema: `{ oneOf: [] }`, message: `'oneOf' is empty` },
+      { name: 'empty-allof', schema: `{ allOf: [] }`, message: `'allOf' is empty` },
+      { name: 'bad-minlength', schema: `{ type: 'string', minLength: '3' }`, message: `must be a finite number` },
+      { name: 'self-cycle', schema: `(() => { const s = { type: 'object', properties: {} }; s.properties.self = s; return s; })()`, message: 'reference cycle' },
+      { name: 'foreign-ref', schema: `{ $ref: '#/components/parameters/Thing' }`, message: `only '#/components/schemas/<name>' refs are supported` },
+      { name: 'empty-ref', schema: `{ $ref: '' }`, message: 'empty reference' },
+    ];
+
+    for (const testCase of cases) {
+      writeFileSync(join(cwd, `weak-${testCase.name}.ts`), `
+        export const config = { database: undefined, jwt: { key: 'weak-secret-at-least-32-chars-long-ok' } };
+        export const componentSchemas = { Thing: ${testCase.schema} };
+      `);
+      const result = runCli(cwd, ['schemas', '--format', 'zod', '--module', `./weak-${testCase.name}.ts`]);
+      const diagnostic = `${result.stdout}\n${result.stderr}`;
+      expect(result.status, `${testCase.name}: ${diagnostic}`).toBe(1);
+      expect(diagnostic, testCase.name).toContain(testCase.message);
+      expect(diagnostic, testCase.name).not.toMatch(RUNTIME_ERROR_RE);
+    }
+  }, 30_000);
+
+  it('rejects component names OpenAPI forbids and refs that cannot resolve', () => {
+    const cases = [
+      { name: 'space', schemas: `{ 'Bad Name': { type: 'string' } }`, message: `Invalid OpenAPI component name 'Bad Name'` },
+      { name: 'slash', schemas: `{ 'a/b': { type: 'string' } }`, message: `Invalid OpenAPI component name 'a/b'` },
+      { name: 'empty', schemas: `{ '': { type: 'string' } }`, message: `Invalid OpenAPI component name ''` },
+      { name: 'tilde', schemas: `{ '~weird': { type: 'string' } }`, message: `Invalid OpenAPI component name '~weird'` },
+    ];
+    for (const testCase of cases) {
+      writeFileSync(join(cwd, `badname-${testCase.name}.ts`), `
+        export const config = { database: undefined, jwt: { key: 'badname-secret-at-least-32-chars-ok' } };
+        export const componentSchemas = ${testCase.schemas};
+      `);
+      for (const command of [['openapi'], ['schemas', '--format', 'json-schema']]) {
+        const result = runCli(cwd, [...command, '--module', `./badname-${testCase.name}.ts`]);
+        const diagnostic = `${result.stdout}\n${result.stderr}`;
+        expect(result.status, `${testCase.name} ${command[0]}: ${diagnostic}`).toBe(1);
+        expect(diagnostic, testCase.name).toContain(testCase.message);
+      }
+    }
+
+    // A percent-encoded ref denotes the decoded name, so this resolves.
+    writeFileSync(join(cwd, 'encoded-ref.ts'), `
+      export const config = {
+        database: undefined,
+        jwt: { key: 'encoded-secret-at-least-32-chars-long' },
+        routes: { e: { method: 'POST', path: '/e', handler: 'e',
+          meta: { summary: 'e', permission: { resource: 'x', action: 'y' } },
+          input: { body: { $ref: '#/components/schemas/Foo%2DBar' } },
+          responses: { 200: { description: 'ok' } } } },
+      };
+      export const componentSchemas = { 'Foo-Bar': { type: 'object', properties: { a: { type: 'string' } } } };
+    `);
+    const encoded = runCli(cwd, ['openapi', '--module', './encoded-ref.ts', '--out', 'encoded.json']);
+    expect(encoded.status, String(encoded.stderr)).toBe(0);
+
+    // A local pointer into a bucket the document does not define must fail.
+    writeFileSync(join(cwd, 'other-local-ref.ts'), `
+      export const config = {
+        database: undefined,
+        jwt: { key: 'otherlocal-secret-at-least-32-chars-ok' },
+        routes: { o: { method: 'POST', path: '/o', handler: 'o',
+          meta: { summary: 'o', permission: { resource: 'x', action: 'y' } },
+          input: { body: { $ref: '#/components/parameters/Missing' } },
+          responses: { 200: { description: 'ok' } } } },
+      };
+    `);
+    const otherLocal = runCli(cwd, ['openapi', '--module', './other-local-ref.ts']);
+    expect(otherLocal.status, String(otherLocal.stdout)).toBe(1);
+    expect(otherLocal.stderr).toContain('unresolvable $ref');
   }, 30_000);
 
   it('refuses to emit an OpenAPI document with duplicate operation IDs', () => {

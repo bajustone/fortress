@@ -1,5 +1,6 @@
 import type { ComponentSchemas, EndpointDefinition, SecurityRequirement } from '../../core/endpoint';
 import type { JSONSchema } from '../../core/json-schema';
+import { assertComponentName } from '../../core/openapi-ref';
 
 /** Minimal OpenAPI 3.1 spec shape produced by {@link buildOpenAPISpec}. */
 export interface OpenAPISpec {
@@ -143,20 +144,35 @@ function toOpenAPIPath(path: string): string {
  * JSON-serializable JSON Schema, so strip any key beginning with `~`, any
  * function value, and any `undefined` value recursively.
  */
-function cleanSchema<T>(value: T): T {
-  if (Array.isArray(value))
-    return value.map(cleanSchema) as T;
+function cleanSchema<T>(value: T, ancestors: Set<object> = new Set()): T {
+  if (typeof value !== 'object' || value === null)
+    return value;
 
-  if (typeof value === 'object' && value !== null) {
+  // Track ancestors, not every object seen: a sub-schema legitimately reused in
+  // several places must be cleaned at each one. Only a schema that contains
+  // *itself* is unserializable, and it would otherwise exhaust the stack.
+  if (ancestors.has(value)) {
+    throw new Error(
+      'Schema contains a reference cycle; use a local $ref '
+      + '(\'#/components/schemas/<name>\') instead of a self-referential object.',
+    );
+  }
+  ancestors.add(value);
+
+  try {
+    if (Array.isArray(value))
+      return value.map(entry => cleanSchema(entry, ancestors)) as T;
+
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .filter(([key]) => !key.startsWith('~'))
         .filter(([, entry]) => typeof entry !== 'function' && entry !== undefined)
-        .map(([key, entry]) => [key, cleanSchema(entry)]),
+        .map(([key, entry]) => [key, cleanSchema(entry, ancestors)]),
     ) as T;
   }
-
-  return value;
+  finally {
+    ancestors.delete(value);
+  }
 }
 
 function resolveOperationId(endpoint: EndpointDefinition, options: SpecBuilderOptions): string | undefined {
@@ -173,7 +189,16 @@ export function buildOpenAPISpec(
   componentSchemas: ComponentSchemas,
   options: SpecBuilderOptions,
 ): OpenAPISpec {
-  const paths: Record<string, Record<string, OpenAPIOperation>> = {};
+  // Backstop for every caller that supplies its own component schemas —
+  // `toOpenAPI({ schemas })`, the OpenAPI plugin's `additionalSchemas`, and the
+  // CLI's `--module componentSchemas`. An illegal key produces a document no
+  // conformant tool can resolve.
+  for (const name of Object.keys(componentSchemas))
+    assertComponentName(name);
+
+  // `paths` is keyed by caller-supplied route paths; a null prototype keeps a
+  // pathological name from reaching Object.prototype.
+  const paths: Record<string, Record<string, OpenAPIOperation>> = Object.create(null);
   const usedSecuritySchemes = new Set<string>();
 
   for (const ep of endpoints) {
@@ -181,7 +206,18 @@ export function buildOpenAPISpec(
     const method = ep.method.toLowerCase();
 
     if (!paths[openAPIPath]) {
-      paths[openAPIPath] = {};
+      paths[openAPIPath] = Object.create(null) as Record<string, OpenAPIOperation>;
+    }
+    // `:id` and `{id}` normalise to the same OpenAPI path, so a route set that
+    // mixes both styles would silently lose one operation here. A route that
+    // survived route assembly must never vanish between the manifest and the
+    // spec.
+    if (paths[openAPIPath][method]) {
+      throw new Error(
+        `Two endpoints map to the same OpenAPI operation ${ep.method.toUpperCase()} ${openAPIPath}: `
+        + `'${paths[openAPIPath][method].operationId ?? 'unnamed'}' and '${ep.handler}'. `
+        + `Use ':param' or '{param}' consistently in route paths, not both.`,
+      );
     }
 
     const operation: OpenAPIOperation = {
@@ -271,7 +307,12 @@ export function buildOpenAPISpec(
     },
     paths,
     components: {
-      schemas: cleanSchema(componentSchemas),
+      // Clean each component's value, not the record: `cleanSchema` strips
+      // keys beginning with `~`, which would silently delete a component whose
+      // *name* starts with one instead of reporting it as invalid.
+      schemas: Object.fromEntries(
+        Object.entries(componentSchemas).map(([name, schema]) => [name, cleanSchema(schema)]),
+      ),
       securitySchemes,
     },
   };
