@@ -439,12 +439,15 @@ function parseDialect(value: string | undefined, required = false): 'sqlite' | '
   return dialect;
 }
 
+const DECIMAL_INTEGER_PATTERN = /^\d+$/;
+
 function parseTargetVersion(raw: string | undefined): number | undefined {
   if (raw === undefined)
     return undefined;
-  const targetVersion = Number(raw);
-  if (!Number.isSafeInteger(targetVersion) || targetVersion < 0)
-    throw new Error('--target-version must be a non-negative safe integer');
+  // Number() coerces whitespace, hex/binary/exponent syntax, and signs; require plain digits.
+  const targetVersion = DECIMAL_INTEGER_PATTERN.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(targetVersion))
+    throw new Error(`--target-version must be a non-negative safe integer (received '${raw}')`);
   return targetVersion;
 }
 
