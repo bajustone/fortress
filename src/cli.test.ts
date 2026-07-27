@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -135,14 +135,23 @@ describe('fortress CLI smoke tests', () => {
       export const fortress = { async migrate() { throw new Error('migration rejected'); } };
       export async function dispose() { await Bun.write('rejection-disposed.txt', 'yes'); }
     `);
+    writeFileSync(join(cwd, 'must-not-import.ts'), `
+      await Bun.write('typo-imported.txt', 'yes');
+      export const fortress = { async migrate() { throw new Error('must not run'); } };
+    `);
     const cases = [
       { args: ['migrate:up'], message: '--module requires a value' },
+      { args: ['migrate:up', '--module', '-x'], message: '--module requires a value' },
       { args: ['migrate:up', '--module', './missing.ts'], message: 'Cannot find module' },
       { args: ['migrate:up', '--module', './invalid-module.ts'], message: `named export 'fortress'` },
       { args: ['migrate:up', '--module', './invalid-module.ts', '--target-version', '-1'], message: 'non-negative safe integer' },
       { args: ['migrate:up', '--module', './invalid-module.ts', '--dialect', 'pg'], message: 'adapter owns the dialect' },
       { args: ['migrate:up', '--module', './invalid-module.ts', '--out', 'x.sql'], message: '--out cannot be used' },
       { args: ['migrate:up', '--module', './rejecting-module.ts'], message: 'migration rejected' },
+      { args: ['migrate:up', '--module', './must-not-import.ts', '--target-verison', '5'], message: `Unknown argument '--target-verison'` },
+      { args: ['migrate:up', '--module', './must-not-import.ts', 'trailing'], message: `Unknown argument 'trailing'` },
+      { args: ['migrate:up', '--module', './must-not-import.ts', '--module', './invalid-module.ts'], message: `Duplicate argument '--module'` },
+      { args: ['migrate:up', '--module', './must-not-import.ts', '--target-version', '5', '--target-version', '6'], message: `Duplicate argument '--target-version'` },
     ];
 
     for (const testCase of cases) {
@@ -153,6 +162,7 @@ describe('fortress CLI smoke tests', () => {
       expect(diagnostic).not.toMatch(RUNTIME_ERROR_RE);
     }
     expect(readFileSync(join(cwd, 'rejection-disposed.txt'), 'utf8')).toBe('yes');
+    expect(existsSync(join(cwd, 'typo-imported.txt'))).toBe(false);
   });
 
   it('exports deterministic review SQL with explicit data-step limitations', () => {
@@ -176,10 +186,37 @@ describe('fortress CLI smoke tests', () => {
       ['migrate:export', '--direction', 'up'],
       ['migrate:export', '--dialect', 'sqlite'],
       ['migrate:export', '--dialect', 'sqlite', '--direction', 'sideways'],
+      ['migrate:export', '--dialect', 'sqlite', '--direction', 'up', '--out', 'a.sql', '-o', 'b.sql'],
+      ['migrate:export', '--dialect', 'sqlite', '--direction', 'up', 'trailing'],
     ]) {
       const invalid = runCli(cwd, args);
       expect(invalid.status, String(invalid.stderr)).toBe(1);
       expect(`${invalid.stdout}\n${invalid.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
+    }
+
+    for (const args of [
+      ['migrate:export', '--dialect', 'sqlite', '--direction', 'up', '--out'],
+      ['migrate:export', '--dialect', 'sqlite', '--direction', 'up', '-o'],
+      ['migrate:export', '--dialect', 'sqlite', '--direction', 'up', '--out', '-x'],
+      ['migrate:status', '--out'],
+      ['migrate:status', '-o'],
+      ['migrate:down', '--out'],
+      ['migrate:down', '-o'],
+    ]) {
+      const missingOut = runCli(cwd, args);
+      expect(missingOut.status).toBe(1);
+      expect(missingOut.stdout).toBe('');
+      expect(missingOut.stderr).toMatch(/(?:--out|-o) requires a value/);
+    }
+
+    for (const args of [
+      ['migrate:diff', 'trailing'],
+      ['migrate:check', '--out', 'ignored.sql'],
+      ['migrate:status', '--dialect', 'sqlite', '-x'],
+    ]) {
+      const invalid = runCli(cwd, args);
+      expect(invalid.status).toBe(1);
+      expect(`${invalid.stdout}\n${invalid.stderr}`).toContain('Error:');
     }
   });
 

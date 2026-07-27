@@ -382,17 +382,73 @@ function cmdPolicyHowto(name: 'diff' | 'apply' | 'check'): void {
   }
 }
 
-function parseDialect(args: string[]): 'sqlite' | 'pg' {
-  const dialect = parseArg(args, '--dialect') ?? 'sqlite';
-  if (dialect !== 'sqlite' && dialect !== 'pg') {
-    console.error(`Unsupported dialect '${dialect}'. Use sqlite or pg.`);
-    process.exit(1);
+type MigrationOption = 'dialect' | 'direction' | 'module' | 'out' | 'targetVersion';
+
+type ParsedMigrationArgs = Partial<Record<MigrationOption, string>>;
+
+const MIGRATION_OPTION_FLAGS: Readonly<Record<string, MigrationOption>> = {
+  '--dialect': 'dialect',
+  '--direction': 'direction',
+  '--module': 'module',
+  '--out': 'out',
+  '-o': 'out',
+  '--target-version': 'targetVersion',
+};
+
+function parseMigrationArgs(
+  args: string[],
+  command: string,
+  allowed: readonly MigrationOption[],
+): ParsedMigrationArgs {
+  const allowedOptions = new Set(allowed);
+  const parsed: ParsedMigrationArgs = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index]!;
+    const option = MIGRATION_OPTION_FLAGS[flag];
+    if (!option)
+      throw new Error(`Unknown argument '${flag}' for ${command}`);
+    if (!allowedOptions.has(option))
+      throw new Error(`${flag} cannot be used with ${command}`);
+    if (parsed[option] !== undefined)
+      throw new Error(`Duplicate argument '${flag}' for ${command}`);
+    const value = args[index + 1];
+    if (!value || (option !== 'targetVersion' && value.startsWith('-')) || MIGRATION_OPTION_FLAGS[value])
+      throw new Error(`${flag} requires a value`);
+    parsed[option] = value;
   }
+  return parsed;
+}
+
+function requireMigrationOption(
+  parsed: ParsedMigrationArgs,
+  option: MigrationOption,
+  flag: string,
+): string {
+  const value = parsed[option];
+  if (!value)
+    throw new Error(`${flag} requires a value`);
+  return value;
+}
+
+function parseDialect(value: string | undefined, required = false): 'sqlite' | 'pg' {
+  if (required && !value)
+    throw new Error('--dialect requires a value');
+  const dialect = value ?? 'sqlite';
+  if (dialect !== 'sqlite' && dialect !== 'pg')
+    throw new Error(`Unsupported dialect '${dialect}'. Use sqlite or pg.`);
   return dialect;
 }
 
-function writeOrPrint(content: string, args: string[], label: string): void {
-  const outFile = parseArg(args, '--out') ?? parseArg(args, '-o');
+function parseTargetVersion(raw: string | undefined): number | undefined {
+  if (raw === undefined)
+    return undefined;
+  const targetVersion = Number(raw);
+  if (!Number.isSafeInteger(targetVersion) || targetVersion < 0)
+    throw new Error('--target-version must be a non-negative safe integer');
+  return targetVersion;
+}
+
+function writeOrPrint(content: string, outFile: string | undefined, label: string): void {
   if (outFile) {
     writeFileSync(outFile, content, 'utf-8');
     console.log(`${label} written to ${outFile}`);
@@ -403,7 +459,8 @@ function writeOrPrint(content: string, args: string[], label: string): void {
 }
 
 function cmdMigrateStatus(args: string[]): void {
-  const dialect = parseDialect(args);
+  const parsed = parseMigrationArgs(args, 'migrate:status', ['dialect', 'out']);
+  const dialect = parseDialect(parsed.dialect);
   const migrations = getFortressMigrations(dialect);
   const body = {
     dialect,
@@ -414,32 +471,7 @@ function cmdMigrateStatus(args: string[]): void {
     })),
     note: 'For live database status, call getMigrationStatus(databaseAdapter) from application code so Fortress can use your configured connection.',
   };
-  writeOrPrint(`${JSON.stringify(body, null, 2)}\n`, args, 'Migration status');
-}
-
-function hasArg(args: string[], flag: string, alias?: string): boolean {
-  return args.includes(flag) || Boolean(alias && args.includes(alias));
-}
-
-function requireArg(args: string[], flag: string): string {
-  const index = args.indexOf(flag);
-  const value = index >= 0 ? args[index + 1] : undefined;
-  if (!value || value.startsWith('-'))
-    throw new Error(`${flag} requires a value`);
-  return value;
-}
-
-function parseTargetVersion(args: string[]): number | undefined {
-  const index = args.indexOf('--target-version');
-  if (index < 0)
-    return undefined;
-  const raw = args[index + 1];
-  if (!raw || raw.startsWith('--'))
-    throw new Error('--target-version requires a value');
-  const targetVersion = Number(raw);
-  if (!Number.isSafeInteger(targetVersion) || targetVersion < 0)
-    throw new Error('--target-version must be a non-negative safe integer');
-  return targetVersion;
+  writeOrPrint(`${JSON.stringify(body, null, 2)}\n`, parsed.out, 'Migration status');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -492,14 +524,11 @@ function printMigrationResult(result: MigrateResult): void {
 }
 
 async function cmdMigrateUp(args: string[]): Promise<void> {
-  if (hasArg(args, '--dialect'))
+  if (args.includes('--dialect'))
     throw new Error('--dialect cannot be used with live migration; the module adapter owns the dialect');
-  if (hasArg(args, '--out', '-o'))
-    throw new Error('--out cannot be used with live migration');
-  if (hasArg(args, '--direction'))
-    throw new Error('--direction cannot be used with live migration');
-  const modulePath = requireArg(args, '--module');
-  const targetVersion = parseTargetVersion(args);
+  const parsed = parseMigrationArgs(args, 'migrate:up', ['module', 'targetVersion']);
+  const modulePath = requireMigrationOption(parsed, 'module', '--module');
+  const targetVersion = parseTargetVersion(parsed.targetVersion);
   const loaded = await loadMigrationModule(modulePath);
   let result: MigrateResult | undefined;
   let migrationError: unknown;
@@ -535,35 +564,27 @@ async function cmdMigrateUp(args: string[]): Promise<void> {
   printMigrationResult(result);
 }
 
-function parseRequiredDialect(args: string[]): 'sqlite' | 'pg' {
-  const dialect = requireArg(args, '--dialect');
-  if (dialect !== 'sqlite' && dialect !== 'pg')
-    throw new Error(`Unsupported dialect '${dialect}'. Use sqlite or pg.`);
-  return dialect;
-}
-
 function cmdMigrateExport(args: string[]): void {
-  if (hasArg(args, '--module'))
-    throw new Error('--module cannot be used with offline SQL export');
-  if (hasArg(args, '--target-version'))
-    throw new Error('--target-version cannot be used with offline SQL export');
-  const dialect = parseRequiredDialect(args);
-  const direction = requireArg(args, '--direction');
+  const parsed = parseMigrationArgs(args, 'migrate:export', ['dialect', 'direction', 'out']);
+  const dialect = parseDialect(parsed.dialect, true);
+  const direction = requireMigrationOption(parsed, 'direction', '--direction');
   if (direction !== 'up' && direction !== 'down')
     throw new Error(`Unsupported migration direction '${direction}'. Use up or down.`);
   const sql = renderMigrationSqlExport(dialect, direction);
-  writeOrPrint(sql, args, `${direction === 'up' ? 'Forward' : 'Rollback'} migration SQL`);
+  writeOrPrint(sql, parsed.out, `${direction === 'up' ? 'Forward' : 'Rollback'} migration SQL`);
   if (direction === 'up')
     console.error('Warning: exported SQL omits runtime data steps and is for review/tooling only; use migrate:up --module for execution.');
 }
 
 function cmdMigrateDown(args: string[]): void {
+  const parsed = parseMigrationArgs(args, 'migrate:down', ['dialect', 'out']);
   console.error('Warning: migrate:down is deprecated; use migrate:export --direction down --dialect <sqlite|pg>.');
-  const dialect = parseDialect(args);
-  writeOrPrint(renderMigrationSqlExport(dialect, 'down'), args, 'Rollback migration SQL');
+  const dialect = parseDialect(parsed.dialect);
+  writeOrPrint(renderMigrationSqlExport(dialect, 'down'), parsed.out, 'Rollback migration SQL');
 }
 
-function cmdMigrateDiff(): void {
+function cmdMigrateDiff(args: string[]): void {
+  parseMigrationArgs(args, 'migrate:diff', []);
   console.log('Live migration drift checks require your application database adapter.');
   console.log('Use this in application or CI code:');
   console.log('  import { detectMigrationDrift, hasMigrationDrift } from \'@bajustone/fortress\';');
@@ -572,7 +593,8 @@ function cmdMigrateDiff(): void {
 }
 
 function cmdMigrateCheck(args: string[]): void {
-  const dialect = parseDialect(args);
+  const parsed = parseMigrationArgs(args, 'migrate:check', ['dialect']);
+  const dialect = parseDialect(parsed.dialect);
   const migrations = getFortressMigrations(dialect);
   const versions = new Set<number>();
   for (const migration of migrations) {
@@ -770,7 +792,7 @@ async function main(): Promise<void> {
       cmdMigrateDown(args.slice(1));
       break;
     case 'migrate:diff':
-      cmdMigrateDiff();
+      cmdMigrateDiff(args.slice(1));
       break;
     case 'migrate:check':
       cmdMigrateCheck(args.slice(1));
