@@ -303,6 +303,57 @@ describe('fortress.handleRequest', () => {
         error_description: 'grant_type is required',
       });
     });
+
+    it.each(['introspect', 'revoke'] as const)('returns an OAuth error when /oauth/%s omits token', async (route) => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const client = await local.plugins.oauth.createClient({
+        name: `Missing token ${route}`,
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+      if (!client.clientSecret)
+        throw new Error('expected a confidential OAuth client');
+
+      const res = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Basic ${btoa(`${client.clientId}:${client.clientSecret}`)}`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: '',
+      }));
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: 'invalid_request',
+        error_description: 'token is required',
+      });
+
+      const invalidClient = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Basic ${btoa(`${client.clientId}:wrong-secret`)}`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: '',
+      }));
+      expect(invalidClient.status).toBe(401);
+      await expect(invalidClient.json()).resolves.toMatchObject({ error: 'invalid_client' });
+
+      const unknownClient = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Basic ${btoa('unknown-client:wrong-secret')}`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: '',
+      }));
+      expect(unknownClient.status).toBe(401);
+      await expect(unknownClient.json()).resolves.toMatchObject({ error: 'invalid_client' });
+    });
   });
 
   describe('plugin success serialization', () => {

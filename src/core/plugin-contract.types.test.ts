@@ -9,6 +9,7 @@ import type { socialLogin } from '../plugins/social-login';
 import type { twoFactor } from '../plugins/two-factor';
 import type { webauthn } from '../plugins/webauthn';
 import type { webhook } from '../plugins/webhook';
+import type { FortressPluginRuntime } from './capabilities';
 import type {
   EndpointDefinition,
   InferEndpointBody,
@@ -31,6 +32,7 @@ import { defineEndpoints } from './define-endpoints';
 import { createFortress } from './fortress';
 import { buildCall } from './http/call';
 import { definePlugin } from './plugin';
+import { resolvePluginCapability } from './plugin-methods-map';
 import { arr, bool, endpoint, obj, str } from './schema-builder';
 
 describe('plugin type contracts', () => {
@@ -74,6 +76,17 @@ export type DispatchCapabilityContracts = [
   Assert<Equal<Parameters<PluginCapability<'oauth'>['handleUserInfoRequest']>[0], string>>,
   Assert<Equal<ReturnType<PluginCapability<'openapi'>['getUI']>, string>>,
 ];
+
+export function compileRestrictedCapabilityLookup(
+  runtime: Pick<FortressPluginRuntime, 'resolvePlugin'>,
+): void {
+  const capability = resolvePluginCapability(runtime, 'two-factor', 'verify');
+  capability.verify('token', '123456');
+  // @ts-expect-error lookup proves only the requested method
+  capability.enable('user');
+  // @ts-expect-error required methods must be keys of the named capability
+  resolvePluginCapability(runtime, 'two-factor', 'missing');
+}
 
 export type BuiltInUnknownMethodContracts = [
   Assert<Lacks<Surface<typeof accountLockout>, 'account-lockout', 'missing'>>,

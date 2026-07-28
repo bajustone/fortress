@@ -117,10 +117,10 @@ function objectOrEmpty(value: unknown): Record<string, unknown> {
     : {};
 }
 
-async function parseFormBody(request: Request): Promise<Record<string, string>> {
+async function parseFormBody(request: Request): Promise<Partial<Record<string, string>>> {
   const text = await request.text();
   const params = new URLSearchParams(text);
-  const out = Object.create(null) as Record<string, string>;
+  const out = Object.create(null) as Partial<Record<string, string>>;
   for (const [k, v] of params) out[k] = v;
   return out;
 }
@@ -221,6 +221,22 @@ async function dispatchPlugin(
 
 // ── OAuth special case ──────────────────────────────────────────────
 
+type OAuthCapabilityMethod = Extract<keyof PluginCapability<'oauth'>, string>;
+
+function resolveOAuthMethod<M extends OAuthCapabilityMethod>(
+  fortress: FortressRuntime,
+  method: M,
+): Pick<PluginCapability<'oauth'>, M> {
+  try {
+    return resolvePluginCapability(fortress, 'oauth', method);
+  }
+  catch (error) {
+    if (error instanceof FortressError && error.code === 'BAD_REQUEST')
+      throw Errors.notFound(`OAuth handler '${method}' not found`);
+    throw error;
+  }
+}
+
 async function dispatchOAuth(
   fortress: FortressRuntime,
   request: Request,
@@ -228,26 +244,18 @@ async function dispatchOAuth(
   auth: DispatchAuth,
 ): Promise<Response> {
   const handlerName = endpoint.handler;
-  let methods: PluginCapability<'oauth'>;
-  try {
-    methods = resolvePluginCapability(fortress, 'oauth', handlerName);
-  }
-  catch (error) {
-    if (error instanceof FortressError && error.code === 'BAD_REQUEST')
-      throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
-    throw error;
-  }
-  const m = methods;
   const authHeader = request.headers.get('authorization');
 
   switch (handlerName) {
     case 'handleTokenRequest': {
+      const m = resolveOAuthMethod(fortress, 'handleTokenRequest');
       const body = parseTokenRequestBody(await parseFormBody(request));
       const clientAuth = parseBasicAuth(authHeader);
       const result = await m.handleTokenRequest(body, clientAuth);
       return jsonResponse(result, 200);
     }
     case 'handleIntrospectRequest': {
+      const m = resolveOAuthMethod(fortress, 'handleIntrospectRequest');
       const body = await parseFormBody(request);
       const clientAuth = parseBasicAuth(authHeader);
       if (!clientAuth) {
@@ -256,10 +264,11 @@ async function dispatchOAuth(
           401,
         );
       }
-      const result = await m.handleIntrospectRequest({ token: body.token }, clientAuth);
+      const result = await m.handleIntrospectRequest({ token: body.token ?? '' }, clientAuth);
       return jsonResponse(result, 200);
     }
     case 'handleRevokeRequest': {
+      const m = resolveOAuthMethod(fortress, 'handleRevokeRequest');
       const body = await parseFormBody(request);
       const clientAuth = parseBasicAuth(authHeader);
       if (!clientAuth) {
@@ -268,10 +277,11 @@ async function dispatchOAuth(
           401,
         );
       }
-      await m.handleRevokeRequest({ token: body.token }, clientAuth);
+      await m.handleRevokeRequest({ token: body.token ?? '' }, clientAuth);
       return jsonResponse({}, 200);
     }
     case 'handleUserInfoRequest': {
+      const m = resolveOAuthMethod(fortress, 'handleUserInfoRequest');
       // RFC 6750 §2.1: bearer token from Authorization header.
       // The plugin's `handleUserInfoRequest` now returns OIDC-Core-§5.3
       // shaped claims directly (sub-as-string, scope-gated standard
@@ -290,10 +300,12 @@ async function dispatchOAuth(
       return jsonResponse(claims, 200);
     }
     case 'handleDiscovery': {
+      const m = resolveOAuthMethod(fortress, 'handleDiscovery');
       const result = m.handleDiscovery();
       return jsonResponse(result, 200);
     }
     case 'handleJwksRequest': {
+      const m = resolveOAuthMethod(fortress, 'handleJwksRequest');
       // RFC 7517 / OIDC Discovery: public JWKS for id_token verification.
       // Cacheable for a short window — long enough that key rotation
       // doesn't immediately bust every RP, short enough that a rotated
@@ -308,6 +320,7 @@ async function dispatchOAuth(
       });
     }
     case 'handleAuthorizeRequest': {
+      const m = resolveOAuthMethod(fortress, 'handleAuthorizeRequest');
       // GET /oauth/authorize — front door for the auth-code flow.
       // Reads query params, optionally identifies the user, then 302s to
       // either the configured loginUrl or consentUrl with `?flow=<id>`.
@@ -319,6 +332,7 @@ async function dispatchOAuth(
       });
     }
     case 'handleGetFlow': {
+      const m = resolveOAuthMethod(fortress, 'handleGetFlow');
       // H6 fix — every consent-flow endpoint requires authentication so the
       // owner check has someone to compare against. Without this guard, an
       // unauthenticated caller could read another user's pending flow.
@@ -333,6 +347,7 @@ async function dispatchOAuth(
       return jsonResponse(result, 200);
     }
     case 'handleApproveFlow': {
+      const m = resolveOAuthMethod(fortress, 'handleApproveFlow');
       if (auth.userId === undefined) {
         return jsonResponse(
           { error: 'unauthorized', error_description: 'Authentication required' },
@@ -344,6 +359,7 @@ async function dispatchOAuth(
       return jsonResponse(result, 200);
     }
     case 'handleDenyFlow': {
+      const m = resolveOAuthMethod(fortress, 'handleDenyFlow');
       if (auth.userId === undefined) {
         return jsonResponse(
           { error: 'unauthorized', error_description: 'Authentication required' },
@@ -415,11 +431,15 @@ function optionalNullableString(value: unknown, field: string): string | null | 
   return requiredString(value, field);
 }
 
-function parseTokenRequestBody(value: Record<string, string>): TokenRequestBody {
-  if (!value.grant_type)
-    throw Errors.oauth('invalid_request', 'grant_type is required');
+function requiredOAuthFormValue(value: string | undefined, field: string): string {
+  if (!value)
+    throw Errors.oauth('invalid_request', `${field} is required`);
+  return value;
+}
+
+function parseTokenRequestBody(value: Partial<Record<string, string>>): TokenRequestBody {
   return {
-    grant_type: value.grant_type,
+    grant_type: requiredOAuthFormValue(value.grant_type, 'grant_type'),
     code: optionalString(value.code, 'code'),
     redirect_uri: optionalString(value.redirect_uri, 'redirect_uri'),
     client_id: optionalString(value.client_id, 'client_id'),
@@ -536,7 +556,7 @@ async function invokeAuthHandler(
         ...(typeof body.trustedDeviceToken === 'string' ? { trustedDeviceToken: body.trustedDeviceToken } : {}),
       });
     case 'verifyTwoFactor': {
-      let methods: PluginCapability<'two-factor'>;
+      let methods: Pick<PluginCapability<'two-factor'>, 'verify'>;
       try {
         methods = resolvePluginCapability(fortress, 'two-factor', 'verify');
       }
@@ -551,7 +571,7 @@ async function invokeAuthHandler(
       });
     }
     case 'verifyMagicLink': {
-      let methods: PluginCapability<'magic-link'>;
+      let methods: Pick<PluginCapability<'magic-link'>, 'verify'>;
       try {
         methods = resolvePluginCapability(fortress, 'magic-link', 'verify');
       }

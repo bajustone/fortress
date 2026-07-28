@@ -78,7 +78,7 @@ function isCallableMethods(value: unknown): value is LegacyPluginMethods {
   return Object.values(value).every(method => typeof method === 'function');
 }
 
-function hasCallableCapabilityMethod(value: LegacyPluginMethods, requiredMethod: string): boolean {
+function hasCallableCapabilityMethod(value: LegacyPluginMethods, requiredMethod: PropertyKey): boolean {
   let owner: object | null = value;
   while (owner !== null && owner !== Object.prototype) {
     if (Object.hasOwn(owner, requiredMethod))
@@ -88,7 +88,12 @@ function hasCallableCapabilityMethod(value: LegacyPluginMethods, requiredMethod:
   return false;
 }
 
-function isPluginCapability<K extends PluginCapabilityName>(name: K, value: unknown, requiredMethod?: string): value is PluginCapability<K> {
+type PluginCapabilityMethod<K extends PluginCapabilityName> = Extract<keyof PluginCapability<K>, string>;
+
+function isPluginCapability<
+  K extends PluginCapabilityName,
+  M extends PluginCapabilityMethod<K>,
+>(name: K, value: unknown, requiredMethod: M): value is Pick<PluginCapability<K>, M> {
   void name;
   if (!isCallableMethods(value))
     return false;
@@ -96,7 +101,7 @@ function isPluginCapability<K extends PluginCapabilityName>(name: K, value: unkn
   // lookup time permits intentionally minimal test doubles and gives a
   // useful runtime failure when a configured capability drifts. Class
   // prototype methods are valid, but Object.prototype is never a capability.
-  return requiredMethod === undefined || hasCallableCapabilityMethod(value, requiredMethod);
+  return hasCallableCapabilityMethod(value, requiredMethod);
 }
 
 /**
@@ -105,10 +110,13 @@ function isPluginCapability<K extends PluginCapabilityName>(name: K, value: unkn
  * the dispatch path, while `resolvePlugin` retains its actionable missing
  * plugin error.
  */
-export function resolvePluginCapability<K extends PluginCapabilityName>(
+export function resolvePluginCapability<
+  K extends PluginCapabilityName,
+  M extends PluginCapabilityMethod<K>,
+>(
   runtime: Pick<FortressPluginRuntime, 'resolvePlugin'>,
   name: K,
-  requiredMethod?: string,
-): PluginCapability<K> {
+  requiredMethod: M,
+): Pick<PluginCapability<K>, M> {
   return runtime.resolvePlugin(name, value => isPluginCapability(name, value, requiredMethod));
 }

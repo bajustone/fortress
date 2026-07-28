@@ -1639,7 +1639,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
        * Handle POST /oauth/introspect (RFC 7662).
        */
       async handleIntrospectRequest(
-        body: { token: string },
+        body: { token?: string },
         clientAuth: ClientAuth,
       ): Promise<Record<string, unknown>> {
         // Validate client credentials
@@ -1649,7 +1649,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         });
 
         if (!client)
-          throw Errors.unauthorized('Invalid client credentials');
+          throw Errors.oauth('invalid_client', 'Invalid client credentials');
 
         const secretValid = timingSafeEqualHex(
           await hashToken(clientAuth.clientSecret),
@@ -1657,6 +1657,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         );
         if (!secretValid)
           throw Errors.oauth('invalid_client', 'Invalid client credentials');
+        if (!body.token)
+          throw Errors.oauth('invalid_request', 'token is required');
 
         const result = await this.introspectToken(body.token);
 
@@ -1675,13 +1677,15 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
       /**
        * Handle POST /oauth/revoke (RFC 7009). Always returns success.
        */
-      async handleRevokeRequest(body: { token: string }, clientAuth: ClientAuth): Promise<void> {
+      async handleRevokeRequest(body: { token?: string }, clientAuth: ClientAuth): Promise<void> {
         const client = await ctx.db.findOne<OAuthClientRecord>({
           model: 'oauth_client',
           where: [{ field: 'clientId', operator: '=', value: clientAuth.clientId }],
         });
         if (!client || !timingSafeEqualHex(await hashToken(clientAuth.clientSecret), client.clientSecretHash))
           throw Errors.oauth('invalid_client', 'Invalid client credentials');
+        if (!body.token)
+          throw Errors.oauth('invalid_request', 'token is required');
 
         const tokenHash = await hashToken(body.token);
         // RFC 7009 prevents one authenticated client from revoking another
