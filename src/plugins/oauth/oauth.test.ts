@@ -3,6 +3,7 @@ import type { OAuthMethods } from './index';
 import { decodeJwt, importJWK, jwtVerify } from 'jose';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { generateRefreshToken } from '../../core/auth/refresh-token';
+import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
 import { generateCodeChallenge, generateCodeVerifier, matchRedirectUri, oauth, toOidcUserinfo } from './index';
 
@@ -729,6 +730,22 @@ describe('oauth plugin', () => {
 
       expect(result.active).toBe(false);
     });
+
+    it('rejects an empty token from a direct caller', async () => {
+      const client = await methods.createClient({
+        name: 'Empty introspect',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      // HTTP dispatch screens the form parameter, but `token: string` does not
+      // exclude `''`, so a direct caller must not have an empty token quietly
+      // reported as inactive.
+      await expect(methods.handleIntrospectRequest(
+        { token: '' },
+        { clientId: client.clientId, clientSecret: client.clientSecret! },
+      )).rejects.toThrow(/token is required/);
+    });
   });
 
   describe('handleRevokeRequest', () => {
@@ -743,6 +760,20 @@ describe('oauth plugin', () => {
         { token: 'nonexistent' },
         { clientId: client.clientId, clientSecret: client.clientSecret! },
       )).resolves.toBeUndefined();
+    });
+
+    it('rejects an empty token from a direct caller', async () => {
+      const client = await methods.createClient({
+        name: 'Empty revoke',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      // Revocation must not proceed to hash `''` and report success.
+      await expect(methods.handleRevokeRequest(
+        { token: '' },
+        { clientId: client.clientId, clientSecret: client.clientSecret! },
+      )).rejects.toThrow(/token is required/);
     });
   });
 
@@ -2219,6 +2250,33 @@ describe('oauth plugin', () => {
         clientSecret: client.clientSecret!,
         redirectUri: 'https://app.com/cb',
       })).rejects.toThrow(/authorization_code grant/);
+    });
+  });
+
+  describe('protocol route response contracts', () => {
+    // Dispatch can answer these routes with `invalid_request` (missing or
+    // duplicated `token`) and `invalid_client`, so both must be declared or
+    // generated clients will not model the failures they can actually receive.
+    it('declares the invalid_request and invalid_client failures on introspect and revoke', () => {
+      const routes = oauth().routes;
+      for (const handler of ['handleIntrospectRequest', 'handleRevokeRequest'] as const) {
+        const { responses } = routes[handler] as { responses?: Record<string, unknown> };
+        expect(Object.keys(responses ?? {}).sort()).toEqual(['200', '400', '401']);
+      }
+    });
+
+    it('emits those failures into the OpenAPI spec', () => {
+      const fortress = createFortress({
+        jwt: { key: 'x'.repeat(32) },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const spec = fortress.toOpenAPI({ title: 'Fortress', version: '0.0.0' }) as unknown as {
+        paths: Record<string, { post: { responses?: Record<string, unknown> } }>;
+      };
+      for (const path of ['/oauth/introspect', '/oauth/revoke']) {
+        expect(Object.keys(spec.paths[path].post.responses ?? {}).sort()).toEqual(['200', '400', '401']);
+      }
     });
   });
 });

@@ -283,6 +283,8 @@ export interface OAuthMethods {
   rotateSigningKey: () => Promise<{ kid: string }>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
   handleTokenRequest: (body: TokenRequestBody, clientAuth?: ClientAuth) => Promise<Record<string, unknown>>;
+  // `token` is required: the HTTP dispatcher rejects a missing or duplicated
+  // form parameter before calling these, so the handlers always receive one.
   handleIntrospectRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<Record<string, unknown>>;
   handleRevokeRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<void>;
   /**
@@ -1649,7 +1651,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         });
 
         if (!client)
-          throw Errors.unauthorized('Invalid client credentials');
+          throw Errors.oauth('invalid_client', 'Invalid client credentials');
 
         const secretValid = timingSafeEqualHex(
           await hashToken(clientAuth.clientSecret),
@@ -1657,6 +1659,12 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         );
         if (!secretValid)
           throw Errors.oauth('invalid_client', 'Invalid client credentials');
+        // HTTP dispatch rejects a missing or duplicated `token` form parameter
+        // at the transport boundary. This handler is also a public
+        // transport-agnostic method, and `token: string` does not exclude `''`,
+        // so it defends its own non-empty invariant for direct callers.
+        if (!body.token)
+          throw Errors.oauth('invalid_request', 'token is required');
 
         const result = await this.introspectToken(body.token);
 
@@ -1682,6 +1690,11 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         });
         if (!client || !timingSafeEqualHex(await hashToken(clientAuth.clientSecret), client.clientSecretHash))
           throw Errors.oauth('invalid_client', 'Invalid client credentials');
+        // As with introspection: dispatch validates the form parameter, and
+        // this public method separately refuses an empty token so a direct
+        // caller cannot revoke by hashing `''`.
+        if (!body.token)
+          throw Errors.oauth('invalid_request', 'token is required');
 
         const tokenHash = await hashToken(body.token);
         // RFC 7009 prevents one authenticated client from revoking another
@@ -2029,7 +2042,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: {
           200: { description: 'Token info', schema: { type: 'object', properties: { active: { type: 'boolean' }, sub: { type: 'string' }, scope: { type: 'string' }, exp: { type: 'number' } } } },
-          401: { description: 'Client authentication required' },
+          400: { description: 'Missing or duplicated token parameter (invalid_request)' },
+          401: { description: 'Client authentication required (invalid_client)' },
         },
       },
       handleRevokeRequest: {
@@ -2038,7 +2052,11 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         handler: 'handleRevokeRequest' as const,
         meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
-        responses: { 200: { description: 'Token revoked' } },
+        responses: {
+          200: { description: 'Token revoked' },
+          400: { description: 'Missing or duplicated token parameter (invalid_request)' },
+          401: { description: 'Client authentication required (invalid_client)' },
+        },
       },
       handleUserInfoRequest: {
         method: 'GET',

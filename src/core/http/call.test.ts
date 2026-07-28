@@ -69,6 +69,20 @@ function rejectsInvalidCallInputs(fortress: ReturnType<typeof makeFortress>): vo
   fortress.call.plugins['no-route'].health({});
   // @ts-expect-error -- unknown route keys must not be callable
   fortress.call.plugins['literal-route'].notRegistered({});
+  // @ts-expect-error -- /iam/check takes exactly one of userId or subject, never both
+  fortress.call.iam.checkPermission({ userId: 'u1', subject: { type: 'USER', id: 'u2' }, resource: 'post', action: 'read' });
+  // @ts-expect-error -- /iam/check requires one of userId or subject
+  fortress.call.iam.checkPermission({ resource: 'post', action: 'read' });
+}
+
+/** Compile-only positive coverage: this function is deliberately never invoked. */
+function acceptsBothPermissionCheckForms(fortress: ReturnType<typeof makeFortress>): void {
+  void fortress.call.iam.checkPermission({ userId: 'u1', resource: 'post', action: 'read' });
+  void fortress.call.iam.checkPermission({
+    subject: { type: 'SERVICE_ACCOUNT', id: 'sa1' },
+    resource: 'post',
+    action: 'read',
+  });
 }
 
 describe('fortress.call', () => {
@@ -109,6 +123,10 @@ describe('fortress.call', () => {
 
     it('keeps invalid and unknown calls as compile errors', () => {
       expectTypeOf(rejectsInvalidCallInputs).toBeFunction();
+    });
+
+    it('accepts either permission-check form as a compile-time union', () => {
+      expectTypeOf(acceptsBothPermissionCheckForms).toBeFunction();
     });
   });
 

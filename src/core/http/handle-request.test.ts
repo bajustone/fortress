@@ -1,6 +1,8 @@
 import type { EndpointDefinition } from '../endpoint';
-import type { FortressPlugin, PluginRouteContext } from '../plugin';
+import type { FortressPlugin, PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
+import type { PermissionContext, Subject } from '../types';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { oauth } from '../../plugins/oauth';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 import { definePlugin } from '../plugin';
@@ -190,6 +192,86 @@ describe('fortress.handleRequest', () => {
     });
   });
 
+  describe('iam permission check body union', () => {
+    async function callCheck(body: unknown) {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+      });
+      await local.auth.createUser({ email: 'admin@x.co', name: 'Admin', password: 'password1234567' });
+      const login = await local.auth.login('admin@x.co', 'password1234567');
+      if (login.status !== 'success')
+        throw new Error('expected success');
+      // The RBAC gate and the handler share this method, so the handler's
+      // evaluation is the last recorded call.
+      const calls: { subject: Subject; resource: string; action: string; context?: PermissionContext }[] = [];
+      local.iam.checkPermission = async (subject, resource, action, context) => {
+        calls.push({ subject, resource, action, context });
+        return true;
+      };
+      const res = await local.handleRequest(new Request('http://localhost/iam/check', {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${login.accessToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      }));
+      return { res, calls };
+    }
+
+    it.each(['USER', 'GROUP', 'SERVICE_ACCOUNT'] as const)('evaluates a %s subject body', async (type) => {
+      const { res, calls } = await callCheck({ subject: { type, id: 'subject-1' }, resource: 'post', action: 'read' });
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ allowed: true });
+      expect(calls.at(-1)).toMatchObject({ subject: { type, id: 'subject-1' }, resource: 'post', action: 'read' });
+    });
+
+    it('still evaluates the legacy userId body as a USER subject', async () => {
+      const { res, calls } = await callCheck({ userId: 'user-1', resource: 'post', action: 'read' });
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ allowed: true });
+      expect(calls.at(-1)).toMatchObject({ subject: { type: 'USER', id: 'user-1' } });
+    });
+
+    it.each([
+      ['neither userId nor subject', { resource: 'post', action: 'read' }],
+      ['both userId and subject', { userId: 'user-1', subject: { type: 'USER', id: 'user-2' }, resource: 'post', action: 'read' }],
+      // A malformed counterpart must not disqualify one branch and let the
+      // other match alone; open branches accepted both of these.
+      ['a null subject alongside userId', { userId: 'user-1', subject: null, resource: 'post', action: 'read' }],
+      ['a non-string userId alongside subject', { subject: { type: 'USER', id: 'user-1' }, userId: 123, resource: 'post', action: 'read' }],
+    ])('rejects a body carrying %s', async (_label, body) => {
+      const { res } = await callCheck(body);
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({ code: 'VALIDATION_ERROR' });
+    });
+
+    it('rejects undeclared properties, the cost of closing both branches', async () => {
+      const { res } = await callCheck({ userId: 'user-1', resource: 'post', action: 'read', trace: 'x' });
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({ code: 'VALIDATION_ERROR' });
+    });
+
+    it('forwards only request-scoped context to the evaluator', async () => {
+      const { res, calls } = await callCheck({
+        subject: { type: 'USER', id: 'user-1' },
+        resource: 'post',
+        action: 'read',
+        context: {
+          tenantId: 'tenant-a',
+          request: { ip: '10.0.0.1' },
+          credentialScopes: ['*'],
+          user: { id: 'user-1' },
+          resource: { ownerId: 'user-1' },
+        },
+      });
+      expect(res.status).toBe(200);
+      // credentialScopes, user, and resource would each let a caller forge an allow.
+      expect(calls.at(-1)?.context).toEqual({ tenantId: 'tenant-a', request: { ip: '10.0.0.1' } });
+    });
+  });
+
   describe('validation', () => {
     it('returns 422 when required fields are missing', async () => {
       // /auth/login requires identifier + password
@@ -201,6 +283,353 @@ describe('fortress.handleRequest', () => {
       expect(res.status).toBe(422);
       const body = await res.json() as { code: string };
       expect(body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('returns an actionable 4xx when a required plugin capability is missing', async () => {
+      const incompleteTwoFactor = {
+        name: 'two-factor',
+        methods: () => ({}),
+      } as unknown as RuntimeFortressPlugin;
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [incompleteTwoFactor] as const,
+      });
+      const res = await local.handleRequest(new Request('http://localhost/auth/2fa/verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ continuationToken: 'token', code: '123456' }),
+      }));
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Two-factor plugin is not configured',
+      });
+    });
+
+    it('accepts required capability methods defined on a prototype', async () => {
+      class PrototypeTwoFactorMethods {
+        verify() {
+          return { ok: true };
+        }
+      }
+      const prototypeTwoFactor = {
+        name: 'two-factor',
+        methods: () => new PrototypeTwoFactorMethods(),
+      } as unknown as RuntimeFortressPlugin;
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [prototypeTwoFactor] as const,
+      });
+      const res = await local.handleRequest(new Request('http://localhost/auth/2fa/verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ continuationToken: 'token', code: '123456' }),
+      }));
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ ok: true });
+    });
+
+    it('does not resolve required capabilities from Object.prototype', async () => {
+      const rootPrototype = Object.getPrototypeOf({}) as object;
+      const originalVerify = Object.getOwnPropertyDescriptor(rootPrototype, 'verify');
+      Object.defineProperty(rootPrototype, 'verify', {
+        configurable: true,
+        value: () => ({ compromised: true }),
+      });
+      try {
+        const incompleteTwoFactor = {
+          name: 'two-factor',
+          methods: () => ({}),
+        } as unknown as RuntimeFortressPlugin;
+        const local = createFortress({
+          jwt: { key: SECRET },
+          database: createTestAdapter(),
+          plugins: [incompleteTwoFactor] as const,
+        });
+        const res = await local.handleRequest(new Request('http://localhost/auth/2fa/verify', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ continuationToken: 'token', code: '123456' }),
+        }));
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'Two-factor plugin is not configured',
+        });
+      }
+      finally {
+        if (originalVerify)
+          Object.defineProperty(rootPrototype, 'verify', originalVerify);
+        else
+          Reflect.deleteProperty(rootPrototype, 'verify');
+      }
+    });
+
+    it('returns an OAuth error when the token request omits grant_type', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const res = await local.handleRequest(new Request('http://localhost/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: '',
+      }));
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: 'invalid_request',
+        error_description: 'grant_type is required',
+      });
+    });
+
+    it.each(['introspect', 'revoke'] as const)('returns an OAuth error when /oauth/%s omits token', async (route) => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const client = await local.plugins.oauth.createClient({
+        name: `Missing token ${route}`,
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+      if (!client.clientSecret)
+        throw new Error('expected a confidential OAuth client');
+
+      const res = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Basic ${btoa(`${client.clientId}:${client.clientSecret}`)}`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: '',
+      }));
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: 'invalid_request',
+        error_description: 'token is required',
+      });
+
+      // Once credentials are syntactically present, form shape is checked
+      // before the secret is verified — so an invalid secret and an unknown
+      // client both surface the missing `token` first.
+      const invalidClient = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Basic ${btoa(`${client.clientId}:wrong-secret`)}`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: '',
+      }));
+      expect(invalidClient.status).toBe(400);
+      await expect(invalidClient.json()).resolves.toMatchObject({ error: 'invalid_request' });
+
+      const unknownClient = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Basic ${btoa('unknown-client:wrong-secret')}`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: '',
+      }));
+      expect(unknownClient.status).toBe(400);
+      await expect(unknownClient.json()).resolves.toMatchObject({ error: 'invalid_request' });
+
+      // A well-formed request with the wrong secret still fails on credentials.
+      const badSecret = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Basic ${btoa(`${client.clientId}:wrong-secret`)}`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: 'token=some-token',
+      }));
+      expect(badSecret.status).toBe(401);
+      await expect(badSecret.json()).resolves.toMatchObject({ error: 'invalid_client' });
+    });
+
+    it('rejects duplicate OAuth form parameters instead of last-write-wins', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const client = await local.plugins.oauth.createClient({
+        name: 'Duplicate params',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+      if (!client.clientSecret)
+        throw new Error('expected a confidential OAuth client');
+      const basic = `Basic ${btoa(`${client.clientId}:${client.clientSecret}`)}`;
+
+      // A trailing duplicate must not override the grant_type an intermediary
+      // already inspected, and must never issue a token.
+      const token = await local.handleRequest(new Request('http://localhost/oauth/token', {
+        method: 'POST',
+        headers: { 'authorization': basic, 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'grant_type=client_credentials&grant_type=authorization_code',
+      }));
+      expect(token.status).toBe(400);
+      const tokenBody = await token.json() as Record<string, unknown>;
+      expect(tokenBody).toMatchObject({ error: 'invalid_request' });
+      expect(tokenBody).not.toHaveProperty('access_token');
+
+      for (const route of ['introspect', 'revoke'] as const) {
+        const res = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+          method: 'POST',
+          headers: { 'authorization': basic, 'content-type': 'application/x-www-form-urlencoded' },
+          body: 'token=first&token=second',
+        }));
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({ error: 'invalid_request' });
+      }
+    });
+
+    it('requires parseable client credentials before reading the body', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      // No credentials at all: rejected before the duplicate `token` is seen.
+      const missing = await local.handleRequest(new Request('http://localhost/oauth/introspect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'token=first&token=second',
+      }));
+      expect(missing.status).toBe(401);
+      await expect(missing.json()).resolves.toMatchObject({ error: 'invalid_client' });
+
+      // An unparseable Basic payload is equivalent to presenting none.
+      const malformed = await local.handleRequest(new Request('http://localhost/oauth/introspect', {
+        method: 'POST',
+        headers: {
+          'authorization': 'Basic not-valid-base64!!',
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: 'token=first&token=second',
+      }));
+      expect(malformed.status).toBe(401);
+      await expect(malformed.json()).resolves.toMatchObject({ error: 'invalid_client' });
+    });
+
+    it('accepts case-insensitive Authorization schemes (RFC 9110 §11.1)', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const client = await local.plugins.oauth.createClient({
+        name: 'Case insensitive',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+      if (!client.clientSecret)
+        throw new Error('expected a confidential OAuth client');
+
+      // A lowercase scheme still authenticates, so the request advances past
+      // the client check and fails only on the missing token.
+      for (const scheme of ['basic', 'BASIC', 'BaSiC']) {
+        const res = await local.handleRequest(new Request('http://localhost/oauth/introspect', {
+          method: 'POST',
+          headers: {
+            'authorization': `${scheme} ${btoa(`${client.clientId}:${client.clientSecret}`)}`,
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: '',
+        }));
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({
+          error: 'invalid_request',
+          error_description: 'token is required',
+        });
+      }
+
+      // A recognized bearer scheme rejects the token itself rather than
+      // reporting a missing bearer credential.
+      for (const scheme of ['bearer', 'BEARER']) {
+        const res = await local.handleRequest(new Request('http://localhost/oauth/userinfo', {
+          headers: { authorization: `${scheme} not-a-real-token` },
+        }));
+        expect(res.status).toBe(401);
+        await expect(res.json()).resolves.not.toMatchObject({
+          error_description: 'Bearer token required',
+        });
+      }
+    });
+  });
+
+  describe('oauth dispatch selection', () => {
+    // Bespoke OAuth dispatch is selected by route metadata, not by the owning
+    // plugin's name alone, so an ordinary route on an oauth-named plugin keeps
+    // the normal plugin calling convention instead of hitting the closed
+    // protocol switch.
+    it('sends an ordinary route on an oauth-named plugin through plugin dispatch', async () => {
+      const custom = definePlugin({
+        name: 'oauth',
+        methods: () => ({
+          customRoute: (input: { note?: string }) => ({ ok: input.note ?? 'default' }),
+        }),
+        routes: {
+          customRoute: endpoint('GET', '/oauth/custom')
+            .security('none')
+            .response(200, 'Custom', obj({ ok: str() }, 'ok'))
+            .handler('customRoute')
+            .build(),
+        },
+      });
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [custom] as const,
+      });
+
+      const res = await local.handleRequest(new Request('http://localhost/oauth/custom?note=hi'));
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ ok: 'hi' });
+    });
+
+    // Consent routes are marked with `dispatchKind` rather than `bearerKind`,
+    // so they must still reach the positional OAuth convention — a flowId
+    // string, not the merged request object plugin dispatch would pass.
+    it('keeps dispatchKind-marked consent routes on the positional OAuth convention', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth({ enableConsentApi: true })] as const,
+      });
+      await local.auth.createUser({ email: 'flow@b.co', name: 'Flow', password: 'password1234567' });
+      const login = await local.handleRequest(new Request('http://localhost/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ identifier: 'flow@b.co', password: 'password1234567' }),
+      }));
+      const { accessToken } = await login.json() as AuthBody;
+
+      const client = await local.plugins.oauth.createClient({
+        name: 'Consent client',
+        redirectUris: ['https://client.example/callback'],
+        grantTypes: ['authorization_code'],
+      });
+      const { flowId } = await local.plugins.oauth.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://client.example/callback',
+        scope: 'openid',
+        state: 'state-value',
+      });
+
+      const res = await local.handleRequest(new Request(`http://localhost/oauth/flows/${flowId}`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }));
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({
+        flowId: String(flowId),
+        redirectUri: 'https://client.example/callback',
+      });
     });
   });
 

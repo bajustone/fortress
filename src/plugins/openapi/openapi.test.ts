@@ -463,9 +463,14 @@ describe('openapi resource/action enum enrichment', () => {
     const checkOp = spec.paths['/iam/check']?.post;
     expect(checkOp).toBeDefined();
 
+    // The body is a `oneOf` of the subject and legacy user forms; both
+    // branches must document the same enums.
     const bodySchema = checkOp.requestBody!.content['application/json'].schema;
-    expect(bodySchema.properties!.resource.enum).toEqual(['posts', 'students']);
-    expect(bodySchema.properties!.action.enum).toEqual(['delete', 'publish', 'read', 'write']);
+    expect(bodySchema.oneOf).toHaveLength(2);
+    for (const branch of bodySchema.oneOf!) {
+      expect(branch.properties!.resource.enum).toEqual(['posts', 'students']);
+      expect(branch.properties!.action.enum).toEqual(['delete', 'publish', 'read', 'write']);
+    }
   });
 
   it('falls back to plain strings when no resources are registered', async () => {

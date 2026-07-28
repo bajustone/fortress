@@ -13,6 +13,7 @@ import type { TenancyMethods } from '../plugins/tenancy';
 import type { TwoFactorMethods } from '../plugins/two-factor';
 import type { WebAuthnMethods } from '../plugins/webauthn';
 import type { WebhookMethods } from '../plugins/webhook';
+import type { FortressPluginRuntime } from './capabilities';
 import type { LegacyPluginMethods, PluginMethodsOf, RuntimeFortressPlugin } from './plugin';
 
 /**
@@ -64,3 +65,58 @@ type IsAny<T> = 0 extends (1 & T) ? true : false;
 export type InferPlugins<T extends readonly RuntimeFortressPlugin[]> = {
   [P in T[number] as IsAny<P['name']> extends true ? never : string extends P['name'] ? never : P['name']]: MethodsForPlugin<P>;
 };
+
+/** Names with a method surface known to the core dispatcher. */
+export type PluginCapabilityName = keyof PluginMethodsMap;
+
+/** Typed method surface for a named built-in plugin capability. */
+export type PluginCapability<K extends PluginCapabilityName> = PluginMethodsMap[K];
+
+function isCallableMethods(value: unknown): value is LegacyPluginMethods {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return false;
+  return Object.values(value).every(method => typeof method === 'function');
+}
+
+function hasCallableCapabilityMethod(value: LegacyPluginMethods, requiredMethod: PropertyKey): boolean {
+  let owner: object | null = value;
+  while (owner !== null && owner !== Object.prototype) {
+    if (Object.hasOwn(owner, requiredMethod))
+      return typeof Reflect.get(value, requiredMethod) === 'function';
+    owner = Object.getPrototypeOf(owner) as object | null;
+  }
+  return false;
+}
+
+type PluginCapabilityMethod<K extends PluginCapabilityName> = Extract<keyof PluginCapability<K>, string>;
+
+function isPluginCapability<
+  K extends PluginCapabilityName,
+  M extends PluginCapabilityMethod<K>,
+>(name: K, value: unknown, requiredMethod: M): value is Pick<PluginCapability<K>, M> {
+  void name;
+  if (!isCallableMethods(value))
+    return false;
+  // The required method is selected by the matched endpoint. Checking it at
+  // lookup time permits intentionally minimal test doubles and gives a
+  // useful runtime failure when a configured capability drifts. Class
+  // prototype methods are valid, but Object.prototype is never a capability.
+  return hasCallableCapabilityMethod(value, requiredMethod);
+}
+
+/**
+ * Resolve a core-known plugin capability through the runtime's validated
+ * lookup. The lookup preserves typed names and checks the methods required by
+ * the dispatch path, while `resolvePlugin` retains its actionable missing
+ * plugin error.
+ */
+export function resolvePluginCapability<
+  K extends PluginCapabilityName,
+  M extends PluginCapabilityMethod<K>,
+>(
+  runtime: Pick<FortressPluginRuntime, 'resolvePlugin'>,
+  name: K,
+  requiredMethod: M,
+): Pick<PluginCapability<K>, M> {
+  return runtime.resolvePlugin(name, value => isPluginCapability(name, value, requiredMethod));
+}

@@ -752,5 +752,38 @@ describe('createFortress', () => {
       expect(Object.keys(spec.paths)).toEqual(['/ping']);
       expect(spec.paths['/ping'].get.operationId).toBe('ping');
     });
+
+    it('documents the permission check body as an exactly-one identity union', () => {
+      interface Branch {
+        required?: string[];
+        additionalProperties?: boolean;
+        properties?: Record<string, { properties?: Record<string, { enum?: string[] }> }>;
+      }
+      const fortress = createFortress({
+        jwt: { key: 'fortress-test-secret-at-least-32!' },
+        database: mockDb,
+      });
+
+      const spec = fortress.toOpenAPI({ title: 'Fortress', version: '0.0.0' });
+      const schema = (spec.paths['/iam/check'] as unknown as {
+        post: { requestBody: { content: Record<string, { schema: { oneOf?: Branch[] } }> } };
+      }).post.requestBody.content['application/json'].schema;
+
+      expect(schema.oneOf).toHaveLength(2);
+      const legacy = schema.oneOf!.find(branch => branch.required?.includes('userId'));
+      const subject = schema.oneOf!.find(branch => branch.required?.includes('subject'));
+      expect(legacy).toBeDefined();
+      expect(subject).toBeDefined();
+      // Neither branch may require the other's identity field, which is what
+      // makes a body carrying both match both arms and fail `oneOf`.
+      expect(legacy!.required).not.toContain('subject');
+      expect(subject!.required).not.toContain('userId');
+      // Both branches must be closed. While they were open, a malformed
+      // counterpart disqualified one arm and the body was accepted.
+      expect(legacy!.additionalProperties).toBe(false);
+      expect(subject!.additionalProperties).toBe(false);
+      expect(subject!.properties!.subject.properties!.type.enum)
+        .toEqual(['USER', 'GROUP', 'SERVICE_ACCOUNT']);
+    });
   });
 });
