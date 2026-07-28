@@ -416,8 +416,10 @@ function optionalNullableString(value: unknown, field: string): string | null | 
 }
 
 function parseTokenRequestBody(value: Record<string, string>): TokenRequestBody {
+  if (!value.grant_type)
+    throw Errors.oauth('invalid_request', 'grant_type is required');
   return {
-    grant_type: requiredString(value.grant_type, 'grant_type'),
+    grant_type: value.grant_type,
     code: optionalString(value.code, 'code'),
     redirect_uri: optionalString(value.redirect_uri, 'redirect_uri'),
     client_id: optionalString(value.client_id, 'client_id'),

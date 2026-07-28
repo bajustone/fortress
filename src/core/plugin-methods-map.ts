@@ -78,14 +78,25 @@ function isCallableMethods(value: unknown): value is LegacyPluginMethods {
   return Object.values(value).every(method => typeof method === 'function');
 }
 
+function hasCallableCapabilityMethod(value: LegacyPluginMethods, requiredMethod: string): boolean {
+  let owner: object | null = value;
+  while (owner !== null && owner !== Object.prototype) {
+    if (Object.hasOwn(owner, requiredMethod))
+      return typeof Reflect.get(value, requiredMethod) === 'function';
+    owner = Object.getPrototypeOf(owner) as object | null;
+  }
+  return false;
+}
+
 function isPluginCapability<K extends PluginCapabilityName>(name: K, value: unknown, requiredMethod?: string): value is PluginCapability<K> {
   void name;
   if (!isCallableMethods(value))
     return false;
   // The required method is selected by the matched endpoint. Checking it at
   // lookup time permits intentionally minimal test doubles and gives a
-  // useful runtime failure when a configured capability drifts.
-  return requiredMethod === undefined || Object.hasOwn(value, requiredMethod);
+  // useful runtime failure when a configured capability drifts. Class
+  // prototype methods are valid, but Object.prototype is never a capability.
+  return requiredMethod === undefined || hasCallableCapabilityMethod(value, requiredMethod);
 }
 
 /**

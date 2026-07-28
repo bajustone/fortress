@@ -1,6 +1,7 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin, PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { oauth } from '../../plugins/oauth';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 import { definePlugin } from '../plugin';
@@ -222,6 +223,84 @@ describe('fortress.handleRequest', () => {
       await expect(res.json()).resolves.toMatchObject({
         code: 'BAD_REQUEST',
         message: 'Two-factor plugin is not configured',
+      });
+    });
+
+    it('accepts required capability methods defined on a prototype', async () => {
+      class PrototypeTwoFactorMethods {
+        verify() {
+          return { ok: true };
+        }
+      }
+      const prototypeTwoFactor = {
+        name: 'two-factor',
+        methods: () => new PrototypeTwoFactorMethods(),
+      } as unknown as RuntimeFortressPlugin;
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [prototypeTwoFactor] as const,
+      });
+      const res = await local.handleRequest(new Request('http://localhost/auth/2fa/verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ continuationToken: 'token', code: '123456' }),
+      }));
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ ok: true });
+    });
+
+    it('does not resolve required capabilities from Object.prototype', async () => {
+      const rootPrototype = Object.getPrototypeOf({}) as object;
+      const originalVerify = Object.getOwnPropertyDescriptor(rootPrototype, 'verify');
+      Object.defineProperty(rootPrototype, 'verify', {
+        configurable: true,
+        value: () => ({ compromised: true }),
+      });
+      try {
+        const incompleteTwoFactor = {
+          name: 'two-factor',
+          methods: () => ({}),
+        } as unknown as RuntimeFortressPlugin;
+        const local = createFortress({
+          jwt: { key: SECRET },
+          database: createTestAdapter(),
+          plugins: [incompleteTwoFactor] as const,
+        });
+        const res = await local.handleRequest(new Request('http://localhost/auth/2fa/verify', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ continuationToken: 'token', code: '123456' }),
+        }));
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'Two-factor plugin is not configured',
+        });
+      }
+      finally {
+        if (originalVerify)
+          Object.defineProperty(rootPrototype, 'verify', originalVerify);
+        else
+          Reflect.deleteProperty(rootPrototype, 'verify');
+      }
+    });
+
+    it('returns an OAuth error when the token request omits grant_type', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const res = await local.handleRequest(new Request('http://localhost/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: '',
+      }));
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: 'invalid_request',
+        error_description: 'grant_type is required',
       });
     });
   });
