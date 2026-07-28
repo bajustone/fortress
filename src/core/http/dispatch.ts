@@ -122,9 +122,11 @@ async function parseFormBody(request: Request): Promise<Partial<Record<string, s
   const params = new URLSearchParams(text);
   const out = Object.create(null) as Partial<Record<string, string>>;
   for (const [k, v] of params) {
-    // RFC 6749 §3.1: request parameters MUST NOT be included more than once.
-    // Last-write-wins would let a trailing duplicate override a `grant_type`
-    // or `token` that an intermediary already inspected.
+    // RFC 6749 §3.2: token-endpoint parameters MUST NOT be included more than
+    // once. RFC 7662 and RFC 7009 do not restate the rule, so applying it to
+    // introspection and revocation is a deliberate consistency choice rather
+    // than a 6749 requirement. Last-write-wins would let a trailing duplicate
+    // override a `grant_type` or `token` an intermediary already inspected.
     if (Object.hasOwn(out, k))
       throw Errors.oauth('invalid_request', `Duplicate parameter: ${k}`);
     out[k] = v;
@@ -706,10 +708,8 @@ async function invokeIamHandler(
         optionalString(body.tenantId, 'tenantId'),
       );
     case 'checkPermission': {
-      // Accept either the new `{ subject: { type, id } }` shape or the
-      // legacy `{ userId }` shape. Defaulting to USER keeps this backwards
-      // compatible for callers that haven't migrated yet — step 10 updates
-      // the endpoint body schema to the new shape.
+      // The endpoint schema admits exactly one of `subject` or `userId`, so
+      // the legacy shape stays supported and is read as a USER subject.
       const subjectIn = isRecord(body.subject) ? body.subject : undefined;
       const subject: Subject = subjectIn
         ? { type: parseSubjectType(subjectIn.type), id: requiredString(subjectIn.id, 'subject.id') }

@@ -1,5 +1,6 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin, PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
+import type { PermissionContext, Subject } from '../types';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { oauth } from '../../plugins/oauth';
 import { createTestAdapter } from '../../testing';
@@ -188,6 +189,76 @@ describe('fortress.handleRequest', () => {
         body: JSON.stringify({ name: 'editor', permissions: [] }),
       }));
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('iam permission check body union', () => {
+    async function callCheck(body: unknown) {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+      });
+      await local.auth.createUser({ email: 'admin@x.co', name: 'Admin', password: 'password1234567' });
+      const login = await local.auth.login('admin@x.co', 'password1234567');
+      if (login.status !== 'success')
+        throw new Error('expected success');
+      // The RBAC gate and the handler share this method, so the handler's
+      // evaluation is the last recorded call.
+      const calls: { subject: Subject; resource: string; action: string; context?: PermissionContext }[] = [];
+      local.iam.checkPermission = async (subject, resource, action, context) => {
+        calls.push({ subject, resource, action, context });
+        return true;
+      };
+      const res = await local.handleRequest(new Request('http://localhost/iam/check', {
+        method: 'POST',
+        headers: {
+          'authorization': `Bearer ${login.accessToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      }));
+      return { res, calls };
+    }
+
+    it.each(['USER', 'GROUP', 'SERVICE_ACCOUNT'] as const)('evaluates a %s subject body', async (type) => {
+      const { res, calls } = await callCheck({ subject: { type, id: 'subject-1' }, resource: 'post', action: 'read' });
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ allowed: true });
+      expect(calls.at(-1)).toMatchObject({ subject: { type, id: 'subject-1' }, resource: 'post', action: 'read' });
+    });
+
+    it('still evaluates the legacy userId body as a USER subject', async () => {
+      const { res, calls } = await callCheck({ userId: 'user-1', resource: 'post', action: 'read' });
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ allowed: true });
+      expect(calls.at(-1)).toMatchObject({ subject: { type: 'USER', id: 'user-1' } });
+    });
+
+    it.each([
+      ['neither userId nor subject', { resource: 'post', action: 'read' }],
+      ['both userId and subject', { userId: 'user-1', subject: { type: 'USER', id: 'user-2' }, resource: 'post', action: 'read' }],
+    ])('rejects a body carrying %s', async (_label, body) => {
+      const { res } = await callCheck(body);
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({ code: 'VALIDATION_ERROR' });
+    });
+
+    it('forwards only request-scoped context to the evaluator', async () => {
+      const { res, calls } = await callCheck({
+        subject: { type: 'USER', id: 'user-1' },
+        resource: 'post',
+        action: 'read',
+        context: {
+          tenantId: 'tenant-a',
+          request: { ip: '10.0.0.1' },
+          credentialScopes: ['*'],
+          user: { id: 'user-1' },
+          resource: { ownerId: 'user-1' },
+        },
+      });
+      expect(res.status).toBe(200);
+      // credentialScopes, user, and resource would each let a caller forge an allow.
+      expect(calls.at(-1)?.context).toEqual({ tenantId: 'tenant-a', request: { ip: '10.0.0.1' } });
     });
   });
 

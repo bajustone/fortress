@@ -177,18 +177,25 @@ function enrichIamSchemas(
   const allActions = [...new Set(entries.flatMap(([, def]) => def.actions))].sort();
 
   for (const ep of allEndpoints) {
-    if (ep.path === '/iam/check' && ep.input?.body?.properties) {
-      // Clone to avoid mutating the static endpoint definition
-      const bodyClone: JSONSchema = JSON.parse(JSON.stringify(ep.input.body));
-      if (bodyClone.properties!.resource) {
-        bodyClone.properties!.resource = { ...bodyClone.properties!.resource, enum: allResourceNames };
+    if (ep.path !== '/iam/check' || !ep.input?.body)
+      continue;
+    // Clone to avoid mutating the static endpoint definition
+    const bodyClone: JSONSchema = JSON.parse(JSON.stringify(ep.input.body)) as JSONSchema;
+    // The body is a `oneOf` of the subject and legacy user forms, so each
+    // branch carries its own copy of the flat enums.
+    const branches = (bodyClone.oneOf ?? [bodyClone]) as JSONSchema[];
+    for (const branch of branches) {
+      if (!branch.properties)
+        continue;
+      if (branch.properties.resource) {
+        branch.properties.resource = { ...branch.properties.resource, enum: allResourceNames };
       }
-      if (bodyClone.properties!.action && allActions.length > 0) {
-        bodyClone.properties!.action = { ...bodyClone.properties!.action, enum: allActions };
+      if (branch.properties.action && allActions.length > 0) {
+        branch.properties.action = { ...branch.properties.action, enum: allActions };
       }
-      ep.input = { ...ep.input, body: bodyClone };
-      break;
     }
+    ep.input = { ...ep.input, body: bodyClone };
+    break;
   }
 }
 

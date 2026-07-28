@@ -3,7 +3,7 @@ import type { EndpointDefinition } from '../endpoint';
 import type { FortressSchema } from '../json-schema';
 import { authRef } from '../auth/auth-endpoints';
 import { defineEndpoints } from '../define-endpoints';
-import { arr, bool, defineComponents, endpoint, enums, id, int, nullable, obj, record, recordOf, str } from '../schema-builder';
+import { arr, bool, defineComponents, endpoint, enums, id, int, nullable, obj, oneOf, record, recordOf, str } from '../schema-builder';
 
 // Sentinel for "no body / query / params" matching EndpointDefinition's default.
 
@@ -50,6 +50,37 @@ export interface PermissionInputWire {
   effect?: 'ALLOW' | 'DENY';
   conditions?: PermissionConditionWire[];
 }
+
+/** Wire shape of the subject a permission check is evaluated against. */
+export interface CheckSubjectWire {
+  type: 'USER' | 'GROUP' | 'SERVICE_ACCOUNT';
+  id: string;
+}
+
+/** Legacy user-only form of the permission-check body. */
+export interface CheckPermissionByUserWire {
+  userId: string;
+  subject?: never;
+  resource: string;
+  action: string;
+  context?: Record<string, unknown>;
+}
+
+/** Subject-aware form of the permission-check body. */
+export interface CheckPermissionBySubjectWire {
+  subject: CheckSubjectWire;
+  userId?: never;
+  resource: string;
+  action: string;
+  context?: Record<string, unknown>;
+}
+
+/**
+ * Body accepted by `POST /iam/check`. Exactly one of `userId` or `subject`
+ * must be present; the `?: never` arms make supplying both a compile error,
+ * matching the `oneOf` schema that rejects it at runtime.
+ */
+export type CheckPermissionBodyWire = CheckPermissionByUserWire | CheckPermissionBySubjectWire;
 
 /** Wire shape of a persisted service account. Date fields are ISO strings on the wire. */
 export interface ServiceAccountWire {
@@ -252,12 +283,7 @@ export interface IamEndpointsMap {
     { 200: PermissionWire[]; 401: ErrorResponseWire }
   >;
   checkPermission: EndpointDefinition<
-    {
-      userId: string;
-      resource: string;
-      action: string;
-      context?: Record<string, unknown>;
-    },
+    CheckPermissionBodyWire,
     EmptyInput,
     EmptyInput,
     { 200: { allowed: boolean }; 401: ErrorResponseWire }
@@ -524,16 +550,38 @@ export const iamEndpoints: IamEndpointsMap = defineEndpoints({
     .tags('IAM', 'Permissions')
     .security('bearer')
     .permission('fortress', 'viewPermissions')
-    .body(obj(
-      {
-        userId: id('User ID'),
-        resource: str('Resource name'),
-        action: str('Action name'),
-        context: record('Permission context'),
-      },
-      'userId',
-      'resource',
-      'action',
+    // `oneOf` is exactly-one, so a body carrying both `userId` and `subject`
+    // matches both arms and is rejected, as is a body carrying neither.
+    .body(oneOf(
+      obj(
+        {
+          userId: id('User ID'),
+          resource: str('Resource name'),
+          action: str('Action name'),
+          context: record('Permission context'),
+        },
+        'userId',
+        'resource',
+        'action',
+      ),
+      obj(
+        {
+          subject: obj(
+            {
+              type: enums('USER', 'GROUP', 'SERVICE_ACCOUNT'),
+              id: id('Subject ID'),
+            },
+            'type',
+            'id',
+          ),
+          resource: str('Resource name'),
+          action: str('Action name'),
+          context: record('Permission context'),
+        },
+        'subject',
+        'resource',
+        'action',
+      ),
     ))
     .response(200, 'Permission check result', obj({ allowed: bool('Whether permission is granted') }, 'allowed'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))
