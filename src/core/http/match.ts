@@ -48,10 +48,10 @@ export function canonicalizePath(pathname: string): string {
  * so `/:id` and `/:sessionId` must collide during startup validation too.
  */
 export function canonicalizeRouteShape(pathname: string): string {
-  return canonicalizePath(pathname)
-    .split('/')
-    .map(segment => segment.startsWith(':') ? ':' : segment)
+  const shape = parsePathSegments(pathname)
+    .map(segment => segment.param === undefined ? segment.raw : ':')
     .join('/');
+  return shape === '' ? '/' : `/${shape}`;
 }
 
 /** One parsed path segment: a literal, or a `:param` capture with its name. */
@@ -83,17 +83,12 @@ export function parsePathSegments(path: string): PathSegment[] {
  */
 export function buildRouteTable<T extends RouteLike>(endpoints: readonly T[]): RouteEntry<T>[] {
   const table = endpoints.map((ep) => {
-    const segments = canonicalizePath(ep.path).split('/').filter(Boolean);
-    const paramNames: string[] = [];
-    for (const seg of segments) {
-      if (seg.startsWith(':'))
-        paramNames.push(seg.slice(1));
-    }
+    const parsed = parsePathSegments(ep.path);
     return {
       endpoint: ep,
       method: ep.method.toUpperCase(),
-      segments,
-      paramNames,
+      segments: parsed.map(segment => segment.raw),
+      paramNames: parsed.flatMap(segment => segment.param === undefined ? [] : [segment.param]),
     };
   });
 
