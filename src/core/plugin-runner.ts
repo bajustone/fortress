@@ -5,7 +5,7 @@ import type { FortressConfig } from './config';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
-import type { FortressPlugin, MiddlewareDefinition, PluginContext, RuntimeFortressPlugin } from './plugin';
+import type { FortressPlugin, MiddlewareDefinition, PluginContext, PluginMethod, RuntimeFortressPlugin } from './plugin';
 import { Errors } from './errors';
 import { canonicalizePath } from './http/match';
 
@@ -20,13 +20,28 @@ export function processPlugins(
   auth?: AuthService,
   iam?: IamService,
   logger?: FortressLogger,
-  // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
-): Record<string, Record<string, Function>> {
-  const ctx: PluginContext = { db, config, auth, iam, logger };
-  // eslint-disable-next-line ts/no-unsafe-function-type -- plugin methods are dynamically typed
-  const result: Record<string, Record<string, Function>> = Object.create(null) as Record<string, Record<string, Function>>;
+): Record<string, Record<string, PluginMethod>> {
+  const result: Record<string, Record<string, PluginMethod>> = Object.create(null) as Record<string, Record<string, PluginMethod>>;
+  let initializingPlugin: string | undefined;
+  const ctx: PluginContext = {
+    db,
+    config,
+    auth,
+    iam,
+    logger,
+    getPluginMethods: (name) => {
+      if (initializingPlugin) {
+        throw Errors.badRequest(
+          `Plugin "${initializingPlugin}" cannot resolve plugin "${name}" while plugin methods are initializing; defer lookup until a returned method is called`,
+          { details: { plugin: initializingPlugin, requestedPlugin: name } },
+        );
+      }
+      return result[name];
+    },
+  };
 
   for (const plugin of plugins) {
+    initializingPlugin = plugin.name;
     const methods = plugin.methods ? plugin.methods(ctx) : Object.create(null) as object;
     if (methods === null || typeof methods !== 'object')
       throw Errors.badRequest(`Plugin "${plugin.name}" methods factory must return an object`);
@@ -40,9 +55,9 @@ export function processPlugins(
     // Keep each surface's own properties and `this` identity intact. Dispatch
     // performs own-property checks, so inherited names can never become route
     // handlers accidentally.
-    // eslint-disable-next-line ts/no-unsafe-function-type -- normalized at the runtime dictionary boundary
-    result[plugin.name] = methods as Record<string, Function>;
+    result[plugin.name] = methods as Record<string, PluginMethod>;
   }
+  initializingPlugin = undefined;
 
   return result;
 }

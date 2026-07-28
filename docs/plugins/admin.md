@@ -263,7 +263,11 @@ curl -X POST http://localhost:3000/admin/service-accounts/42/api-keys \
 
 From then on, the service account authenticates incoming requests with `Authorization: ApiKey myapp_sk_...` or `X-API-Key: myapp_sk_...` — the api-key plugin's `resolvePrincipal` hook turns the header into a subject principal and RBAC flows through as usual.
 
-Admin-minted keys respect the same configured knobs (`prefix`, `maxKeysPerSubject`, `defaultExpirySeconds`) as self-service keys — the admin plugin re-enters the api-key plugin's `methods(ctx)` factory to mint, so there's no duplicate config.
+Admin-minted keys respect the same configured knobs (`prefix`, `maxKeysPerSubject`, `defaultExpirySeconds`) as self-service keys — the admin plugin mints through the api-key plugin's startup-created method surface rather than building its own, so there's no duplicate config.
+
+With `apiKeyRoutes: true`, the admin plugin declares a startup dependency on the `api-key` plugin's `createKey` capability, so a missing or incomplete `api-key` registration fails at `createFortress()` instead of on the first create-key request.
+
+The admin API-key *methods* remain available regardless of the flag — only the HTTP routes are gated. `adminCreateUserApiKey` and `adminCreateServiceAccountApiKey` resolve the `api-key` plugin's `createKey` capability, so for an existing target they report `BAD_REQUEST` naming the missing capability when it is unavailable; a missing user or service account is reported as `NOT_FOUND` before that point. The list and revoke methods read the `api_key` model directly and never resolve that capability.
 
 ## Endpoints
 

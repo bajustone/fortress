@@ -49,7 +49,14 @@ import { SILENT_LOGGER } from './observability/logger';
 import { NO_OP_TELEMETRY } from './observability/types';
 import { toOpenAPI as endpointsToOpenAPI } from './openapi';
 import { processPlugins } from './plugin-runner';
-import { assembleEndpoints, CORE_ENDPOINT_OWNER, HOST_ROUTES_PLUGIN_NAME, normalizePlugins } from './route-assembly';
+import {
+  assembleEndpoints,
+  assertPluginDependencyCapabilities,
+  assertPluginDependencyProviders,
+  CORE_ENDPOINT_OWNER,
+  HOST_ROUTES_PLUGIN_NAME,
+  normalizePlugins,
+} from './route-assembly';
 
 /**
  * Configured fortress instance returned by {@link createFortress}.
@@ -186,6 +193,12 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // the factories, below.
   const plugins = normalizePlugins(config);
 
+  // Composition check, deliberately not shared with `describeRouteSurface()`:
+  // a plugin declaring a dependency on an unregistered plugin can never boot,
+  // and rejecting it here means no factory starts a worker or opens a database
+  // handle first. Re-checked after the factories, which may mutate the graph.
+  assertPluginDependencyProviders(plugins);
+
   // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
   // zero-allocation singletons — if the caller doesn't opt in, Fortress
   // never writes to stderr and every metric/span call is a no-op.
@@ -212,6 +225,13 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   const iam = createIamService(db, config, { logger, telemetry });
   const pluginMethods = processPlugins(plugins, db, config, auth, iam, logger);
 
+  // Derive and revalidate the authoritative graph and route set now that every
+  // plugin factory has run. Factories receive live config/route objects and can
+  // mutate them, so this pass must precede capability dereferencing as well as
+  // publication.
+  const { endpoints, endpointOwners } = assembleEndpoints(plugins);
+  assertPluginDependencyCapabilities(plugins, pluginMethods);
+
   // A Fortress-mounted plugin route is executable only when its handler is
   // an own callable method. Fail at startup rather than publishing a call
   // namespace whose first request would 404; top-level host routes remain
@@ -228,14 +248,6 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
       }
     }
   }
-
-  // Derive the authoritative route set now that every plugin factory has run.
-  // Factories are handed the live route objects (their own closures, and
-  // `ctx.config.plugins[…].routes`), so a factory can flip `bearerKind`,
-  // rewrite a path onto a core route, or add and remove routes. Merging and
-  // re-checking the security invariants here — not before `processPlugins` —
-  // is what stops a mutated route from being published unvalidated.
-  const { endpoints, endpointOwners } = assembleEndpoints(plugins);
 
   // --- Wire built-in telemetry observers ------------------------------
   //

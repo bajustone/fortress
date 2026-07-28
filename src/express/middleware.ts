@@ -276,7 +276,9 @@ export function createRbacMiddleware(fortress: Pick<FortressAuthRuntime, 'iam'>,
         credentialScopes: req.fortressScopes,
       });
       if (!allowed) {
-        throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403);
+        throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403, {
+          details: { requiredPermission: `${mapping.resource}:${mapping.action}` },
+        });
       }
 
       next();

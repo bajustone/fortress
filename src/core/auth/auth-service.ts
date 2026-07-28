@@ -1228,7 +1228,9 @@ export function createAuthService(
       // service calls must fail closed too.
       const adminPermissions = await adapter.getSubjectPermissions({ type: 'USER', id: adminUserId });
       if (!evaluatePermissions(adminPermissions, 'fortress', 'impersonate', evaluationMode)) {
-        throw Errors.forbidden('Insufficient permissions');
+        throw Errors.forbidden('Insufficient permissions', {
+          details: { requiredPermission: 'fortress:impersonate' },
+        });
       }
 
       const targetUser = await db.findOne<FortressUser>({

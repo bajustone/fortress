@@ -41,7 +41,29 @@ describe('processPlugins', () => {
   it('passes PluginContext to methods factory', () => {
     const methodsFn = vi.fn(() => ({}));
     processPlugins([testPlugin({ methods: methodsFn })], mockDb, mockConfig);
-    expect(methodsFn).toHaveBeenCalledWith({ db: mockDb, config: mockConfig });
+    expect(methodsFn).toHaveBeenCalledWith(expect.objectContaining({
+      db: mockDb,
+      config: mockConfig,
+      getPluginMethods: expect.any(Function),
+    }));
+  });
+
+  it('rejects runtime method lookup during factory initialization', () => {
+    const consumer = definePlugin({
+      name: 'consumer',
+      methods: (ctx) => {
+        ctx.getPluginMethods?.('provider');
+        return {};
+      },
+    });
+    const provider = definePlugin({ name: 'provider', methods: () => ({ ready: () => true }) });
+
+    expect(() => processPlugins([consumer, provider], mockDb, mockConfig)).toThrow(expect.objectContaining({
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+      message: 'Plugin "consumer" cannot resolve plugin "provider" while plugin methods are initializing; defer lookup until a returned method is called',
+      details: { plugin: 'consumer', requestedPlugin: 'provider' },
+    }));
   });
 
   it('accepts definePlugin and interface-shaped method surfaces', () => {

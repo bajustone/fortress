@@ -997,6 +997,13 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin<'admin',
   return definePlugin({
     name: 'admin',
     coreOverrides: adminCoreOverrides,
+    // The opt-in HTTP routes call through the configured api-key plugin so
+    // limits, prefixes, expiry, and observers stay centralized there. Declare
+    // that dependency up front instead of failing as a DATABASE_ERROR on the
+    // first create-key request.
+    dependencies: mountApiKeyRoutes
+      ? [{ plugin: 'api-key', methods: ['createKey'] }] as const
+      : undefined,
 
     // Routes are keyed by handler name, matching the runtime dispatch
     // contract. Re-exported core IAM routes retain the same keys so intentional
@@ -1650,21 +1657,18 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin<'admin',
 // --- Helpers ---
 
 /**
- * Look up the api-key plugin on the fortress config and return its
- * methods bound to the current context. Used by the admin plugin's
- * create-key handlers so admin-minted keys go through the same
- * configured knobs (prefix, limits, default expiry) as self-service
- * keys — no duplicate config.
- *
- * Rerunning the api-key plugin's `methods` factory is cheap and safe:
- * it just returns a fresh object literal, and the plugin's internal
- * `observerRegistered` flag prevents the IAM cascade observer from
- * being attached twice.
+ * Return the api-key plugin's startup-created, capability-validated runtime
+ * methods. Admin-minted keys therefore use the exact same configured surface
+ * (prefix, limits, default expiry, and observers) as self-service keys without
+ * rerunning a potentially stateful plugin factory.
  */
 
 function getApiKeyMethods(ctx: PluginContext): ApiKeyMethods {
-  const apiKeyPlugin = (ctx.config.plugins ?? []).find(p => p.name === 'api-key');
-  if (!apiKeyPlugin?.methods)
-    throw Errors.database('api-key plugin is not registered');
-  return apiKeyPlugin.methods(ctx) as unknown as ApiKeyMethods;
+  const methods = ctx.getPluginMethods?.('api-key');
+  if (!methods || typeof methods.createKey !== 'function') {
+    throw Errors.badRequest('Admin API-key operations require the api-key plugin createKey capability', {
+      details: { plugin: 'admin', dependencyPlugin: 'api-key', missingMethod: 'createKey' },
+    });
+  }
+  return methods as unknown as ApiKeyMethods;
 }

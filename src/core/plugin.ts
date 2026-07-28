@@ -33,6 +33,18 @@ export type PluginMethod = (...args: any[]) => any;
 export type LegacyPluginMethods = Record<string, PluginMethod>;
 export type PluginRoutes = Readonly<Record<string, AnyEndpointDefinition>>;
 
+/**
+ * A startup dependency on another registered plugin and, optionally, on
+ * callable methods that plugin must expose. Dependency metadata is declarative
+ * so Fortress can reject an invalid plugin graph before serving requests.
+ */
+export interface PluginDependency {
+  /** Registered plugin name that provides the dependency. */
+  plugin: string;
+  /** Method capabilities required from the dependency's runtime surface. */
+  methods?: readonly string[];
+}
+
 type CallableMethodSurface<TMethods extends object> = {
   [K in keyof TMethods]: TMethods[K] extends PluginMethod ? TMethods[K] : never;
 };
@@ -47,6 +59,9 @@ export interface FortressPluginDefinition<
 
   /** DB models this plugin needs */
   models?: ModelDefinition[];
+
+  /** Other plugin capabilities required for this plugin configuration. */
+  dependencies?: readonly PluginDependency[];
 
   /** Hooks into auth lifecycle (executed in plugin registration order) */
   hooks?: PluginHooks;
@@ -412,6 +427,17 @@ export interface PluginContext {
   iam?: IamService;
   /** Resolved logger (silent no-op if `config.logger` is unset). */
   logger?: FortressLogger;
+  /**
+   * Look up the single runtime method surface created for a registered plugin.
+   * Capture this function during `methods()` initialization and call it lazily
+   * from returned methods; calling it while any plugin factory is still running
+   * is rejected so lookup semantics do not depend on registration order.
+   *
+   * Only `createFortress()` supplies this. A hand-assembled context — calling
+   * `plugin.methods(ctx)` directly rather than registering the plugin — will
+   * not have it, so treat its absence as the dependency being unavailable.
+   */
+  getPluginMethods?: (name: string) => Readonly<Record<string, PluginMethod>> | undefined;
 }
 
 /**

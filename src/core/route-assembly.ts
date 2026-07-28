@@ -1,6 +1,6 @@
 import type { FortressConfig } from './config';
 import type { EndpointDefinition } from './endpoint';
-import type { FortressPlugin, RuntimeFortressPlugin } from './plugin';
+import type { FortressPlugin, PluginDependency, RuntimeFortressPlugin } from './plugin';
 import { authEndpoints } from './auth/auth-endpoints';
 import { isHttpMethod } from './endpoint';
 import { Errors } from './errors';
@@ -148,6 +148,130 @@ function validatePluginRouteShapes(plugins: readonly RuntimeFortressPlugin[]): v
         if (schema?.type && schema.type !== 'object') {
           throw Errors.badRequest(
             `Plugin "${plugin.name}" route "${routeName}" ${location} schema must describe a flat object`,
+          );
+        }
+      }
+    }
+  }
+
+  // Only the declared *shape* is checked here, so config-only tooling still
+  // rejects a malformed `dependencies` array. Whether a provider is actually
+  // registered is a property of the composed runtime, not the declaration, and
+  // belongs to `assertPluginDependencyProviders`.
+  for (const plugin of plugins) {
+    readDeclaredDependencies(plugin);
+  }
+}
+
+/**
+ * Validate the declared shape of `plugin.dependencies` and return it typed.
+ *
+ * Derivable from the declaration alone, so this is safe everywhere route
+ * shapes are validated. It says nothing about whether a provider is registered.
+ */
+function readDeclaredDependencies(plugin: RuntimeFortressPlugin): readonly PluginDependency[] {
+  const dependencies: unknown = plugin.dependencies;
+  if (dependencies !== undefined && !Array.isArray(dependencies)) {
+    throw Errors.badRequest(`Plugin "${plugin.name}" dependencies must be an array`, {
+      details: { plugin: plugin.name, field: 'dependencies' },
+    });
+  }
+  for (const [index, value] of (dependencies ?? []).entries()) {
+    if (
+      !value || typeof value !== 'object' || Array.isArray(value)
+      || typeof value.plugin !== 'string' || value.plugin.length === 0
+      || (value.methods !== undefined && (
+        !Array.isArray(value.methods)
+        || value.methods.some((method: unknown) => typeof method !== 'string' || method.length === 0)
+      ))
+    ) {
+      throw Errors.badRequest(`Plugin "${plugin.name}" dependency at index ${index} is invalid`, {
+        details: { plugin: plugin.name, field: `dependencies[${index}]` },
+      });
+    }
+  }
+  return (dependencies ?? []) as readonly PluginDependency[];
+}
+
+/**
+ * Reject a plugin graph whose declared dependency providers are not registered.
+ *
+ * Runs before plugin factories so a missing provider fails before any factory
+ * starts a worker or reaches for the database. Registration order is
+ * irrelevant: the full name set is built up front.
+ *
+ * Composition, not declaration — which is why {@link describeRouteSurface}
+ * does not call it. That entry point is explicitly not a boot check, and
+ * `fortress init` scaffolds configs that are not yet bootable.
+ */
+export function assertPluginDependencyProviders(plugins: readonly RuntimeFortressPlugin[]): void {
+  const pluginNames = new Set(plugins.map(plugin => plugin.name));
+  for (const plugin of plugins) {
+    for (const dependency of readDeclaredDependencies(plugin)) {
+      if (!pluginNames.has(dependency.plugin)) {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" requires plugin "${dependency.plugin}" to be registered`,
+          {
+            details: {
+              plugin: plugin.name,
+              missingPlugin: dependency.plugin,
+              requiredMethods: dependency.methods ?? [],
+            },
+          },
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Re-validate the dependency graph against the surfaces plugin factories
+ * actually produced.
+ *
+ * Presence is re-derived from the current plugin graph rather than from the
+ * keys of `pluginMethods`. That map is filled in incrementally as each factory
+ * returns, keying every plugin under the name it held at that moment, so a
+ * later factory that renames an already-keyed plugin leaves behind a stale key
+ * that would otherwise satisfy a dependency on a provider no longer in the
+ * graph. Capabilities are
+ * then checked per declared method against the surface that was actually
+ * produced, closing the case where a plugin with the right name is registered
+ * but does not expose what its consumer needs.
+ */
+export function assertPluginDependencyCapabilities(
+  plugins: readonly RuntimeFortressPlugin[],
+  pluginMethods: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+): void {
+  assertPluginDependencyProviders(plugins);
+
+  for (const plugin of plugins) {
+    for (const dependency of readDeclaredDependencies(plugin)) {
+      const methods = pluginMethods[dependency.plugin];
+      if (!methods) {
+        // In the graph but with no surface: the plugin list itself was mutated
+        // after `processPlugins` ran.
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" dependency "${dependency.plugin}" has no runtime method surface`,
+          {
+            details: {
+              plugin: plugin.name,
+              dependencyPlugin: dependency.plugin,
+              requiredMethods: dependency.methods ?? [],
+            },
+          },
+        );
+      }
+      for (const method of dependency.methods ?? []) {
+        if (!Object.hasOwn(methods, method) || typeof methods[method] !== 'function') {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" requires callable method "${dependency.plugin}.${method}"`,
+            {
+              details: {
+                plugin: plugin.name,
+                dependencyPlugin: dependency.plugin,
+                missingMethod: method,
+              },
+            },
           );
         }
       }

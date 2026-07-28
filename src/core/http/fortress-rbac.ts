@@ -106,8 +106,15 @@ export async function enforceFortressPermission(
       endpoint.meta.permission.action,
       scopes,
     );
-    if (!allowed)
-      throw Errors.forbidden('Insufficient permissions');
+    if (!allowed) {
+      throw Errors.forbidden('Insufficient permissions', {
+        // Report only the route's declared requirement. Do not include the
+        // caller's roles, grants, conditions, or other policy internals.
+        details: {
+          requiredPermission: `${endpoint.meta.permission.resource}:${endpoint.meta.permission.action}`,
+        },
+      });
+    }
     return;
   }
 

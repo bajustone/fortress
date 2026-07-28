@@ -227,8 +227,11 @@ export function createSvelteKitHandle(
           const allowed = await fortress.iam.checkPermission(subject, mapping.resource, mapping.action, {
             credentialScopes: scopes,
           });
-          if (!allowed)
-            throw Errors.forbidden('Insufficient permissions');
+          if (!allowed) {
+            throw Errors.forbidden('Insufficient permissions', {
+              details: { requiredPermission: `${mapping.resource}:${mapping.action}` },
+            });
+          }
         }
       }
 

@@ -44,20 +44,18 @@ describe('dialect-specific Drizzle factories', () => {
 });
 
 describe('drizzle adapter: buildWhereCondition edge cases', () => {
-  it('throws BAD_REQUEST for unknown field', async () => {
+  it('throws a model-aware BAD_REQUEST for unknown fields', async () => {
     await expect(
       db.findOne({
         model: 'user',
         where: [{ field: 'nonexistent_column', operator: '=', value: 'test' }],
       }),
-    ).rejects.toThrow(FortressError);
-
-    await expect(
-      db.findOne({
-        model: 'user',
-        where: [{ field: 'nonexistent_column', operator: '=', value: 'test' }],
-      }),
-    ).rejects.toThrow('Unknown field');
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+      message: 'Unknown field: nonexistent_column on model/table \'user\'',
+      details: { model: 'user', field: 'nonexistent_column' },
+    });
   });
 
   it('throws BAD_REQUEST for unsupported operator', async () => {

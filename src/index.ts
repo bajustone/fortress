@@ -203,6 +203,7 @@ export type {
   ModelConstraint,
   ModelDefinition,
   PluginContext,
+  PluginDependency,
   PluginHooks,
   PluginMethod,
   PluginMethodsOf,
