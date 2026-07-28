@@ -43,6 +43,15 @@ describe('spec-builder path parameters', () => {
     })).toThrow(/literal segment '\{id\}'/);
   });
 
+  it('rejects braces inside a :param suffix', () => {
+    // The whole suffix is the parameter name, so '/:a{b}' would emit the
+    // invalid path '/{a{b}}' and parameter 'a{b}' if braces were not rejected.
+    expect(() => buildOpenAPISpec([pathEndpoint('/:a{b}', 'weird')], {}, {
+      title: 'T',
+      version: '1.0.0',
+    })).toThrow(/path parameter ':a\{b\}' containing '\{' or '\}'/);
+  });
+
   it('rejects a path that declares the same parameter twice', () => {
     // '/dup/:id/:id' is a duplicate (name, in) pair OpenAPI forbids; at runtime
     // the second capture silently overwrites the first.

@@ -132,6 +132,15 @@ function buildOpenAPIPath(
     const name = segment.param;
     if (name === '')
       throw new Error(`Route path '${path}' has an empty ':' path-parameter segment.`);
+    // The whole suffix is the parameter name, so '/:a{b}' would otherwise emit
+    // the invalid path '/{a{b}}'. Braces are OpenAPI path-template syntax and
+    // cannot appear in a parameter name.
+    if (name.includes('{') || name.includes('}')) {
+      throw new Error(
+        `Route path '${path}' has a path parameter ':${name}' containing '{' or '}'. `
+        + `Brace characters are OpenAPI path-template syntax and cannot appear in a parameter name.`,
+      );
+    }
     if (seen.has(name))
       throw new Error(`Route path '${path}' declares path parameter ':${name}' more than once.`);
     seen.add(name);
