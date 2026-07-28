@@ -121,16 +121,38 @@ async function parseFormBody(request: Request): Promise<Partial<Record<string, s
   const text = await request.text();
   const params = new URLSearchParams(text);
   const out = Object.create(null) as Partial<Record<string, string>>;
-  for (const [k, v] of params) out[k] = v;
+  for (const [k, v] of params) {
+    // RFC 6749 §3.1: request parameters MUST NOT be included more than once.
+    // Last-write-wins would let a trailing duplicate override a `grant_type`
+    // or `token` that an intermediary already inspected.
+    if (Object.hasOwn(out, k))
+      throw Errors.oauth('invalid_request', `Duplicate parameter: ${k}`);
+    out[k] = v;
+  }
   return out;
 }
 
+/**
+ * Extract the credentials of an `Authorization` scheme. RFC 9110 §11.1 makes
+ * the scheme token case-insensitive, so `bearer`/`BEARER` are as valid as
+ * `Bearer`.
+ */
+function schemeCredentials(header: string | null, scheme: string): string | undefined {
+  if (!header)
+    return undefined;
+  const separator = header.indexOf(' ');
+  if (separator <= 0 || header.slice(0, separator).toLowerCase() !== scheme)
+    return undefined;
+  return header.slice(separator + 1).trim() || undefined;
+}
+
 function parseBasicAuth(header: string | null): ClientAuth | undefined {
-  if (!header?.startsWith('Basic '))
+  const encoded = schemeCredentials(header, 'basic');
+  if (encoded === undefined)
     return undefined;
   let decoded: string;
   try {
-    decoded = atob(header.slice(6));
+    decoded = atob(encoded);
   }
   catch {
     return undefined;
@@ -145,9 +167,7 @@ function parseBasicAuth(header: string | null): ClientAuth | undefined {
 }
 
 function parseBearerToken(header: string | null): string | undefined {
-  if (!header?.startsWith('Bearer '))
-    return undefined;
-  return header.slice(7);
+  return schemeCredentials(header, 'bearer');
 }
 
 // ── Plugin dispatch (non-oauth) ─────────────────────────────────────
@@ -256,20 +276,21 @@ async function dispatchOAuth(
     }
     case 'handleIntrospectRequest': {
       const m = resolveOAuthMethod(fortress, 'handleIntrospectRequest');
-      const body = await parseFormBody(request);
       const clientAuth = parseBasicAuth(authHeader);
+      // Client authentication outranks request-shape errors, so the body is
+      // only parsed once the caller has presented credentials.
       if (!clientAuth) {
         return jsonResponse(
           { error: 'invalid_client', error_description: 'Client authentication required' },
           401,
         );
       }
-      const result = await m.handleIntrospectRequest({ token: body.token ?? '' }, clientAuth);
+      const body = await parseFormBody(request);
+      const result = await m.handleIntrospectRequest({ token: body.token }, clientAuth);
       return jsonResponse(result, 200);
     }
     case 'handleRevokeRequest': {
       const m = resolveOAuthMethod(fortress, 'handleRevokeRequest');
-      const body = await parseFormBody(request);
       const clientAuth = parseBasicAuth(authHeader);
       if (!clientAuth) {
         return jsonResponse(
@@ -277,7 +298,8 @@ async function dispatchOAuth(
           401,
         );
       }
-      await m.handleRevokeRequest({ token: body.token ?? '' }, clientAuth);
+      const body = await parseFormBody(request);
+      await m.handleRevokeRequest({ token: body.token }, clientAuth);
       return jsonResponse({}, 200);
     }
     case 'handleUserInfoRequest': {

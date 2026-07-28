@@ -354,6 +354,104 @@ describe('fortress.handleRequest', () => {
       expect(unknownClient.status).toBe(401);
       await expect(unknownClient.json()).resolves.toMatchObject({ error: 'invalid_client' });
     });
+
+    it('rejects duplicate OAuth form parameters instead of last-write-wins', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const client = await local.plugins.oauth.createClient({
+        name: 'Duplicate params',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+      if (!client.clientSecret)
+        throw new Error('expected a confidential OAuth client');
+      const basic = `Basic ${btoa(`${client.clientId}:${client.clientSecret}`)}`;
+
+      // A trailing duplicate must not override the grant_type an intermediary
+      // already inspected, and must never issue a token.
+      const token = await local.handleRequest(new Request('http://localhost/oauth/token', {
+        method: 'POST',
+        headers: { 'authorization': basic, 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'grant_type=client_credentials&grant_type=authorization_code',
+      }));
+      expect(token.status).toBe(400);
+      const tokenBody = await token.json() as Record<string, unknown>;
+      expect(tokenBody).toMatchObject({ error: 'invalid_request' });
+      expect(tokenBody).not.toHaveProperty('access_token');
+
+      for (const route of ['introspect', 'revoke'] as const) {
+        const res = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+          method: 'POST',
+          headers: { 'authorization': basic, 'content-type': 'application/x-www-form-urlencoded' },
+          body: 'token=first&token=second',
+        }));
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({ error: 'invalid_request' });
+      }
+    });
+
+    it('keeps client authentication ahead of duplicate-parameter errors', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const res = await local.handleRequest(new Request('http://localhost/oauth/introspect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'token=first&token=second',
+      }));
+      expect(res.status).toBe(401);
+      await expect(res.json()).resolves.toMatchObject({ error: 'invalid_client' });
+    });
+
+    it('accepts case-insensitive Authorization schemes (RFC 9110 §11.1)', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth()] as const,
+      });
+      const client = await local.plugins.oauth.createClient({
+        name: 'Case insensitive',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+      if (!client.clientSecret)
+        throw new Error('expected a confidential OAuth client');
+
+      // A lowercase scheme still authenticates, so the request advances past
+      // the client check and fails only on the missing token.
+      for (const scheme of ['basic', 'BASIC', 'BaSiC']) {
+        const res = await local.handleRequest(new Request('http://localhost/oauth/introspect', {
+          method: 'POST',
+          headers: {
+            'authorization': `${scheme} ${btoa(`${client.clientId}:${client.clientSecret}`)}`,
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: '',
+        }));
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({
+          error: 'invalid_request',
+          error_description: 'token is required',
+        });
+      }
+
+      // A recognized bearer scheme rejects the token itself rather than
+      // reporting a missing bearer credential.
+      for (const scheme of ['bearer', 'BEARER']) {
+        const res = await local.handleRequest(new Request('http://localhost/oauth/userinfo', {
+          headers: { authorization: `${scheme} not-a-real-token` },
+        }));
+        expect(res.status).toBe(401);
+        await expect(res.json()).resolves.not.toMatchObject({
+          error_description: 'Bearer token required',
+        });
+      }
+    });
   });
 
   describe('plugin success serialization', () => {

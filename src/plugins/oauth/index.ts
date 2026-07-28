@@ -283,8 +283,11 @@ export interface OAuthMethods {
   rotateSigningKey: () => Promise<{ kid: string }>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
   handleTokenRequest: (body: TokenRequestBody, clientAuth?: ClientAuth) => Promise<Record<string, unknown>>;
-  handleIntrospectRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<Record<string, unknown>>;
-  handleRevokeRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<void>;
+  // `token` is optional because these handlers authenticate the client before
+  // rejecting a missing token, so client-credential failures keep precedence
+  // over `invalid_request`.
+  handleIntrospectRequest: (body: { token?: string }, clientAuth: ClientAuth) => Promise<Record<string, unknown>>;
+  handleRevokeRequest: (body: { token?: string }, clientAuth: ClientAuth) => Promise<void>;
   /**
    * OIDC Core 1.0 §5.3 userinfo endpoint. Returns the standard claims set
    * (`sub`, `email`, `email_verified`, `name`, `preferred_username`,
@@ -2033,7 +2036,8 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
         responses: {
           200: { description: 'Token info', schema: { type: 'object', properties: { active: { type: 'boolean' }, sub: { type: 'string' }, scope: { type: 'string' }, exp: { type: 'number' } } } },
-          401: { description: 'Client authentication required' },
+          400: { description: 'Missing or duplicated token parameter (invalid_request)' },
+          401: { description: 'Client authentication required (invalid_client)' },
         },
       },
       handleRevokeRequest: {
@@ -2042,7 +2046,11 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         handler: 'handleRevokeRequest' as const,
         meta: { summary: 'Revoke a token (RFC 7009)', tags: ['OAuth'], security: ['basic'], bearerKind: 'oauth' as const },
         input: { body: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
-        responses: { 200: { description: 'Token revoked' } },
+        responses: {
+          200: { description: 'Token revoked' },
+          400: { description: 'Missing or duplicated token parameter (invalid_request)' },
+          401: { description: 'Client authentication required (invalid_client)' },
+        },
       },
       handleUserInfoRequest: {
         method: 'GET',
