@@ -413,6 +413,9 @@ describe('fortress.handleRequest', () => {
         error_description: 'token is required',
       });
 
+      // Once credentials are syntactically present, form shape is checked
+      // before the secret is verified — so an invalid secret and an unknown
+      // client both surface the missing `token` first.
       const invalidClient = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
         method: 'POST',
         headers: {
@@ -421,8 +424,8 @@ describe('fortress.handleRequest', () => {
         },
         body: '',
       }));
-      expect(invalidClient.status).toBe(401);
-      await expect(invalidClient.json()).resolves.toMatchObject({ error: 'invalid_client' });
+      expect(invalidClient.status).toBe(400);
+      await expect(invalidClient.json()).resolves.toMatchObject({ error: 'invalid_request' });
 
       const unknownClient = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
         method: 'POST',
@@ -432,8 +435,20 @@ describe('fortress.handleRequest', () => {
         },
         body: '',
       }));
-      expect(unknownClient.status).toBe(401);
-      await expect(unknownClient.json()).resolves.toMatchObject({ error: 'invalid_client' });
+      expect(unknownClient.status).toBe(400);
+      await expect(unknownClient.json()).resolves.toMatchObject({ error: 'invalid_request' });
+
+      // A well-formed request with the wrong secret still fails on credentials.
+      const badSecret = await local.handleRequest(new Request(`http://localhost/oauth/${route}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `Basic ${btoa(`${client.clientId}:wrong-secret`)}`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: 'token=some-token',
+      }));
+      expect(badSecret.status).toBe(401);
+      await expect(badSecret.json()).resolves.toMatchObject({ error: 'invalid_client' });
     });
 
     it('rejects duplicate OAuth form parameters instead of last-write-wins', async () => {
@@ -474,19 +489,32 @@ describe('fortress.handleRequest', () => {
       }
     });
 
-    it('keeps client authentication ahead of duplicate-parameter errors', async () => {
+    it('requires parseable client credentials before reading the body', async () => {
       const local = createFortress({
         jwt: { key: SECRET },
         database: createTestAdapter(),
         plugins: [oauth()] as const,
       });
-      const res = await local.handleRequest(new Request('http://localhost/oauth/introspect', {
+      // No credentials at all: rejected before the duplicate `token` is seen.
+      const missing = await local.handleRequest(new Request('http://localhost/oauth/introspect', {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: 'token=first&token=second',
       }));
-      expect(res.status).toBe(401);
-      await expect(res.json()).resolves.toMatchObject({ error: 'invalid_client' });
+      expect(missing.status).toBe(401);
+      await expect(missing.json()).resolves.toMatchObject({ error: 'invalid_client' });
+
+      // An unparseable Basic payload is equivalent to presenting none.
+      const malformed = await local.handleRequest(new Request('http://localhost/oauth/introspect', {
+        method: 'POST',
+        headers: {
+          'authorization': 'Basic not-valid-base64!!',
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: 'token=first&token=second',
+      }));
+      expect(malformed.status).toBe(401);
+      await expect(malformed.json()).resolves.toMatchObject({ error: 'invalid_client' });
     });
 
     it('accepts case-insensitive Authorization schemes (RFC 9110 §11.1)', async () => {

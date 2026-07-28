@@ -291,8 +291,11 @@ async function dispatchOAuth(
     case 'handleIntrospectRequest': {
       const m = resolveOAuthMethod(fortress, 'handleIntrospectRequest');
       const clientAuth = parseBasicAuth(authHeader);
-      // Client authentication outranks request-shape errors, so the body is
-      // only parsed once the caller has presented credentials.
+      // Precedence: an absent or unparseable `Authorization: Basic` is
+      // rejected before the body is read. Once credentials are syntactically
+      // present, form-shape errors (duplicate or missing `token`) are raised
+      // before the secret is verified — presenting credentials is required to
+      // get a request-shape error, but their validity is checked later.
       if (!clientAuth) {
         return jsonResponse(
           { error: 'invalid_client', error_description: 'Client authentication required' },
@@ -300,7 +303,8 @@ async function dispatchOAuth(
         );
       }
       const body = await parseFormBody(request);
-      const result = await m.handleIntrospectRequest({ token: body.token }, clientAuth);
+      const token = requiredOAuthFormValue(body.token, 'token');
+      const result = await m.handleIntrospectRequest({ token }, clientAuth);
       return jsonResponse(result, 200);
     }
     case 'handleRevokeRequest': {
@@ -313,7 +317,8 @@ async function dispatchOAuth(
         );
       }
       const body = await parseFormBody(request);
-      await m.handleRevokeRequest({ token: body.token }, clientAuth);
+      const token = requiredOAuthFormValue(body.token, 'token');
+      await m.handleRevokeRequest({ token }, clientAuth);
       return jsonResponse({}, 200);
     }
     case 'handleUserInfoRequest': {

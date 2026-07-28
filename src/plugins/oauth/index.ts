@@ -283,11 +283,10 @@ export interface OAuthMethods {
   rotateSigningKey: () => Promise<{ kid: string }>;
   // HTTP handler methods (transport-agnostic, accept/return plain objects)
   handleTokenRequest: (body: TokenRequestBody, clientAuth?: ClientAuth) => Promise<Record<string, unknown>>;
-  // `token` is optional because these handlers authenticate the client before
-  // rejecting a missing token, so client-credential failures keep precedence
-  // over `invalid_request`.
-  handleIntrospectRequest: (body: { token?: string }, clientAuth: ClientAuth) => Promise<Record<string, unknown>>;
-  handleRevokeRequest: (body: { token?: string }, clientAuth: ClientAuth) => Promise<void>;
+  // `token` is required: the HTTP dispatcher rejects a missing or duplicated
+  // form parameter before calling these, so the handlers always receive one.
+  handleIntrospectRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<Record<string, unknown>>;
+  handleRevokeRequest: (body: { token: string }, clientAuth: ClientAuth) => Promise<void>;
   /**
    * OIDC Core 1.0 §5.3 userinfo endpoint. Returns the standard claims set
    * (`sub`, `email`, `email_verified`, `name`, `preferred_username`,
@@ -1642,7 +1641,7 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
        * Handle POST /oauth/introspect (RFC 7662).
        */
       async handleIntrospectRequest(
-        body: { token?: string },
+        body: { token: string },
         clientAuth: ClientAuth,
       ): Promise<Record<string, unknown>> {
         // Validate client credentials
@@ -1660,8 +1659,6 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         );
         if (!secretValid)
           throw Errors.oauth('invalid_client', 'Invalid client credentials');
-        if (!body.token)
-          throw Errors.oauth('invalid_request', 'token is required');
 
         const result = await this.introspectToken(body.token);
 
@@ -1680,15 +1677,13 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
       /**
        * Handle POST /oauth/revoke (RFC 7009). Always returns success.
        */
-      async handleRevokeRequest(body: { token?: string }, clientAuth: ClientAuth): Promise<void> {
+      async handleRevokeRequest(body: { token: string }, clientAuth: ClientAuth): Promise<void> {
         const client = await ctx.db.findOne<OAuthClientRecord>({
           model: 'oauth_client',
           where: [{ field: 'clientId', operator: '=', value: clientAuth.clientId }],
         });
         if (!client || !timingSafeEqualHex(await hashToken(clientAuth.clientSecret), client.clientSecretHash))
           throw Errors.oauth('invalid_client', 'Invalid client credentials');
-        if (!body.token)
-          throw Errors.oauth('invalid_request', 'token is required');
 
         const tokenHash = await hashToken(body.token);
         // RFC 7009 prevents one authenticated client from revoking another
