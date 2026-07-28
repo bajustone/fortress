@@ -730,6 +730,22 @@ describe('oauth plugin', () => {
 
       expect(result.active).toBe(false);
     });
+
+    it('rejects an empty token from a direct caller', async () => {
+      const client = await methods.createClient({
+        name: 'Empty introspect',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      // HTTP dispatch screens the form parameter, but `token: string` does not
+      // exclude `''`, so a direct caller must not have an empty token quietly
+      // reported as inactive.
+      await expect(methods.handleIntrospectRequest(
+        { token: '' },
+        { clientId: client.clientId, clientSecret: client.clientSecret! },
+      )).rejects.toThrow(/token is required/);
+    });
   });
 
   describe('handleRevokeRequest', () => {
@@ -744,6 +760,20 @@ describe('oauth plugin', () => {
         { token: 'nonexistent' },
         { clientId: client.clientId, clientSecret: client.clientSecret! },
       )).resolves.toBeUndefined();
+    });
+
+    it('rejects an empty token from a direct caller', async () => {
+      const client = await methods.createClient({
+        name: 'Empty revoke',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+      });
+
+      // Revocation must not proceed to hash `''` and report success.
+      await expect(methods.handleRevokeRequest(
+        { token: '' },
+        { clientId: client.clientId, clientSecret: client.clientSecret! },
+      )).rejects.toThrow(/token is required/);
     });
   });
 

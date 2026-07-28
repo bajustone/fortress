@@ -1659,6 +1659,12 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         );
         if (!secretValid)
           throw Errors.oauth('invalid_client', 'Invalid client credentials');
+        // HTTP dispatch rejects a missing or duplicated `token` form parameter
+        // at the transport boundary. This handler is also a public
+        // transport-agnostic method, and `token: string` does not exclude `''`,
+        // so it defends its own non-empty invariant for direct callers.
+        if (!body.token)
+          throw Errors.oauth('invalid_request', 'token is required');
 
         const result = await this.introspectToken(body.token);
 
@@ -1684,6 +1690,11 @@ export function oauth(config: OAuthConfig = {}): FortressPlugin<'oauth', OAuthMe
         });
         if (!client || !timingSafeEqualHex(await hashToken(clientAuth.clientSecret), client.clientSecretHash))
           throw Errors.oauth('invalid_client', 'Invalid client credentials');
+        // As with introspection: dispatch validates the form parameter, and
+        // this public method separately refuses an empty token so a direct
+        // caller cannot revoke by hashing `''`.
+        if (!body.token)
+          throw Errors.oauth('invalid_request', 'token is required');
 
         const tokenHash = await hashToken(body.token);
         // RFC 7009 prevents one authenticated client from revoking another
