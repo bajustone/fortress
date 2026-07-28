@@ -187,6 +187,12 @@ describe('fortress.handleRequest', () => {
         body: JSON.stringify({ name: 'editor', permissions: [] }),
       }));
       expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        code: 'FORBIDDEN',
+        statusCode: 403,
+        message: 'Insufficient permissions',
+        details: { requiredPermission: 'fortress:createRole' },
+      });
     });
   });
 

@@ -62,7 +62,7 @@ function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema):
 const SQLITE_DEFAULT_TABLE_MAP = buildTableMap(fortressSchema);
 const PG_DEFAULT_TABLE_MAP = buildTableMap(fortressPgSchema);
 
-function getColumn(table: Table, field: string): Column {
+function getColumn(table: Table, field: string, model: string): Column {
   const columns = getTableColumns(table);
   // Try exact match first
   if (columns[field])
@@ -73,10 +73,12 @@ function getColumn(table: Table, field: string): Column {
   if (columns[camelCase])
     return columns[camelCase];
 
-  throw Errors.badRequest(`Unknown field: ${field} on table`);
+  throw Errors.badRequest(`Unknown field: ${field} on model/table '${model}'`, {
+    details: { model, field },
+  });
 }
 
-function buildWhereCondition(table: Table, where: WhereClause[]): SQL | undefined {
+function buildWhereCondition(table: Table, where: WhereClause[], model: string): SQL | undefined {
   // A missing/empty where would compile to `.where(undefined)`, which matches
   // EVERY row — a silent full-table update/delete footgun. findMany/count
   // guard the empty case before calling (an unfiltered read is legal); the
@@ -85,7 +87,7 @@ function buildWhereCondition(table: Table, where: WhereClause[]): SQL | undefine
   if (where.length === 0)
     throw Errors.badRequest('A non-empty where clause is required (empty where would match all rows)');
   const conditions = where.map((clause) => {
-    const column = getColumn(table, clause.field);
+    const column = getColumn(table, clause.field, model);
 
     switch (clause.operator) {
       case '=':
@@ -311,7 +313,7 @@ function createDialectDrizzleAdapter<D extends DrizzleDialect>(
       async findOne<T>(params: { model: string; where: WhereClause[] }): Promise<T | null> {
         return serializeSqlite<T | null>(async () => {
           const table = getTable(params.model);
-          const condition = buildWhereCondition(table, params.where);
+          const condition = buildWhereCondition(table, params.where, params.model);
           const result = await execOne<T>((drizzle as any).select().from(table).where(condition).limit(1));
           return (result as T) ?? null;
         });
@@ -329,12 +331,12 @@ function createDialectDrizzleAdapter<D extends DrizzleDialect>(
           let query = (drizzle as any).select().from(table).$dynamic();
 
           if (params.where && params.where.length > 0) {
-            const condition = buildWhereCondition(table, params.where);
+            const condition = buildWhereCondition(table, params.where, params.model);
             query = query.where(condition);
           }
 
           if (params.sortBy) {
-            const column = getColumn(table, params.sortBy.field);
+            const column = getColumn(table, params.sortBy.field, params.model);
             query = query.orderBy(
               params.sortBy.direction === 'desc' ? sql`${column} desc` : sql`${column} asc`,
             );
@@ -355,7 +357,7 @@ function createDialectDrizzleAdapter<D extends DrizzleDialect>(
       async update<T>(params: { model: string; where: WhereClause[]; data: Record<string, unknown> }): Promise<T | null> {
         return serializeSqlite<T | null>(async () => {
           const table = getTable(params.model);
-          const condition = buildWhereCondition(table, params.where);
+          const condition = buildWhereCondition(table, params.where, params.model);
           const query = (drizzle as any).update(table).set(sanitizeData(params.data) as any).where(condition).returning();
           try {
             // SQLite drivers only step the statement for rows that are read from
@@ -378,7 +380,7 @@ function createDialectDrizzleAdapter<D extends DrizzleDialect>(
       async delete(params: { model: string; where: WhereClause[] }): Promise<void> {
         return serializeSqlite<void>(async () => {
           const table = getTable(params.model);
-          const condition = buildWhereCondition(table, params.where);
+          const condition = buildWhereCondition(table, params.where, params.model);
           try {
             await execRun((drizzle as any).delete(table).where(condition));
           }
@@ -396,7 +398,7 @@ function createDialectDrizzleAdapter<D extends DrizzleDialect>(
           let query = (drizzle as any).select({ count: sql<number>`count(*)` }).from(table).$dynamic();
 
           if (params.where && params.where.length > 0) {
-            const condition = buildWhereCondition(table, params.where);
+            const condition = buildWhereCondition(table, params.where, params.model);
             query = query.where(condition);
           }
 

@@ -24,7 +24,12 @@ describe('enforceFortressPermission', () => {
       endpoint(['basic']),
       { type: 'USER', id: '1' },
       { checkPermission },
-    )).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    )).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      statusCode: 403,
+      message: 'Insufficient permissions',
+      details: { requiredPermission: 'billing:read' },
+    });
     expect(checkPermission).toHaveBeenCalledWith(
       { type: 'USER', id: '1' },
       'billing',

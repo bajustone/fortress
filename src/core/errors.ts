@@ -89,10 +89,10 @@ export const Errors = {
     new FortressError('SESSION_IDLE_TIMEOUT', 'Session idle timeout exceeded', 401),
   sessionAbsoluteTimeout: (): FortressError =>
     new FortressError('SESSION_ABSOLUTE_TIMEOUT', 'Session absolute timeout exceeded', 401),
-  forbidden: (message = 'Forbidden'): FortressError =>
-    new FortressError('FORBIDDEN', message, 403),
-  badRequest: (message = 'Bad request'): FortressError =>
-    new FortressError('BAD_REQUEST', message, 400),
+  forbidden: (message = 'Forbidden', options?: { cause?: unknown; details?: unknown }): FortressError =>
+    new FortressError('FORBIDDEN', message, 403, options),
+  badRequest: (message = 'Bad request', options?: { cause?: unknown; details?: unknown }): FortressError =>
+    new FortressError('BAD_REQUEST', message, 400, options),
   notFound: (message = 'Not found'): FortressError =>
     new FortressError('NOT_FOUND', message, 404),
   conflict: (message = 'Conflict', options?: { cause?: unknown; details?: unknown }): FortressError =>

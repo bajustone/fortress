@@ -92,7 +92,9 @@ export function createRbacMiddleware(
       credentialScopes: c.get('fortressScopes'),
     });
     if (!allowed) {
-      throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403);
+      throw new FortressError('FORBIDDEN', 'Insufficient permissions', 403, {
+        details: { requiredPermission: `${mapping.resource}:${mapping.action}` },
+      });
     }
 
     await next();

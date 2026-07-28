@@ -3,6 +3,8 @@ import type { RuntimeFortressPlugin } from './plugin';
 import type { StandardSchemaV1 } from './standard-schema';
 
 import { describe, expect, it } from 'vitest';
+import { admin } from '../plugins/admin';
+import { apiKey } from '../plugins/api-key';
 import { oauth } from '../plugins/oauth';
 import { openapi } from '../plugins/openapi';
 import { createFortress } from './fortress';
@@ -54,6 +56,117 @@ describe('resolvePlugin', () => {
 });
 
 describe('createFortress', () => {
+  it('rejects admin API-key routes when the api-key plugin is missing', () => {
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [admin({ apiKeyRoutes: true })] as const,
+    })).toThrow(expect.objectContaining({
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+      message: 'Plugin "admin" requires plugin "api-key" to be registered',
+      details: {
+        plugin: 'admin',
+        missingPlugin: 'api-key',
+        requiredMethods: ['createKey'],
+      },
+    }));
+  });
+
+  it('rejects a named dependency that does not expose its required capability', () => {
+    const incompleteApiKey = definePlugin({ name: 'api-key', methods: () => ({}) });
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [admin({ apiKeyRoutes: true }), incompleteApiKey] as const,
+    })).toThrow(expect.objectContaining({
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+      message: 'Plugin "admin" requires callable method "api-key.createKey"',
+      details: {
+        plugin: 'admin',
+        dependencyPlugin: 'api-key',
+        missingMethod: 'createKey',
+      },
+    }));
+  });
+
+  it('accepts admin API-key routes when the required plugin capability is registered', () => {
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [admin({ apiKeyRoutes: true }), apiKey()] as const,
+    })).not.toThrow();
+  });
+
+  it('reuses the capability surface validated at startup', async () => {
+    let factoryCalls = 0;
+    const createKey = async (): Promise<{ key: string; id: string }> => ({ key: 'raw-key', id: 'key-1' });
+    const statefulApiKey = definePlugin({
+      name: 'api-key',
+      methods: () => {
+        factoryCalls++;
+        if (factoryCalls > 1)
+          throw new Error('api-key methods factory was invoked more than once');
+        return { createKey };
+      },
+    });
+    const database: DatabaseAdapter = {
+      ...mockDb,
+      findOne: async () => ({ id: 'user-1' }) as never,
+    };
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database,
+      plugins: [admin({ apiKeyRoutes: true }), statefulApiKey] as const,
+    });
+
+    await expect(fortress.plugins.admin.adminCreateUserApiKey({
+      userId: 'user-1',
+      name: 'automation',
+    })).resolves.toEqual({ key: 'raw-key', id: 'key-1' });
+    expect(factoryCalls).toBe(1);
+  });
+
+  it('rejects malformed plugin dependency metadata as BAD_REQUEST', () => {
+    const malformed = {
+      name: 'malformed-dependency',
+      dependencies: [null],
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [malformed],
+    })).toThrow(expect.objectContaining({
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+      message: 'Plugin "malformed-dependency" dependency at index 0 is invalid',
+      details: { plugin: 'malformed-dependency', field: 'dependencies[0]' },
+    }));
+  });
+
+  it('revalidates dependency metadata mutated by a plugin factory', () => {
+    const mutating = {
+      name: 'mutating-dependency',
+      dependencies: [],
+      methods: () => {
+        Object.assign(mutating, { dependencies: {} });
+        return {};
+      },
+    } as unknown as RuntimeFortressPlugin;
+
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [mutating],
+    })).toThrow(expect.objectContaining({
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+      message: 'Plugin "mutating-dependency" dependencies must be an array',
+      details: { plugin: 'mutating-dependency', field: 'dependencies' },
+    }));
+  });
+
   it('matches optional built-in call routes to runtime configuration', () => {
     const configured = (plugins: readonly RuntimeFortressPlugin[]) => createFortress({
       jwt: { key: 'fortress-test-secret-at-least-32!' },

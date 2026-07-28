@@ -153,6 +153,76 @@ function validatePluginRouteShapes(plugins: readonly RuntimeFortressPlugin[]): v
       }
     }
   }
+
+  // Dependencies are checked in a second pass so registration order does not
+  // matter. At this stage method factories have not run, but a missing provider
+  // can already be rejected as a configuration error.
+  for (const plugin of plugins) {
+    const dependencies: unknown = plugin.dependencies;
+    if (dependencies !== undefined && !Array.isArray(dependencies)) {
+      throw Errors.badRequest(`Plugin "${plugin.name}" dependencies must be an array`, {
+        details: { plugin: plugin.name, field: 'dependencies' },
+      });
+    }
+    for (const [index, value] of (dependencies ?? []).entries()) {
+      if (
+        !value || typeof value !== 'object' || Array.isArray(value)
+        || typeof value.plugin !== 'string' || value.plugin.length === 0
+        || (value.methods !== undefined && (
+          !Array.isArray(value.methods)
+          || value.methods.some((method: unknown) => typeof method !== 'string' || method.length === 0)
+        ))
+      ) {
+        throw Errors.badRequest(`Plugin "${plugin.name}" dependency at index ${index} is invalid`, {
+          details: { plugin: plugin.name, field: `dependencies[${index}]` },
+        });
+      }
+      const dependency = value as { plugin: string; methods?: readonly string[] };
+      if (!pluginNames.has(dependency.plugin)) {
+        throw Errors.badRequest(
+          `Plugin "${plugin.name}" requires plugin "${dependency.plugin}" to be registered`,
+          {
+            details: {
+              plugin: plugin.name,
+              missingPlugin: dependency.plugin,
+              requiredMethods: dependency.methods ?? [],
+            },
+          },
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Validate method-level capabilities after plugin factories have produced
+ * their runtime surfaces. Presence is checked earlier by
+ * {@link normalizePlugins}; this closes the case where a plugin with the right
+ * name is registered but does not provide the capabilities its consumer needs.
+ */
+export function assertPluginDependencyCapabilities(
+  plugins: readonly RuntimeFortressPlugin[],
+  pluginMethods: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+): void {
+  for (const plugin of plugins) {
+    for (const dependency of plugin.dependencies ?? []) {
+      const methods = pluginMethods[dependency.plugin];
+      for (const method of dependency.methods ?? []) {
+        if (!methods || !Object.hasOwn(methods, method) || typeof methods[method] !== 'function') {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" requires callable method "${dependency.plugin}.${method}"`,
+            {
+              details: {
+                plugin: plugin.name,
+                dependencyPlugin: dependency.plugin,
+                missingMethod: method,
+              },
+            },
+          );
+        }
+      }
+    }
+  }
 }
 
 /**
