@@ -73,6 +73,55 @@ describe('createFortress', () => {
     }));
   });
 
+  it('accepts admin() without api-key routes when the api-key plugin is absent', () => {
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [admin()] as const,
+    })).not.toThrow();
+  });
+
+  it('rejects a presence-only dependency whose provider is not registered', () => {
+    const consumer = definePlugin({
+      name: 'consumer',
+      dependencies: [{ plugin: 'absent-provider' }],
+      methods: () => ({}),
+    });
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [consumer] as const,
+    })).toThrow(expect.objectContaining({
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+      message: 'Plugin "consumer" requires plugin "absent-provider" to be registered',
+      details: {
+        plugin: 'consumer',
+        missingPlugin: 'absent-provider',
+        requiredMethods: [],
+      },
+    }));
+  });
+
+  // A presence-only dependency has no method loop to fall into, so the
+  // post-factory pass must check the provider itself to catch this.
+  it('rejects a presence-only dependency introduced by a plugin factory', () => {
+    const mutating = {
+      name: 'late-dependency',
+      dependencies: [],
+      methods: () => {
+        Object.assign(mutating, { dependencies: [{ plugin: 'absent-provider' }] });
+        return {};
+      },
+    } as unknown as RuntimeFortressPlugin;
+
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [mutating],
+    })).toThrow('Plugin "late-dependency" requires plugin "absent-provider" to be registered');
+  });
+
   it('rejects a named dependency that does not expose its required capability', () => {
     const incompleteApiKey = definePlugin({ name: 'api-key', methods: () => ({}) });
     expect(() => createFortress({
@@ -865,5 +914,50 @@ describe('createFortress', () => {
       expect(Object.keys(spec.paths)).toEqual(['/ping']);
       expect(spec.paths['/ping'].get.operationId).toBe('ping');
     });
+  });
+});
+
+describe('post-factory dependency graph revalidation', () => {
+  const KEY = 'fortress-test-secret-at-least-32!';
+
+  // `processPlugins` keys each plugin as its factory returns, under the name it
+  // holds at that moment. A later factory that renames an already-keyed plugin
+  // therefore leaves a stale key behind, so presence must be re-derived from the
+  // plugin graph rather than read off the map.
+  it('rejects a provider that a factory renamed out of the graph', () => {
+    const provider = {
+      name: 'provider',
+      methods: () => ({ ready: () => true }),
+    } as unknown as RuntimeFortressPlugin;
+
+    const consumer = {
+      name: 'consumer',
+      dependencies: [{ plugin: 'provider', methods: ['ready'] }],
+      methods: () => {
+        Object.assign(provider, { name: 'renamed' });
+        return {};
+      },
+    } as unknown as RuntimeFortressPlugin;
+
+    expect(() => createFortress({
+      jwt: { key: KEY },
+      database: mockDb,
+      plugins: [provider, consumer],
+    })).toThrow('Plugin "consumer" requires plugin "provider" to be registered');
+  });
+
+  it('reports the missing capability when an admin create method is called directly', async () => {
+    const fortress = createFortress({
+      jwt: { key: KEY },
+      database: { ...mockDb, findOne: async () => ({ id: 'user-1' }) as never },
+      plugins: [admin()] as const,
+    });
+
+    await expect(
+      fortress.plugins.admin.adminCreateUserApiKey({ userId: 'user-1', name: 'ci' }),
+    ).rejects.toThrow(expect.objectContaining({
+      code: 'BAD_REQUEST',
+      details: { plugin: 'admin', dependencyPlugin: 'api-key', missingMethod: 'createKey' },
+    }));
   });
 });

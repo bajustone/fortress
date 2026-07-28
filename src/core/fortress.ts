@@ -52,6 +52,7 @@ import { processPlugins } from './plugin-runner';
 import {
   assembleEndpoints,
   assertPluginDependencyCapabilities,
+  assertPluginDependencyProviders,
   CORE_ENDPOINT_OWNER,
   HOST_ROUTES_PLUGIN_NAME,
   normalizePlugins,
@@ -191,6 +192,12 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // plugin factory runs. The authoritative endpoint set is re-derived after
   // the factories, below.
   const plugins = normalizePlugins(config);
+
+  // Composition check, deliberately not shared with `describeRouteSurface()`:
+  // a plugin declaring a dependency on an unregistered plugin can never boot,
+  // and rejecting it here means no factory starts a worker or opens a database
+  // handle first. Re-checked after the factories, which may mutate the graph.
+  assertPluginDependencyProviders(plugins);
 
   // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
   // zero-allocation singletons — if the caller doesn't opt in, Fortress

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { admin } from '../../plugins/admin';
 import { createFortress } from '../fortress';
 import { endpoint, obj, str } from '../schema-builder';
 import { describeRouteSurface } from './route-surface';
@@ -43,6 +44,24 @@ function makeConfig() {
 }
 
 describe('describeRouteSurface', () => {
+  // Declaring a dependency on an unregistered plugin is a composition error,
+  // not a route-surface one. `fortress init` scaffolds configs that cannot
+  // boot, so codegen in CI must still describe their declared routes.
+  it('describes declared routes when a plugin dependency is unregistered', () => {
+    const config = {
+      jwt: { key: SECRET },
+      database: undefined as never,
+      plugins: [admin({ apiKeyRoutes: true })],
+    };
+
+    const surface = describeRouteSurface(config);
+    expect(surface.manifest.some(entry => entry.path.includes('api-keys'))).toBe(true);
+
+    // Construction is where composition is enforced.
+    expect(() => createFortress({ ...config, database: {} as never }))
+      .toThrow('Plugin "admin" requires plugin "api-key" to be registered');
+  });
+
   it('includes core, plugin, and host-owned routes', () => {
     const surface = describeRouteSurface(makeConfig());
 

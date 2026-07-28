@@ -432,6 +432,10 @@ export interface PluginContext {
    * Capture this function during `methods()` initialization and call it lazily
    * from returned methods; calling it while any plugin factory is still running
    * is rejected so lookup semantics do not depend on registration order.
+   *
+   * Only `createFortress()` supplies this. A hand-assembled context — calling
+   * `plugin.methods(ctx)` directly rather than registering the plugin — will
+   * not have it, so treat its absence as the dependency being unavailable.
    */
   getPluginMethods?: (name: string) => Readonly<Record<string, PluginMethod>> | undefined;
 }
