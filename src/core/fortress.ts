@@ -22,7 +22,6 @@ import type { IamEvent, PermissionCheckEvent } from './iam/iam-service';
 import type { PermissionSyncOptions, PermissionSyncResult } from './iam/permission-sync';
 import type { RouteManifestEntry } from './manifest/route-manifest';
 import type {
-  FortressPlugin,
   PluginMethod,
   PluginMethodsOf,
   RuntimeFortressPlugin,
@@ -32,7 +31,6 @@ import type { InferPlugins } from './plugin-methods-map';
 import { authEndpoints } from './auth/auth-endpoints';
 import { createAuthService } from './auth/auth-service';
 import { resolveCookieConfig } from './config';
-import { isHttpMethod } from './endpoint';
 import { Errors } from './errors';
 import { buildCall } from './http/call';
 import { serializeAuthCookies as serializeAuthCookiesFn } from './http/cookie-serialize';
@@ -51,6 +49,7 @@ import { SILENT_LOGGER } from './observability/logger';
 import { NO_OP_TELEMETRY } from './observability/types';
 import { toOpenAPI as endpointsToOpenAPI } from './openapi';
 import { processPlugins } from './plugin-runner';
+import { assembleEndpoints, CORE_ENDPOINT_OWNER, HOST_ROUTES_PLUGIN_NAME, normalizePlugins } from './route-assembly';
 
 /**
  * Configured fortress instance returned by {@link createFortress}.
@@ -179,25 +178,13 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     }
   }
 
-  // Synthesize a virtual plugin from any top-level `routes` field so host
-  // apps don't have to hand-roll a one-field plugin just to register their
-  // own endpoints. Prepended to the plugin list so its routes appear before
-  // explicit plugins in the manifest, matching the registration order a
-  // user would write themselves.
-  const HOST_ROUTES_PLUGIN_NAME = '__host';
-  const userPlugins = config.plugins ?? [];
-  if (config.routes) {
-    const collision = userPlugins.find(p => p.name === HOST_ROUTES_PLUGIN_NAME);
-    if (collision) {
-      throw Errors.badRequest(
-        `Plugin name '${HOST_ROUTES_PLUGIN_NAME}' is reserved for top-level \`routes\`; rename your plugin.`,
-      );
-    }
-  }
-  const hostRoutesPlugin: FortressPlugin | null = config.routes
-    ? { name: HOST_ROUTES_PLUGIN_NAME, routes: config.routes }
-    : null;
-  const plugins = hostRoutesPlugin ? [hostRoutesPlugin, ...userPlugins] : userPlugins;
+  // Synthesize a virtual plugin from any top-level `routes` field and validate
+  // the declaration, sharing the rules with `describeRouteSurface()` so tooling
+  // that reads a config without booting the app sees the same conflicts. This
+  // early pass is fail-fast only: a malformed config is rejected before any
+  // plugin factory runs. The authoritative endpoint set is re-derived after
+  // the factories, below.
+  const plugins = normalizePlugins(config);
 
   // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
   // zero-allocation singletons — if the caller doesn't opt in, Fortress
@@ -211,40 +198,6 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // (and every plugin query that also uses this adapter) emits the stable
   // `db.client.operation.duration` metric with standard attributes.
   const db = instrumentAdapter(config.database, telemetry);
-
-  // Validate plugin name uniqueness
-  const pluginNames = new Set<string>();
-  for (const plugin of plugins) {
-    if (pluginNames.has(plugin.name)) {
-      throw Errors.badRequest(`Duplicate plugin name: '${plugin.name}'`);
-    }
-    pluginNames.add(plugin.name);
-    for (const [routeName, endpoint] of Object.entries(plugin.routes ?? {})) {
-      if (
-        !endpoint || typeof endpoint !== 'object'
-        || !isHttpMethod(endpoint.method)
-        || typeof endpoint.path !== 'string'
-        || typeof endpoint.handler !== 'string'
-      ) {
-        throw Errors.badRequest(
-          `Plugin "${plugin.name}" route "${routeName}" is not a valid endpoint definition`,
-        );
-      }
-      if (plugin.name !== HOST_ROUTES_PLUGIN_NAME && routeName !== endpoint.handler) {
-        throw Errors.badRequest(
-          `Plugin "${plugin.name}" route key "${routeName}" must match handler "${endpoint.handler}"`,
-        );
-      }
-      for (const location of ['body', 'query', 'params'] as const) {
-        const schema = endpoint.input?.[location];
-        if (schema?.type && schema.type !== 'object') {
-          throw Errors.badRequest(
-            `Plugin "${plugin.name}" route "${routeName}" ${location} schema must describe a flat object`,
-          );
-        }
-      }
-    }
-  }
 
   // Token-verify histogram is built before the auth service so it can be
   // passed in via deps. Kept here (not inside auth-service) so the metric
@@ -275,6 +228,14 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
       }
     }
   }
+
+  // Derive the authoritative route set now that every plugin factory has run.
+  // Factories are handed the live route objects (their own closures, and
+  // `ctx.config.plugins[…].routes`), so a factory can flip `bearerKind`,
+  // rewrite a path onto a core route, or add and remove routes. Merging and
+  // re-checking the security invariants here — not before `processPlugins` —
+  // is what stops a mutated route from being published unvalidated.
+  const { endpoints, endpointOwners } = assembleEndpoints(plugins);
 
   // --- Wire built-in telemetry observers ------------------------------
   //
@@ -330,98 +291,6 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   if (Object.hasOwn(pluginMethods, 'audit-log') && Object.hasOwn(pluginMethods['audit-log'], 'logCustomEvent')) {
     const logCustomEvent = pluginMethods['audit-log'].logCustomEvent as (event: IamEvent) => Promise<void>;
     iam.addIamObserver(event => logCustomEvent(event));
-  }
-
-  // Assemble all endpoint definitions. A plugin may intentionally override a
-  // core route, but two plugins claiming the same method+path is ambiguous and
-  // therefore rejected instead of depending on registration order.
-  const endpointMap = new Map<string, EndpointDefinition>();
-  const endpointOwners = new Map<string, string>();
-  const coreEndpoints: EndpointDefinition[] = [
-    ...Object.values(authEndpoints) as EndpointDefinition[],
-    ...Object.values(iamEndpoints) as EndpointDefinition[],
-  ];
-  for (const ep of coreEndpoints) {
-    const routeKey = `${ep.method.toUpperCase()} ${canonicalizeRouteShape(ep.path)}`;
-    endpointMap.set(routeKey, ep);
-    endpointOwners.set(routeKey, 'core');
-  }
-  for (const plugin of plugins) {
-    const appliedCoreOverrides = new Set<string>();
-    for (const [routeName, value] of Object.entries(plugin.routes ?? {})) {
-      const ep = value as EndpointDefinition;
-      const routeKey = `${ep.method.toUpperCase()} ${canonicalizeRouteShape(ep.path)}`;
-      const owner = endpointOwners.get(routeKey);
-      if (owner && owner !== 'core') {
-        throw Errors.badRequest(
-          `Duplicate endpoint ${routeKey} declared by plugins "${owner}" and "${plugin.name}"`,
-        );
-      }
-      if (owner === 'core') {
-        if (plugin.name === HOST_ROUTES_PLUGIN_NAME) {
-          throw Errors.badRequest(
-            `Top-level route ${routeKey} collides with a Fortress core route; use an explicit plugin for intentional overrides.`,
-          );
-        }
-        const coreHandler = endpointMap.get(routeKey)!.handler;
-        if (!plugin.coreOverrides?.includes(coreHandler)) {
-          throw Errors.badRequest(
-            `Plugin "${plugin.name}" overrides core route ${routeKey}; declare "${coreHandler}" in coreOverrides so the derived call tree can remove the core callable safely.`,
-          );
-        }
-        if (routeName !== coreHandler || ep.handler !== coreHandler) {
-          throw Errors.badRequest(
-            `Plugin "${plugin.name}" overrides core route ${routeKey}; its route key and handler must both be "${coreHandler}".`,
-          );
-        }
-        appliedCoreOverrides.add(coreHandler);
-      }
-      endpointMap.set(routeKey, ep);
-      endpointOwners.set(routeKey, plugin.name);
-    }
-    for (const declared of plugin.coreOverrides ?? []) {
-      if (!appliedCoreOverrides.has(declared)) {
-        throw Errors.badRequest(
-          `Plugin "${plugin.name}" declares unused core override "${declared}"; it must provide a matching core method/path with the same route key and handler.`,
-        );
-      }
-    }
-  }
-  const endpoints = Array.from(endpointMap.values());
-
-  // L-tier: fail-fast on `security: ['none']` + `permission` collisions.
-  // The two are mutually exclusive: an unauthenticated route has no subject
-  // to evaluate the permission against, so default-deny RBAC would always
-  // reject it. Catch the misconfiguration at startup, not at first request.
-  const oauthSelfAuthAllowlist = new Set([
-    'GET /oauth/authorize',
-    'POST /oauth/token',
-    'POST /oauth/introspect',
-    'POST /oauth/revoke',
-    'GET /oauth/userinfo',
-    'GET /oauth/.well-known/openid-configuration',
-    'GET /oauth/.well-known/jwks.json',
-  ]);
-  for (const ep of endpoints) {
-    const security = ep.meta?.security ?? [];
-    if (security.includes('none') && ep.meta?.permission) {
-      throw Errors.badRequest(
-        `Endpoint ${ep.method} ${ep.path} declares security:['none'] AND a permission `
-        + `(${ep.meta.permission.resource}:${ep.meta.permission.action}). These are mutually `
-        + `exclusive — default-deny RBAC would reject every request.`,
-      );
-    }
-
-    // P3.6: `bearerKind: 'oauth'` means "this handler self-authenticates"
-    // and therefore skips the normal plugin/JWT/RBAC/JSON-validation
-    // pipeline. It is intentionally reserved for the OAuth protocol routes
-    // that parse form bodies or OAuth access tokens themselves. Any other
-    // route trying to use it is almost certainly a latent auth bypass.
-    if (ep.meta?.bearerKind === 'oauth' && !oauthSelfAuthAllowlist.has(`${ep.method} ${ep.path}`)) {
-      throw Errors.badRequest(
-        `Endpoint ${ep.method} ${ep.path} sets bearerKind:'oauth' but is not an approved self-auth OAuth protocol route.`,
-      );
-    }
   }
 
   // Resolve cookie config once at startup so all HTTP entry points share names.
@@ -522,7 +391,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     const effective = Object.create(null) as Record<string, EndpointDefinition>;
     for (const [name, endpoint] of Object.entries(routes)) {
       const key = `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
-      if (endpointOwners.get(key) === 'core')
+      if (endpointOwners.get(key) === CORE_ENDPOINT_OWNER)
         effective[name] = endpoint;
     }
     return effective;

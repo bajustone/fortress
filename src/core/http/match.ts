@@ -48,10 +48,33 @@ export function canonicalizePath(pathname: string): string {
  * so `/:id` and `/:sessionId` must collide during startup validation too.
  */
 export function canonicalizeRouteShape(pathname: string): string {
-  return canonicalizePath(pathname)
-    .split('/')
-    .map(segment => segment.startsWith(':') ? ':' : segment)
+  const shape = parsePathSegments(pathname)
+    .map(segment => segment.param === undefined ? segment.raw : ':')
     .join('/');
+  return shape === '' ? '/' : `/${shape}`;
+}
+
+/** One parsed path segment: a literal, or a `:param` capture with its name. */
+export interface PathSegment {
+  /** The canonical segment text, e.g. `users` or `:userId`. */
+  raw: string;
+  /** The capture name (segment without its leading `:`) when this is a param. */
+  param?: string;
+}
+
+/**
+ * Split a route path into segments using the exact rules {@link matchRoute}
+ * matches with: a segment is a `:param` capture iff it starts with `:`, and its
+ * name is the whole remainder of the segment (so `:item-id` captures
+ * `item-id`, not `item`). Everything else is a literal. Sharing this with the
+ * OpenAPI spec builder keeps the documented path shape aligned with the one the
+ * router actually matches.
+ */
+export function parsePathSegments(path: string): PathSegment[] {
+  return canonicalizePath(path)
+    .split('/')
+    .filter(Boolean)
+    .map(raw => raw.startsWith(':') ? { raw, param: raw.slice(1) } : { raw });
 }
 
 /**
@@ -60,17 +83,12 @@ export function canonicalizeRouteShape(pathname: string): string {
  */
 export function buildRouteTable<T extends RouteLike>(endpoints: readonly T[]): RouteEntry<T>[] {
   const table = endpoints.map((ep) => {
-    const segments = canonicalizePath(ep.path).split('/').filter(Boolean);
-    const paramNames: string[] = [];
-    for (const seg of segments) {
-      if (seg.startsWith(':'))
-        paramNames.push(seg.slice(1));
-    }
+    const parsed = parsePathSegments(ep.path);
     return {
       endpoint: ep,
       method: ep.method.toUpperCase(),
-      segments,
-      paramNames,
+      segments: parsed.map(segment => segment.raw),
+      paramNames: parsed.flatMap(segment => segment.param === undefined ? [] : [segment.param]),
     };
   });
 

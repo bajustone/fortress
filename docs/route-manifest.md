@@ -26,11 +26,22 @@ Each entry contains:
 ## CLI
 
 ```sh
-fortress manifest --out route-manifest.json
-fortress manifest:check
+fortress manifest --module ./fortress.config.ts --out route-manifest.json
+fortress manifest:check --module ./fortress.config.ts
 ```
 
-The CLI currently emits/checks the core auth + IAM manifest. For app/plugin-aware checks, call the programmatic API against your configured `fortress` instance:
+`--module` points at a module exporting your configuration as
+`export const config`. The manifest is derived from it without calling
+`createFortress()`, so no Fortress instance is created and no plugin `methods()`
+factory runs. A module exporting a configured instance as `export const fortress`
+is also accepted — that is what `migrate:up` requires — but it means importing the
+module constructs your application. An optional `dispose()` export is awaited
+when the command finishes.
+
+Without `--module` both commands emit/check the core auth + IAM manifest only —
+they cannot see your plugins or host-owned routes, and they label their output
+`Scope: core-only`. You can also call the programmatic API against your
+configured `fortress` instance, which is the better fit inside a test:
 
 ```ts
 import { detectRouteManifestDrift, hasRouteManifestDrift } from '@bajustone/fortress';

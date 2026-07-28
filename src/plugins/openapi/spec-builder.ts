@@ -1,5 +1,8 @@
 import type { ComponentSchemas, EndpointDefinition, SecurityRequirement } from '../../core/endpoint';
 import type { JSONSchema } from '../../core/json-schema';
+import { parsePathSegments } from '../../core/http/match';
+import { cleanJsonSchema } from '../../core/json-schema-utils';
+import { assertComponentName } from '../../core/openapi-ref';
 
 /** Minimal OpenAPI 3.1 spec shape produced by {@link buildOpenAPISpec}. */
 export interface OpenAPISpec {
@@ -92,12 +95,66 @@ function toOperationId(method: string, path: string): string {
   return `${method.toLowerCase()}_${normalized}`;
 }
 
-function extractPathParams(path: string, paramSchemas?: JSONSchema): OpenAPIParameter[] {
+/**
+ * Render a route path as its OpenAPI-templated form plus the path parameters it
+ * declares, parsing segments with the same rules the runtime router matches
+ * with (see {@link parsePathSegments}). A `:name` segment becomes `{name}`
+ * using the whole name — so `:item-id` yields the parameter `item-id`, not the
+ * `item` the old `\w+` scan produced.
+ *
+ * Declarations OpenAPI cannot represent faithfully are rejected rather than
+ * emitted as a document that disagrees with the routes actually served:
+ *
+ * - a literal segment containing '{' or '}', which the router matches verbatim
+ *   but OpenAPI would read as a parameter template with no declared parameter;
+ * - a path-parameter name repeated within one path, which is the duplicate
+ *   `(name, in)` pair OpenAPI forbids.
+ */
+function buildOpenAPIPath(
+  path: string,
+  paramSchemas?: JSONSchema,
+): { openAPIPath: string; params: OpenAPIParameter[] } {
   const params: OpenAPIParameter[] = [];
-  const matches = path.matchAll(/:(\w+)/g);
+  const seen = new Set<string>();
 
-  for (const match of matches) {
-    const name = match[1];
+  const rendered = parsePathSegments(path).map((segment) => {
+    if (segment.param === undefined) {
+      // The router matches a bare '*' against any single segment, so '/files/*'
+      // serves '/files/report.pdf'. OpenAPI has no equivalent; emitting it
+      // verbatim would document a literal '/files/*' path that no client can
+      // call and hide every path the route actually serves. Fail closed.
+      if (segment.raw === '*') {
+        throw new Error(
+          `Route path '${path}' has a wildcard segment '*', which matches any single segment at `
+          + `runtime and cannot be represented in OpenAPI. Use a ':name' path parameter instead.`,
+        );
+      }
+      if (segment.raw.includes('{') || segment.raw.includes('}')) {
+        throw new Error(
+          `Route path '${path}' has a literal segment '${segment.raw}' containing '{' or '}'. `
+          + `Declare path parameters with ':name'; brace segments are matched literally by the `
+          + `router and cannot be represented as OpenAPI path parameters.`,
+        );
+      }
+      return segment.raw;
+    }
+
+    const name = segment.param;
+    if (name === '')
+      throw new Error(`Route path '${path}' has an empty ':' path-parameter segment.`);
+    // The whole suffix is the parameter name, so '/:a{b}' would otherwise emit
+    // the invalid path '/{a{b}}'. Braces are OpenAPI path-template syntax and
+    // cannot appear in a parameter name.
+    if (name.includes('{') || name.includes('}')) {
+      throw new Error(
+        `Route path '${path}' has a path parameter ':${name}' containing '{' or '}'. `
+        + `Brace characters are OpenAPI path-template syntax and cannot appear in a parameter name.`,
+      );
+    }
+    if (seen.has(name))
+      throw new Error(`Route path '${path}' declares path parameter ':${name}' more than once.`);
+    seen.add(name);
+
     const schema = paramSchemas?.properties?.[name] ?? { type: 'string' as const };
     params.push({
       name,
@@ -106,9 +163,10 @@ function extractPathParams(path: string, paramSchemas?: JSONSchema): OpenAPIPara
       description: schema.description,
       schema: { type: schema.type ?? 'string' },
     });
-  }
+    return `{${name}}`;
+  });
 
-  return params;
+  return { openAPIPath: `/${rendered.join('/')}`, params };
 }
 
 function extractQueryParams(querySchema?: JSONSchema): OpenAPIParameter[] {
@@ -131,34 +189,6 @@ function extractQueryParams(querySchema?: JSONSchema): OpenAPIParameter[] {
   return params;
 }
 
-function toOpenAPIPath(path: string): string {
-  return path.replace(/:(\w+)/g, '{$1}');
-}
-
-/**
- * Deep-clean Standard Schema / runtime-only fields from schema objects before
- * embedding them in OpenAPI. Fortress schemas are JSON Schema objects with a
- * `~standard` validator attached; external schema adapters can also hang
- * functions or undefined values off the object. OpenAPI must receive pure
- * JSON-serializable JSON Schema, so strip any key beginning with `~`, any
- * function value, and any `undefined` value recursively.
- */
-function cleanSchema<T>(value: T): T {
-  if (Array.isArray(value))
-    return value.map(cleanSchema) as T;
-
-  if (typeof value === 'object' && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([key]) => !key.startsWith('~'))
-        .filter(([, entry]) => typeof entry !== 'function' && entry !== undefined)
-        .map(([key, entry]) => [key, cleanSchema(entry)]),
-    ) as T;
-  }
-
-  return value;
-}
-
 function resolveOperationId(endpoint: EndpointDefinition, options: SpecBuilderOptions): string | undefined {
   if (typeof options.operationId === 'function')
     return options.operationId(endpoint);
@@ -173,15 +203,37 @@ export function buildOpenAPISpec(
   componentSchemas: ComponentSchemas,
   options: SpecBuilderOptions,
 ): OpenAPISpec {
-  const paths: Record<string, Record<string, OpenAPIOperation>> = {};
+  // Backstop for every caller that supplies its own component schemas —
+  // `toOpenAPI({ schemas })`, the OpenAPI plugin's `additionalSchemas`, and the
+  // CLI's `--module componentSchemas`. An illegal key produces a document no
+  // conformant tool can resolve.
+  for (const name of Object.keys(componentSchemas))
+    assertComponentName(name);
+
+  // `paths` is keyed by caller-supplied route paths; a null prototype keeps a
+  // pathological name from reaching Object.prototype.
+  const paths: Record<string, Record<string, OpenAPIOperation>> = Object.create(null);
   const usedSecuritySchemes = new Set<string>();
 
   for (const ep of endpoints) {
-    const openAPIPath = toOpenAPIPath(ep.path);
+    const { openAPIPath, params: pathParams } = buildOpenAPIPath(
+      ep.path,
+      ep.input?.params && cleanJsonSchema(ep.input.params),
+    );
     const method = ep.method.toLowerCase();
 
     if (!paths[openAPIPath]) {
-      paths[openAPIPath] = {};
+      paths[openAPIPath] = Object.create(null) as Record<string, OpenAPIOperation>;
+    }
+    // Path-parameter names do not affect routing, so two endpoints that differ
+    // only in a parameter name share one route shape, which route assembly
+    // rejects before the spec is built. This stays as a backstop so a route
+    // that survived assembly can never silently vanish between manifest and spec.
+    if (paths[openAPIPath][method]) {
+      throw new Error(
+        `Two endpoints map to the same OpenAPI operation ${ep.method.toUpperCase()} ${openAPIPath}: `
+        + `'${paths[openAPIPath][method].operationId ?? 'unnamed'}' and '${ep.handler}'.`,
+      );
     }
 
     const operation: OpenAPIOperation = {
@@ -218,8 +270,8 @@ export function buildOpenAPISpec(
 
     // Parameters
     const params: OpenAPIParameter[] = [
-      ...extractPathParams(ep.path, cleanSchema(ep.input?.params)),
-      ...extractQueryParams(cleanSchema(ep.input?.query)),
+      ...pathParams,
+      ...extractQueryParams(ep.input?.query && cleanJsonSchema(ep.input.query)),
     ];
     if (params.length > 0) {
       operation.parameters = params;
@@ -229,7 +281,7 @@ export function buildOpenAPISpec(
     if (ep.input?.body) {
       operation.requestBody = {
         required: true,
-        content: { 'application/json': { schema: cleanSchema(ep.input.body) } },
+        content: { 'application/json': { schema: cleanJsonSchema(ep.input.body) } },
       };
     }
 
@@ -240,7 +292,7 @@ export function buildOpenAPISpec(
           description: resp.description,
         };
         if (resp.schema) {
-          entry.content = { 'application/json': { schema: cleanSchema(resp.schema) } };
+          entry.content = { 'application/json': { schema: cleanJsonSchema(resp.schema) } };
         }
         operation.responses[status] = entry;
       }
@@ -271,7 +323,10 @@ export function buildOpenAPISpec(
     },
     paths,
     components: {
-      schemas: cleanSchema(componentSchemas),
+      // Clean each schema node, not the component-name map. Map keys are data.
+      schemas: Object.fromEntries(
+        Object.entries(componentSchemas).map(([name, schema]) => [name, cleanJsonSchema(schema)]),
+      ),
       securitySchemes,
     },
   };

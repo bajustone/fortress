@@ -10,6 +10,67 @@ import { buildOpenAPISpec } from './spec-builder';
 
 const SECRET = 'openapi-test-secret-at-least-32-bytes!!';
 
+function pathEndpoint(path: string, handler: string) {
+  return endpoint('GET', path)
+    .summary(`${handler} route`)
+    .security('none')
+    .response(200, 'ok', obj({ ok: str() }, 'ok'))
+    .handler(handler)
+    .build();
+}
+
+describe('spec-builder path parameters', () => {
+  it('parses a hyphenated :param as one whole parameter name', () => {
+    // The old `\w+` scan stopped at the hyphen and emitted 'item', disagreeing
+    // with the router, which captures the whole segment as 'item-id'.
+    const spec = buildOpenAPISpec([pathEndpoint('/items/:item-id', 'getItem')], {}, {
+      title: 'T',
+      version: '1.0.0',
+    });
+    expect(spec.paths['/items/{item-id}']).toBeDefined();
+    const params = spec.paths['/items/{item-id}'].get.parameters;
+    expect(params).toHaveLength(1);
+    expect(params![0].name).toBe('item-id');
+    expect(params![0].in).toBe('path');
+  });
+
+  it('rejects a literal brace segment the router matches verbatim', () => {
+    // At runtime '/things/{id}' matches the literal text '{id}'. Emitting it as
+    // an OpenAPI template would invent a parameter the route never declared.
+    expect(() => buildOpenAPISpec([pathEndpoint('/things/{id}', 'getThing')], {}, {
+      title: 'T',
+      version: '1.0.0',
+    })).toThrow(/literal segment '\{id\}'/);
+  });
+
+  it('rejects a wildcard segment the router expands but OpenAPI cannot express', () => {
+    // '/files/*' serves '/files/report.pdf' at runtime. Emitting it verbatim
+    // would document a literal '/files/*' path no client can call.
+    expect(() => buildOpenAPISpec([pathEndpoint('/files/*', 'getFile')], {}, {
+      title: 'T',
+      version: '1.0.0',
+    })).toThrow(/wildcard segment '\*'/);
+  });
+
+  it('rejects braces inside a :param suffix', () => {
+    // The whole suffix is the parameter name, so '/:a{b}' would emit the
+    // invalid path '/{a{b}}' and parameter 'a{b}' if braces were not rejected.
+    expect(() => buildOpenAPISpec([pathEndpoint('/:a{b}', 'weird')], {}, {
+      title: 'T',
+      version: '1.0.0',
+    })).toThrow(/path parameter ':a\{b\}' containing '\{' or '\}'/);
+  });
+
+  it('rejects a path that declares the same parameter twice', () => {
+    // '/dup/:id/:id' is a duplicate (name, in) pair OpenAPI forbids; at runtime
+    // the second capture silently overwrites the first.
+    expect(() => buildOpenAPISpec([pathEndpoint('/dup/:id/:id', 'getDup')], {}, {
+      title: 'T',
+      version: '1.0.0',
+    })).toThrow(/declares path parameter ':id' more than once/);
+  });
+});
+
 describe('spec-builder', () => {
   it('builds a valid OpenAPI 3.1.0 spec', () => {
     const spec = buildOpenAPISpec(Object.values(authEndpoints), authComponentSchemas, {

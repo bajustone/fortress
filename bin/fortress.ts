@@ -1,18 +1,25 @@
 #!/usr/bin/env bun
 /* eslint-disable no-console -- CLI tool requires console output */
 
-import type { FortressMigrationRuntime, MigrateResult } from '../src/core/capabilities';
-import type { EndpointDefinition } from '../src/core/endpoint';
+import type { FortressManifestRuntime, FortressMigrationRuntime, MigrateResult } from '../src/core/capabilities';
+import type { FortressConfig } from '../src/core/config';
+import type { ComponentSchemas, EndpointDefinition } from '../src/core/endpoint';
+import type { RouteManifestEntry } from '../src/core/manifest/route-manifest';
+import type { ParsedRef } from '../src/core/openapi-ref';
+import type { OpenAPISpec } from '../src/plugins/openapi/spec-builder';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { authComponentSchemas, authEndpoints } from '../src/core/auth/auth-endpoints';
 import { iamComponentSchemas, iamEndpoints } from '../src/core/iam/iam-endpoints';
 import { parseResourceFile } from '../src/core/iam/resource-sync';
+import { cleanJsonSchema, visitSchemaRefs } from '../src/core/json-schema-utils';
 import { detectRouteManifestDrift, hasRouteManifestDrift } from '../src/core/manifest/drift';
 import { buildRouteManifest } from '../src/core/manifest/route-manifest';
+import { describeRouteSurface } from '../src/core/manifest/route-surface';
 import { renderMigrationSqlExport } from '../src/core/migrations/artifacts';
 import { getFortressMigrations, getLatestMigrationVersion } from '../src/core/migrations/migrations';
+import { assertComponentName, parseSchemaRef } from '../src/core/openapi-ref';
 import { loadPolicy, resolvePolicyPath } from '../src/core/policy/loader';
 import { buildOpenAPISpec } from '../src/plugins/openapi/spec-builder';
 import { checkPublicRoutes } from '../src/testing/checks';
@@ -47,20 +54,41 @@ Commands:
   migrate:diff        Explain live schema drift checking API
   migrate:check       Check bundled migration catalog consistency
 
+Route command scope:
+  openapi, schemas, manifest, manifest:check, check:routes, and
+  check:public-routes cover only Fortress's own auth + IAM routes unless you
+  pass --module <path>. Point them at a module exporting your 'config' to
+  include your plugin and host-owned routes; the route surface is derived
+  without calling createFortress(), so no Fortress instance is created and no
+  plugin methods() factory runs. A module
+  exporting a configured 'fortress' instance also works, at the cost of
+  constructing your app. Optional exports: 'componentSchemas', 'dispose'.
+
 Options:
   --help, -h          Show this help message
 
 openapi options:
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
   --out, -o <file>    Output file (default: stdout)
   --title <title>     API title (default: 'Fortress Auth API')
   --version <ver>     API version (default: '1.0.0')
+  --operation-id <s>  operationId style: 'methodPath' | 'handler' (default: 'methodPath')
 
 schemas options:
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
   --format <fmt>      Schema format: 'zod' | 'json-schema' (default: 'json-schema')
   --out, -o <file>    Output file (default: stdout)
 
 manifest options:
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
   --out, -o <file>    Output file (default: stdout)
+
+manifest:check / check:routes options:
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
+
+check:public-routes options:
+  --module <path>     Module exporting your 'config' (or a 'fortress' instance)
+  --allow "<M> <path>"  Allow one public route; repeatable
 
 live migration options:
   --module <path>     Trusted module exporting a configured 'fortress' value
@@ -78,18 +106,34 @@ Examples:
   fortress openapi --out openapi.json
   fortress schemas --format zod --out src/generated/fortress-schemas.ts
   fortress manifest --out route-manifest.json
-  fortress manifest:check
+  fortress manifest --module ./fortress.config.ts --out route-manifest.json
+  fortress manifest:check --module ./fortress.config.ts
   fortress check:routes
-  fortress check:public-routes
+  fortress check:public-routes --module ./fortress.config.ts
+  fortress check:public-routes --allow "GET /health"
   fortress check:migrations
-  fortress migrate:up --module ./src/fortress.ts
+  fortress migrate:up --module ./fortress.migrate.ts
   fortress migrate:export --dialect pg --direction up --out fortress-pg.sql
   fortress policy:summary --file fortress.policy.production.json
 `.trim();
 
 const CONFIG_TEMPLATE = `import type { FortressConfig } from '@bajustone/fortress';
 
-const config: FortressConfig = {
+/**
+ * Fortress configuration, and the module the route CLI reads:
+ *
+ *   fortress manifest --module ./fortress.config.ts
+ *   fortress check:public-routes --module ./fortress.config.ts
+ *   fortress openapi --module ./fortress.config.ts --out openapi.json
+ *
+ * Those commands derive your route surface from this \`config\` export without
+ * calling createFortress(), so importing this file must stay free of side
+ * effects — no createFortress() at module scope, no opening a database.
+ *
+ * Without --module they cover Fortress's own auth + IAM routes only, not your
+ * plugins or host-owned routes.
+ */
+export const config: FortressConfig = {
   database: undefined!, // Replace with your DatabaseAdapter (e.g. createSqliteDrizzleAdapter(db))
   jwt: {
     key: process.env.FORTRESS_JWT_SECRET!,
@@ -98,7 +142,23 @@ const config: FortressConfig = {
     refreshTokenExpirySeconds: 604800, // 7 days
   },
   plugins: [],
+  // routes: { ... }  // host-owned endpoint definitions; these show up in CLI checks too
 };
+
+/**
+ * \`fortress migrate:up\` needs a real instance, which means constructing the
+ * app (and starting any plugin workers). Keep that in its own module so the
+ * route checks above never pay for it:
+ *
+ *   // fortress.migrate.ts
+ *   import { createFortress } from '@bajustone/fortress';
+ *   import { config } from './fortress.config';
+ *
+ *   export const fortress = createFortress(config);
+ *   export function dispose() { /* close database handles *\\/ }
+ *
+ *   $ fortress migrate:up --module ./fortress.migrate.ts
+ */
 
 export default config;
 `;
@@ -145,6 +205,7 @@ function cmdInit(): void {
   console.log('  2. Configure your database adapter in fortress.config.ts');
   console.log('  3. Define your resources in fortress.resources.json');
   console.log('  4. Run "fortress sync:types" to generate TypeScript types');
+  console.log('  5. Point the checks at your app: "fortress check:public-routes --module ./fortress.config.ts"');
 }
 
 function cmdSyncPush(): void {
@@ -234,112 +295,673 @@ function cmdGenerateSecret(): void {
   console.log(hex);
 }
 
-function parseArg(args: string[], flag: string, alias?: string): string | undefined {
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === flag || (alias && args[i] === alias)) {
-      return args[i + 1];
+// --- Argument parsing ---
+
+/**
+ * How one named option is spelled and how many times it may appear.
+ *
+ * Every command parses through {@link parseCliArgs} so an unrecognised flag is
+ * a hard error rather than a silent no-op. That matters most for the security
+ * checks: a typo like `--modul ./app.ts` must fail loudly instead of quietly
+ * reporting a core-only pass.
+ */
+interface CliOptionSpec {
+  /** Flags that select this option, e.g. `['--out', '-o']`. */
+  readonly flags: readonly string[];
+  /** Accumulate every occurrence instead of rejecting the second one. */
+  readonly repeatable?: boolean;
+  /**
+   * Accept a value beginning with `-`. Reserved for free-form text; a value
+   * that is itself a registered flag is still rejected.
+   */
+  readonly allowLeadingDash?: boolean;
+}
+
+type CliOptionRegistry<TOption extends string> = Readonly<Record<TOption, CliOptionSpec>>;
+
+interface ParsedCliArgs<TOption extends string> {
+  /** Single value for an option, or `undefined` when it was not supplied. */
+  get: (option: TOption) => string | undefined;
+  /** Every value supplied for a repeatable option, in argv order. */
+  getAll: (option: TOption) => string[];
+}
+
+/**
+ * Parse `--flag value` pairs against a registry, rejecting unknown flags,
+ * flags the command does not accept, duplicates of non-repeatable options,
+ * and missing values.
+ *
+ * Each command passes its own registry so error wording stays scoped: an
+ * option another command owns reports "cannot be used with", while a flag no
+ * command owns reports "Unknown argument".
+ */
+function parseCliArgs<TOption extends string>(
+  args: string[],
+  command: string,
+  registry: CliOptionRegistry<TOption>,
+  allowed: readonly TOption[],
+): ParsedCliArgs<TOption> {
+  const flagToOption = new Map<string, TOption>();
+  for (const [option, spec] of Object.entries(registry) as Array<[TOption, CliOptionSpec]>) {
+    for (const flag of spec.flags)
+      flagToOption.set(flag, option);
+  }
+
+  const allowedOptions = new Set(allowed);
+  const collected = new Map<TOption, string[]>();
+
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index]!;
+    const option = flagToOption.get(flag);
+    if (!option)
+      throw new Error(`Unknown argument '${flag}' for ${command}`);
+    if (!allowedOptions.has(option))
+      throw new Error(`${flag} cannot be used with ${command}`);
+
+    const spec = registry[option];
+    const existing = collected.get(option);
+    if (existing && !spec.repeatable)
+      throw new Error(`Duplicate argument '${flag}' for ${command}`);
+
+    const value = args[index + 1];
+    if (!value || (!spec.allowLeadingDash && value.startsWith('-')) || flagToOption.has(value))
+      throw new Error(`${flag} requires a value`);
+
+    if (existing)
+      existing.push(value);
+    else
+      collected.set(option, [value]);
+  }
+
+  return {
+    get: option => collected.get(option)?.[0],
+    getAll: option => collected.get(option) ?? [],
+  };
+}
+
+/** Options shared by the route-derived commands (manifest, OpenAPI, schemas, checks). */
+type RouteOption = 'allow' | 'format' | 'module' | 'operationId' | 'out' | 'title' | 'version';
+
+const ROUTE_OPTIONS = {
+  allow: { flags: ['--allow'], repeatable: true },
+  format: { flags: ['--format'] },
+  module: { flags: ['--module'] },
+  operationId: { flags: ['--operation-id'] },
+  out: { flags: ['--out', '-o'] },
+  title: { flags: ['--title'], allowLeadingDash: true },
+  version: { flags: ['--version'], allowLeadingDash: true },
+} as const satisfies CliOptionRegistry<RouteOption>;
+
+function parseRouteArgs(
+  args: string[],
+  command: string,
+  allowed: readonly RouteOption[],
+): ParsedCliArgs<RouteOption> {
+  return parseCliArgs(args, command, ROUTE_OPTIONS, allowed);
+}
+
+type PolicyOption = 'env' | 'file';
+
+const POLICY_OPTIONS = {
+  env: { flags: ['--env'] },
+  file: { flags: ['--file', '-f'] },
+} as const satisfies CliOptionRegistry<PolicyOption>;
+
+function parseOperationIdStyle(value: string | undefined): 'handler' | 'methodPath' {
+  const style = value ?? 'methodPath';
+  if (style !== 'handler' && style !== 'methodPath')
+    throw new Error(`Unknown operation-id style '${style}'. Use methodPath or handler.`);
+  return style;
+}
+
+/**
+ * Core auth + IAM component schemas.
+ *
+ * The spec is always built through {@link buildOpenAPISpec} with these merged
+ * in, rather than through `fortress.toOpenAPI()`, because the instance method
+ * forwards no component schemas — it would emit an empty `components.schemas`
+ * and leave every core `$ref` dangling. An application module can contribute
+ * its own via a `componentSchemas` export, which is merged on top.
+ */
+function coreComponentSchemas(): ComponentSchemas {
+  return { ...authComponentSchemas, ...iamComponentSchemas };
+}
+
+/** Drop runtime metadata from each schema node without altering schema data. */
+function stripInternalSchemaFields(schemas: ComponentSchemas): ComponentSchemas {
+  return Object.fromEntries(
+    Object.entries(schemas).map(([name, schema]) => [name, cleanJsonSchema(schema)]),
+  );
+}
+
+/**
+ * Merge application component schemas over Fortress's own, refusing to
+ * redefine a core name.
+ *
+ * Silently letting an application `User` replace the core `User` would change
+ * the meaning of core operations in the emitted spec without any signal.
+ */
+function mergeComponentSchemas(appSchemas: ComponentSchemas, modulePath: string): ComponentSchemas {
+  const core = coreComponentSchemas();
+  // Validate before merging, and before anything strips the record: a name
+  // OpenAPI forbids must be reported as the author wrote it. This is the one
+  // choke point all three schema-consuming commands pass through, so they
+  // accept an identical input set.
+  for (const name of Object.keys(appSchemas))
+    assertComponentName(name, `application module '${modulePath}'`);
+
+  const collisions = Object.keys(appSchemas).filter(name => Object.hasOwn(core, name));
+  if (collisions.length > 0) {
+    throw new Error(
+      `Application module '${modulePath}' redefines Fortress component schema(s): ${collisions.join(', ')}. `
+      + `Core operations reference these by name, so overriding them would silently change their meaning. `
+      + `Rename the application schema(s).`,
+    );
+  }
+  return { ...core, ...appSchemas };
+}
+
+/**
+ * OpenAPI requires operationId to be unique across the document. Neither
+ * strategy guarantees that on its own: handler names are unique per plugin,
+ * not per application, and `methodPath` normalisation maps `/foo-bar` and
+ * `/foo_bar` onto the same id. Report the clash with both routes and advice
+ * that matches the strategy in use.
+ */
+function assertUniqueOperationIds(spec: OpenAPISpec, strategy: 'handler' | 'methodPath'): void {
+  const advice = strategy === 'handler'
+    ? `Handler names are unique per plugin, not per application — re-run without --operation-id handler, or rename one of the handlers.`
+    : `Generated IDs normalise punctuation, so these paths collide — try --operation-id handler, or rename one of the routes.`;
+
+  const seen = new Map<string, string>();
+  for (const [path, operations] of Object.entries(spec.paths)) {
+    for (const [method, operation] of Object.entries(operations)) {
+      const id = operation.operationId;
+      if (id === undefined)
+        continue;
+      const route = `${method.toUpperCase()} ${path}`;
+      const previous = seen.get(id);
+      if (previous)
+        throw new Error(`Duplicate operationId '${id}' generated for ${previous} and ${route}. ${advice}`);
+      seen.set(id, route);
     }
   }
-  return undefined;
 }
 
-function cmdOpenAPI(args: string[]): void {
-  const title = parseArg(args, '--title') ?? 'Fortress Auth API';
-  const version = parseArg(args, '--version') ?? '1.0.0';
-  const outFile = parseArg(args, '--out') ?? parseArg(args, '-o');
+/** A single `$ref` occurrence: the raw value the author wrote and its parse. */
+interface CollectedRef {
+  raw: string;
+  parsed: ParsedRef;
+}
 
-  const allEndpoints = [
-    ...Object.values(authEndpoints),
-    ...Object.values(iamEndpoints),
-  ];
-  const componentSchemas = { ...authComponentSchemas, ...iamComponentSchemas };
+/**
+ * Collect every `$ref` occurrence from actual schema nodes.
+ *
+ * Occurrences accumulate into an array, not a map keyed by the raw value: a
+ * legal string ref (`'null'`) and a malformed non-string ref (`null`)
+ * stringify to the same key, so a map would let the legal one silently mask
+ * the malformed one and skip its error. Every occurrence is validated.
+ */
+function collectRefs(schema: unknown, into: CollectedRef[]): void {
+  visitSchemaRefs(schema, (ref) => {
+    into.push({ raw: typeof ref === 'string' ? ref : String(ref), parsed: parseSchemaRef(ref) });
+  });
+}
 
-  const spec = buildOpenAPISpec(allEndpoints, componentSchemas, { title, version });
-  const json = JSON.stringify(spec, null, 2);
-
-  if (outFile) {
-    writeFileSync(outFile, json, 'utf-8');
-    console.log(`OpenAPI spec written to ${outFile}`);
-    const pathCount = Object.keys(spec.paths).length;
-    console.log(`  ${pathCount} endpoints, OpenAPI 3.1.0`);
+/** Resolve decoded JSON Pointer tokens against the generated document. */
+function pointerResolves(spec: OpenAPISpec, tokens: readonly string[]): boolean {
+  let cursor: unknown = spec;
+  for (const token of tokens) {
+    if (typeof cursor !== 'object' || cursor === null)
+      return false;
+    if (!Object.hasOwn(cursor, token))
+      return false;
+    cursor = (cursor as Record<string, unknown>)[token];
   }
-  else {
-    process.stdout.write(json);
+  return true;
+}
+
+/**
+ * Fail on a `$ref` the generated document cannot resolve.
+ *
+ * A spec with a dangling reference is invalid but still serializes happily, so
+ * without this the command exits 0 and the breakage surfaces in whatever
+ * consumes the spec later. External refs are legal OpenAPI and are left for
+ * the consumer to resolve.
+ */
+function assertResolvableRefs(spec: OpenAPISpec): void {
+  const refs: CollectedRef[] = [];
+  for (const operations of Object.values(spec.paths)) {
+    for (const operation of Object.values(operations)) {
+      for (const parameter of operation.parameters ?? [])
+        collectRefs(parameter.schema, refs);
+      collectRefs(operation.requestBody?.content['application/json'].schema, refs);
+      for (const response of Object.values(operation.responses))
+        collectRefs(response.content?.['application/json'].schema, refs);
+    }
+  }
+  // A component may reference another component.
+  for (const schema of Object.values(spec.components?.schemas ?? {}))
+    collectRefs(schema, refs);
+
+  const defined = spec.components?.schemas ?? {};
+  const undefinedComponents: string[] = [];
+  const unresolvablePointers: string[] = [];
+
+  for (const { raw, parsed } of refs) {
+    switch (parsed.kind) {
+      case 'malformed':
+        throw new Error(`Invalid $ref '${raw}': ${parsed.reason}.`);
+      case 'component':
+        if (!Object.hasOwn(defined, parsed.name))
+          undefinedComponents.push(parsed.name);
+        break;
+      case 'other-local':
+        if (!pointerResolves(spec, parsed.tokens))
+          unresolvablePointers.push(raw);
+        break;
+      case 'external':
+        break;
+    }
+  }
+
+  if (undefinedComponents.length > 0) {
+    throw new Error(
+      `OpenAPI spec references undefined component schema(s): ${[...new Set(undefinedComponents)].sort().join(', ')}. `
+      + `Export them from your module as 'componentSchemas' so the spec resolves.`,
+    );
+  }
+  if (unresolvablePointers.length > 0) {
+    throw new Error(
+      `OpenAPI spec contains unresolvable $ref(s): ${[...new Set(unresolvablePointers)].sort().join(', ')}. `
+      + `A local $ref must resolve against the generated document, which defines only `
+      + `components.schemas and components.securitySchemes.`,
+    );
   }
 }
 
-function buildCoreFortressForCli(): { endpoints: EndpointDefinition[]; config: { plugins: []; csrf: undefined }; readonly manifest: ReturnType<typeof buildRouteManifest> } {
+async function cmdOpenAPI(args: string[]): Promise<void> {
+  const parsed = parseRouteArgs(args, 'openapi', ['module', 'operationId', 'out', 'title', 'version']);
+  const title = parsed.get('title') ?? 'Fortress Auth API';
+  const version = parsed.get('version') ?? '1.0.0';
+  const outFile = parsed.get('out');
+  const operationId = parseOperationIdStyle(parsed.get('operationId'));
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote, componentSchemas }) => {
+    const spec = buildOpenAPISpec(fortress.endpoints, componentSchemas, {
+      title,
+      version,
+      operationId,
+    });
+    assertUniqueOperationIds(spec, operationId);
+    assertResolvableRefs(spec);
+    const json = JSON.stringify(spec, null, 2);
+
+    if (outFile) {
+      writeFileSync(outFile, json, 'utf-8');
+      console.log(`OpenAPI spec written to ${outFile}`);
+      console.log(`  ${Object.keys(spec.paths).length} path(s), OpenAPI 3.1.0`);
+    }
+    else {
+      process.stdout.write(json);
+    }
+    printScope(scopeNote, !outFile);
+  });
+}
+
+// --- Route surface resolution ---
+
+/**
+ * The introspection surface every route-derived command works against. A real
+ * `Fortress` instance satisfies this structurally, so `--module` output needs
+ * no casts and no library-side change.
+ */
+type CliRouteSurface = Pick<FortressManifestRuntime, 'config' | 'endpoints' | 'manifest'>;
+
+/**
+ * Fortress's own auth + IAM routes, with no plugins and no host-owned routes.
+ * This is the deliberate fallback when the caller does not point the CLI at an
+ * application module; commands label it as such so a green check is never read
+ * as covering the caller's own routes.
+ */
+function buildCoreFortressForCli(): CliRouteSurface {
   const endpoints = [
     ...Object.values(authEndpoints) as EndpointDefinition[],
     ...Object.values(iamEndpoints) as EndpointDefinition[],
   ];
   return {
     endpoints,
-    config: { plugins: [], csrf: undefined },
+    config: { plugins: [], csrf: undefined } as unknown as FortressManifestRuntime['config'],
     get manifest() {
-      return buildRouteManifest(this as any);
+      return buildRouteManifest(this);
     },
   };
 }
 
-function cmdManifest(args: string[]): void {
-  const outFile = parseArg(args, '--out') ?? parseArg(args, '-o');
-  const fortress = buildCoreFortressForCli();
-  const manifest = buildRouteManifest(fortress as any);
-  const json = JSON.stringify(manifest, null, 2);
+const CORE_ONLY_NOTE
+  = 'Scope: core-only (Fortress auth + IAM routes). '
+    + 'Pass --module <path> to include plugin and host-owned routes.';
 
-  if (outFile) {
-    writeFileSync(outFile, json, 'utf-8');
-    console.log(`Route manifest written to ${outFile}`);
-    console.log(`  ${manifest.length} route(s)`);
-  }
-  else {
-    process.stdout.write(json);
-  }
+interface LoadedAppModule {
+  fortress: CliRouteSurface;
+  /** How the surface was obtained, so the scope note can be precise. */
+  source: 'config' | 'instance';
+  /** Application component schemas to merge with Fortress's own. */
+  componentSchemas: ComponentSchemas;
+  dispose?: () => void | Promise<void>;
 }
 
-function cmdManifestCheck(): void {
-  const fortress = buildCoreFortressForCli();
-  const openapi = buildOpenAPISpec(
-    fortress.endpoints,
-    { ...authComponentSchemas, ...iamComponentSchemas },
-    { title: 'Fortress Auth API', version: '1.0.0' },
+const MODULE_CONTRACT_HINT
+  = `must export either a Fortress config as named export 'config' (preferred — read without constructing the app) `
+    + `or a configured instance as named export 'fortress'`;
+
+function isRouteSurface(value: unknown): value is CliRouteSurface {
+  return isRecord(value)
+    && Array.isArray(value.endpoints)
+    && Array.isArray(value.manifest)
+    && isRecord(value.config);
+}
+
+/**
+ * Does this export actually look like a Fortress config?
+ *
+ * `config` is a common export name — framework configs, build configs, app
+ * settings. Accepting any object under that name would silently derive the
+ * bare core surface and report it as `Scope: application`: a green check that
+ * covered none of the caller's routes, which is precisely the failure #15
+ * exists to remove. Require the shape `FortressConfig` mandates instead.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && !Array.isArray(value);
+}
+
+/** A JSON-style record, excluding arrays and class instances. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value))
+    return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** `jwt.key` is `string | string[]`; `undefined` is the unset-env placeholder. */
+function isJwtKeyMaterial(key: unknown): boolean {
+  return key === undefined
+    || typeof key === 'string'
+    || (Array.isArray(key) && key.every(entry => typeof entry === 'string'));
+}
+
+/** Duck-typed DatabaseAdapter; `undefined` is the `fortress init` scaffold placeholder. */
+function isDatabaseAdapterLike(database: unknown): boolean {
+  return database === undefined
+    || (isPlainObject(database)
+      && typeof database.findOne === 'function'
+      && typeof database.transaction === 'function');
+}
+
+function isFortressConfig(value: unknown): value is FortressConfig {
+  if (!isPlainObject(value))
+    return false;
+
+  // `database` and `jwt.key` are both required by FortressConfig, so a real
+  // config module declares them. Their *values* stay unconstrained-or-undefined
+  // on purpose: `fortress init` scaffolds `database: undefined!` and
+  // `key: process.env.FORTRESS_JWT_SECRET!`. Presence is the discriminator;
+  // value typing applies only once a value is actually there.
+  if (!('database' in value))
+    return false;
+  // Read the value only from a data property — a `get database()` could open a
+  // connection, which is the side effect this whole path exists to avoid.
+  const database = Object.getOwnPropertyDescriptor(value, 'database');
+  if (database && 'value' in database && !isDatabaseAdapterLike(database.value))
+    return false;
+
+  if (!isPlainObject(value.jwt) || !('key' in value.jwt) || !isJwtKeyMaterial(value.jwt.key))
+    return false;
+
+  if (value.plugins !== undefined
+    && (!Array.isArray(value.plugins)
+      || !value.plugins.every(plugin => isPlainObject(plugin) && typeof plugin.name === 'string'))) {
+    return false;
+  }
+
+  // `routes` is a record of endpoint definitions; an array is a different shape.
+  if (value.routes !== undefined && !isPlainObject(value.routes))
+    return false;
+
+  return true;
+}
+
+/**
+ * Resolve a loaded module to a route surface.
+ *
+ * `config` wins over `fortress` because deriving the surface from config never
+ * calls a plugin's `methods()` factory. Constructing an instance does, and
+ * plugins start workers there — the webhook plugin's queue runs a startup
+ * recovery sweep against the database — so the CLI avoids construction
+ * whenever the module gives it the declarative input instead.
+ */
+function validateAppModule(value: unknown, modulePath: string): LoadedAppModule {
+  if (!isRecord(value))
+    throw new Error(`Application module '${modulePath}' did not export an object`);
+
+  if (value.componentSchemas !== undefined && !isPlainRecord(value.componentSchemas)) {
+    throw new Error(
+      `Application module export 'componentSchemas' must be a plain object when provided; arrays are not schema records`,
+    );
+  }
+  const componentSchemas = value.componentSchemas ?? {};
+  for (const [name, schema] of Object.entries(componentSchemas)) {
+    if (!isPlainRecord(schema)) {
+      throw new Error(
+        `Application module componentSchemas[${JSON.stringify(name)}] must be a schema object; `
+        + `received ${Array.isArray(schema) ? 'an array' : schema === null ? 'null' : typeof schema}`,
+      );
+    }
+  }
+  if (value.dispose !== undefined && typeof value.dispose !== 'function')
+    throw new Error(`Application module export 'dispose' must be a function when provided`);
+
+  const common = {
+    componentSchemas: componentSchemas as ComponentSchemas,
+    dispose: value.dispose as LoadedAppModule['dispose'],
+  };
+
+  if (isFortressConfig(value.config))
+    return { fortress: describeRouteSurface(value.config), source: 'config', ...common };
+
+  if (isRouteSurface(value.fortress))
+    return { fortress: value.fortress, source: 'instance', ...common };
+
+  // Past this point neither export is usable. Say which one was wrong rather
+  // than falling back to a surface that does not describe the caller's app.
+  if (value.fortress !== undefined) {
+    throw new Error(
+      `Application module '${modulePath}' export 'fortress' is not a configured Fortress instance `
+      + `(expected 'endpoints', 'manifest', and 'config').`,
+    );
+  }
+
+  if (value.config !== undefined) {
+    throw new Error(
+      `Application module '${modulePath}' export 'config' is not a Fortress config `
+      + `(expected a 'database' property and a 'jwt' object with a 'key' — either may be an `
+      + `undefined placeholder — plus 'plugins'/'routes' of the right shape). `
+      + `Refusing to report application scope for a surface that would not include your routes.`,
+    );
+  }
+
+  throw new Error(
+    `Application module '${modulePath}' ${MODULE_CONTRACT_HINT}. `
+    + `Add \`export const config = { ... };\` to the module.`,
   );
-  const drift = detectRouteManifestDrift(fortress as any, { openapi });
-
-  if (hasRouteManifestDrift(drift)) {
-    console.error('Route manifest drift detected:');
-    console.error(JSON.stringify(drift, null, 2));
-    process.exit(1);
-  }
-
-  console.log('Route manifest check passed.');
 }
 
-function cmdCheckPublicRoutes(args: string[]): void {
-  // Optional `--allow <method> <path>` repeated entries augment the
-  // default Fortress allow-list. For app-level checks (with plugins
-  // mounted), call `checkPublicRoutes(fortress)` from your CI script
-  // against your real fortress instance.
-  const allow: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--allow' && args[i + 1])
-      allow.push(args[++i]);
+async function loadAppModule(modulePath: string): Promise<LoadedAppModule> {
+  const imported = await importCliModule(modulePath);
+  try {
+    return validateAppModule(imported, modulePath);
   }
-  const fortress = buildCoreFortressForCli();
-  const result = checkPublicRoutes(fortress as any, { allow });
-  if (!result.ok) {
-    console.error('Public-route check failed:');
-    for (const msg of result.messages)
-      console.error(`  - ${msg}`);
-    process.exit(1);
+  catch (error) {
+    await disposeQuietly(imported, 'Application module cleanup also failed');
+    throw error;
   }
-  console.log(`Public-route check passed (${result.unexpected.length} unexpected, allow-list ok).`);
+}
+
+interface ResolvedRouteSurface {
+  fortress: CliRouteSurface;
+  /** Printed before/alongside command output so scope is never implicit. */
+  scopeNote: string;
+  /** Fortress component schemas plus anything the module contributed. */
+  componentSchemas: ComponentSchemas;
+  dispose?: () => void | Promise<void>;
+}
+
+/**
+ * Finish resolving a loaded module into a runnable surface.
+ *
+ * This can still throw: `manifest` is a lazy getter, so a malformed
+ * `csrf.skipPaths` (or any other config the manifest builder rejects) surfaces
+ * here rather than at load time. It runs inside the cleanup boundary so the
+ * module's `dispose()` is not skipped when it does.
+ */
+function describeLoadedSurface(loaded: LoadedAppModule, modulePath: string): ResolvedRouteSurface {
+  const routeCount = loaded.fortress.manifest.length;
+  const via = loaded.source === 'config' ? 'config' : 'constructed instance';
+  return {
+    fortress: loaded.fortress,
+    scopeNote: `Scope: application (${routeCount} route(s) from ${modulePath}, via ${via}).`,
+    componentSchemas: mergeComponentSchemas(loaded.componentSchemas, modulePath),
+    dispose: loaded.dispose,
+  };
+}
+
+/**
+ * Run a route-derived command against the resolved surface, always disposing
+ * the loaded module afterwards. Failures set `process.exitCode` rather than
+ * calling `process.exit` so `dispose()` is not skipped.
+ *
+ * Everything after a successful import happens under the cleanup boundary —
+ * including manifest construction and schema merging, both of which can throw.
+ */
+async function withRouteSurface(
+  modulePath: string | undefined,
+  run: (surface: ResolvedRouteSurface) => void,
+): Promise<void> {
+  if (!modulePath) {
+    run({
+      fortress: buildCoreFortressForCli(),
+      scopeNote: CORE_ONLY_NOTE,
+      componentSchemas: coreComponentSchemas(),
+    });
+    return;
+  }
+
+  const loaded = await loadAppModule(modulePath);
+  let runError: unknown;
+  let runFailed = false;
+  try {
+    run(describeLoadedSurface(loaded, modulePath));
+  }
+  catch (error) {
+    runFailed = true;
+    runError = error;
+  }
+
+  let cleanupError: unknown;
+  let cleanupFailed = false;
+  try {
+    await loaded.dispose?.();
+  }
+  catch (error) {
+    cleanupFailed = true;
+    cleanupError = error;
+  }
+
+  if (runFailed) {
+    if (cleanupFailed)
+      console.error(`Application module cleanup also failed: ${describeError(cleanupError)}`);
+    throw runError;
+  }
+  if (cleanupFailed)
+    throw cleanupError;
+}
+
+/** Emit the scope note without polluting stdout when stdout carries the payload. */
+function printScope(note: string, payloadOnStdout: boolean): void {
+  if (payloadOnStdout)
+    console.error(note);
+  else
+    console.log(note);
+}
+
+async function cmdManifest(args: string[]): Promise<void> {
+  const parsed = parseRouteArgs(args, 'manifest', ['module', 'out']);
+  const outFile = parsed.get('out');
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
+    const manifest = buildRouteManifest(fortress);
+    const json = JSON.stringify(manifest, null, 2);
+
+    if (outFile) {
+      writeFileSync(outFile, json, 'utf-8');
+      console.log(`Route manifest written to ${outFile}`);
+      console.log(`  ${manifest.length} route(s)`);
+    }
+    else {
+      process.stdout.write(json);
+    }
+    printScope(scopeNote, !outFile);
+  });
+}
+
+async function cmdManifestCheck(args: string[], command: string): Promise<void> {
+  const parsed = parseRouteArgs(args, command, ['module']);
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote, componentSchemas }) => {
+    const openapi = buildOpenAPISpec(fortress.endpoints, componentSchemas, {
+      title: 'Fortress Auth API',
+      version: '1.0.0',
+    });
+    const drift = detectRouteManifestDrift(fortress, { openapi });
+
+    if (hasRouteManifestDrift(drift)) {
+      console.error('Route manifest drift detected:');
+      console.error(JSON.stringify(drift, null, 2));
+      console.error(scopeNote);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log('Route manifest check passed.');
+    console.log(scopeNote);
+  });
+}
+
+async function cmdCheckPublicRoutes(args: string[]): Promise<void> {
+  // Repeated `--allow '<METHOD> <path>'` entries augment (never replace) the
+  // default Fortress allow-list. Without `--module` this only sees Fortress's
+  // own auth + IAM routes, so the scope note is part of the result.
+  const parsed = parseRouteArgs(args, 'check:public-routes', ['allow', 'module']);
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote }) => {
+    const result = checkPublicRoutes(fortress, { allow: parsed.getAll('allow') });
+    if (!result.ok) {
+      console.error('Public-route check failed:');
+      for (const msg of result.messages)
+        console.error(`  - ${msg}`);
+      console.error(scopeNote);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Public-route check passed (${fortress.manifest.length} route(s) reviewed, allow-list ok).`);
+    console.log(scopeNote);
+  });
 }
 
 async function cmdPolicySummary(args: string[]): Promise<void> {
-  const filePath = parseArg(args, '--file') ?? parseArg(args, '-f');
-  const env = parseArg(args, '--env');
+  const parsed = parseCliArgs(args, 'policy:summary', POLICY_OPTIONS, ['env', 'file']);
+  const filePath = parsed.get('file');
+  const env = parsed.get('env');
   const resolved = await resolvePolicyPath({ filePath, env });
   if (!resolved) {
     console.error('No fortress.policy.json (or fortress.policy.<env>.json) found in the current directory.');
@@ -386,37 +1008,31 @@ type MigrationOption = 'dialect' | 'direction' | 'module' | 'out' | 'targetVersi
 
 type ParsedMigrationArgs = Partial<Record<MigrationOption, string>>;
 
-const MIGRATION_OPTION_FLAGS: Readonly<Record<string, MigrationOption>> = {
-  '--dialect': 'dialect',
-  '--direction': 'direction',
-  '--module': 'module',
-  '--out': 'out',
-  '-o': 'out',
-  '--target-version': 'targetVersion',
-};
+const MIGRATION_OPTIONS = {
+  dialect: { flags: ['--dialect'] },
+  direction: { flags: ['--direction'] },
+  module: { flags: ['--module'] },
+  out: { flags: ['--out', '-o'] },
+  // A negative or otherwise malformed version reaches parseTargetVersion so it
+  // reports the numeric contract instead of a generic "requires a value".
+  targetVersion: { flags: ['--target-version'], allowLeadingDash: true },
+} as const satisfies CliOptionRegistry<MigrationOption>;
+
+const MIGRATION_OPTION_NAMES = Object.keys(MIGRATION_OPTIONS) as MigrationOption[];
 
 function parseMigrationArgs(
   args: string[],
   command: string,
   allowed: readonly MigrationOption[],
 ): ParsedMigrationArgs {
-  const allowedOptions = new Set(allowed);
-  const parsed: ParsedMigrationArgs = {};
-  for (let index = 0; index < args.length; index += 2) {
-    const flag = args[index]!;
-    const option = MIGRATION_OPTION_FLAGS[flag];
-    if (!option)
-      throw new Error(`Unknown argument '${flag}' for ${command}`);
-    if (!allowedOptions.has(option))
-      throw new Error(`${flag} cannot be used with ${command}`);
-    if (parsed[option] !== undefined)
-      throw new Error(`Duplicate argument '${flag}' for ${command}`);
-    const value = args[index + 1];
-    if (!value || (option !== 'targetVersion' && value.startsWith('-')) || MIGRATION_OPTION_FLAGS[value])
-      throw new Error(`${flag} requires a value`);
-    parsed[option] = value;
+  const parsed = parseCliArgs(args, command, MIGRATION_OPTIONS, allowed);
+  const result: ParsedMigrationArgs = {};
+  for (const option of MIGRATION_OPTION_NAMES) {
+    const value = parsed.get(option);
+    if (value !== undefined)
+      result[option] = value;
   }
-  return parsed;
+  return result;
 }
 
 function requireMigrationOption(
@@ -499,21 +1115,39 @@ function validateMigrationModule(value: unknown): LoadedMigrationModule {
   return value as unknown as LoadedMigrationModule;
 }
 
-async function loadMigrationModule(modulePath: string): Promise<LoadedMigrationModule> {
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Import a caller-supplied module by cwd-relative path. The import error is
+ * deliberately left unwrapped so runtime diagnostics ("Cannot find module …")
+ * reach the operator verbatim.
+ */
+async function importCliModule(modulePath: string): Promise<unknown> {
   const specifier = pathToFileURL(resolve(process.cwd(), modulePath)).href;
-  const imported: unknown = await import(specifier);
+  return await import(specifier);
+}
+
+/** Best-effort `dispose()` on a module that failed validation. */
+async function disposeQuietly(imported: unknown, label: string): Promise<void> {
+  if (!isRecord(imported) || typeof imported.dispose !== 'function')
+    return;
+  try {
+    await imported.dispose();
+  }
+  catch (cleanupError) {
+    console.error(`${label}: ${describeError(cleanupError)}`);
+  }
+}
+
+async function loadMigrationModule(modulePath: string): Promise<LoadedMigrationModule> {
+  const imported = await importCliModule(modulePath);
   try {
     return validateMigrationModule(imported);
   }
   catch (error) {
-    if (isRecord(imported) && typeof imported.dispose === 'function') {
-      try {
-        await imported.dispose();
-      }
-      catch (cleanupError) {
-        console.error(`Migration module cleanup also failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
-      }
-    }
+    await disposeQuietly(imported, 'Migration module cleanup also failed');
     throw error;
   }
 }
@@ -618,129 +1252,674 @@ function cmdMigrateCheck(args: string[]): void {
   console.log(`Migration catalog check passed (${dialect}, latest=${getLatestMigrationVersion(dialect)}).`);
 }
 
-function cmdSchemas(args: string[]): void {
-  const format = parseArg(args, '--format') ?? 'json-schema';
-  const outFile = parseArg(args, '--out') ?? parseArg(args, '-o');
+const IDENTITY_HELPER = `/** Validate like JSON Schema: never replace or transform a successful input value. */
+function validateIdentity<T extends z.ZodTypeAny>(
+  schema: T,
+  prepare: (input: unknown) => unknown = input => input,
+  check: (prepared: unknown) => boolean = () => true,
+): z.ZodType<z.output<T>, unknown> {
+  return z.any().superRefine((input: unknown, ctx: z.RefinementCtx) => {
+    const prepared = prepare(input);
+    if (!check(prepared) || !schema.safeParse(prepared).success)
+      ctx.addIssue({ code: 'custom', message: 'JSON Schema validation failed' });
+  }) as z.ZodType<z.output<T>, unknown>;
+}
+`;
 
-  if (format === 'json-schema') {
-    const allSchemas = { ...authComponentSchemas, ...iamComponentSchemas };
-    const json = JSON.stringify(allSchemas, null, 2);
+const JSON_VALUE_HELPER = `/** JSON Schema const/enum equality for structured JSON values. */
+function jsonDeepEqual(left: unknown, right: unknown, seen = new WeakMap<object, WeakSet<object>>()): boolean {
+  if (left === right)
+    return true;
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null)
+    return false;
+  if (Array.isArray(left) !== Array.isArray(right))
+    return false;
 
-    if (outFile) {
-      writeFileSync(outFile, json, 'utf-8');
-      console.log(`JSON Schema written to ${outFile}`);
-      console.log(`  ${Object.keys(allSchemas).length} component schemas`);
+  let rights = seen.get(left);
+  if (rights?.has(right))
+    return true;
+  if (!rights) {
+    rights = new WeakSet<object>();
+    seen.set(left, rights);
+  }
+  rights.add(right);
+
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length)
+    return false;
+  return leftKeys.every(key => Object.hasOwn(right, key)
+    && jsonDeepEqual(Reflect.get(left, key), Reflect.get(right, key), seen));
+}
+
+function jsonValue<T>(expected: T): z.ZodType<T, unknown> {
+  return z.custom<T>(value => jsonDeepEqual(value, expected), { message: 'Expected a deep-equal JSON value' });
+}
+`;
+
+const EXACTLY_ONE_HELPER = `/** JSON Schema \`oneOf\`: exactly one variant must match — a plain z.union is any-match. */
+function matchExactlyOne<T extends readonly [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]]>(...variants: T) {
+  const union = z.union(variants);
+  return z.any().superRefine((input: unknown, ctx: z.RefinementCtx) => {
+    let matched = 0;
+    for (const variant of variants) {
+      if (variant.safeParse(input).success)
+        matched += 1;
     }
-    else {
-      process.stdout.write(json);
-    }
-    return;
+    if (matched !== 1)
+      ctx.addIssue({ code: 'custom', message: \`Expected exactly one oneOf variant to match, but \${matched} did\` });
+  }).pipe(validateIdentity(union));
+}
+`;
+
+const NON_IDENTIFIER_RUN_RE = /[^\w$]+(.)?/g;
+const LEADING_DIGITS_RE = /^\d+/;
+const VALID_IDENTIFIER_RE = /^[a-z_$][\w$]*$/i;
+
+/** Component schema name → the exported const it is emitted as. */
+type ComponentIdentifiers = Map<string, string>;
+
+function quotePropertyKey(key: string): string {
+  // `__proto__` as a plain object-literal key — bare or quoted, however it is
+  // spelled — is prototype-setter syntax (ECMA-262 B.3.1), not a property
+  // definition. It creates no own key, so `z.object()` never sees the field and
+  // a required `__proto__` goes unvalidated. A computed key is the only form
+  // that defines a property. (Reachable via JSON.parse, which does create
+  // `__proto__` as an own property.)
+  if (key === '__proto__')
+    return `[${JSON.stringify(key)}]`;
+  return VALID_IDENTIFIER_RE.test(key) ? key : JSON.stringify(key);
+}
+
+/**
+ * Map every component schema name onto a unique, valid export identifier.
+ *
+ * Component names are free-form in JSON Schema — `Foo-Bar` and `123.Name` are
+ * both legal and neither is a TypeScript identifier. One map serves both the
+ * declarations and every `$ref` that resolves to them, so the two cannot drift.
+ */
+function buildComponentIdentifiers(componentSchemas: ComponentSchemas): ComponentIdentifiers {
+  const taken = new Set<string>();
+  const identifiers: ComponentIdentifiers = new Map();
+
+  for (const name of Object.keys(componentSchemas)) {
+    const base = toIdentifierPart(name) || 'Component';
+    let candidate = `${base}Schema`;
+    for (let suffix = 2; taken.has(candidate); suffix += 1)
+      candidate = `${base}${suffix}Schema`;
+    taken.add(candidate);
+    identifiers.set(name, candidate);
   }
 
-  if (format === 'zod') {
-    const allSchemas = { ...authComponentSchemas, ...iamComponentSchemas };
-    const allEndpoints = [
-      ...Object.values(authEndpoints),
-      ...Object.values(iamEndpoints),
-    ];
+  return identifiers;
+}
+
+/** Local component names a schema fragment refers to. */
+function componentDependencies(schema: unknown): Set<string> {
+  const refs: CollectedRef[] = [];
+  collectRefs(schema, refs);
+  const names = new Set<string>();
+  for (const { parsed } of refs) {
+    if (parsed.kind === 'component')
+      names.add(parsed.name);
+  }
+  return names;
+}
+
+/**
+ * Order component declarations so each is defined before it is used.
+ *
+ * A component referring to one declared later would hit the temporal dead
+ * zone at import time. Kahn's algorithm emits everything it can order; what
+ * remains is a cycle (or something depending on one) and is emitted through
+ * `z.lazy()`, whose body is not evaluated until first use.
+ */
+function orderComponents(componentSchemas: ComponentSchemas): { eager: string[]; lazy: string[] } {
+  const names = Object.keys(componentSchemas);
+  const known = new Set(names);
+  // A self-reference counts as a dependency: it can never be satisfied
+  // eagerly, which is exactly what forces a recursive schema to be deferred.
+  const pending = new Map(
+    names.map(name => [
+      name,
+      new Set(Array.from(componentDependencies(componentSchemas[name])).filter(ref => known.has(ref))),
+    ]),
+  );
+
+  const eager: string[] = [];
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const [name, deps] of pending) {
+      if (deps.size > 0)
+        continue;
+      eager.push(name);
+      pending.delete(name);
+      for (const remaining of pending.values())
+        remaining.delete(name);
+      progressed = true;
+    }
+  }
+
+  return { eager, lazy: [...pending.keys()] };
+}
+
+/** Strip anything that cannot appear in a TypeScript identifier, PascalCasing across the removals. */
+function toIdentifierPart(value: string): string {
+  const cleaned = value
+    .replace(NON_IDENTIFIER_RUN_RE, (_, next: string | undefined) => (next ? next.toUpperCase() : ''))
+    .replace(LEADING_DIGITS_RE, '');
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/**
+ * Pick a unique, valid export name per endpoint body schema.
+ *
+ * Handler names are only unique within a plugin — two plugins may each define
+ * `submit` — and nothing stops one containing punctuation (`schools.get`).
+ * Emitting them verbatim produces a file that does not compile, so qualify a
+ * clashing name with its owning plugin and fail loudly if that still collides.
+ */
+function resolveSchemaExportNames(
+  endpoints: EndpointDefinition[],
+  manifest: RouteManifestEntry[],
+  components: ComponentIdentifiers,
+): Map<EndpointDefinition, string> {
+  const originByRoute = new Map(manifest.map(entry => [`${entry.method} ${entry.path}`, entry.plugin]));
+  // Component schemas are emitted into the same module namespace, so their
+  // resolved identifiers are already spoken for.
+  const taken = new Map<string, string>(
+    Array.from(components, ([name, identifier]) => [identifier, `component schema '${name}'`]),
+  );
+  const names = new Map<EndpointDefinition, string>();
+
+  for (const endpoint of endpoints) {
+    const route = `${endpoint.method} ${endpoint.path}`;
+    const owner = originByRoute.get(route);
+    const base = toIdentifierPart(endpoint.handler);
+    const qualified = `${toIdentifierPart(owner ?? 'host')}${base}`;
+
+    const candidate = [`${base}BodySchema`, `${qualified}BodySchema`].find(name => !taken.has(name));
+    if (!candidate) {
+      throw new Error(
+        `Cannot generate a unique schema export for ${route} (handler '${endpoint.handler}'): `
+        + `'${base}BodySchema' is already used by ${taken.get(`${base}BodySchema`)} and the `
+        + `plugin-qualified fallback '${qualified}BodySchema' is used by ${taken.get(`${qualified}BodySchema`)}. `
+        + `Rename one of the handlers.`,
+      );
+    }
+    taken.set(candidate, `${route} (handler '${endpoint.handler}')`);
+    names.set(endpoint, candidate);
+  }
+
+  return names;
+}
+
+async function cmdSchemas(args: string[]): Promise<void> {
+  const parsed = parseRouteArgs(args, 'schemas', ['format', 'module', 'out']);
+  const format = parsed.get('format') ?? 'json-schema';
+  const outFile = parsed.get('out');
+
+  if (format !== 'json-schema' && format !== 'zod')
+    throw new Error(`Unknown format: ${format}. Supported: json-schema, zod`);
+
+  await withRouteSurface(parsed.get('module'), ({ fortress, scopeNote, componentSchemas }) => {
+    const allSchemas = componentSchemas;
+
+    if (format === 'json-schema') {
+      // Fortress attaches a `~standard` validator to its schema objects; that
+      // is an internal runtime detail and must not appear in a published JSON
+      // Schema document.
+      const json = JSON.stringify(stripInternalSchemaFields(allSchemas), null, 2);
+      if (outFile) {
+        writeFileSync(outFile, json, 'utf-8');
+        console.log(`JSON Schema written to ${outFile}`);
+        console.log(`  ${Object.keys(allSchemas).length} component schemas`);
+      }
+      else {
+        process.stdout.write(json);
+      }
+      printScope(scopeNote, !outFile);
+      return;
+    }
+
+    const bodyEndpoints = fortress.endpoints.filter(ep => ep.input?.body);
+    const components = buildComponentIdentifiers(allSchemas);
+    const exportNames = resolveSchemaExportNames(bodyEndpoints, fortress.manifest, components);
+    const { eager, lazy } = orderComponents(allSchemas);
+
+    // Bodies are generated first so the preamble can be emitted only when
+    // something in the file actually needs it.
+    const ctx = createZodCodegenContext(components);
+    let declarations = '// ── Component Schemas ─────────────────────────────────────────────\n\n';
+    for (const name of eager) {
+      const body = jsonSchemaToZodCodegen(allSchemas[name], ctx, `component '${name}'`);
+      declarations += `export const ${components.get(name)!} = ${body};\n\n`;
+    }
+    if (lazy.length > 0) {
+      declarations += '// Recursive or mutually-referential schemas; deferred so each\n';
+      declarations += '// reference resolves after every declaration is in scope.\n\n';
+      for (const name of lazy) {
+        const body = jsonSchemaToZodCodegen(allSchemas[name], ctx, `component '${name}'`);
+        declarations += `export const ${components.get(name)!}: z.ZodTypeAny = z.lazy(() => ${body});\n\n`;
+      }
+    }
+
+    declarations += '// ── Endpoint Input Schemas ────────────────────────────────────────\n\n';
+    for (const ep of bodyEndpoints) {
+      const where = `${ep.method} ${ep.path} body`;
+      declarations += `export const ${exportNames.get(ep)!} = ${jsonSchemaToZodCodegen(ep.input!.body, ctx, where)};\n\n`;
+    }
 
     let output = '// Auto-generated by "fortress schemas --format zod" — do not edit manually\n';
     output += '// Requires: zod\n\n';
     output += 'import { z } from \'zod\';\n\n';
-
-    // Generate component schemas
-    output += '// ── Component Schemas ─────────────────────────────────────────────\n\n';
-    for (const [name, schema] of Object.entries(allSchemas)) {
-      output += `export const ${name}Schema = ${jsonSchemaToZodCodegen(schema as any)};\n\n`;
-    }
-
-    // Generate endpoint input schemas
-    output += '// ── Endpoint Input Schemas ────────────────────────────────────────\n\n';
-    for (const ep of allEndpoints) {
-      if (ep.input?.body) {
-        const handlerName = ep.handler.charAt(0).toUpperCase() + ep.handler.slice(1);
-        output += `export const ${handlerName}BodySchema = ${jsonSchemaToZodCodegen(ep.input.body)};\n\n`;
-      }
-    }
+    output += `${IDENTITY_HELPER}\n`;
+    if (ctx.usesJsonValue)
+      output += `${JSON_VALUE_HELPER}\n`;
+    if (ctx.usesExactlyOne)
+      output += `${EXACTLY_ONE_HELPER}\n`;
+    output += declarations;
 
     if (outFile) {
       writeFileSync(outFile, output, 'utf-8');
       console.log(`Zod schemas written to ${outFile}`);
-      console.log(`  ${Object.keys(allSchemas).length} component schemas, ${allEndpoints.filter((e: any) => e.input?.body).length} body schemas`);
+      console.log(`  ${Object.keys(allSchemas).length} component schemas, ${bodyEndpoints.length} body schemas`);
     }
     else {
       process.stdout.write(output);
     }
-    return;
-  }
-
-  console.error(`Unknown format: ${format}. Supported: json-schema, zod`);
-  process.exit(1);
+    printScope(scopeNote, !outFile);
+  });
 }
 
-/** Convert a JSON Schema object to Zod code string (codegen, not runtime). */
-function jsonSchemaToZodCodegen(schema: any): string {
-  if (schema.$ref) {
-    const name = schema.$ref.replace('#/components/schemas/', '');
-    return `${name}Schema`;
+/**
+ * The JSON Schema → Zod generator.
+ *
+ * Governing rule: never silently weaken a constraint. Application schemas now
+ * reach this through `--module`, so a keyword this cannot represent is an
+ * error rather than a quietly permissive `z.any()`. Composition keywords are
+ * folded together with their siblings instead of short-circuiting, because a
+ * schema may carry `allOf` *and* `properties`.
+ *
+ * Known residual: keywords outside the public `JSONSchema` type (`minItems`,
+ * `uniqueItems`, `multipleOf`, `patternProperties`, `not`, `if`/`then`/`else`)
+ * are ignored for raw JSON input.
+ */
+interface ZodCodegenContext {
+  components: ComponentIdentifiers;
+  /** Set when structured const/enum values need deep JSON equality. */
+  usesJsonValue: boolean;
+  /** Set when any emitted expression needs the exactly-one helper. */
+  usesExactlyOne: boolean;
+  /** Schemas on the current path, for cycle detection by object identity. */
+  path: Set<object>;
+}
+
+function createZodCodegenContext(components: ComponentIdentifiers): ZodCodegenContext {
+  return { components, usesJsonValue: false, usesExactlyOne: false, path: new Set() };
+}
+
+/** Emit a typed JavaScript expression for a JSON data value. */
+function jsonDataExpression(value: unknown, keyword: string, where: string, path = new Set<object>()): string {
+  if (value === null)
+    return 'null';
+  if (typeof value === 'string' || typeof value === 'boolean')
+    return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (Number.isFinite(value))
+      return String(value);
+    throw new TypeError(`Schema keyword '${keyword}' in ${where} must contain only finite JSON numbers.`);
+  }
+  if (typeof value !== 'object')
+    throw new TypeError(`Schema keyword '${keyword}' in ${where} must contain only JSON values.`);
+  if (path.has(value))
+    throw new TypeError(`Schema keyword '${keyword}' in ${where} contains a cycle.`);
+
+  path.add(value);
+  try {
+    if (Array.isArray(value))
+      return `([${value.map(item => jsonDataExpression(item, keyword, where, path)).join(', ')}] as const)`;
+    if (!isPlainRecord(value))
+      throw new TypeError(`Schema keyword '${keyword}' in ${where} must contain only plain JSON objects.`);
+    const fields = Object.keys(value).map(key =>
+      `${quotePropertyKey(key)}: ${jsonDataExpression(value[key], keyword, where, path)}`);
+    return `({ ${fields.join(', ')} } as const)`;
+  }
+  finally {
+    path.delete(value);
+  }
+}
+
+function generateJsonValueSchema(value: unknown, keyword: string, ctx: ZodCodegenContext, where: string): string {
+  const expression = jsonDataExpression(value, keyword, where);
+  if (value === null)
+    return 'z.null()';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+    return `z.literal(${expression})`;
+  ctx.usesJsonValue = true;
+  return `jsonValue(${expression})`;
+}
+
+/** Interpolate a numeric keyword, refusing anything that is not a finite number. */
+function numericLiteral(value: unknown, keyword: string, where: string): string | undefined {
+  if (value === undefined)
+    return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(
+      `Schema keyword '${keyword}' in ${where} must be a finite number (received ${JSON.stringify(value)}).`,
+    );
+  }
+  return String(value);
+}
+
+function unionOf(parts: string[]): string {
+  // `z.union([X])` with one member is a type error under zod v3.
+  return parts.length === 1 ? parts[0]! : `z.union([${parts.join(', ')}])`;
+}
+
+function intersectionOf(parts: string[]): string {
+  if (parts.length === 1)
+    return parts[0]!;
+  // Retain Zod's inferred intersection output while discarding its reconstructed
+  // value. validateIdentity returns the original input after every member passes.
+  const intersection = parts.reduce((left, right) => `z.intersection(${left}, ${right})`);
+  return `validateIdentity(${intersection})`;
+}
+
+function generateParts(branches: unknown, keyword: string, ctx: ZodCodegenContext, where: string): string[] {
+  if (!Array.isArray(branches) || branches.length === 0)
+    throw new Error(`Cannot generate Zod for ${where}: '${keyword}' is empty.`);
+  return branches.map((branch, index) => jsonSchemaToZodCodegen(branch, ctx, `${where} ${keyword}[${index}]`));
+}
+
+function generateObject(schema: any, ctx: ZodCodegenContext, where: string): string {
+  const additional = schema.additionalProperties;
+  const additionalIsSchema = isPlainRecord(additional);
+  const additionalExpression = additionalIsSchema
+    ? jsonSchemaToZodCodegen(additional, ctx, `${where} additionalProperties`)
+    : undefined;
+  const declaredPropertyNames = schema.properties ? Object.keys(schema.properties) : [];
+  const required = new Set<unknown>(Array.isArray(schema.required) ? schema.required : []);
+  const requiredPropertyNames = Array.from(required).filter((key): key is string => typeof key === 'string');
+  const propertyNames = [...new Set([...declaredPropertyNames, ...requiredPropertyNames])];
+
+  // A required name that properties does not declare is still required. If
+  // additional properties are forbidden, however, no object can satisfy both
+  // assertions.
+  if (additional === false && requiredPropertyNames.some(key => !declaredPropertyNames.includes(key)))
+    return 'z.never()';
+
+  let expression: string;
+  if (propertyNames.length === 0) {
+    if (additionalExpression)
+      expression = 'z.object({}).passthrough()';
+    else if (additional === false)
+      expression = 'z.object({}).strict()';
+    // An empty `properties: {}` used to emit `z.object({\n,\n})` — a syntax error.
+    // JSON Schema allows additional properties unless explicitly disabled.
+    else
+      expression = additional ? 'z.record(z.string(), z.any())' : 'z.object({}).passthrough()';
+  }
+  else {
+    const fields = propertyNames.map((key) => {
+      const declared = Object.hasOwn(schema.properties ?? {}, key);
+      const property = declared
+        ? jsonSchemaToZodCodegen(schema.properties[key], ctx, `${where}.${key}`)
+        : additionalExpression ?? 'z.any()';
+      // Property names come from application schemas and need not be valid
+      // identifiers — `first-name` and `2fa` are both legal JSON Schema.
+      return `  ${quotePropertyKey(key)}: ${required.has(key) ? property : `${property}.optional()`}`;
+    });
+
+    expression = `z.object({\n${fields.join(',\n')},\n})`;
+    if (additional === false)
+      expression += '.strict()';
+    else
+      // additionalProperties schemas are enforced by the explicit own-key
+      // check below. Passthrough keeps declared fields sound and types extras
+      // as unknown instead of producing the impossible T & Record<string, U>.
+      expression += '.passthrough()';
   }
 
-  if (schema.oneOf) {
-    const variants = schema.oneOf.map((s: any) => jsonSchemaToZodCodegen(s));
-    return `z.union([${variants.join(', ')}])`;
+  // Zod's unknown-key processing skips `__proto__` and non-enumerable own
+  // properties. Apply additionalProperties to every own string key before Zod
+  // reconstructs the object. Declared keys are handled by the object shape.
+  const declaredNames = JSON.stringify(declaredPropertyNames);
+  let additionalPropertyCheck: string | undefined;
+  if (additional === false) {
+    additionalPropertyCheck = `(value: unknown) => typeof value !== 'object' || value === null || Object.getOwnPropertyNames(value).every(key => new Set<string>(${declaredNames}).has(key))`;
+  }
+  else if (additionalExpression) {
+    additionalPropertyCheck = `(value: unknown) => typeof value !== 'object' || value === null || Object.getOwnPropertyNames(value).every(key => new Set<string>(${declaredNames}).has(key) || (${additionalExpression}).safeParse(Reflect.get(value, key)).success)`;
   }
 
-  if (schema.anyOf) {
-    const variants = schema.anyOf.map((s: any) => jsonSchemaToZodCodegen(s));
-    return `z.union([${variants.join(', ')}])`;
-  }
+  // JSON Schema validates data without transforming it. Zod object parsing
+  // rebuilds output objects and can lose an own `__proto__` property; it also
+  // reads inherited values when deciding whether a shape key is present. Copy
+  // own enumerable input keys onto a null-prototype object for validation, then
+  // return the untouched input through z.any(). This preserves output identity
+  // and makes required/optional checks depend on ownership, as JSON data does.
+  return `validateIdentity(${expression}, (value: unknown) =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? Object.defineProperties(Object.create(null), Object.getOwnPropertyDescriptors(value))
+    : value${additionalPropertyCheck ? `,\n${additionalPropertyCheck}` : ''})`;
+}
 
-  if (schema.enum) {
-    const values = schema.enum.map((v: any) => JSON.stringify(v));
-    return `z.enum([${values.join(', ')}])`;
-  }
-
-  switch (schema.type) {
+function generateForType(schema: any, type: string, ctx: ZodCodegenContext, where: string): string {
+  switch (type) {
     case 'string': {
-      let s = 'z.string()';
-      if (schema.format === 'email')
-        s += '.email()';
-      if (schema.format === 'uri')
-        s += '.url()';
-      if (schema.minLength)
-        s += `.min(${schema.minLength})`;
-      if (schema.maxLength)
-        s += `.max(${schema.maxLength})`;
-      if (schema.nullable)
-        s += '.nullable()';
-      return s;
+      let expression = 'z.string()';
+      if (typeof schema.pattern === 'string')
+        expression += `.regex(new RegExp(${JSON.stringify(schema.pattern)}))`;
+      const min = numericLiteral(schema.minLength, 'minLength', where);
+      if (min !== undefined)
+        expression += `.refine(value => [...value].length >= ${min}, { message: 'String is too short' })`;
+      const max = numericLiteral(schema.maxLength, 'maxLength', where);
+      if (max !== undefined)
+        expression += `.refine(value => [...value].length <= ${max}, { message: 'String is too long' })`;
+      return expression;
     }
     case 'number':
-      return schema.nullable ? 'z.number().nullable()' : 'z.number()';
-    case 'integer':
-      return schema.nullable ? 'z.number().int().nullable()' : 'z.number().int()';
+    case 'integer': {
+      let expression = type === 'integer' ? 'z.number().int()' : 'z.number()';
+      const min = numericLiteral(schema.minimum, 'minimum', where);
+      if (min !== undefined)
+        expression += `.min(${min})`;
+      const max = numericLiteral(schema.maximum, 'maximum', where);
+      if (max !== undefined)
+        expression += `.max(${max})`;
+      return expression;
+    }
     case 'boolean':
-      return schema.nullable ? 'z.boolean().nullable()' : 'z.boolean()';
+      return 'z.boolean()';
     case 'null':
       return 'z.null()';
     case 'array': {
-      const items = schema.items ? jsonSchemaToZodCodegen(schema.items) : 'z.any()';
-      return `z.array(${items})`;
-    }
-    case 'object': {
-      if (!schema.properties) {
-        return schema.additionalProperties ? 'z.record(z.string(), z.any())' : 'z.object({})';
+      if (Array.isArray(schema.items)) {
+        const members = schema.items.map((item: unknown, index: number) =>
+          jsonSchemaToZodCodegen(item, ctx, `${where}.items[${index}]`));
+        return `validateIdentity(z.tuple([${members.join(', ')}]))`;
       }
-      const required = new Set(schema.required ?? []);
-      const fields = Object.entries(schema.properties).map(([key, propSchema]: [string, any]) => {
-        const zodType = jsonSchemaToZodCodegen(propSchema);
-        return required.has(key) ? `  ${key}: ${zodType}` : `  ${key}: ${zodType}.optional()`;
-      });
-      return `z.object({\n${fields.join(',\n')},\n})`;
+      const items = schema.items
+        ? jsonSchemaToZodCodegen(schema.items, ctx, `${where}.items`)
+        : 'z.any()';
+      return `validateIdentity(z.array(${items}))`;
     }
+    case 'object':
+      return generateObject(schema, ctx, where);
     default:
-      return 'z.any()';
+      throw new Error(`Cannot generate Zod for ${where}: unsupported JSON Schema type '${type}'.`);
   }
+}
+
+/**
+ * Type-specific assertion keywords without a `type` sibling apply only when
+ * the instance has that JSON type. Emit conditional refinements so `$ref`,
+ * `const`, and `enum` can still combine with standalone bounds.
+ */
+function generateUntypedAssertions(
+  schema: any,
+  ctx: ZodCodegenContext,
+  where: string,
+): string | undefined {
+  const refinements: string[] = [];
+
+  if (schema.pattern !== undefined) {
+    if (typeof schema.pattern !== 'string')
+      throw new TypeError(`Schema keyword 'pattern' in ${where} must be a string.`);
+    refinements.push(`.refine((value: unknown) => typeof value !== 'string' || new RegExp(${JSON.stringify(schema.pattern)}).test(value), { message: 'String does not match pattern' })`);
+  }
+  const minLength = numericLiteral(schema.minLength, 'minLength', where);
+  if (minLength !== undefined)
+    refinements.push(`.refine((value: unknown) => typeof value !== 'string' || [...value].length >= ${minLength}, { message: 'String is too short' })`);
+  const maxLength = numericLiteral(schema.maxLength, 'maxLength', where);
+  if (maxLength !== undefined)
+    refinements.push(`.refine((value: unknown) => typeof value !== 'string' || [...value].length <= ${maxLength}, { message: 'String is too long' })`);
+
+  const minimum = numericLiteral(schema.minimum, 'minimum', where);
+  if (minimum !== undefined)
+    refinements.push(`.refine((value: unknown) => typeof value !== 'number' || value >= ${minimum}, { message: 'Number is too small' })`);
+  const maximum = numericLiteral(schema.maximum, 'maximum', where);
+  if (maximum !== undefined)
+    refinements.push(`.refine((value: unknown) => typeof value !== 'number' || value <= ${maximum}, { message: 'Number is too large' })`);
+
+  // Object assertion keywords are conditional in JSON Schema: they constrain
+  // objects and are ignored for strings, numbers, arrays, booleans, and null.
+  if (schema.properties !== undefined || schema.required !== undefined || schema.additionalProperties !== undefined) {
+    const object = generateObject(schema, ctx, where);
+    refinements.push(`.refine((value: unknown) => typeof value !== 'object' || value === null || Array.isArray(value) || (${object}).safeParse(value).success, { message: 'Object assertions failed' })`);
+  }
+
+  // `items` similarly applies only to arrays. Parsing inside a refinement
+  // checks element assertions without transforming the original value.
+  if (schema.items !== undefined) {
+    const array = generateForType(schema, 'array', ctx, where);
+    refinements.push(`.refine((value: unknown) => !Array.isArray(value) || (${array}).safeParse(value).success, { message: 'Array items failed validation' })`);
+  }
+
+  // `unknown` composes without erasing a typed $ref/composition sibling's
+  // inferred output. `any & T` would collapse z.infer back to unsafe any.
+  return refinements.length > 0 ? `z.unknown()${refinements.join('')}` : undefined;
+}
+
+/** The schema's own type/shape constraints, ignoring independent keywords. */
+function generateOwn(schema: any, ctx: ZodCodegenContext, where: string): string | undefined {
+  if (Array.isArray(schema.type)) {
+    throw new TypeError(
+      `Cannot generate Zod for ${where}: JSONSchema.type arrays are not supported by Fortress's public schema subset; use oneOf/anyOf or nullable instead.`,
+    );
+  }
+
+  if (typeof schema.type === 'string')
+    return generateForType(schema, schema.type, ctx, where);
+
+  return generateUntypedAssertions(schema, ctx, where);
+}
+
+function jsonSchemaToZodCodegen(schema: any, ctx: ZodCodegenContext, where: string): string {
+  if (typeof schema !== 'object' || schema === null)
+    throw new Error(`Cannot generate Zod for ${where}: expected a schema object, got ${JSON.stringify(schema)}.`);
+
+  if (ctx.path.has(schema)) {
+    throw new Error(
+      `Schema for ${where} contains a reference cycle; use a local $ref `
+      + `('#/components/schemas/<name>') instead of a self-referential object.`,
+    );
+  }
+  ctx.path.add(schema);
+  try {
+    // Schema objects are application input and may have polluted/custom
+    // prototypes. Only own keywords participate in JSON Schema evaluation.
+    const ownSchema = Object.defineProperties(
+      Object.create(null),
+      Object.getOwnPropertyDescriptors(schema),
+    );
+    return applyNullable(buildZodExpression(ownSchema, ctx, where), ownSchema);
+  }
+  finally {
+    ctx.path.delete(schema);
+  }
+}
+
+function applyNullable(expression: string, schema: any): string {
+  return schema.nullable === true ? `${expression}.nullable()` : expression;
+}
+
+function buildZodExpression(schema: any, ctx: ZodCodegenContext, where: string): string {
+  // Every assertion keyword is one member of the same intersection. JSON
+  // Schema 2020-12 applies siblings next to `$ref`, `const`, and `enum`; none
+  // of them may short-circuit the rest of the schema.
+  const members: string[] = [];
+
+  // `'$ref' in schema`, not `schema.$ref`: an empty-string ref is falsy and
+  // used to fall through to `z.any()`, silently accepting everything.
+  if ('$ref' in schema) {
+    const parsed = parseSchemaRef(schema.$ref);
+    if (parsed.kind === 'malformed')
+      throw new Error(`Invalid $ref '${String(schema.$ref)}': ${parsed.reason}.`);
+    if (parsed.kind !== 'component') {
+      throw new Error(
+        `Cannot generate Zod for $ref '${String(schema.$ref)}': `
+        + `only '#/components/schemas/<name>' refs are supported.`,
+      );
+    }
+    const identifier = ctx.components.get(parsed.name);
+    if (!identifier) {
+      throw new Error(
+        `Schema references undefined component '${parsed.name}'. `
+        + `Export it from your module as 'componentSchemas'.`,
+      );
+    }
+    members.push(identifier);
+  }
+
+  // Presence checks matter: `const: null` and `const: 0` are both falsy.
+  if ('const' in schema)
+    members.push(generateJsonValueSchema(schema.const, 'const', ctx, where));
+
+  if (schema.enum !== undefined) {
+    if (!Array.isArray(schema.enum))
+      throw new TypeError(`Schema keyword 'enum' in ${where} must be an array.`);
+    if (schema.enum.length === 0) {
+      members.push('z.never()');
+    }
+    else if (schema.enum.every((value: unknown) => typeof value === 'string')) {
+      members.push(`z.enum([${schema.enum.map((value: unknown) => JSON.stringify(value)).join(', ')}])`);
+    }
+    else {
+      // z.enum only accepts string members. Primitive values use literals;
+      // structured JSON values require deep equality rather than identity.
+      members.push(unionOf(schema.enum.map((value: unknown) =>
+        generateJsonValueSchema(value, 'enum', ctx, where))));
+    }
+  }
+
+  // Composition keywords combine with each other and with the schema's own
+  // constraints rather than short-circuiting past them.
+  if (schema.allOf !== undefined)
+    members.push(...generateParts(schema.allOf, 'allOf', ctx, where));
+  if (schema.anyOf !== undefined)
+    members.push(unionOf(generateParts(schema.anyOf, 'anyOf', ctx, where)));
+  if (schema.oneOf !== undefined) {
+    const parts = generateParts(schema.oneOf, 'oneOf', ctx, where);
+    if (parts.length === 1) {
+      members.push(parts[0]!);
+    }
+    else {
+      // JSON Schema `oneOf` is exactly-one; z.union is any-match.
+      ctx.usesExactlyOne = true;
+      members.push(`matchExactlyOne(${parts.join(', ')})`);
+    }
+  }
+
+  const own = generateOwn(schema, ctx, where);
+  if (own !== undefined)
+    members.push(own);
+
+  if (members.length === 0)
+    return 'z.any()';
+  return intersectionOf(members);
 }
 
 // --- Main ---
@@ -771,16 +1950,16 @@ async function main(): Promise<void> {
       cmdGenerateSecret();
       break;
     case 'openapi':
-      cmdOpenAPI(args.slice(1));
+      await cmdOpenAPI(args.slice(1));
       break;
     case 'schemas':
-      cmdSchemas(args.slice(1));
+      await cmdSchemas(args.slice(1));
       break;
     case 'manifest':
-      cmdManifest(args.slice(1));
+      await cmdManifest(args.slice(1));
       break;
     case 'manifest:check':
-      cmdManifestCheck();
+      await cmdManifestCheck(args.slice(1), 'manifest:check');
       break;
     case 'migrate:status':
       cmdMigrateStatus(args.slice(1));
@@ -801,10 +1980,10 @@ async function main(): Promise<void> {
       cmdMigrateCheck(args.slice(1));
       break;
     case 'check:routes':
-      cmdManifestCheck();
+      await cmdManifestCheck(args.slice(1), 'check:routes');
       break;
     case 'check:public-routes':
-      cmdCheckPublicRoutes(args.slice(1));
+      await cmdCheckPublicRoutes(args.slice(1));
       break;
     case 'check:migrations':
       cmdMigrateCheck(args.slice(1));

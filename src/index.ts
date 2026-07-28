@@ -159,6 +159,8 @@ export type { DetectRouteManifestDriftOptions, RouteManifestDrift } from './core
 
 export { buildRouteManifest } from './core/manifest/route-manifest';
 export type { RouteClassification, RouteManifestEntry } from './core/manifest/route-manifest';
+export { describeRouteSurface } from './core/manifest/route-surface';
+export type { RouteSurface } from './core/manifest/route-surface';
 /** Fortress schema migration metadata and runner helpers. */
 export { detectMigrationDrift, getMigrationStatus, hasMigrationDrift, migrateDown, migrateUp } from './core/migrations/engine';
 export type { MigrationApplyResult, MigrationDownResult, MigrationDrift, MigrationStatus } from './core/migrations/engine';

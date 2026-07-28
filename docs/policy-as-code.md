@@ -140,7 +140,7 @@ console.log(`Policy in sync (${policy.roles?.length ?? 0} role(s), ${policy.serv
 ```
 
 Run it as a step in `.github/workflows/fortress-ci.yml` alongside
-`fortress manifest:check` and `fortress migrate:check`.
+`fortress manifest:check --module <path>` and `fortress migrate:check`.
 
 ## API reference
 

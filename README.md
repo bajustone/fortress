@@ -757,20 +757,37 @@ See [Observability](docs/observability.md).
 fortress init
 fortress generate-secret
 fortress sync:types
-fortress openapi --out openapi.json
-fortress schemas --format json-schema --out schemas.json
-fortress manifest --out route-manifest.json
-fortress manifest:check
-fortress check:public-routes
+fortress openapi --module ./fortress.config.ts --out openapi.json
+fortress schemas --module ./fortress.config.ts --format json-schema --out schemas.json
+fortress manifest --module ./fortress.config.ts --out route-manifest.json
+fortress manifest:check --module ./fortress.config.ts
+fortress check:public-routes --module ./fortress.config.ts
 fortress migrate:status --dialect pg       # bundled catalog status
 fortress migrate:check --dialect pg        # bundled catalog validation
-fortress migrate:up --module ./src/fortress.ts
+fortress migrate:up --module ./fortress.migrate.ts   # needs a real instance
 fortress migrate:export --dialect pg --direction up --out fortress-pg.sql
 fortress policy:summary
 ```
 
-`migrate:up` is the live migration command and requires an explicit trusted
-module with a named `fortress` export. `migrate:export` emits deterministic SQL
+`openapi`, `schemas`, `manifest`, `manifest:check` (alias `check:routes`), and
+`check:public-routes` take `--module <path>`, pointing at a module that exports
+your configuration as `export const config`. That is what makes them cover your
+plugin and host-owned routes. The route surface is derived from the config
+without calling `createFortress()`, so no Fortress instance is created and no
+plugin's `methods()` factory runs — relevant because plugins do real work in
+that factory (the webhook queue runs a startup recovery sweep there). Keep such a
+module free of side effects at import time. A configured instance exported as
+`export const fortress` is also accepted, at the cost of constructing your app.
+Export `componentSchemas` to add your own reusable schemas to `openapi` and
+`schemas` output.
+
+**Omit `--module` and they only cover Fortress's own auth and IAM routes** —
+useful for checking Fortress itself, but a pass says nothing about your routes.
+Every one of them prints its scope. `fortress init` scaffolds a
+`fortress.config.ts` in the shape these commands expect.
+
+`migrate:up` is the live migration command and needs a real instance, so it
+requires an explicit trusted module with a named `fortress` export. `migrate:export` emits deterministic SQL
 for review or external tooling; it does not run JavaScript data steps and is not
 a substitute for the live command. `migrate:down` remains a deprecated alias
 for down-SQL export, not a live rollback command. Live drift checks use

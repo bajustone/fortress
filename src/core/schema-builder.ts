@@ -4,6 +4,7 @@ import type { StandardSchemaV1 } from './standard-schema';
 import { fromJSONSchema } from '@bajustone/fetcher/openapi';
 import { date as fDate, datetime as fDatetime, email as fEmail, time as fTime, url as fUrl, uuid as fUuid } from '@bajustone/fetcher/schema';
 import { isHttpMethod } from './endpoint';
+import { assertComponentName } from './openapi-ref';
 
 /** Shorthands for the Standard Schema wire-input and validated-output types. */
 type InferSchemaInput<T extends StandardSchemaV1> = StandardSchemaV1.InferInput<T>;
@@ -116,13 +117,8 @@ function refName(refPath: string): string {
 
 // OpenAPI 3.x component-map keys are restricted to this grammar. Rejecting
 // unsupported names is safer than emitting an ambiguous JSON Pointer that
-// silently resolves to a different final path segment.
-const COMPONENT_NAME_RE = /^[\w.-]+$/;
-
-function assertComponentName(name: string): void {
-  if (!COMPONENT_NAME_RE.test(name))
-    throw new Error(`Invalid OpenAPI component name '${name}'`);
-}
+// silently resolves to a different final path segment. Shared with the CLI's
+// `--module` path so both accept the same names.
 
 /**
  * Build the definitions map fed to `fromJSONSchema`, resolving each `$ref`
