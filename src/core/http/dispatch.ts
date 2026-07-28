@@ -18,14 +18,31 @@
  * form-encoded bodies and Basic-auth client authentication.
  */
 
-import type { ClientAuth } from '../../plugins/oauth';
+import type { ClientAuth, TokenRequestBody } from '../../plugins/oauth';
+import type { AuthEndpointsMap } from '../auth/auth-endpoints';
 import type { FortressRuntime } from '../capabilities';
-import type { EndpointDefinition } from '../endpoint';
-import type { PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
-import type { RequestMeta, Subject, TokenClaims } from '../types';
+import type {
+  EndpointDefinition,
+  InferEndpointBody,
+} from '../endpoint';
+import type { IamEndpointsMap } from '../iam/iam-endpoints';
+import type { PluginMethod, PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
+import type { PluginCapability } from '../plugin-methods-map';
+import type {
+  CreateUserInput,
+  LoginIdentifierType,
+  PermissionCondition,
+  PermissionContext,
+  PermissionInput,
+  RequestMeta,
+  Subject,
+  SubjectType,
+  TokenClaims,
+} from '../types';
 import type { ValidatedRequestData } from '../validation';
 import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
+import { resolvePluginCapability } from '../plugin-methods-map';
 
 /** Auth context resolved by `handleRequest` before dispatch. */
 export interface DispatchAuth {
@@ -77,11 +94,11 @@ export async function dispatchEndpoint(
   // params remain separate for the existing positional service calls.
   const bodyAndQuery = { ...body, ...query };
   if (endpoint.path.startsWith('/auth/')) {
-    const result = await invokeAuthHandler(fortress, endpoint.handler, bodyAndQuery, params as Record<string, string>, auth);
+    const result = await invokeAuthHandler(fortress, endpoint.handler, bodyAndQuery, params, auth);
     return jsonResponse(result, endpointSuccessStatus(endpoint));
   }
   if (endpoint.path.startsWith('/iam/')) {
-    const result = await invokeIamHandler(fortress, endpoint.handler, bodyAndQuery, params as Record<string, string>);
+    const result = await invokeIamHandler(fortress, endpoint.handler, bodyAndQuery, params);
     return jsonResponse(result, endpointSuccessStatus(endpoint));
   }
 
@@ -135,6 +152,12 @@ function parseBearerToken(header: string | null): string | undefined {
 
 // ── Plugin dispatch (non-oauth) ─────────────────────────────────────
 
+function isPluginMethodRecord(value: unknown): value is Record<string, PluginMethod> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return false;
+  return Object.values(value).every(method => typeof method === 'function');
+}
+
 /** Find the plugin (if any) that owns the given endpoint. */
 function findOwningPlugin(fortress: FortressRuntime, endpoint: EndpointDefinition): RuntimeFortressPlugin | undefined {
   const plugins = fortress.config.plugins ?? [];
@@ -159,23 +182,23 @@ async function dispatchPlugin(
   request: Request,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const registry = fortress.plugins as Record<string, Record<string, unknown>>;
-  const methods = Object.hasOwn(registry, plugin.name) ? registry[plugin.name] : undefined;
-  const method = methods && Object.hasOwn(methods, endpoint.handler) ? methods[endpoint.handler] : undefined;
-  if (typeof method !== 'function') {
-    throw Errors.notFound(`Plugin handler '${plugin.name}.${endpoint.handler}' not found`);
-  }
-
-  // Call as `methods.<handler>(...)` so the `this` binding is preserved —
-  // some plugin methods reference sibling helpers via `this`.
-  // OpenAPI Scalar UI returns HTML, not JSON.
+  // OpenAPI Scalar UI returns HTML, not JSON. Use the named capability so
+  // this core-owned route cannot silently drift from the plugin contract.
   if (plugin.name === 'openapi' && endpoint.handler === 'getUI') {
-    const html = method.call(methods) as string;
+    const html = resolvePluginCapability(fortress, 'openapi', 'getUI').getUI();
     return new Response(html, {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   }
+
+  const methods = fortress.resolvePlugin(plugin.name, isPluginMethodRecord);
+  const method = Object.hasOwn(methods, endpoint.handler) ? methods[endpoint.handler] : undefined;
+  if (typeof method !== 'function')
+    throw Errors.notFound(`Plugin handler '${plugin.name}.${endpoint.handler}' not found`);
+
+  // Call as `methods.<handler>(...)` so the `this` binding is preserved —
+  // some plugin methods reference sibling helpers via `this`.
 
   const ctx: PluginRouteContext = {
     subject: auth.subject,
@@ -204,24 +227,22 @@ async function dispatchOAuth(
   endpoint: EndpointDefinition,
   auth: DispatchAuth,
 ): Promise<Response> {
-  const registry = fortress.plugins as Record<string, Record<string, unknown>>;
-  const methods = Object.hasOwn(registry, 'oauth') ? registry.oauth : undefined;
-  if (!methods)
-    throw Errors.notFound(`OAuth plugin not registered`);
   const handlerName = endpoint.handler;
-  if (!Object.hasOwn(methods, handlerName) || typeof methods[handlerName] !== 'function')
-    throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
-
-  // IMPORTANT: invoke as `methods.<name>(...)` so the `this` binding is the
-  // methods object — the OAuth plugin's `handleTokenRequest` calls
-  // `this.clientCredentialsGrant(...)` and friends, which would otherwise
-  // throw "Cannot read properties of undefined" if called bare.
-  const m = methods as Record<string, (...args: unknown[]) => Promise<unknown> | unknown>;
+  let methods: PluginCapability<'oauth'>;
+  try {
+    methods = resolvePluginCapability(fortress, 'oauth', handlerName);
+  }
+  catch (error) {
+    if (error instanceof FortressError && error.code === 'BAD_REQUEST')
+      throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
+    throw error;
+  }
+  const m = methods;
   const authHeader = request.headers.get('authorization');
 
   switch (handlerName) {
     case 'handleTokenRequest': {
-      const body = await parseFormBody(request);
+      const body = parseTokenRequestBody(await parseFormBody(request));
       const clientAuth = parseBasicAuth(authHeader);
       const result = await m.handleTokenRequest(body, clientAuth);
       return jsonResponse(result, 200);
@@ -265,7 +286,7 @@ async function dispatchOAuth(
           401,
         );
       }
-      const claims = await m.handleUserInfoRequest(bearer) as Record<string, unknown>;
+      const claims = await m.handleUserInfoRequest(bearer);
       return jsonResponse(claims, 200);
     }
     case 'handleDiscovery': {
@@ -291,9 +312,7 @@ async function dispatchOAuth(
       // Reads query params, optionally identifies the user, then 302s to
       // either the configured loginUrl or consentUrl with `?flow=<id>`.
       const query = Object.fromEntries(new URL(request.url).searchParams);
-      const result = (await m.handleAuthorizeRequest(query, { userId: auth.userId })) as {
-        redirectUrl: string;
-      };
+      const result = await m.handleAuthorizeRequest(query, { userId: auth.userId });
       return new Response(null, {
         status: 302,
         headers: { Location: result.redirectUrl },
@@ -335,13 +354,8 @@ async function dispatchOAuth(
       const result = await m.handleDenyFlow(flowId, { userId: auth.userId });
       return jsonResponse(result, 200);
     }
-    default: {
-      // Authorize endpoint and friends — JSON body. Call through `m` so the
-      // `this` binding survives.
-      const body = (await request.json().catch(() => ({}))) as unknown;
-      const result = await m[handlerName](body);
-      return jsonResponse(result, endpointSuccessStatus(endpoint));
-    }
+    default:
+      throw Errors.notFound(`OAuth handler '${handlerName}' not found`);
   }
 }
 
@@ -359,13 +373,157 @@ function consentFlowIdFromUrl(url: string): string {
   return decodeURIComponent(match[1]);
 }
 
-// ── Auth / IAM hardcoded dispatch ────────────────────────────────────
+// ── Auth / IAM dispatch ──────────────────────────────────────────────
+
+/** Validated body types are derived from the endpoint maps, not re-declared here. */
+type AuthBody<K extends keyof AuthEndpointsMap> = InferEndpointBody<AuthEndpointsMap[K]>;
+type IamBody<K extends keyof IamEndpointsMap> = InferEndpointBody<IamEndpointsMap[K]>;
+type PermissionWire = IamBody<'createRole'>['permissions'][number];
+
+function validationFailure(field: string): never {
+  throw Errors.validationError([{
+    path: [field],
+    message: `Invalid ${field}`,
+  }]);
+}
+
+function requiredString(value: unknown, field: string): string {
+  return typeof value === 'string' ? value : validationFailure(field);
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined)
+    return undefined;
+  return requiredString(value, field);
+}
+
+function optionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined)
+    return undefined;
+  return typeof value === 'boolean' ? value : validationFailure(field);
+}
+
+function optionalNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined)
+    return undefined;
+  return typeof value === 'number' && Number.isFinite(value) ? value : validationFailure(field);
+}
+
+function optionalNullableString(value: unknown, field: string): string | null | undefined {
+  if (value === undefined || value === null)
+    return value;
+  return requiredString(value, field);
+}
+
+function parseTokenRequestBody(value: Record<string, string>): TokenRequestBody {
+  return {
+    grant_type: requiredString(value.grant_type, 'grant_type'),
+    code: optionalString(value.code, 'code'),
+    redirect_uri: optionalString(value.redirect_uri, 'redirect_uri'),
+    client_id: optionalString(value.client_id, 'client_id'),
+    client_secret: optionalString(value.client_secret, 'client_secret'),
+    code_verifier: optionalString(value.code_verifier, 'code_verifier'),
+    scope: optionalString(value.scope, 'scope'),
+    refresh_token: optionalString(value.refresh_token, 'refresh_token'),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseCreateUserInput(value: Record<string, unknown>): AuthBody<'createUser'> {
+  const input: CreateUserInput = {
+    email: requiredString(value.email, 'email'),
+    name: requiredString(value.name, 'name'),
+  };
+  const password = optionalString(value.password, 'password');
+  const isActive = optionalBoolean(value.isActive, 'isActive');
+  if (password !== undefined)
+    input.password = password;
+  if (isActive !== undefined)
+    input.isActive = isActive;
+  return input;
+}
+
+function parseLoginIdentifierType(value: unknown): LoginIdentifierType {
+  if (value === 'email' || value === 'phone' || value === 'username')
+    return value;
+  return validationFailure('type');
+}
+
+function parseSubjectType(value: unknown): SubjectType {
+  if (value === 'USER' || value === 'GROUP' || value === 'SERVICE_ACCOUNT')
+    return value;
+  return validationFailure('subjectType');
+}
+
+function isPermissionWire(value: unknown): value is PermissionWire {
+  if (!isRecord(value)
+    || typeof value.resource !== 'string'
+    || typeof value.action !== 'string'
+    || (value.effect !== undefined && value.effect !== 'ALLOW' && value.effect !== 'DENY')) {
+    return false;
+  }
+  if (value.conditions === undefined) {
+    return true;
+  }
+  return Array.isArray(value.conditions) && value.conditions.every((condition) => {
+    if (!isRecord(condition)
+      || typeof condition.field !== 'string'
+      || (condition.operator !== 'eq' && condition.operator !== 'neq' && condition.operator !== 'in' && condition.operator !== 'startsWith')) {
+      return false;
+    }
+    return typeof condition.value === 'string';
+  });
+}
+
+function parsePermissionInput(value: unknown): PermissionInput {
+  if (!isPermissionWire(value))
+    return validationFailure('permission');
+  const permission: PermissionInput = {
+    resource: value.resource,
+    action: value.action,
+  };
+  if (value.effect !== undefined)
+    permission.effect = value.effect;
+  if (value.conditions !== undefined) {
+    permission.conditions = value.conditions.map(condition => ({
+      field: condition.field,
+      operator: condition.operator,
+      value: condition.value,
+    } satisfies PermissionCondition));
+  }
+  return permission;
+}
+
+function parsePermissionInputs(value: unknown): PermissionInput[] {
+  if (!Array.isArray(value) || !value.every(isPermissionWire))
+    return validationFailure('permissions');
+  return value.map(parsePermissionInput);
+}
+
+function parsePermissionContext(value: unknown): PermissionContext {
+  if (value === undefined)
+    return {};
+  if (!isRecord(value))
+    return validationFailure('context');
+  const context: PermissionContext = {};
+  if (value.tenantId !== undefined)
+    context.tenantId = requiredString(value.tenantId, 'context.tenantId');
+  if (value.request !== undefined) {
+    if (!isRecord(value.request))
+      return validationFailure('context.request');
+    context.request = value.request;
+  }
+  return context;
+}
 
 async function invokeAuthHandler(
   fortress: FortressRuntime,
   handler: string,
   body: Record<string, unknown>,
-  params: Record<string, string>,
+  params: Record<string, unknown>,
   auth: DispatchAuth,
 ): Promise<unknown> {
   const meta = auth.meta;
@@ -376,22 +534,34 @@ async function invokeAuthHandler(
         ...(typeof body.trustedDeviceToken === 'string' ? { trustedDeviceToken: body.trustedDeviceToken } : {}),
       });
     case 'verifyTwoFactor': {
-      const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)['two-factor'];
-      if (!methods?.verify)
-        throw Errors.badRequest('Two-factor plugin is not configured');
+      let methods: PluginCapability<'two-factor'>;
+      try {
+        methods = resolvePluginCapability(fortress, 'two-factor', 'verify');
+      }
+      catch (error) {
+        if (error instanceof FortressError && (error.code === 'NOT_FOUND' || error.code === 'BAD_REQUEST'))
+          throw Errors.badRequest('Two-factor plugin is not configured');
+        throw error;
+      }
       return methods.verify(String(body.continuationToken ?? ''), String(body.code ?? ''), {
         ...meta,
         ...(body.rememberDevice === true ? { rememberDevice: true } : {}),
       });
     }
     case 'verifyMagicLink': {
-      const methods = (fortress.plugins as Record<string, Record<string, (...args: unknown[]) => unknown>>)['magic-link'];
-      if (!methods?.verify)
-        throw Errors.badRequest('Magic-link plugin is not configured');
+      let methods: PluginCapability<'magic-link'>;
+      try {
+        methods = resolvePluginCapability(fortress, 'magic-link', 'verify');
+      }
+      catch (error) {
+        if (error instanceof FortressError && (error.code === 'NOT_FOUND' || error.code === 'BAD_REQUEST'))
+          throw Errors.badRequest('Magic-link plugin is not configured');
+        throw error;
+      }
       return methods.verify(String(body.token ?? ''), meta);
     }
     case 'createUser':
-      return fortress.auth.createUser(body as never);
+      return fortress.auth.createUser(parseCreateUserInput(body));
     case 'refresh':
       return fortress.auth.refresh(String(body.refreshToken ?? ''), meta);
     case 'logout':
@@ -402,7 +572,7 @@ async function invokeAuthHandler(
     case 'listSessions':
       return fortress.auth.listSessions(requireUserId(auth));
     case 'revokeSession':
-      await fortress.auth.revokeSession(requireUserId(auth), params.id);
+      await fortress.auth.revokeSession(requireUserId(auth), requiredString(params.id, 'id'));
       return { ok: true };
     case 'revokeAllOtherSessions':
       await fortress.auth.revokeAllOtherSessions(requireUserId(auth), String(body.currentTokenId ?? ''));
@@ -410,23 +580,23 @@ async function invokeAuthHandler(
     case 'addLoginIdentifier':
       await fortress.auth.addLoginIdentifier(
         requireUserId(auth),
-        body.type as never,
-        String(body.value ?? ''),
+        parseLoginIdentifierType(body.type),
+        requiredString(body.value, 'value'),
       );
       return { ok: true };
     case 'removeLoginIdentifier':
       await fortress.auth.removeLoginIdentifier(
         requireUserId(auth),
-        body.type as never,
-        String(body.value ?? ''),
+        parseLoginIdentifierType(body.type),
+        requiredString(body.value, 'value'),
       );
       return { ok: true };
     case 'getLoginIdentifiers':
       return fortress.auth.getLoginIdentifiers(requireUserId(auth));
     case 'impersonate':
-      return fortress.auth.impersonate(requireUserId(auth), String(body.targetUserId ?? ''), {
-        reason: body.reason as string | undefined,
-        expirySeconds: body.expirySeconds as number | undefined,
+      return fortress.auth.impersonate(requireUserId(auth), requiredString(body.targetUserId, 'targetUserId'), {
+        reason: optionalString(body.reason, 'reason'),
+        expirySeconds: optionalNumber(body.expirySeconds, 'expirySeconds'),
       });
     default:
       throw Errors.notFound(`Auth handler '${handler}' not found`);
@@ -437,7 +607,7 @@ async function invokeIamHandler(
   fortress: FortressRuntime,
   handler: string,
   body: Record<string, unknown>,
-  params: Record<string, string>,
+  params: Record<string, unknown>,
 ): Promise<unknown> {
   switch (handler) {
     case 'getResources':
@@ -446,164 +616,154 @@ async function invokeIamHandler(
       return fortress.iam.getRoles();
     case 'createRole':
       return fortress.iam.createRole(
-        String(body.name ?? ''),
-        body.permissions as never,
-        body.description as string | undefined,
+        requiredString(body.name, 'name'),
+        parsePermissionInputs(body.permissions),
+        optionalString(body.description, 'description'),
       );
     case 'deleteRole':
-      await fortress.iam.deleteRole(params.id);
+      await fortress.iam.deleteRole(requiredString(params.id, 'id'));
       return { ok: true };
     case 'bindRoleToUser':
       await fortress.iam.bindRoleToUser(
-        String(body.userId ?? ''),
-        params.id,
-        body.tenantId as string | undefined,
+        requiredString(body.userId, 'userId'),
+        requiredString(params.id, 'id'),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'bindRoleToGroup':
       await fortress.iam.bindRoleToGroup(
-        String(body.groupId ?? ''),
-        params.id,
-        body.tenantId as string | undefined,
+        requiredString(body.groupId, 'groupId'),
+        requiredString(params.id, 'id'),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'unbindRole':
       await fortress.iam.unbindRole(
-        body.subjectType as never,
-        String(body.subjectId ?? ''),
-        params.id,
-        body.tenantId as string | undefined,
+        parseSubjectType(body.subjectType),
+        requiredString(body.subjectId, 'subjectId'),
+        requiredString(params.id, 'id'),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'createGroup':
       return fortress.iam.createGroup(
-        String(body.name ?? ''),
-        body.description as string | undefined,
+        requiredString(body.name, 'name'),
+        optionalString(body.description, 'description'),
       );
     case 'addUserToGroup':
-      await fortress.iam.addUserToGroup(params.id, String(body.userId ?? ''));
+      await fortress.iam.addUserToGroup(requiredString(params.id, 'id'), requiredString(body.userId, 'userId'));
       return { ok: true };
     case 'removeUserFromGroup':
-      await fortress.iam.removeUserFromGroup(params.id, params.userId);
+      await fortress.iam.removeUserFromGroup(requiredString(params.id, 'id'), requiredString(params.userId, 'userId'));
       return { ok: true };
     case 'getUserPermissions':
       return fortress.iam.getPermissionsForSubject(
-        { type: 'USER', id: params.id },
-        body.tenantId as string | undefined,
+        { type: 'USER', id: requiredString(params.id, 'id') },
+        optionalString(body.tenantId, 'tenantId'),
       );
     case 'checkPermission': {
       // Accept either the new `{ subject: { type, id } }` shape or the
       // legacy `{ userId }` shape. Defaulting to USER keeps this backwards
       // compatible for callers that haven't migrated yet — step 10 updates
       // the endpoint body schema to the new shape.
-      const subjectIn = body.subject as { type?: string; id?: string } | undefined;
-      const subject: Subject = subjectIn?.type && subjectIn?.id != null
-        ? { type: subjectIn.type as 'USER' | 'GROUP' | 'SERVICE_ACCOUNT', id: String(subjectIn.id) }
-        : { type: 'USER' as const, id: String(body.userId ?? '') };
-      // M7 fix: sanitize caller-supplied context before forwarding to the
-      // evaluator. `/iam/check` is an admin diagnostic; we must NOT let a
-      // caller widen credentialScopes (which would let any caller answer
-      // "yes" by passing scopes:['*']) nor satisfy ownership conditions by
-      // forging `resource.ownerId === user.id`. The narrowed shape allows
-      // only `request.*` (truly request-scoped data the caller could have
-      // supplied in a real request anyway).
-      const rawCtx = body.context as Record<string, unknown> | undefined;
-      const safeCtx: { tenantId?: string; request?: Record<string, unknown> } = {};
-      if (rawCtx?.tenantId !== undefined && typeof rawCtx.tenantId === 'string')
-        safeCtx.tenantId = rawCtx.tenantId;
-      if (rawCtx?.request && typeof rawCtx.request === 'object')
-        safeCtx.request = rawCtx.request as Record<string, unknown>;
+      const subjectIn = isRecord(body.subject) ? body.subject : undefined;
+      const subject: Subject = subjectIn
+        ? { type: parseSubjectType(subjectIn.type), id: requiredString(subjectIn.id, 'subject.id') }
+        : { type: 'USER', id: requiredString(body.userId, 'userId') };
+      // Sanitize caller-supplied context before forwarding to the evaluator.
+      // The diagnostic route must not accept credential scopes or forged user
+      // and resource data from JSON.
       const allowed = await fortress.iam.checkPermission(
         subject,
-        String(body.resource ?? ''),
-        String(body.action ?? ''),
-        safeCtx as never,
+        requiredString(body.resource, 'resource'),
+        requiredString(body.action, 'action'),
+        parsePermissionContext(body.context),
       );
       return { allowed };
     }
     case 'bindPermissionToUser':
       await fortress.iam.bindPermissionToUser(
-        String(body.userId ?? ''),
-        body.permission as never,
-        body.tenantId as string | undefined,
+        requiredString(body.userId, 'userId'),
+        parsePermissionInput(body.permission),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'bindPermissionToGroup':
       await fortress.iam.bindPermissionToGroup(
-        String(body.groupId ?? ''),
-        body.permission as never,
-        body.tenantId as string | undefined,
+        requiredString(body.groupId, 'groupId'),
+        parsePermissionInput(body.permission),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'unbindPermissionFromUser':
       await fortress.iam.unbindPermissionFromUser(
-        String(body.userId ?? ''),
-        String(body.permissionId ?? ''),
-        body.tenantId as string | undefined,
+        requiredString(body.userId, 'userId'),
+        requiredString(body.permissionId, 'permissionId'),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'unbindPermissionFromGroup':
       await fortress.iam.unbindPermissionFromGroup(
-        String(body.groupId ?? ''),
-        String(body.permissionId ?? ''),
-        body.tenantId as string | undefined,
+        requiredString(body.groupId, 'groupId'),
+        requiredString(body.permissionId, 'permissionId'),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
 
     // ── Service Accounts ──────────────────────────────────────────
     case 'createServiceAccount':
       return fortress.iam.createServiceAccount({
-        name: String(body.name ?? ''),
-        displayName: body.displayName as string | undefined,
-        description: body.description as string | undefined,
+        name: requiredString(body.name, 'name'),
+        displayName: optionalString(body.displayName, 'displayName'),
+        description: optionalString(body.description, 'description'),
       });
     case 'listServiceAccounts':
       return fortress.iam.listServiceAccounts({
-        limit: body.limit != null ? Number(body.limit) : undefined,
-        offset: body.offset != null ? Number(body.offset) : undefined,
+        limit: optionalNumber(body.limit, 'limit'),
+        offset: optionalNumber(body.offset, 'offset'),
       });
     case 'getServiceAccount':
-      return fortress.iam.getServiceAccount(params.id);
+      return fortress.iam.getServiceAccount(requiredString(params.id, 'id'));
     case 'updateServiceAccount':
-      return fortress.iam.updateServiceAccount(params.id, {
-        displayName: body.displayName as string | null | undefined,
-        description: body.description as string | null | undefined,
-        isActive: body.isActive as boolean | undefined,
+      return fortress.iam.updateServiceAccount(requiredString(params.id, 'id'), {
+        displayName: optionalNullableString(body.displayName, 'displayName'),
+        description: optionalNullableString(body.description, 'description'),
+        isActive: optionalBoolean(body.isActive, 'isActive'),
       });
     case 'deleteServiceAccount':
-      await fortress.iam.deleteServiceAccount(params.id);
+      await fortress.iam.deleteServiceAccount(requiredString(params.id, 'id'));
       return { ok: true };
     case 'getServiceAccountPermissions':
       return fortress.iam.getPermissionsForSubject(
-        { type: 'SERVICE_ACCOUNT', id: params.id },
-        body.tenantId as string | undefined,
+        { type: 'SERVICE_ACCOUNT', id: requiredString(params.id, 'id') },
+        optionalString(body.tenantId, 'tenantId'),
       );
     case 'bindRoleToServiceAccount':
       await fortress.iam.bindRoleToServiceAccount(
-        String(body.serviceAccountId ?? ''),
-        params.id,
-        body.tenantId as string | undefined,
+        requiredString(body.serviceAccountId, 'serviceAccountId'),
+        requiredString(params.id, 'id'),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'unbindRoleFromServiceAccount':
       await fortress.iam.unbindRoleFromServiceAccount(
-        String(body.serviceAccountId ?? ''),
-        params.id,
-        body.tenantId as string | undefined,
+        requiredString(body.serviceAccountId, 'serviceAccountId'),
+        requiredString(params.id, 'id'),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'bindPermissionToServiceAccount':
       await fortress.iam.bindPermissionToServiceAccount(
-        String(body.serviceAccountId ?? ''),
-        body.permission as never,
-        body.tenantId as string | undefined,
+        requiredString(body.serviceAccountId, 'serviceAccountId'),
+        parsePermissionInput(body.permission),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
     case 'unbindPermissionFromServiceAccount':
       await fortress.iam.unbindPermissionFromServiceAccount(
-        String(body.serviceAccountId ?? ''),
-        String(body.permissionId ?? ''),
-        body.tenantId as string | undefined,
+        requiredString(body.serviceAccountId, 'serviceAccountId'),
+        requiredString(body.permissionId, 'permissionId'),
+        optionalString(body.tenantId, 'tenantId'),
       );
       return { ok: true };
 

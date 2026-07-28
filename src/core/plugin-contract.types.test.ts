@@ -19,7 +19,7 @@ import type {
   InferEndpointValidatedInput,
 } from './endpoint';
 import type { FortressPlugin, PluginRouteContext } from './plugin';
-import type { InferPlugins } from './plugin-methods-map';
+import type { InferPlugins, PluginCapability } from './plugin-methods-map';
 import type { StandardSchemaV1 } from './standard-schema';
 import { describe, expect, it } from 'vitest';
 import { admin } from '../plugins/admin';
@@ -66,6 +66,14 @@ export type TenancyContract = Assert<Has<Surface<typeof tenancy>, 'tenancy', 'cr
 export type TwoFactorContract = Assert<Has<Surface<typeof twoFactor>, 'two-factor', 'enable'>>;
 export type WebAuthnContract = Assert<Has<Surface<typeof webauthn>, 'webauthn', 'generateRegistrationOptions'>>;
 export type WebhookContract = Assert<Has<Surface<typeof webhook>, 'webhook', 'emit'>>;
+
+/** Core dispatch capabilities retain the concrete plugin method signatures. */
+export type DispatchCapabilityContracts = [
+  Assert<Equal<Parameters<PluginCapability<'two-factor'>['verify']>[0], string>>,
+  Assert<Equal<Parameters<PluginCapability<'magic-link'>['verify']>[0], string>>,
+  Assert<Equal<Parameters<PluginCapability<'oauth'>['handleUserInfoRequest']>[0], string>>,
+  Assert<Equal<ReturnType<PluginCapability<'openapi'>['getUI']>, string>>,
+];
 
 export type BuiltInUnknownMethodContracts = [
   Assert<Lacks<Surface<typeof accountLockout>, 'account-lockout', 'missing'>>,

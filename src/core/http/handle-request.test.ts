@@ -1,5 +1,5 @@
 import type { EndpointDefinition } from '../endpoint';
-import type { FortressPlugin, PluginRouteContext } from '../plugin';
+import type { FortressPlugin, PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
@@ -201,6 +201,28 @@ describe('fortress.handleRequest', () => {
       expect(res.status).toBe(422);
       const body = await res.json() as { code: string };
       expect(body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('returns an actionable 4xx when a required plugin capability is missing', async () => {
+      const incompleteTwoFactor = {
+        name: 'two-factor',
+        methods: () => ({}),
+      } as unknown as RuntimeFortressPlugin;
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [incompleteTwoFactor] as const,
+      });
+      const res = await local.handleRequest(new Request('http://localhost/auth/2fa/verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ continuationToken: 'token', code: '123456' }),
+      }));
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Two-factor plugin is not configured',
+      });
     });
   });
 
