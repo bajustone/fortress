@@ -59,7 +59,8 @@ Route command scope:
   check:public-routes cover only Fortress's own auth + IAM routes unless you
   pass --module <path>. Point them at a module exporting your 'config' to
   include your plugin and host-owned routes; the route surface is derived
-  without calling createFortress(), so no plugin worker starts. A module
+  without calling createFortress(), so no Fortress instance is created and no
+  plugin methods() factory runs. A module
   exporting a configured 'fortress' instance also works, at the cost of
   constructing your app. Optional exports: 'componentSchemas', 'dispose'.
 

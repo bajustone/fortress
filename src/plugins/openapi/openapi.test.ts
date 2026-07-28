@@ -43,6 +43,15 @@ describe('spec-builder path parameters', () => {
     })).toThrow(/literal segment '\{id\}'/);
   });
 
+  it('rejects a wildcard segment the router expands but OpenAPI cannot express', () => {
+    // '/files/*' serves '/files/report.pdf' at runtime. Emitting it verbatim
+    // would document a literal '/files/*' path no client can call.
+    expect(() => buildOpenAPISpec([pathEndpoint('/files/*', 'getFile')], {}, {
+      title: 'T',
+      version: '1.0.0',
+    })).toThrow(/wildcard segment '\*'/);
+  });
+
   it('rejects braces inside a :param suffix', () => {
     // The whole suffix is the parameter name, so '/:a{b}' would emit the
     // invalid path '/{a{b}}' and parameter 'a{b}' if braces were not rejected.

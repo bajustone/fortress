@@ -119,6 +119,16 @@ function buildOpenAPIPath(
 
   const rendered = parsePathSegments(path).map((segment) => {
     if (segment.param === undefined) {
+      // The router matches a bare '*' against any single segment, so '/files/*'
+      // serves '/files/report.pdf'. OpenAPI has no equivalent; emitting it
+      // verbatim would document a literal '/files/*' path that no client can
+      // call and hide every path the route actually serves. Fail closed.
+      if (segment.raw === '*') {
+        throw new Error(
+          `Route path '${path}' has a wildcard segment '*', which matches any single segment at `
+          + `runtime and cannot be represented in OpenAPI. Use a ':name' path parameter instead.`,
+        );
+      }
       if (segment.raw.includes('{') || segment.raw.includes('}')) {
         throw new Error(
           `Route path '${path}' has a literal segment '${segment.raw}' containing '{' or '}'. `

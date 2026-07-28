@@ -42,9 +42,23 @@ describe('parseSchemaRef', () => {
     '../schemas/common.json',
     'https://example.test/schemas.json#/Thing',
     'https://[2001:db8::1]:443/schemas.json',
+    // RFC 3986 IPvFuture permits every `unreserved` character, '~' included.
+    'http://[v1.foo~bar]/schema',
+    'http://[v7.a-b._c~d:e]/schema',
     '//example.test/schemas.json',
     'urn:example:fortress',
   ])('accepts valid external URI-reference %s', (ref) => {
     expect(parseSchemaRef(ref)).toEqual({ kind: 'external' });
+  });
+
+  it('rejects a plain-name $anchor fragment as unsupported, not as an RFC violation', () => {
+    // '#thing' is a valid URI fragment and a legal JSON Schema $anchor; it is
+    // outside the supported subset, so it must fail closed with an accurate
+    // reason rather than being reported as malformed syntax.
+    const parsed = parseSchemaRef('#thing');
+    expect(parsed).toEqual(expect.objectContaining({ kind: 'malformed' }));
+    expect(parsed).toEqual(expect.objectContaining({
+      reason: expect.stringContaining('$anchor references are not supported'),
+    }));
   });
 });

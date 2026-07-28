@@ -1228,6 +1228,25 @@ describe('fortress CLI smoke tests', () => {
     expect(`${masked.stdout}\n${masked.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
   }, 30_000);
 
+  it('refuses to emit an OpenAPI document for a wildcard route', () => {
+    // '/files/*' matches '/files/report.pdf' at runtime. Emitting it verbatim
+    // would document a literal '/files/*' path no client can call, while every
+    // path the route actually serves goes undocumented — so fail closed.
+    writeFileSync(join(cwd, 'wildcard-route.ts'), `
+      export const config = {
+        database: undefined,
+        jwt: { key: 'wildcard-route-secret-at-least-32-chars' },
+        routes: { getFile: { method: 'GET', path: '/files/*', handler: 'getFile',
+          meta: { summary: 'Serve a file', permission: { resource: 'file', action: 'read' } },
+          responses: { 200: { description: 'ok' } } } },
+      };
+    `);
+    const wildcard = runCli(cwd, ['openapi', '--module', './wildcard-route.ts']);
+    expect(wildcard.status, String(wildcard.stdout)).toBe(1);
+    expect(wildcard.stderr).toContain(`wildcard segment '*'`);
+    expect(`${wildcard.stdout}\n${wildcard.stderr}`).not.toMatch(RUNTIME_ERROR_RE);
+  }, 30_000);
+
   it('refuses to emit an OpenAPI document with duplicate operation IDs', () => {
     writeAppModule(cwd, 'opid-module.ts', { collide: true });
 

@@ -7,6 +7,12 @@
  * JSON Schema, so ref parsing has to be exact: validation, dependency
  * ordering, and code generation must all agree on which component a given
  * `$ref` denotes, or one of them silently disagrees with the others.
+ *
+ * Scope: local refs are supported as JSON Pointer fragments (RFC 6901);
+ * external refs are checked for URI-reference syntax (RFC 3986). A plain-name
+ * `$anchor` fragment (`#thing`) is valid JSON Schema but outside the supported
+ * subset — it is rejected explicitly rather than guessed at, which is a
+ * support boundary, not an RFC violation.
  */
 
 /** OpenAPI 3.1 §4.8.7: Components Object keys MUST match this. */
@@ -40,7 +46,9 @@ const URI_SCHEME_PREFIX_RE = /^[a-z][a-z\d+.-]*:/i;
 const INVALID_PERCENT_ESCAPE_RE = /%(?![\da-f]{2})/i;
 const URI_PORT_SUFFIX_RE = /^:\d*$/;
 const URI_PORT_RE = /^\d*$/;
-const URI_IP_FUTURE_RE = /^v[\da-f]+\.[\w.!$&'()*+,;=:-]+$/i;
+// RFC 3986 IPvFuture: "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" ).
+// `unreserved` includes '~', so it must be permitted here.
+const URI_IP_FUTURE_RE = /^v[\da-f]+\.[\w.!$&'()*+,;=:~-]+$/i;
 const URI_SPECIAL_CHARACTERS = new Set(`-._~:/?#[]@!$&'()*+,;=%`);
 
 function decodeReferenceToken(token: string): { value: string } | { reason: string } {
@@ -146,8 +154,15 @@ export function parseSchemaRef(ref: unknown): ParsedRef {
   const fragment = ref.slice(1);
   if (fragment === '')
     return { kind: 'other-local', tokens: [] };
-  if (!fragment.startsWith('/'))
-    return { kind: 'malformed', reason: `fragment must start with '/', got '${fragment}'` };
+  // A plain-name fragment is a legal JSON Schema `$anchor`, but `$anchor` is
+  // not part of the supported subset and nothing here can resolve it. Reject
+  // it as unsupported rather than silently treating it as a pointer.
+  if (!fragment.startsWith('/')) {
+    return {
+      kind: 'malformed',
+      reason: `fragment '#${fragment}' is not a JSON Pointer; $anchor references are not supported`,
+    };
+  }
 
   // Split on literal '/' before decoding: a percent-encoded %2F is data, not a
   // separator, and decoding first would invent a segment boundary.
