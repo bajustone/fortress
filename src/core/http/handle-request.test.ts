@@ -535,6 +535,76 @@ describe('fortress.handleRequest', () => {
     });
   });
 
+  describe('oauth dispatch selection', () => {
+    // Bespoke OAuth dispatch is selected by route metadata, not by the owning
+    // plugin's name alone, so an ordinary route on an oauth-named plugin keeps
+    // the normal plugin calling convention instead of hitting the closed
+    // protocol switch.
+    it('sends an ordinary route on an oauth-named plugin through plugin dispatch', async () => {
+      const custom = definePlugin({
+        name: 'oauth',
+        methods: () => ({
+          customRoute: (input: { note?: string }) => ({ ok: input.note ?? 'default' }),
+        }),
+        routes: {
+          customRoute: endpoint('GET', '/oauth/custom')
+            .security('none')
+            .response(200, 'Custom', obj({ ok: str() }, 'ok'))
+            .handler('customRoute')
+            .build(),
+        },
+      });
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [custom] as const,
+      });
+
+      const res = await local.handleRequest(new Request('http://localhost/oauth/custom?note=hi'));
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({ ok: 'hi' });
+    });
+
+    // Consent routes are marked with `dispatchKind` rather than `bearerKind`,
+    // so they must still reach the positional OAuth convention — a flowId
+    // string, not the merged request object plugin dispatch would pass.
+    it('keeps dispatchKind-marked consent routes on the positional OAuth convention', async () => {
+      const local = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [oauth({ enableConsentApi: true })] as const,
+      });
+      await local.auth.createUser({ email: 'flow@b.co', name: 'Flow', password: 'password1234567' });
+      const login = await local.handleRequest(new Request('http://localhost/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ identifier: 'flow@b.co', password: 'password1234567' }),
+      }));
+      const { accessToken } = await login.json() as AuthBody;
+
+      const client = await local.plugins.oauth.createClient({
+        name: 'Consent client',
+        redirectUris: ['https://client.example/callback'],
+        grantTypes: ['authorization_code'],
+      });
+      const { flowId } = await local.plugins.oauth.createPendingFlow({
+        clientId: client.clientId,
+        redirectUri: 'https://client.example/callback',
+        scope: 'openid',
+        state: 'state-value',
+      });
+
+      const res = await local.handleRequest(new Request(`http://localhost/oauth/flows/${flowId}`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }));
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({
+        flowId: String(flowId),
+        redirectUri: 'https://client.example/callback',
+      });
+    });
+  });
+
   describe('plugin success serialization', () => {
     const responseShapes = definePlugin({
       name: 'response-shapes',

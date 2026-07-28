@@ -75,9 +75,10 @@ export async function dispatchEndpoint(
   input: ValidatedRequestData,
   auth: DispatchAuth,
 ): Promise<DispatchResult> {
-  // OAuth endpoints get form-encoded body parsing + Basic auth handling.
+  // OAuth protocol/consent routes get form-encoded body parsing + Basic auth
+  // handling. Ordinary routes on the same plugin take the normal path.
   const owningPlugin = findOwningPlugin(fortress, endpoint);
-  if (owningPlugin?.name === 'oauth') {
+  if (owningPlugin && isOAuthDispatchRoute(owningPlugin, endpoint)) {
     return dispatchOAuth(fortress, request, endpoint, auth);
   }
 
@@ -178,6 +179,17 @@ function isPluginMethodRecord(value: unknown): value is Record<string, PluginMet
   if (value === null || typeof value !== 'object' || Array.isArray(value))
     return false;
   return Object.values(value).every(method => typeof method === 'function');
+}
+
+/**
+ * Whether a route uses OAuth's bespoke positional dispatch. Both the owning
+ * plugin name and the route marker are required: `dispatchOAuth` resolves its
+ * capabilities under the literal name `oauth`, so matching on metadata alone
+ * would dispatch another plugin's route against this plugin's methods.
+ */
+function isOAuthDispatchRoute(plugin: RuntimeFortressPlugin, endpoint: EndpointDefinition): boolean {
+  return plugin.name === 'oauth'
+    && (endpoint.meta?.bearerKind === 'oauth' || endpoint.meta?.dispatchKind === 'oauth');
 }
 
 /** Find the plugin (if any) that owns the given endpoint. */
