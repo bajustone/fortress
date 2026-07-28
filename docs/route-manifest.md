@@ -32,9 +32,9 @@ fortress manifest:check --module ./fortress.config.ts
 
 `--module` points at a module exporting your configuration as
 `export const config`. The manifest is derived from it without calling
-`createFortress()`, so no plugin is constructed and no plugin worker starts. A
-module exporting a configured instance as `export const fortress` is also
-accepted — that is what `migrate:up` requires — but it means importing the
+`createFortress()`, so no Fortress instance is created and no plugin `methods()`
+factory runs. A module exporting a configured instance as `export const fortress`
+is also accepted — that is what `migrate:up` requires — but it means importing the
 module constructs your application. An optional `dispose()` export is awaited
 when the command finishes.
 

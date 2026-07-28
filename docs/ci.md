@@ -65,9 +65,9 @@ bun run generate:migrations --check  # Fortress-repository SQL artifact parity
 
 The module should export your configuration as `export const config`. The CLI
 derives the route surface from it directly and **never calls
-`createFortress()`**, so no plugin is constructed and no plugin worker starts.
-That matters: constructing an instance runs every plugin's `methods()` factory,
-and plugins do real work there — the webhook plugin's queue, for example, runs
+`createFortress()`**, so no Fortress instance is created and no plugin
+`methods()` factory runs. That matters: constructing an instance runs that
+factory, and plugins do real work there — the webhook plugin's queue, for example, runs
 a startup recovery sweep that queries pending deliveries and can dispatch them.
 `fortress init` scaffolds a `fortress.config.ts` in exactly this shape.
 
