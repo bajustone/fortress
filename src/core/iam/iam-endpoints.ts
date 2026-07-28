@@ -3,7 +3,7 @@ import type { EndpointDefinition } from '../endpoint';
 import type { FortressSchema } from '../json-schema';
 import { authRef } from '../auth/auth-endpoints';
 import { defineEndpoints } from '../define-endpoints';
-import { arr, bool, defineComponents, endpoint, enums, id, int, nullable, obj, oneOf, record, recordOf, str } from '../schema-builder';
+import { arr, bool, defineComponents, endpoint, enums, id, int, nullable, obj, oneOf, record, recordOf, str, strict } from '../schema-builder';
 
 // Sentinel for "no body / query / params" matching EndpointDefinition's default.
 
@@ -550,10 +550,16 @@ export const iamEndpoints: IamEndpointsMap = defineEndpoints({
     .tags('IAM', 'Permissions')
     .security('bearer')
     .permission('fortress', 'viewPermissions')
-    // `oneOf` is exactly-one, so a body carrying both `userId` and `subject`
-    // matches both arms and is rejected, as is a body carrying neither.
+    // Exactly one of `userId` and `subject`. `oneOf` alone is not enough:
+    // open branches let a malformed counterpart (`subject: null`, or a
+    // non-string `userId`) disqualify one arm so the other matches alone and
+    // the body is accepted, contradicting the `?: never` union. Neither
+    // `not` nor an empty `enum` is enforced by the runtime validator, and
+    // `not` additionally trips the OpenAPI drift gate, so both branches are
+    // closed instead. The cost is that this endpoint no longer tolerates
+    // undeclared extra properties.
     .body(oneOf(
-      obj(
+      strict(obj(
         {
           userId: id('User ID'),
           resource: str('Resource name'),
@@ -563,8 +569,8 @@ export const iamEndpoints: IamEndpointsMap = defineEndpoints({
         'userId',
         'resource',
         'action',
-      ),
-      obj(
+      )),
+      strict(obj(
         {
           subject: obj(
             {
@@ -581,7 +587,7 @@ export const iamEndpoints: IamEndpointsMap = defineEndpoints({
         'subject',
         'resource',
         'action',
-      ),
+      )),
     ))
     .response(200, 'Permission check result', obj({ allowed: bool('Whether permission is granted') }, 'allowed'))
     .response(401, 'Not authenticated', authRef('ErrorResponse'))

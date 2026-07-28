@@ -237,8 +237,18 @@ describe('fortress.handleRequest', () => {
     it.each([
       ['neither userId nor subject', { resource: 'post', action: 'read' }],
       ['both userId and subject', { userId: 'user-1', subject: { type: 'USER', id: 'user-2' }, resource: 'post', action: 'read' }],
+      // A malformed counterpart must not disqualify one branch and let the
+      // other match alone; open branches accepted both of these.
+      ['a null subject alongside userId', { userId: 'user-1', subject: null, resource: 'post', action: 'read' }],
+      ['a non-string userId alongside subject', { subject: { type: 'USER', id: 'user-1' }, userId: 123, resource: 'post', action: 'read' }],
     ])('rejects a body carrying %s', async (_label, body) => {
       const { res } = await callCheck(body);
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({ code: 'VALIDATION_ERROR' });
+    });
+
+    it('rejects undeclared properties, the cost of closing both branches', async () => {
+      const { res } = await callCheck({ userId: 'user-1', resource: 'post', action: 'read', trace: 'x' });
       expect(res.status).toBe(422);
       await expect(res.json()).resolves.toMatchObject({ code: 'VALIDATION_ERROR' });
     });

@@ -756,6 +756,7 @@ describe('createFortress', () => {
     it('documents the permission check body as an exactly-one identity union', () => {
       interface Branch {
         required?: string[];
+        additionalProperties?: boolean;
         properties?: Record<string, { properties?: Record<string, { enum?: string[] }> }>;
       }
       const fortress = createFortress({
@@ -777,6 +778,10 @@ describe('createFortress', () => {
       // makes a body carrying both match both arms and fail `oneOf`.
       expect(legacy!.required).not.toContain('subject');
       expect(subject!.required).not.toContain('userId');
+      // Both branches must be closed. While they were open, a malformed
+      // counterpart disqualified one arm and the body was accepted.
+      expect(legacy!.additionalProperties).toBe(false);
+      expect(subject!.additionalProperties).toBe(false);
       expect(subject!.properties!.subject.properties!.type.enum)
         .toEqual(['USER', 'GROUP', 'SERVICE_ACCOUNT']);
     });
