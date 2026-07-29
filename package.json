@@ -371,7 +371,7 @@
     "check:consumer-contract": "bun run check:consumer-contract:source && bun run check:built-package",
     "check:declarations": "bun run check:consumer-contract:package",
     "check:declarations:ts50": "bun run check:built-package-artifacts && npx --yes --package typescript@5.0.4 tsc -p scripts/tsconfig.consumer-package.json",
-    "check:deno-outbound-types": "npx --yes deno@2.9.4 check scripts/fixtures/deno-outbound-headers.ts",
+    "check:deno-outbound-types": "npx --yes deno@2.6.5 check scripts/fixtures/deno-outbound-headers.ts",
     "check:jsr-publication": "node scripts/check-jsr-publication.mjs",
     "check:jsr": "bun run check:deno-outbound-types && bun run check:jsr-publication",
     "check:testing-esm": "bun run check:built-package-artifacts && node scripts/check-testing-esm.mjs",
