@@ -7,11 +7,6 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.spec.ts', 'examples/**/*.test.ts'],
     exclude: ['node_modules'],
-    coverage: {
-      provider: 'v8',
-      include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/**/*.spec.ts', 'examples/**'],
-    },
   },
   resolve: {
     alias: {

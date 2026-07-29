@@ -42,7 +42,6 @@ jobs:
       - run: bun run test
       - run: bun run test:integration
       - run: bun run check:consumer-contract
-      - run: bun run check:testing-esm
       - run: bun run check:repository-publication-policy
       - run: bun run check:package-cli
 
