@@ -1,7 +1,7 @@
 import type { DatabaseAdapter } from '../../adapters/database';
 import type { FortressUser } from '../../core/types';
 import type { ProviderProfile } from './types';
-import { exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { exportJWK, exportPKCS8, generateKeyPair, SignJWT } from 'jose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { socialLogin } from './index';
@@ -19,11 +19,11 @@ interface SocialLoginMethods {
 }
 
 // Stub a full custom-OIDC callback: discovery + a validly-signed id_token +
-// the matching token/userinfo/jwks responses. Each call MUST use a distinct
-// `issuer` — the plugin caches the remote JWKS by jwksUri at module scope, so
-// reusing an issuer across tests would verify a fresh keypair against a stale
-// cached key. `emailVerified` is set on both the id_token and userinfo claims
-// so the merged profile carries it faithfully.
+// the matching token/userinfo/jwks responses. Each call uses a distinct
+// `issuer` so concurrent stubs cannot collide; cross-instance JWKS reuse is no
+// longer a hazard, since caches belong to the plugin instance (#26).
+// `emailVerified` is set on both the id_token and userinfo claims so the merged
+// profile carries it faithfully.
 async function stubOidcProvider(opts: { issuer: string; email: string; emailVerified: boolean; sub: string }): Promise<void> {
   const { publicKey, privateKey } = await generateKeyPair('RS256');
   const jwk = await exportJWK(publicKey);
@@ -90,6 +90,227 @@ describe('social-login plugin', () => {
   describe('getProviders', () => {
     it('returns configured provider names', () => {
       expect(methods.getProviders()).toEqual(['google', 'github']);
+    });
+  });
+
+  describe('provider cache scoping (#26)', () => {
+    const callbackArgs = ['code', 'https://app.com/callback', 'verifier', 'state', 'state', 'nonce'] as const;
+
+    interface ScopedMethods extends SocialLoginMethods {
+      resetProviderCaches: () => void;
+    }
+
+    function makeInstance(issuer: string): ScopedMethods {
+      const plugin = socialLogin({
+        providers: [{ name: 'oidc-scoped', clientId: 'oidc-client', clientSecret: 'secret', issuer }],
+        autoRegister: true,
+        linkAccounts: true,
+        tokenEncryptionKey,
+      });
+      return plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as ScopedMethods;
+    }
+
+    /**
+     * Like `stubOidcProvider`, but counts upstream fetches and can rotate the
+     * signing key while keeping the same `kid`. Same-kid rotation is what makes
+     * a stale JWKS observable: jose only refetches when it sees an unknown kid,
+     * so a shared cache would keep verifying against the superseded key.
+     */
+    async function stubCountingOidcProvider(opts: { issuer: string; sub: string; email: string }): Promise<{
+      counts: { discovery: number; jwks: number };
+      rotateSigningKey: () => Promise<void>;
+    }> {
+      const kid = 'rotating-kid';
+      const counts = { discovery: 0, jwks: 0 };
+      let jwk: Record<string, unknown> = {};
+      let idToken = '';
+
+      async function useNewKeyPair(): Promise<void> {
+        const { publicKey, privateKey } = await generateKeyPair('RS256');
+        jwk = { ...await exportJWK(publicKey), kid, alg: 'RS256', use: 'sig' };
+        idToken = await new SignJWT({ sub: opts.sub, email: opts.email, email_verified: true, nonce: 'nonce' })
+          .setProtectedHeader({ alg: 'RS256', kid })
+          .setIssuer(opts.issuer)
+          .setAudience('oidc-client')
+          .setIssuedAt()
+          .setExpirationTime('5m')
+          .sign(privateKey);
+      }
+
+      await useNewKeyPair();
+
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const href = input instanceof Request ? input.url : String(input);
+        if (href === `${opts.issuer}/.well-known/openid-configuration`) {
+          counts.discovery += 1;
+          return Response.json({
+            issuer: opts.issuer,
+            authorization_endpoint: `${opts.issuer}/authorize`,
+            token_endpoint: `${opts.issuer}/token`,
+            userinfo_endpoint: `${opts.issuer}/userinfo`,
+            jwks_uri: `${opts.issuer}/jwks`,
+          });
+        }
+        if (href === `${opts.issuer}/token`)
+          return Response.json({ access_token: 'provider-access-token', id_token: idToken });
+        if (href === `${opts.issuer}/userinfo`)
+          return Response.json({ sub: opts.sub, email: opts.email, email_verified: true });
+        if (href === `${opts.issuer}/jwks`) {
+          counts.jwks += 1;
+          return Response.json({ keys: [jwk] });
+        }
+        throw new Error(`unexpected fetch ${href}`);
+      }));
+
+      return { counts, rotateSigningKey: useNewKeyPair };
+    }
+
+    it('keeps discovery state separate between two instances sharing an issuer', async () => {
+      const issuer = 'https://issuer-isolation.example.com';
+      const stub = await stubCountingOidcProvider({ issuer, sub: 'isolation-sub', email: 'isolation@example.com' });
+
+      const first = makeInstance(issuer);
+      const second = makeInstance(issuer);
+
+      await first.handleCallback('oidc-scoped', ...callbackArgs);
+      expect(stub.counts.discovery).toBe(1);
+
+      // A module-level cache would let the second instance reuse the first's
+      // document and never reach the provider.
+      await second.handleCallback('oidc-scoped', ...callbackArgs);
+      expect(stub.counts.discovery).toBe(2);
+      expect(stub.counts.jwks).toBe(2);
+    });
+
+    it('verifies a rotated signing key in a second instance on the same JWKS URL', async () => {
+      const issuer = 'https://issuer-rotation.example.com';
+      const stub = await stubCountingOidcProvider({ issuer, sub: 'rotation-sub', email: 'rotation@example.com' });
+
+      const before = makeInstance(issuer);
+      await before.handleCallback('oidc-scoped', ...callbackArgs);
+
+      await stub.rotateSigningKey();
+
+      const after = makeInstance(issuer);
+      const result = await after.handleCallback('oidc-scoped', ...callbackArgs);
+      expect(result.profile.id).toBe('rotation-sub');
+    });
+
+    it('does not cache failed or semantically invalid discovery', async () => {
+      const issuer = 'https://issuer-invalid-discovery.example.com';
+      const { publicKey, privateKey } = await generateKeyPair('RS256');
+      const kid = 'recovery-kid';
+      const jwk = { ...await exportJWK(publicKey), kid, alg: 'RS256', use: 'sig' };
+      const idToken = await new SignJWT({ sub: 'recovery-sub', email: 'recovery@example.com', email_verified: true, nonce: 'nonce' })
+        .setProtectedHeader({ alg: 'RS256', kid })
+        .setIssuer(issuer)
+        .setAudience('oidc-client')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(privateKey);
+
+      let discoveryAttempts = 0;
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const href = input instanceof Request ? input.url : String(input);
+        if (href === `${issuer}/.well-known/openid-configuration`) {
+          discoveryAttempts += 1;
+          // First response advertises a different issuer, which must be rejected
+          // as untrusted and, critically, must not be retained.
+          return Response.json({
+            issuer: discoveryAttempts === 1 ? 'https://attacker.example.com' : issuer,
+            authorization_endpoint: `${issuer}/authorize`,
+            token_endpoint: `${issuer}/token`,
+            userinfo_endpoint: `${issuer}/userinfo`,
+            jwks_uri: `${issuer}/jwks`,
+          });
+        }
+        if (href === `${issuer}/token`)
+          return Response.json({ access_token: 'provider-access-token', id_token: idToken });
+        if (href === `${issuer}/userinfo`)
+          return Response.json({ sub: 'recovery-sub', email: 'recovery@example.com', email_verified: true });
+        if (href === `${issuer}/jwks`)
+          return Response.json({ keys: [jwk] });
+        throw new Error(`unexpected fetch ${href}`);
+      }));
+
+      const instance = makeInstance(issuer);
+
+      await expect(instance.handleCallback('oidc-scoped', ...callbackArgs)).rejects.toThrow();
+      expect(discoveryAttempts).toBe(1);
+
+      // The degraded result was evicted, so the retry re-resolves and succeeds.
+      const recovered = await instance.handleCallback('oidc-scoped', ...callbackArgs);
+      expect(recovered.profile.id).toBe('recovery-sub');
+      expect(discoveryAttempts).toBe(2);
+    });
+
+    it('resetProviderCaches forces fresh discovery and JWKS resolution', async () => {
+      const issuer = 'https://issuer-reset.example.com';
+      const stub = await stubCountingOidcProvider({ issuer, sub: 'reset-sub', email: 'reset@example.com' });
+      const instance = makeInstance(issuer);
+
+      await instance.handleCallback('oidc-scoped', ...callbackArgs);
+      expect(stub.counts).toEqual({ discovery: 1, jwks: 1 });
+
+      await instance.handleCallback('oidc-scoped', ...callbackArgs);
+      expect(stub.counts).toEqual({ discovery: 1, jwks: 1 });
+
+      instance.resetProviderCaches();
+
+      await instance.handleCallback('oidc-scoped', ...callbackArgs);
+      expect(stub.counts).toEqual({ discovery: 2, jwks: 2 });
+    });
+
+    it('resetProviderCaches drops the cached Apple client secret', async () => {
+      const { publicKey, privateKey } = await generateKeyPair('RS256');
+      const kid = 'apple-kid';
+      const jwk = { ...await exportJWK(publicKey), kid, alg: 'RS256', use: 'sig' };
+      const idToken = await new SignJWT({ sub: 'apple-sub', email: 'apple@example.com', email_verified: true, nonce: 'nonce' })
+        .setProtectedHeader({ alg: 'RS256', kid })
+        .setIssuer('https://appleid.apple.com')
+        .setAudience('apple-client')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(privateKey);
+
+      const appleKey = await generateKeyPair('ES256', { extractable: true });
+      const clientSecrets: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL) => {
+        const request = input instanceof Request ? input : new Request(String(input));
+        if (request.url === 'https://appleid.apple.com/auth/token') {
+          clientSecrets.push(new URLSearchParams(await request.text()).get('client_secret') ?? '');
+          return Response.json({ access_token: 'apple-access-token', id_token: idToken });
+        }
+        if (request.url === 'https://appleid.apple.com/auth/keys')
+          return Response.json({ keys: [jwk] });
+        throw new Error(`unexpected fetch ${request.url}`);
+      }));
+
+      const plugin = socialLogin({
+        providers: [{
+          name: 'apple',
+          clientId: 'apple-client',
+          clientSecret: '',
+          teamId: 'TEAM123456',
+          keyId: 'KEY1234567',
+          privateKey: await exportPKCS8(appleKey.privateKey),
+        }],
+        autoRegister: true,
+        linkAccounts: true,
+        tokenEncryptionKey,
+      });
+      const instance = plugin.methods!({ db, config: { jwt: { key: 'x'.repeat(32) }, database: db } }) as unknown as ScopedMethods;
+
+      await instance.handleCallback('apple', ...callbackArgs);
+      await instance.handleCallback('apple', ...callbackArgs);
+      expect(clientSecrets[1]).toBe(clientSecrets[0]);
+
+      instance.resetProviderCaches();
+      // The secret embeds a whole-second `iat`, so regeneration is only
+      // observable once the clock has advanced past that resolution.
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await instance.handleCallback('apple', ...callbackArgs);
+      expect(clientSecrets[2]).not.toBe(clientSecrets[0]);
     });
   });
 
