@@ -51,6 +51,10 @@ import { tenancy } from '../../src/plugins/tenancy';
 import { twoFactor } from '../../src/plugins/two-factor';
 import { builtinEvents, webhook } from '../../src/plugins/webhook';
 import { createTestAdapter } from '../../src/testing';
+import { requireExampleEnv } from '../env';
+
+const totpEncryptionKey = requireExampleEnv('FORTRESS_TOTP_ENCRYPTION_KEY');
+const adminBootstrapSecret = process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. Create Fortress instance with ALL plugins
@@ -115,8 +119,8 @@ const fortress = createFortress({
     admin({
       apiKeyRoutes: true,
       bootstrap: {
-        enabled: Boolean(process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET),
-        secret: process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET,
+        enabled: Boolean(adminBootstrapSecret),
+        secret: adminBootstrapSecret,
       },
     }),
 
@@ -146,7 +150,7 @@ const fortress = createFortress({
 
     // ── Auth enhancement plugins ──
     twoFactor({
-      secretEncryptionKey: process.env.FORTRESS_TOTP_ENCRYPTION_KEY!,
+      secretEncryptionKey: totpEncryptionKey,
       totp: { issuer: 'Fortress Example' },
     }),
     magicLink({
@@ -163,8 +167,8 @@ const fortress = createFortress({
     // The admin plugin above adds admin-side routes when `apiKeyRoutes: true`:
     //   GET    /admin/users/:userId/api-keys       — list any user's keys
     //   DELETE /admin/users/:userId/api-keys/:id   — revoke any user's key
-    // Both require the `apiKey:manage` permission (auto-registered into
-    // `fortress-admin` via `/iam/admin/bootstrap`).
+    // Both require the `apiKey:manage` permission. Set the optional bootstrap
+    // secret to seed the `fortress-admin` role and grant it to the demo admin.
     socialLogin({
       tokenEncryptionKey: process.env.FORTRESS_SOCIAL_TOKEN_KEY ?? 'dev-social-token-key-32-bytes!!!',
       providers: [
@@ -287,7 +291,7 @@ logger.info(
 // 2. Create Hono app + middleware
 // ═══════════════════════════════════════════════════════════════════════════
 
-const app = new Hono();
+export const app = new Hono();
 
 const { authMiddleware, rbacMiddleware, errorHandler, pluginMiddleware } = createHonoMiddleware(fortress, {
   routeMap: {
@@ -931,8 +935,14 @@ async function seed(): Promise<void> {
   await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: admin.id }], data: { emailVerified: true } });
   await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: user.id }], data: { emailVerified: true } });
 
-  // Bootstrap admin user — creates fortress-admin role with all IAM permissions
-  await fortress.plugins.admin.bootstrap({ userId: admin.id });
+  // Bootstrap is optional because exposing the route requires an explicit
+  // one-time secret. The example still creates its app-specific admin role below.
+  if (adminBootstrapSecret) {
+    await fortress.plugins.admin.bootstrap({
+      userId: admin.id,
+      secret: adminBootstrapSecret,
+    });
+  }
 
   // Create app-specific roles with permissions
   const adminRole = await fortress.iam.createRole('admin', [
@@ -1004,7 +1014,13 @@ async function seed(): Promise<void> {
   console.warn('');
 }
 
-seed().catch(console.error);
+export const exampleReady = seed();
+if (import.meta.main) {
+  exampleReady.catch((error: unknown) => {
+    console.error('[fortress example] startup failed:', error);
+    process.exit(1);
+  });
+}
 
 export default {
   port: 3000,

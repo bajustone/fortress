@@ -1,5 +1,16 @@
 # Examples
 
+From the repository root, install dependencies and copy the development-only
+example environment before running the Hono or Express apps:
+
+```sh
+bun install --frozen-lockfile
+cp .env.example .env
+```
+
+Bun loads `.env` automatically. `FORTRESS_TOTP_ENCRYPTION_KEY` is required;
+the example startup error points back to `.env.example` when it is missing.
+
 | Example | Shows | Run |
 |---|---|---|
 | [`hono-app`](./hono-app/index.ts) | Hono, plugin composition, host routes, validation, OpenAPI | `bun run dev` |

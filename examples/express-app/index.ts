@@ -47,6 +47,10 @@ import { tenancy } from '../../src/plugins/tenancy';
 import { twoFactor } from '../../src/plugins/two-factor';
 import { webhook } from '../../src/plugins/webhook';
 import { createTestAdapter } from '../../src/testing';
+import { requireExampleEnv } from '../env';
+
+const totpEncryptionKey = requireExampleEnv('FORTRESS_TOTP_ENCRYPTION_KEY');
+const adminBootstrapSecret = process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. Create Fortress instance with ALL plugins
@@ -66,7 +70,13 @@ const fortress = createFortress({
   // Plugin order matters — hooks run in array order
   plugins: [
     // ── Admin (IAM route protection + bootstrap) ──
-    admin({ apiKeyRoutes: true }),
+    admin({
+      apiKeyRoutes: true,
+      bootstrap: {
+        enabled: Boolean(adminBootstrapSecret),
+        secret: adminBootstrapSecret,
+      },
+    }),
 
     // ── Gate plugins (reject early) ──
     rateLimit({
@@ -94,7 +104,7 @@ const fortress = createFortress({
 
     // ── Auth enhancement plugins ──
     twoFactor({
-      secretEncryptionKey: process.env.FORTRESS_TOTP_ENCRYPTION_KEY!,
+      secretEncryptionKey: totpEncryptionKey,
       totp: { issuer: 'Fortress Express Example' },
     }),
     magicLink({
@@ -576,8 +586,14 @@ async function seed(): Promise<void> {
   await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: admin.id }], data: { emailVerified: true } });
   await db.update({ model: 'user', where: [{ field: 'id', operator: '=', value: user.id }], data: { emailVerified: true } });
 
-  // Bootstrap admin user — creates fortress-admin role with all IAM permissions
-  await fortress.plugins.admin.bootstrap({ userId: admin.id });
+  // Bootstrap is optional because exposing the route requires an explicit
+  // one-time secret. The example still creates its app-specific admin role below.
+  if (adminBootstrapSecret) {
+    await fortress.plugins.admin.bootstrap({
+      userId: admin.id,
+      secret: adminBootstrapSecret,
+    });
+  }
 
   // Create app-specific roles with permissions
   const adminRole = await fortress.iam.createRole('admin', [

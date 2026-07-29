@@ -12,6 +12,7 @@
     "url": "https://github.com/bajustone/fortress/issues"
   },
   "type": "module",
+  "packageManager": "bun@1.3.4",
   "module": "src/index.ts",
   "main": "./dist/index.cjs",
   "types": "./dist/index.d.ts",
