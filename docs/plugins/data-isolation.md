@@ -21,7 +21,7 @@ import { createFortress } from '@bajustone/fortress';
 import { dataIsolation } from '@bajustone/fortress/plugins/data-isolation';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     dataIsolation({
@@ -145,7 +145,7 @@ import { createFortress } from '@bajustone/fortress';
 import { dataIsolation } from '@bajustone/fortress/plugins/data-isolation';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     dataIsolation({

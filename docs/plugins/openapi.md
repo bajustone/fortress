@@ -31,7 +31,7 @@ import { createFortress } from '@bajustone/fortress';
 import { openapi } from '@bajustone/fortress/plugins/openapi';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     openapi({

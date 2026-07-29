@@ -35,8 +35,8 @@ export interface RbacOptions {
  * 2. {@link RbacOptions.routeMap} — exact `'METHOD /path'` then
  *    parameterized match.
  * 3. {@link RbacOptions.mapRequest} — dynamic resolver fallback.
- * 4. No mapping found → allow, unless {@link RbacOptions.defaultDeny} is set,
- *    in which case the route is refused with a 403 (fail closed).
+ * 4. No mapping found → follow {@link RbacOptions.unmappedRoutes}; `'deny'`
+ *    refuses the route with a 403 (fail closed).
  *
  * Throws {@link FortressError} on missing/insufficient permissions.
  */

@@ -102,7 +102,7 @@ Each item is "what to do" + "why" + "how to verify".
 
 - **Do:** Run `bun run lint` + `bun run typecheck` + `bun run test` + `fortress migrate:check` + `fortress manifest:check --module <path>` + `fortress check:public-routes --module <path>` on every CI build. Pass `--module` pointing at a module that exports your `config`, or the two route checks only cover Fortress's own auth + IAM routes. A config module lets the CLI read your route surface without constructing the app. `migrate:check` validates the bundled catalog, not a live database; add an adapter-backed `checkMigrationDrift()` test for deployment state. Fortress contributors also run `bun run generate:migrations --check` in the repository CI workflow to gate the committed SQL projection. The [consumer workflow template](./ci/github-actions.yml) intentionally omits that maintainer-only step.
 - **Do:** Take a database backup before every deploy that bumps a migration version; test restores quarterly.
-- **Do:** Pin to a minor version (`@bajustone/fortress@~0.1`). Pre-1.0 Fortress reserves the right to ship breaking changes in any minor.
+- **Do:** Pin to a stable minor line (`@bajustone/fortress@~1.0`). Fortress follows semantic versioning; breaking API changes require a new major release.
 
 ## Release notes discipline
 

@@ -15,7 +15,7 @@ import { createFortress } from '@bajustone/fortress';
 import { admin } from '@bajustone/fortress/plugins/admin';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     admin({ bootstrap: { enabled: true, secret: process.env.FORTRESS_ADMIN_BOOTSTRAP_SECRET } }),
@@ -242,7 +242,7 @@ import { apiKey } from '@bajustone/fortress/plugins/api-key';
 import { admin } from '@bajustone/fortress/plugins/admin';
 
 const fortress = createFortress({
-  jwt: { key: '...' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     apiKey({ prefix: 'myapp' }),

@@ -37,8 +37,10 @@ jobs:
       - run: bun run check:exports
       - run: bun run check:migration-artifacts
       - run: bun run lint
+      - run: bun run check:docs
       - run: bun run typecheck
       - run: bun run typecheck:examples
+      - run: bun run typecheck:scripts
       - run: bun run test
       - run: bun run test:integration
       - run: bun run check:consumer-contract

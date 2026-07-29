@@ -27,8 +27,10 @@ If its required environment is missing, the command exits with a pointer to `.en
 
 ```sh
 bun run lint
+bun run check:docs
 bun run typecheck
 bun run typecheck:examples
+bun run typecheck:scripts
 bun run test
 ```
 

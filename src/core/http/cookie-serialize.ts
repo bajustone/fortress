@@ -2,8 +2,8 @@
  * Cookie serialization for fortress auth tokens.
  *
  * Produces and parses cookie strings for the access/refresh token pair using
- * the resolved {@link ResolvedCookieConfig} (which already accounts for
- * `__Host-` prefix rules and dev-vs-prod relaxation).
+ * the resolved {@link ResolvedCookieConfig} (which applies environment-independent
+ * secure defaults and enforces `__Host-` prefix rules).
  *
  * Returns raw `Set-Cookie` header values so any framework adapter can append
  * them to a `Response` directly without depending on a framework cookie API.
