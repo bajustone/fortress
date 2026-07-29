@@ -48,9 +48,41 @@ interface ResolvedProviderDefinition extends ProviderDefinition {
 
 const encoder = new TextEncoder();
 const HEX_32_BYTE_KEY = /^[0-9a-f]+$/i;
-const discoveryCache = new Map<string, Promise<ResolvedProviderDefinition>>();
-const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
-const appleSecretCache = new Map<string, { value: string; expiresAt: number }>();
+/**
+ * Caches for values derived from provider configuration, owned by a single
+ * {@link socialLogin} instance so independently configured plugins never share
+ * discovery documents, JWKS sets, or Apple client secrets.
+ *
+ * Bounds and lifetime are a consequence of the keys, not of an eviction policy:
+ * every key derives from a configured `ProviderConfig`, so an instance holds at
+ * most one discovery entry and one JWKS set per configured provider, plus one
+ * Apple client secret. Entries live as long as the plugin instance unless
+ * {@link ProviderCaches.reset} is called. JWKS key rotation and refetch cooldown
+ * remain owned by jose's `createRemoteJWKSet`, and the Apple client secret keeps
+ * its own expiry. Failed or semantically invalid discovery is never retained.
+ */
+interface ProviderCaches {
+  discovery: Map<string, Promise<ResolvedProviderDefinition>>;
+  jwks: Map<string, ReturnType<typeof createRemoteJWKSet>>;
+  appleSecret: Map<string, { value: string; expiresAt: number }>;
+  reset: () => void;
+}
+
+function createProviderCaches(): ProviderCaches {
+  const discovery = new Map<string, Promise<ResolvedProviderDefinition>>();
+  const jwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+  const appleSecret = new Map<string, { value: string; expiresAt: number }>();
+  return {
+    discovery,
+    jwks,
+    appleSecret,
+    reset() {
+      discovery.clear();
+      jwks.clear();
+      appleSecret.clear();
+    },
+  };
+}
 const MICROSOFT_DISCOVERY_ISSUER_PATTERN = /^https:\/\/login\.microsoftonline\.com\/(?:\{tenantid\}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/v2\.0$/i;
 const MICROSOFT_TOKEN_ISSUER_PATTERN = /^https:\/\/login\.microsoftonline\.com\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/v2\.0$/i;
 
@@ -191,13 +223,13 @@ function isMicrosoftMultiTenant(providerConfig: ProviderConfig): boolean {
  * Failed or semantically invalid discovery is deliberately not cached so a
  * later login can recover after a transient provider outage.
  */
-async function resolveDiscoveredDefinition(definition: ProviderDefinition, providerConfig: ProviderConfig): Promise<ResolvedProviderDefinition> {
+async function resolveDiscoveredDefinition(definition: ProviderDefinition, providerConfig: ProviderConfig, caches: ProviderCaches): Promise<ResolvedProviderDefinition> {
   if (!definition.discoveryUrl || (definition.issuer && definition.jwksUri && !providerConfig.issuer)) {
     return definition;
   }
 
   const cacheKey = `${providerConfig.name}:${definition.discoveryUrl}`;
-  const existing = discoveryCache.get(cacheKey);
+  const existing = caches.discovery.get(cacheKey);
   if (existing)
     return existing;
 
@@ -237,15 +269,15 @@ async function resolveDiscoveredDefinition(definition: ProviderDefinition, provi
     if (result)
       return result;
     // Never retain a degraded/invalid result. The next request retries.
-    if (discoveryCache.get(cacheKey) === cached)
-      discoveryCache.delete(cacheKey);
+    if (caches.discovery.get(cacheKey) === cached)
+      caches.discovery.delete(cacheKey);
     return definition;
   }, (error) => {
-    if (discoveryCache.get(cacheKey) === cached)
-      discoveryCache.delete(cacheKey);
+    if (caches.discovery.get(cacheKey) === cached)
+      caches.discovery.delete(cacheKey);
     throw error;
   });
-  discoveryCache.set(cacheKey, cached);
+  caches.discovery.set(cacheKey, cached);
   return cached;
 }
 
@@ -254,6 +286,7 @@ async function verifyIdToken(
   providerConfig: ProviderConfig,
   idToken: string | undefined,
   nonce: string,
+  caches: ProviderCaches,
 ): Promise<JWTPayload | null> {
   const shouldVerify = Boolean(definition.discoveryUrl || definition.jwksUri || idToken);
   if (!shouldVerify)
@@ -267,10 +300,10 @@ async function verifyIdToken(
   if (!nonce)
     throw Errors.unauthorized(`Missing stored OIDC nonce for ${providerConfig.name}`);
 
-  let jwks = jwksCache.get(definition.jwksUri);
+  let jwks = caches.jwks.get(definition.jwksUri);
   if (!jwks) {
     jwks = createRemoteJWKSet(new URL(definition.jwksUri));
-    jwksCache.set(definition.jwksUri, jwks);
+    caches.jwks.set(definition.jwksUri, jwks);
   }
 
   const multiTenantMicrosoft = isMicrosoftMultiTenant(providerConfig);
@@ -297,14 +330,14 @@ async function verifyIdToken(
   return payload;
 }
 
-async function buildClientSecret(providerConfig: ProviderConfig, definition: ProviderDefinition): Promise<string> {
+async function buildClientSecret(providerConfig: ProviderConfig, definition: ProviderDefinition, caches: ProviderCaches): Promise<string> {
   if (providerConfig.name !== 'apple' || !providerConfig.privateKey)
     return providerConfig.clientSecret;
   if (!providerConfig.teamId || !providerConfig.keyId)
     throw Errors.badRequest('Apple social login requires teamId, keyId, and privateKey');
 
   const cacheKey = `${providerConfig.teamId}:${providerConfig.clientId}:${providerConfig.keyId}`;
-  const cached = appleSecretCache.get(cacheKey);
+  const cached = caches.appleSecret.get(cacheKey);
   if (cached && cached.expiresAt > Date.now() + 60_000)
     return cached.value;
 
@@ -320,7 +353,7 @@ async function buildClientSecret(providerConfig: ProviderConfig, definition: Pro
     .setIssuedAt(now)
     .setExpirationTime(expiresAt)
     .sign(key);
-  appleSecretCache.set(cacheKey, { value, expiresAt: expiresAt * 1000 });
+  caches.appleSecret.set(cacheKey, { value, expiresAt: expiresAt * 1000 });
   return value;
 }
 
@@ -346,6 +379,12 @@ export interface SocialLoginMethods {
   getProviderTokens: (userId: string, provider: string) => Promise<{ accessToken: string | null; refreshToken: string | null; tokenExpiresAt: Date | null }>;
   unlinkAccount: (userId: string, provider: string) => Promise<void>;
   getProviders: () => string[];
+  /**
+   * Drop this instance's cached discovery documents, JWKS sets, and Apple
+   * client secret. Intended for tests and for long-lived processes where
+   * provider configuration or signing keys rotate; the next call re-resolves.
+   */
+  resetProviderCaches: () => void;
 }
 /**
  * Social login plugin factory. Returns a {@link FortressPlugin} that handles
@@ -367,6 +406,10 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin<'social-l
   const tokenEncryptionKey = persistTokens && config.tokenEncryptionKey
     ? importTokenEncryptionKey(config.tokenEncryptionKey)
     : null;
+
+  // Owned by this instance, so two independently configured plugins never share
+  // discovery, JWKS, or Apple client-secret state even on identical URLs.
+  const caches = createProviderCaches();
 
   // Pre-resolve all provider definitions
   const providerMap = new Map<string, { definition: ProviderDefinition; config: ProviderConfig }>();
@@ -412,7 +455,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin<'social-l
           throw Errors.badRequest(`Provider '${providerName}' is not configured`);
 
         const { definition, config: pc } = entry;
-        const resolvedDefinition = await resolveDiscoveredDefinition(definition, pc);
+        const resolvedDefinition = await resolveDiscoveredDefinition(definition, pc, caches);
         const { codeVerifier, codeChallenge } = await generatePKCE();
         const state = randomBase64Url();
         const nonce = randomBase64Url();
@@ -459,8 +502,8 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin<'social-l
           throw Errors.badRequest(`Provider '${providerName}' is not configured`);
 
         const { definition, config: pc } = entry;
-        const resolvedDefinition = await resolveDiscoveredDefinition(definition, pc);
-        const clientSecret = await buildClientSecret(pc, resolvedDefinition);
+        const resolvedDefinition = await resolveDiscoveredDefinition(definition, pc, caches);
+        const clientSecret = await buildClientSecret(pc, resolvedDefinition, caches);
 
         // Exchange code for tokens. POST is never retried (RFC 9110); the
         // shared client adds a timeout and validates `access_token` is present.
@@ -506,7 +549,7 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin<'social-l
         if (!tokens.access_token)
           throw Errors.unauthorized(`Failed to exchange authorization code with ${providerName}`);
 
-        const idTokenClaims = await verifyIdToken(resolvedDefinition, pc, tokens.id_token, storedNonce);
+        const idTokenClaims = await verifyIdToken(resolvedDefinition, pc, tokens.id_token, storedNonce, caches);
 
         // Fetch user profile. OIDC ID-token claims are merged with userinfo so
         // `sub`, `email_verified`, and provider-specific claims are preserved.
@@ -708,6 +751,11 @@ export function socialLogin(config: SocialLoginConfig): FortressPlugin<'social-l
       /** Get list of configured provider names */
       getProviders(): string[] {
         return Array.from(providerMap.keys());
+      },
+
+      /** Drop cached discovery, JWKS, and Apple client-secret state for this instance. */
+      resetProviderCaches(): void {
+        caches.reset();
       },
     }),
   } satisfies FortressPlugin<'social-login', SocialLoginMethods>);
