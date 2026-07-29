@@ -7,7 +7,23 @@ on:
     # even on quiet days so dialect drift is caught before a release.
     - cron: '0 6 * * *'
 
+concurrency:
+  # Normalize push and same-repository PR runs onto the same head branch key,
+  # while keeping fork branches with identical names isolated by repository.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  # Superseded branch and PR runs are cancelled. `main` and release tags are
+  # not: those runs gate releases and must finish even when several commits or
+  # tags land together.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
+  workflow-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.7
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -15,7 +31,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      - run: bun install
+      - name: Restore Bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun install --frozen-lockfile
+      - run: bun run check:version
       - run: bun run lint
       - run: bun run check:docs
       - run: bun run typecheck
@@ -40,21 +63,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [bun, node20, node22]
+        runtime: [bun, node20, node22, node24]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+      # `.nvmrc` is the single source of truth for the documented minimum, so
+      # this job exercises the exact floor declared in `engines.node` rather
+      # than whatever the latest 20.x happens to be.
       - if: matrix.runtime == 'node20'
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
       - if: matrix.runtime == 'node22'
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: bun install
+      - if: matrix.runtime == 'node24'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Restore Bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun install --frozen-lockfile
       - name: Test (bun)
         if: matrix.runtime == 'bun'
         run: bun run test
@@ -74,7 +110,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      - run: bun install
+      - name: Restore Bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun install --frozen-lockfile
       - run: bun run test:integration
 
   jsr-check:
@@ -87,6 +129,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+      - name: Restore Bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
       - run: bun install --frozen-lockfile
       - run: deno --version
       - run: bun run check:jsr

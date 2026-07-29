@@ -1,13 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-const REQUIRED_ARTIFACTS = [
-  'dist/index.d.ts',
-  'dist/index.d.cts',
-  'dist/testing.js',
-  'dist/testing.cjs',
-];
 
 function parseRoot(args) {
   const rootIndex = args.indexOf('--root');
@@ -18,9 +11,41 @@ function parseRoot(args) {
   return resolve(args[rootIndex + 1]);
 }
 
-const root = parseRoot(process.argv.slice(2));
-const missing = REQUIRED_ARTIFACTS.filter(path => !existsSync(resolve(root, path)));
+function collectStringLeaves(value) {
+  if (typeof value === 'string')
+    return [value];
+  if (!value || typeof value !== 'object')
+    return [];
+  return Object.values(value).flatMap(collectStringLeaves);
+}
 
+function requiredArtifacts(root) {
+  const packagePath = resolve(root, 'package.json');
+  if (!existsSync(packagePath))
+    throw new Error(`package manifest is missing: ${packagePath}`);
+  const pkg = JSON.parse(readFileSync(packagePath, 'utf8'));
+  return [...new Set([
+    ...collectStringLeaves(pkg.exports),
+    pkg.main,
+    pkg.types,
+  ])]
+    .filter(path => typeof path === 'string' && path.startsWith('./dist/'))
+    .map(path => path.slice(2))
+    .sort();
+}
+
+let root;
+let required;
+try {
+  root = parseRoot(process.argv.slice(2));
+  required = requiredArtifacts(root);
+}
+catch (error) {
+  console.error(`✖ cannot inspect built package artifacts: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
+
+const missing = required.filter(path => !existsSync(resolve(root, path)));
 if (missing.length > 0) {
   console.error(
     `✖ built package artifacts are missing:\n${missing.map(path => `  - ${path}`).join('\n')}\n`
@@ -30,4 +55,4 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-console.log('✔ required built-package artifacts are present');
+console.log(`✔ all ${required.length} exported built-package artifacts are present`);
