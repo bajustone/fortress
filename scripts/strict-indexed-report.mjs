@@ -119,11 +119,75 @@ export function summarizeDiagnostics(diagnostics) {
   return { production, test, total: production + test };
 }
 
-export function formatSummary(summary) {
-  return [
-    'noUncheckedIndexedAccess telemetry (advisory — reports only, does not gate CI)',
-    `  production  ${summary.production}`,
-    `  tests       ${summary.test}`,
-    `  total       ${summary.total}`,
-  ].join('\n');
+const BUCKETS = ['production', 'test'];
+
+/**
+ * Parses and validates the checked-in baseline.
+ *
+ * Strict about shape on purpose: a typo'd or malformed key would otherwise read
+ * as a missing bucket and silently disable half the ratchet.
+ */
+export function parseBaseline(text, source = 'baseline') {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  }
+  catch (error) {
+    throw new StrictIndexedTelemetryError(`${source} is not valid JSON: ${error.message}`);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new StrictIndexedTelemetryError(`${source} must be a JSON object with 'production' and 'test' counts`);
+
+  const unknown = Object.keys(parsed).filter(key => !BUCKETS.includes(key));
+  if (unknown.length > 0)
+    throw new StrictIndexedTelemetryError(`${source} has unrecognised key(s): ${unknown.join(', ')}`);
+
+  for (const bucket of BUCKETS) {
+    const value = parsed[bucket];
+    if (!Number.isInteger(value) || value < 0)
+      throw new StrictIndexedTelemetryError(`${source} key '${bucket}' must be a non-negative integer, received ${JSON.stringify(value)}`);
+  }
+
+  return { production: parsed.production, test: parsed.test };
+}
+
+/**
+ * Compares each bucket independently. Buckets are never summed: a cleanup in
+ * the test suite must not be able to absorb a new production diagnostic.
+ */
+export function compareToBaseline(summary, baseline) {
+  const regressions = [];
+  const reductions = [];
+
+  for (const bucket of BUCKETS) {
+    const current = summary[bucket];
+    const expected = baseline[bucket];
+    if (current > expected)
+      regressions.push({ bucket, current, baseline: expected });
+    else if (current < expected)
+      reductions.push({ bucket, current, baseline: expected });
+  }
+
+  return { regressions, reductions };
+}
+
+export function formatRatchetReport(summary, baseline, comparison) {
+  const lines = [
+    'noUncheckedIndexedAccess ratchet (buckets are compared independently)',
+    `  production  ${summary.production}  baseline ${baseline.production}`,
+    `  tests       ${summary.test}  baseline ${baseline.test}`,
+    `  total       ${summary.total}  informational only — never used for gating`,
+  ];
+
+  for (const { bucket, current, baseline: expected } of comparison.regressions)
+    lines.push(`✖ ${bucket} diagnostics increased: expected ≤ ${expected}, actual ${current}, delta +${current - expected}`);
+
+  for (const { bucket, current, baseline: expected } of comparison.reductions)
+    lines.push(`✔ ${bucket} diagnostics decreased ${expected} → ${current} — lower it in scripts/strict-indexed-baseline.json to lock the gain in`);
+
+  if (comparison.regressions.length === 0 && comparison.reductions.length === 0)
+    lines.push('✔ both buckets match the baseline');
+
+  return lines.join('\n');
 }

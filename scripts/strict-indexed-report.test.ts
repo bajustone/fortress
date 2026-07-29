@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyDiagnosticFile,
-  formatSummary,
+  compareToBaseline,
+  formatRatchetReport,
   isProjectSourceFile,
   normalizeDiagnosticPath,
+  parseBaseline,
   parseTypeScriptOutput,
   StrictIndexedTelemetryError,
   summarizeDiagnostics,
@@ -131,9 +133,66 @@ describe('strict-indexed summary', () => {
 
     expect(summary).toEqual({ production: 2, test: 1, total: 3 });
   });
+});
 
-  it('reports the two populations as distinct lines', () => {
-    expect(formatSummary({ production: 109, test: 287, total: 396 })).toContain('production  109');
-    expect(formatSummary({ production: 109, test: 287, total: 396 })).toContain('tests       287');
+describe('strict-indexed baseline ratchet', () => {
+  const baseline = { production: 109, test: 287 };
+
+  it('parses the checked-in baseline shape, including zero', () => {
+    expect(parseBaseline('{"production":109,"test":287}', 'fixture')).toEqual(baseline);
+    expect(parseBaseline('{"production":0,"test":0}', 'fixture')).toEqual({ production: 0, test: 0 });
+  });
+
+  it.each([
+    ['invalid JSON', '{'],
+    ['a non-object', '[]'],
+    ['an unknown key', '{"production":109,"test":287,"total":396}'],
+    ['a missing bucket', '{"production":109}'],
+    ['a fractional count', '{"production":109.5,"test":287}'],
+    ['a negative count', '{"production":-1,"test":287}'],
+    ['a string count', '{"production":"109","test":287}'],
+  ])('rejects %s', (_label, value) => {
+    expect(() => parseBaseline(value, 'fixture')).toThrow(StrictIndexedTelemetryError);
+  });
+
+  it('passes an equal baseline, including zero', () => {
+    expect(compareToBaseline(baseline, baseline)).toEqual({ regressions: [], reductions: [] });
+    expect(compareToBaseline({ production: 0, test: 0 }, { production: 0, test: 0 }))
+      .toEqual({ regressions: [], reductions: [] });
+  });
+
+  it('allows reductions in either bucket', () => {
+    expect(compareToBaseline({ production: 108, test: 286 }, baseline))
+      .toEqual({
+        regressions: [],
+        reductions: [
+          { bucket: 'production', current: 108, baseline: 109 },
+          { bucket: 'test', current: 286, baseline: 287 },
+        ],
+      });
+  });
+
+  it('fails a production increase even when test diagnostics decrease', () => {
+    expect(compareToBaseline({ production: 110, test: 0 }, baseline))
+      .toMatchObject({
+        regressions: [{ bucket: 'production', current: 110, baseline: 109 }],
+        reductions: [{ bucket: 'test', current: 0, baseline: 287 }],
+      });
+  });
+
+  it('fails a test increase even when production diagnostics decrease', () => {
+    expect(compareToBaseline({ production: 0, test: 288 }, baseline))
+      .toMatchObject({
+        regressions: [{ bucket: 'test', current: 288, baseline: 287 }],
+        reductions: [{ bucket: 'production', current: 0, baseline: 109 }],
+      });
+  });
+
+  it('reports the aggregate total as informational only', () => {
+    const comparison = compareToBaseline({ production: 110, test: 287 }, baseline);
+    const report = formatRatchetReport({ production: 110, test: 287, total: 397 }, baseline, comparison);
+
+    expect(report).toContain('total       397  informational only — never used for gating');
+    expect(report).toContain('production diagnostics increased: expected ≤ 109, actual 110, delta +1');
   });
 });

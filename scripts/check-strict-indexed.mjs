@@ -1,14 +1,18 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
-  formatSummary,
+  compareToBaseline,
+  formatRatchetReport,
+  parseBaseline,
   parseTypeScriptOutput,
   StrictIndexedTelemetryError,
   summarizeDiagnostics,
 } from './strict-indexed-report.mjs';
 
 const CONFIG = 'scripts/tsconfig.strict-indexed.json';
+const BASELINE = 'scripts/strict-indexed-baseline.json';
 // tsc exits 0 with a clean program and 2 once it has reported diagnostics.
 // Every other code (1 for a bad/missing project, 3 for config resolution)
 // means we never got a usable measurement.
@@ -48,12 +52,27 @@ function measure() {
   return summarizeDiagnostics(diagnostics);
 }
 
+function readBaseline() {
+  let text;
+  try {
+    text = readFileSync(new URL(`../${BASELINE}`, import.meta.url), 'utf-8');
+  }
+  catch (error) {
+    throw new StrictIndexedTelemetryError(`Could not read ${BASELINE}: ${error.message}`);
+  }
+  return parseBaseline(text, BASELINE);
+}
+
 try {
-  console.log(formatSummary(measure()));
-  // Advisory by design: a non-zero count is the thing being tracked, not a
-  // failure. Only a broken measurement (above) exits non-zero, so CI can call
-  // this directly without `continue-on-error` masking real script faults.
-  process.exit(0);
+  const summary = measure();
+  const baseline = readBaseline();
+  const comparison = compareToBaseline(summary, baseline);
+  console.log(formatRatchetReport(summary, baseline, comparison));
+
+  // Only an increase fails. Matching or beating the baseline passes, so a batch
+  // that removes diagnostics is never blocked on updating the file first. A
+  // broken measurement, config, or baseline still exits non-zero via the catch.
+  process.exit(comparison.regressions.length > 0 ? 1 : 0);
 }
 catch (error) {
   console.error(error instanceof StrictIndexedTelemetryError ? error.message : error);

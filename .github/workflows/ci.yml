@@ -55,13 +55,12 @@ jobs:
       - name: Packed npm publication manifest and CLI
         run: bun run check:package-cli
 
-  # Advisory telemetry for the staged `noUncheckedIndexedAccess` adoption
-  # (issue #28). Reports production and test diagnostic counts separately so
-  # test-suite cleanup cannot mask a production regression. Deliberately has no
-  # `continue-on-error`: the script exits 0 for any diagnostic count, so the
-  # only way this job fails is a genuinely broken measurement, which must not
-  # be hidden. It gains a baseline and a fail-on-increase ratchet once #25/#26
-  # land.
+  # Fail-on-increase ratchet for the staged `noUncheckedIndexedAccess` adoption
+  # (issue #28). Production and test diagnostic counts are compared to separate
+  # checked-in baselines, so a cleanup in either bucket cannot mask a regression
+  # in the other. This job also fails when the compiler, measurement, parser, or
+  # baseline is invalid; do not add `continue-on-error`. Reductions pass and are
+  # locked in by deliberately lowering the corresponding checked-in baseline.
   strictness-telemetry:
     runs-on: ubuntu-latest
     steps:
@@ -76,7 +75,7 @@ jobs:
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
       - run: bun install --frozen-lockfile
-      - name: noUncheckedIndexedAccess diagnostic counts (advisory)
+      - name: noUncheckedIndexedAccess diagnostic ratchet
         run: bun run check:strict-indexed
 
   # Unit suite (SQLite test adapter) across every supported runtime. Bun is the
