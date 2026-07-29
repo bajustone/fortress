@@ -50,10 +50,11 @@ For built output only, use the self-contained clean-checkout command:
 bun run check:built-package
 ```
 
-It builds `dist/`, checks declarations with the supported TypeScript branches,
-and imports the testing entrypoint under Node ESM and CommonJS. Standalone
-post-build checks fail immediately with a `bun run build` pointer when artifacts
-are absent.
+It builds `dist/`, checks declarations with the installed TypeScript version,
+and imports the testing entrypoint under Node ESM and CommonJS without fetching
+extra toolchains. The release workflow separately checks the TypeScript 5.0
+compatibility floor. Standalone post-build checks fail immediately with a
+`bun run build` pointer when artifacts are absent.
 
 Code coverage is not currently a repository gate. The project gates behavior,
 type contracts, framework examples, and PostgreSQL integration explicitly;
