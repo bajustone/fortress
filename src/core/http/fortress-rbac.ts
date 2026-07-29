@@ -35,8 +35,12 @@ export function getPluginPathPrefixes(plugins: readonly RuntimeFortressPlugin[])
       continue;
     for (const route of Object.values(plugin.routes) as EndpointDefinition[]) {
       const match = PLUGIN_PREFIX_REGEX.exec(route.path);
-      if (match)
-        prefixes.add(match[1]);
+      if (match) {
+        const prefix = match[1];
+        if (prefix === undefined)
+          throw Errors.badRequest(`Plugin route '${route.path}' has no path prefix`);
+        prefixes.add(prefix);
+      }
     }
   }
   return [...prefixes];

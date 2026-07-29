@@ -127,9 +127,12 @@ function encodeSecret(secret: string): Uint8Array {
  * Normalize key material to an array of encoded keys.
  * First entry is used for signing, all are used for verification.
  */
-function normalizeKeys(key: JwtKeyMaterial): Uint8Array[] {
+function normalizeKeys(key: JwtKeyMaterial): [Uint8Array, ...Uint8Array[]] {
   const keys = Array.isArray(key) ? key : [key];
-  return keys.map(encodeSecret);
+  const [primary, ...rotated] = keys;
+  if (primary === undefined)
+    throw new Error('JWT key material must contain at least one key');
+  return [encodeSecret(primary), ...rotated.map(encodeSecret)];
 }
 
 /**

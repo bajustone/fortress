@@ -213,6 +213,8 @@ export async function verifyAuthContinuation(
   if (providers.length !== 1)
     throw Errors.unauthorized('No unique auth gate can complete this continuation');
   const [provider] = providers;
+  if (provider === undefined)
+    throw Errors.unauthorized('No unique auth gate can complete this continuation');
 
   return provider.verify({
     db,

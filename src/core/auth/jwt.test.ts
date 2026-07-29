@@ -69,6 +69,17 @@ describe('jwt', () => {
       const token = await signAccessToken(claims, 'unknown-secret-not-in-array!!', 900);
       await expect(verifyAccessToken(token, [newSecret, oldSecret])).rejects.toThrow();
     });
+
+    it('rejects an empty key ring instead of choosing a fallback key', async () => {
+      const token = await signAccessToken(claims, secret, 900);
+
+      await expect(signAccessToken(claims, [], 900)).rejects.toThrow(
+        'JWT key material must contain at least one key',
+      );
+      await expect(verifyAccessToken(token, [])).rejects.toThrow(
+        'JWT key material must contain at least one key',
+      );
+    });
   });
 
   describe('custom claims', () => {

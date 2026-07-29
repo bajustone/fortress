@@ -231,8 +231,12 @@ function createExactOneOfProps<T>(schemas: readonly FortressSchema<any>[]): Stan
 
 function exactOneResult<T>(results: readonly StandardSchemaV1.Result<T>[]): StandardSchemaV1.Result<T> {
   const successes = results.filter((result): result is StandardSchemaV1.SuccessResult<T> => !result.issues);
-  if (successes.length === 1)
-    return { value: successes[0].value };
+  if (successes.length === 1) {
+    const [success] = successes;
+    if (success === undefined)
+      throw new Error('oneOf validation invariant violated: one success has no result');
+    return { value: success.value };
+  }
   return {
     issues: [{
       message: successes.length === 0

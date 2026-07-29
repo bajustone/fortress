@@ -171,8 +171,13 @@ function resolveSingleValue(value: string, context: PermissionContext): unknown 
   if (!match)
     return value;
 
-  // It's a variable reference like ${user.id}
-  return resolveFieldValue(match[1], context);
+  // It's a variable reference like ${user.id}. A regex match without its
+  // capture is not a usable policy reference, so resolve it as absent rather
+  // than accidentally evaluating a fallback field.
+  const field = match[1];
+  if (field === undefined)
+    return undefined;
+  return resolveFieldValue(field, context);
 }
 
 // L-tier: prototype-pollution-safe key set. Reading `__proto__` /

@@ -164,7 +164,10 @@ export function generateResourceTypes(resources: ResourceFile): string {
 
   const actionBranches = resourceNames
     .map((name) => {
-      const rawActions = resources.resources[name].actions;
+      const resource = resources.resources[name];
+      if (resource === undefined)
+        throw new Error(`Resource '${name}' disappeared while generating types`);
+      const rawActions = resource.actions;
       const actions = rawActions.length > 0
         ? rawActions.map(action => JSON.stringify(action)).join(' | ')
         : 'never';

@@ -298,6 +298,8 @@ export async function executePluginMiddleware(
     if (index >= matching.length)
       return;
     const current = matching[index++];
+    if (current === undefined)
+      throw new Error('Plugin middleware chain invariant violated: missing current handler');
     await current.middleware.handler(ctx, request, runNext);
   }
 
