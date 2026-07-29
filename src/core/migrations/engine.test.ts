@@ -14,9 +14,10 @@ import {
   migrateDown,
   migrateUp,
 } from './engine';
-import { FORTRESS_INDEXES, FORTRESS_TABLES, getFortressMigrations } from './migrations';
+import { FORTRESS_INDEXES, FORTRESS_TABLES, getExpectedColumns, getFortressMigrations } from './migrations';
 
 const dialect = 'sqlite';
+const MIGRATION_DIALECTS: readonly ('sqlite' | 'pg')[] = ['sqlite', 'pg'];
 
 function runMigrationChild(script: string, filename: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -325,6 +326,29 @@ describe('migration engine', () => {
     expect(drift.missingColumns).toEqual([]);
     expect(drift.missingIndexes).toEqual([]);
     expect(FORTRESS_TABLES.length).toBeGreaterThan(30);
+  });
+
+  it('extracts SQLite incremental ALTER TABLE columns', () => {
+    const expected = getExpectedColumns('sqlite');
+
+    // Exercises ADD COLUMN extraction from the controlled incremental SQLite
+    // migration rather than relying only on the baseline CREATE TABLE DDL.
+    expect(expected.fortress_auth_continuation).toEqual(expect.arrayContaining([
+      'failed_attempts',
+      'cooldown_seconds',
+    ]));
+  });
+
+  it.each(MIGRATION_DIALECTS)('extracts the final refresh-token shape for %s DDL', (migrationDialect) => {
+    const expected = getExpectedColumns(migrationDialect);
+
+    // SQLite rebuild migrations rename a replacement table over this name;
+    // both dialects must retain the final column set.
+    expect(expected.fortress_refresh_token).toEqual(expect.arrayContaining([
+      'family_created_at',
+      'successor_token_hash',
+      'rotated_at',
+    ]));
   });
 
   it('creates every required hot index with the expected column order', async () => {
