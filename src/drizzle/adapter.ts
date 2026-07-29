@@ -17,45 +17,57 @@ export interface DrizzleAdapterOptions {
   tables?: Partial<Record<string, Table>>;
 }
 
-function buildTableMap(schema: typeof fortressSchema | typeof fortressPgSchema): Record<string, Table> {
+/**
+ * The SQLite and PostgreSQL schema modules are static Fortress-owned manifests.
+ * A missing entry is a programming/declaration error, not an absent table that
+ * can safely flow into Drizzle and fail later as an unrelated query error.
+ */
+function requireSchemaTable(schema: Record<string, Table>, property: string): Table {
+  const table = schema[property];
+  if (table === undefined)
+    throw new Error(`Fortress Drizzle schema is missing required table '${property}'`);
+  return table;
+}
+
+function buildTableMap(schema: Record<string, Table>): Record<string, Table> {
   return {
-    schema_version: schema.schemaVersion,
-    user: schema.users,
-    login_identifier: schema.loginIdentifiers,
-    refresh_token: schema.refreshTokens,
-    auth_continuation: schema.authContinuations,
-    group: schema.groups,
-    group_user: schema.groupUsers,
-    service_account: schema.serviceAccounts,
-    resource: schema.resources,
-    permission: schema.permissions,
-    role: schema.roles,
-    role_permission: schema.rolePermissions,
-    role_binding: schema.roleBindings,
-    direct_permission_binding: schema.directPermissionBindings,
-    email_verification_token: schema.emailVerificationTokens,
-    magic_link_token: schema.magicLinkTokens,
-    api_key: schema.apiKeys,
-    two_factor_secret: schema.twoFactorSecrets,
-    backup_code: schema.backupCodes,
-    trusted_device: schema.trustedDevices,
-    social_account: schema.socialAccounts,
-    tenant: schema.tenants,
-    tenant_user: schema.tenantUsers,
-    oauth_client: schema.oauthClients,
-    oauth_authorization_code: schema.oauthAuthorizationCodes,
-    oauth_access_token: schema.oauthAccessTokens,
-    oauth_refresh_token: schema.oauthRefreshTokens,
-    oauth_pending_flow: schema.oauthPendingFlows,
-    oauth_signing_key: schema.oauthSigningKeys,
-    user_scope_assignment: schema.userScopeAssignments,
-    account_lockout: schema.accountLockouts,
-    audit_log: schema.auditLogs,
-    audit_chain_state: schema.auditChainState,
-    webhook_endpoint: schema.webhookEndpoints,
-    webhook_delivery: schema.webhookDeliveries,
-    webauthn_credential: schema.webauthnCredentials,
-    webauthn_challenge: schema.webauthnChallenges,
+    schema_version: requireSchemaTable(schema, 'schemaVersion'),
+    user: requireSchemaTable(schema, 'users'),
+    login_identifier: requireSchemaTable(schema, 'loginIdentifiers'),
+    refresh_token: requireSchemaTable(schema, 'refreshTokens'),
+    auth_continuation: requireSchemaTable(schema, 'authContinuations'),
+    group: requireSchemaTable(schema, 'groups'),
+    group_user: requireSchemaTable(schema, 'groupUsers'),
+    service_account: requireSchemaTable(schema, 'serviceAccounts'),
+    resource: requireSchemaTable(schema, 'resources'),
+    permission: requireSchemaTable(schema, 'permissions'),
+    role: requireSchemaTable(schema, 'roles'),
+    role_permission: requireSchemaTable(schema, 'rolePermissions'),
+    role_binding: requireSchemaTable(schema, 'roleBindings'),
+    direct_permission_binding: requireSchemaTable(schema, 'directPermissionBindings'),
+    email_verification_token: requireSchemaTable(schema, 'emailVerificationTokens'),
+    magic_link_token: requireSchemaTable(schema, 'magicLinkTokens'),
+    api_key: requireSchemaTable(schema, 'apiKeys'),
+    two_factor_secret: requireSchemaTable(schema, 'twoFactorSecrets'),
+    backup_code: requireSchemaTable(schema, 'backupCodes'),
+    trusted_device: requireSchemaTable(schema, 'trustedDevices'),
+    social_account: requireSchemaTable(schema, 'socialAccounts'),
+    tenant: requireSchemaTable(schema, 'tenants'),
+    tenant_user: requireSchemaTable(schema, 'tenantUsers'),
+    oauth_client: requireSchemaTable(schema, 'oauthClients'),
+    oauth_authorization_code: requireSchemaTable(schema, 'oauthAuthorizationCodes'),
+    oauth_access_token: requireSchemaTable(schema, 'oauthAccessTokens'),
+    oauth_refresh_token: requireSchemaTable(schema, 'oauthRefreshTokens'),
+    oauth_pending_flow: requireSchemaTable(schema, 'oauthPendingFlows'),
+    oauth_signing_key: requireSchemaTable(schema, 'oauthSigningKeys'),
+    user_scope_assignment: requireSchemaTable(schema, 'userScopeAssignments'),
+    account_lockout: requireSchemaTable(schema, 'accountLockouts'),
+    audit_log: requireSchemaTable(schema, 'auditLogs'),
+    audit_chain_state: requireSchemaTable(schema, 'auditChainState'),
+    webhook_endpoint: requireSchemaTable(schema, 'webhookEndpoints'),
+    webhook_delivery: requireSchemaTable(schema, 'webhookDeliveries'),
+    webauthn_credential: requireSchemaTable(schema, 'webauthnCredentials'),
+    webauthn_challenge: requireSchemaTable(schema, 'webauthnChallenges'),
   };
 }
 
@@ -64,14 +76,17 @@ const PG_DEFAULT_TABLE_MAP = buildTableMap(fortressPgSchema);
 
 function getColumn(table: Table, field: string, model: string): Column {
   const columns = getTableColumns(table);
-  // Try exact match first
-  if (columns[field])
-    return columns[field];
+  // Try exact match first. Retain the narrowed lookup rather than indexing a
+  // second time, because callers may supply arbitrary field names.
+  const exactColumn = columns[field];
+  if (exactColumn)
+    return exactColumn;
 
-  // Convert snake_case field names to camelCase column references
+  // Convert snake_case field names to camelCase column references.
   const camelCase = field.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
-  if (columns[camelCase])
-    return columns[camelCase];
+  const camelCaseColumn = columns[camelCase];
+  if (camelCaseColumn)
+    return camelCaseColumn;
 
   throw Errors.badRequest(`Unknown field: ${field} on model/table '${model}'`, {
     details: { model, field },
@@ -177,6 +192,18 @@ function stringifyIds<T>(row: T): T {
   return out as T;
 }
 
+/**
+ * Return an array element only after the caller has established its bounds.
+ * This keeps an impossible internal indexing failure distinct from a user-facing
+ * fallback: callers retain their existing validation and query semantics.
+ */
+function requireArrayEntry<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Missing ${description} at index ${index}`);
+  return value;
+}
+
 function buildRawSql(sqlText: string, params: unknown[] = []): SQL {
   if (params.length === 0)
     return sql.raw(sqlText);
@@ -186,9 +213,13 @@ function buildRawSql(sqlText: string, params: unknown[] = []): SQL {
     if (parts.length - 1 !== params.length) {
       throw Errors.badRequest(`rawQuery placeholder count (${parts.length - 1}) does not match params (${params.length})`);
     }
-    let query: SQL = sql.raw(parts[0]);
-    for (let i = 0; i < params.length; i++) {
-      query = sql`${query}${params[i]}${sql.raw(parts[i + 1])}`;
+    // The count check above proves both entries exist for every parameter.
+    // Keep that proof adjacent to each dynamic lookup instead of supplying a
+    // value-changing fallback for malformed SQL.
+    let query: SQL = sql.raw(requireArrayEntry(parts, 0, 'raw SQL segment'));
+    for (const [index, parameter] of params.entries()) {
+      const nextPart = requireArrayEntry(parts, index + 1, 'raw SQL segment');
+      query = sql`${query}${parameter}${sql.raw(nextPart)}`;
     }
     return query;
   }

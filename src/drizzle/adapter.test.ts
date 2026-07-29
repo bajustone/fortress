@@ -1,4 +1,6 @@
+import type { SQL } from 'drizzle-orm';
 import type { DatabaseAdapter } from '../adapters/database';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FortressError } from '../core/errors';
 import { createTestAdapter } from '../testing';
@@ -40,6 +42,32 @@ describe('dialect-specific Drizzle factories', () => {
     expect(drizzle.transaction).toHaveBeenCalledOnce();
     expect(execute).toHaveBeenCalledOnce();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('preserves positional placeholder ordering in raw PostgreSQL queries', async () => {
+    let executedQuery: SQL | undefined;
+    const execute = vi.fn(async (query: SQL) => {
+      executedQuery = query;
+      return [];
+    });
+    const drizzle = {
+      insert: vi.fn(),
+      select: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      execute,
+      transaction: vi.fn(),
+    };
+    const adapter = createPostgresDrizzleAdapter(drizzle);
+
+    await adapter.rawQuery('SELECT ? AS first, ? AS second', ['first value', 2]);
+
+    if (executedQuery === undefined)
+      throw new Error('Expected rawQuery to execute the constructed SQL query');
+    expect(new PgDialect().sqlToQuery(executedQuery)).toMatchObject({
+      sql: 'SELECT $1 AS first, $2 AS second',
+      params: ['first value', 2],
+    });
   });
 });
 
