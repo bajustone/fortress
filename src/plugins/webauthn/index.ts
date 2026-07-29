@@ -129,7 +129,10 @@ function base64urlToUint8Array(base64url: string): Uint8Array<ArrayBuffer> {
 function uint8ArrayToBase64url(bytes: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
+    const byte = bytes[i];
+    if (byte === undefined)
+      throw new Error(`WebAuthn byte conversion invariant violated at index ${i}`);
+    binary += String.fromCharCode(byte);
   }
   return btoa(binary).replace(RE_PLUS, '-').replace(RE_SLASH, '_').replace(RE_TRAILING_EQ, '');
 }

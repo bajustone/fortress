@@ -223,6 +223,10 @@ async function inspectChain(
     return { tail: null, brokenLinks };
   }
 
+  const [firstEntry] = entries;
+  if (firstEntry === undefined)
+    throw new Error('Audit chain invariant violated: non-empty entry list has no first entry');
+
   const hashes = new Map<string, AuditLogEntry>();
   const duplicateHashes = new Set<string>();
   for (const entry of entries) {
@@ -244,8 +248,11 @@ async function inspectChain(
     }
   }
   for (const hash of duplicateHashes) {
+    const entry = hashes.get(hash);
+    if (entry === undefined)
+      throw new Error(`Audit chain invariant violated: duplicate hash '${hash}' has no entry`);
     brokenLinks.push({
-      entryId: hashes.get(hash)!.id,
+      entryId: entry.id,
       expected: 'unique entry hash',
       actual: hash,
     });
@@ -260,9 +267,9 @@ async function inspectChain(
     }
     if (roots.length === 0) {
       brokenLinks.push({
-        entryId: entries[0].id,
+        entryId: firstEntry.id,
         expected: 'one entry with previousHash=null',
-        actual: entries[0].previousHash,
+        actual: firstEntry.previousHash,
       });
     }
   }
@@ -277,7 +284,13 @@ async function inspectChain(
   }
 
   const visited = new Set<AuditLogEntry>();
-  let current = roots.length === 1 ? roots[0] : null;
+  let current: AuditLogEntry | null = null;
+  if (roots.length === 1) {
+    const [root] = roots;
+    if (root === undefined)
+      throw new Error('Audit chain invariant violated: sole root is absent');
+    current = root;
+  }
   let tail: AuditLogEntry | null = null;
   while (current && !visited.has(current)) {
     visited.add(current);
@@ -293,7 +306,15 @@ async function inspectChain(
         });
       }
     }
-    current = successors.length === 1 ? successors[0] : null;
+    if (successors.length === 1) {
+      const [successor] = successors;
+      if (successor === undefined)
+        throw new Error('Audit chain invariant violated: sole successor is absent');
+      current = successor;
+    }
+    else {
+      current = null;
+    }
   }
   for (const entry of entries) {
     if (!visited.has(entry)) {
@@ -305,9 +326,12 @@ async function inspectChain(
     }
   }
 
+  // A broken chain can have no reachable tail; retain the established first
+  // entry fallback, now explicitly proven above, for an actionable report.
+  const anchorEntry = tail === null ? firstEntry : tail;
   if (!anchor) {
     brokenLinks.push({
-      entryId: tail?.id ?? entries[0].id,
+      entryId: anchorEntry.id,
       expected: 'persisted terminal audit-chain anchor',
       actual: null,
     });
@@ -315,7 +339,7 @@ async function inspectChain(
   else {
     if (anchor.entryCount !== entries.length) {
       brokenLinks.push({
-        entryId: tail?.id ?? entries[0].id,
+        entryId: anchorEntry.id,
         expected: `anchor entry count ${anchor.entryCount}`,
         actual: String(entries.length),
       });

@@ -1,5 +1,5 @@
 import type { Fortress } from '../../core/fortress';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
 import { accountLockout } from '../account-lockout';
@@ -68,6 +68,20 @@ describe('two-factor plugin', () => {
       await methods.confirmSetup(userId, code);
 
       await expect(methods.enable(userId)).rejects.toThrow('already enabled');
+    });
+  });
+
+  describe('totp generation', () => {
+    it('matches the RFC 6238 SHA-1 dynamic-truncation vector', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('1970-01-01T00:00:59.000Z'));
+      try {
+        // ASCII "12345678901234567890", 30s period, counter 1 → 94287082.
+        expect(await generateTOTP('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 30, 8)).toBe('94287082');
+      }
+      finally {
+        vi.useRealTimers();
+      }
     });
   });
 

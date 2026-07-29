@@ -73,8 +73,12 @@ const HEX_32_BYTE_KEY = /^[0-9a-f]{64}$/i;
 
 function decodeEncryptionKey(value: string): Uint8Array {
   const trimmed = value.trim();
-  if (HEX_32_BYTE_KEY.test(trimmed))
-    return new Uint8Array(trimmed.match(/.{2}/g)!.map(byte => Number.parseInt(byte, 16)));
+  if (HEX_32_BYTE_KEY.test(trimmed)) {
+    const bytePairs = trimmed.match(/.{2}/g);
+    if (bytePairs === null)
+      throw new Error('Two-factor encryption key invariant violated: hex key has no byte pairs');
+    return new Uint8Array(bytePairs.map(byte => Number.parseInt(byte, 16)));
+  }
   try {
     const normalized = trimmed.replace(/-/g, '+').replace(/_/g, '/');
     const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
@@ -195,6 +199,13 @@ function base32Decode(encoded: string): Uint8Array {
  * Generate a TOTP code from a base32 secret. Re-exported from this module
  * for testing — normal callers should use the plugin methods instead.
  */
+function requireHmacByte(hmac: Uint8Array, index: number): number {
+  const byte = hmac[index];
+  if (byte === undefined)
+    throw new Error('TOTP HMAC output is too short for dynamic truncation');
+  return byte;
+}
+
 async function generateTOTPForCounter(secret: string, digits: number, counter: number): Promise<string> {
   const counterBytes = new ArrayBuffer(8);
   const view = new DataView(counterBytes);
@@ -210,12 +221,21 @@ async function generateTOTPForCounter(secret: string, digits: number, counter: n
   );
 
   const hmac = new Uint8Array(await crypto.subtle.sign('HMAC', key, counterBytes));
-  const offset = hmac.at(-1)! & 0x0F;
+  const offset = requireHmacByte(hmac, hmac.length - 1) & 0x0F;
+  // SHA-1 yields 20 bytes, and dynamic truncation reads four bytes starting
+  // at its low-nibble offset. Do not let malformed crypto output become a
+  // zero/default byte sequence that could accept an attacker-supplied code.
+  if (offset + 3 >= hmac.length)
+    throw new Error('TOTP HMAC output is too short for dynamic truncation');
+  const first = requireHmacByte(hmac, offset);
+  const second = requireHmacByte(hmac, offset + 1);
+  const third = requireHmacByte(hmac, offset + 2);
+  const fourth = requireHmacByte(hmac, offset + 3);
   const code = (
-    ((hmac[offset] & 0x7F) << 24)
-    | ((hmac[offset + 1] & 0xFF) << 16)
-    | ((hmac[offset + 2] & 0xFF) << 8)
-    | (hmac[offset + 3] & 0xFF)
+    ((first & 0x7F) << 24)
+    | ((second & 0xFF) << 16)
+    | ((third & 0xFF) << 8)
+    | (fourth & 0xFF)
   ) % (10 ** digits);
 
   return String(code).padStart(digits, '0');
