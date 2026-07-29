@@ -5,8 +5,8 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { GenericContainer, Wait } from 'testcontainers';
 
-import { afterAll, beforeAll, beforeEach, describe } from 'vitest';
-import { runAdapterTests } from '../../testing/adapter-conformance.test';
+import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import { runAdapterTests } from '../../testing/adapter-conformance';
 import { createPostgresDrizzleAdapter } from '../adapter';
 
 const CREATE_TABLES_SQL = `
@@ -452,5 +452,5 @@ function createPgTestAdapter(): DatabaseAdapter {
 }
 
 describe('adapter conformance: PostgreSQL (drizzle)', () => {
-  runAdapterTests(createPgTestAdapter);
+  runAdapterTests(createPgTestAdapter, { beforeEach, describe, it });
 });

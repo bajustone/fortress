@@ -26,6 +26,8 @@ import { resolve } from 'node:path';
 import { getLatestMigrationVersion, getMigrationUpSql } from '../core/migrations/migrations';
 import { createSqliteDrizzleAdapter } from '../drizzle/adapter';
 
+export { runAdapterTests } from './adapter-conformance';
+export type { ConformanceRunner } from './adapter-conformance';
 export {
   checkMigrationDrift,
   checkPublicRoutes,
