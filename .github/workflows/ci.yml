@@ -55,6 +55,30 @@ jobs:
       - name: Packed npm publication manifest and CLI
         run: bun run check:package-cli
 
+  # Advisory telemetry for the staged `noUncheckedIndexedAccess` adoption
+  # (issue #28). Reports production and test diagnostic counts separately so
+  # test-suite cleanup cannot mask a production regression. Deliberately has no
+  # `continue-on-error`: the script exits 0 for any diagnostic count, so the
+  # only way this job fails is a genuinely broken measurement, which must not
+  # be hidden. It gains a baseline and a fail-on-increase ratchet once #25/#26
+  # land.
+  strictness-telemetry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Restore Bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun install --frozen-lockfile
+      - name: noUncheckedIndexedAccess diagnostic counts (advisory)
+        run: bun run check:strict-indexed
+
   # Unit suite (SQLite test adapter) across every supported runtime. Bun is the
   # primary runtime; the Node jobs run the same vitest suite under Node's
   # better-sqlite3 path so the Node-compatible build stays honest.
