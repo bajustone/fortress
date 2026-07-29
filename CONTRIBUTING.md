@@ -42,7 +42,20 @@ Run the source and built-package consumer contract before changing exports, decl
 bun run check:consumer-contract
 ```
 
-This command builds `dist/` before validating package self-resolution.
+For built output only, use the self-contained clean-checkout command:
+
+```sh
+bun run check:built-package
+```
+
+It builds `dist/`, checks declarations with the supported TypeScript branches,
+and imports the testing entrypoint under Node ESM and CommonJS. Standalone
+post-build checks fail immediately with a `bun run build` pointer when artifacts
+are absent.
+
+Code coverage is not currently a repository gate. The project gates behavior,
+type contracts, framework examples, and PostgreSQL integration explicitly;
+coverage thresholds should only be introduced with an agreed baseline.
 
 ## PostgreSQL integration tests
 
