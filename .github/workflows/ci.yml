@@ -1,6 +1,12 @@
 name: CI
 on:
+  # `push` is scoped to the integration branch and release tags. An unscoped
+  # `push` would run this workflow twice for every same-repo pull request
+  # branch, and the two runs land in different concurrency groups (PR number
+  # vs. ref), so neither cancels the other.
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   schedule:
     # Nightly full run — exercises the heavier PostgreSQL/testcontainers matrix
@@ -8,8 +14,11 @@ on:
     - cron: '0 6 * * *'
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Superseded branch and PR runs are cancelled. `main` and release tags are
+  # not: those runs gate releases and must finish even when several commits or
+  # tags land together.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   workflow-policy:
@@ -31,6 +40,7 @@ jobs:
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
       - run: bun install --frozen-lockfile
       - run: bun run check:version
       - run: bun run lint
@@ -63,10 +73,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+      # `.nvmrc` is the single source of truth for the documented minimum, so
+      # this job exercises the exact floor declared in `engines.node` rather
+      # than whatever the latest 20.x happens to be.
       - if: matrix.runtime == 'node20'
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19.0'
+          node-version-file: .nvmrc
       - if: matrix.runtime == 'node22'
         uses: actions/setup-node@v4
         with:
@@ -80,6 +93,7 @@ jobs:
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
       - run: bun install --frozen-lockfile
       - name: Test (bun)
         if: matrix.runtime == 'bun'
@@ -105,6 +119,7 @@ jobs:
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
       - run: bun install --frozen-lockfile
       - run: bun run test:integration
 
@@ -123,6 +138,7 @@ jobs:
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
       - run: bun install --frozen-lockfile
       - run: deno --version
       - run: bun run check:jsr
