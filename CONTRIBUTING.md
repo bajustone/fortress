@@ -65,7 +65,10 @@ Start Docker (or a compatible runtime), then run:
 bun run test:integration
 ```
 
-The integration suite starts disposable PostgreSQL containers. It is release-critical and must not be silently skipped in CI.
+The command first probes Testcontainers' own Docker-compatible runtime discovery
+path and fails quickly with setup guidance when the daemon or socket is unavailable.
+The integration suite then starts disposable PostgreSQL containers. It is
+release-critical and must not be silently skipped in CI.
 
 ## Before opening a pull request
 
