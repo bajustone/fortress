@@ -48,6 +48,8 @@ export {
 export type {
   CsrfConfig,
   ExpressAdapterOptions,
+  /** Alias of this adapter's `CsrfConfig`, for files that also import the core type. */
+  CsrfConfig as ExpressCsrfConfig,
   ExpressMiddleware,
   ExpressNextFunction,
   ExpressRequest,

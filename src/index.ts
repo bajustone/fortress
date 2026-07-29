@@ -33,6 +33,7 @@ export type { CoreOperator, ScopeRule, WhereClause } from './adapters/database/t
 /** Pre-built endpoint definitions, schemas, and stable JSON wire types for core auth routes. */
 export type {
   AuthChallengeWire,
+  AuthEndpointsMap,
   AuthImpersonationWire,
   AuthPendingWire,
   AuthResultWire,
@@ -40,8 +41,8 @@ export type {
 } from './core/auth/auth-endpoints';
 export { authComponentSchemas, authEndpoints } from './core/auth/auth-endpoints';
 
-/** Auth lifecycle event + listener types, emitted via `fortress.auth.addAuthObserver`. */
-export type { AuthEvent, AuthEventListener } from './core/auth/auth-service';
+/** The authentication service surface exposed as `fortress.auth`, plus its observer contracts. */
+export type { AuthEvent, AuthEventListener, AuthService } from './core/auth/auth-service';
 
 /** Public JWT key-material type used by FortressConfig. */
 export type { JwtKeyMaterial } from './core/auth/jwt';
@@ -71,8 +72,8 @@ export type {
   FortressRuntime,
 } from './core/capabilities';
 
-/** Top-level fortress configuration and pluggable password-hasher contract. */
-export type { FortressConfig, PasswordHasher, SessionConfig } from './core/config';
+/** Top-level fortress configuration, cookie policy, and pluggable password-hasher contract. */
+export type { CookieConfig, FortressConfig, PasswordHasher, ResolvedCookieConfig, SessionConfig } from './core/config';
 /** Definition-site validation and branding for exact endpoint collections (ADR 0001 §2). */
 export { defineEndpoints } from './core/define-endpoints';
 
@@ -93,6 +94,7 @@ export type {
   EndpointDefinition,
   EndpointInput,
   EndpointMeta,
+  EndpointPermission,
   EndpointResponse,
   HttpMethod,
   InferEndpointBody,
@@ -124,8 +126,21 @@ export { buildCall } from './core/http/call';
 
 export type { CallOptions } from './core/http/call';
 
+/** Decoded payload of the fortress auth cookie. */
+export type { AuthCookiePayload } from './core/http/cookie-serialize';
+
+/**
+ * Core CSRF policy. This is the canonical `CsrfConfig`; the Hono and Express
+ * adapters export their own framework-specific shapes, also available under the
+ * unambiguous aliases `HonoCsrfConfig` and `ExpressCsrfConfig`.
+ */
+export type { CsrfConfig } from './core/http/csrf';
+
 /** Cross-adapter context passed to plugin middleware under core, Hono, and Express. */
 export type { PluginRequestContext } from './core/http/plugin-middleware';
+
+/** The authenticated subject resolved from a request by `protect` and the adapters. */
+export type { ResolvedPrincipal } from './core/http/principal';
 export { describeProtectedTarget, protect, resolveProtectedEndpoint } from './core/http/protect';
 export type { ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';
 
@@ -134,6 +149,9 @@ export { explainPermission } from './core/iam/explain';
 export type { PermissionExplanation, PermissionExplanationSource } from './core/iam/explain';
 /** Pre-built endpoint definitions and component schemas for the core IAM routes. */
 export { iamComponentSchemas, iamEndpoints } from './core/iam/iam-endpoints';
+
+/** Declared shape of the exported `iamEndpoints` collection. */
+export type { IamEndpointsMap } from './core/iam/iam-endpoints';
 
 /** IAM mutation and permission-check observer contracts. */
 export type {
@@ -169,7 +187,7 @@ export { FORTRESS_TABLES, fortressMigrations, getExpectedColumns, getFortressMig
 export type { FortressMigration, MigrationDialect } from './core/migrations/migrations';
 export type { Unsubscribe } from './core/observability/listener-list';
 /** Runtime-neutral logging, telemetry, and observer contracts. */
-export type { FortressLogger } from './core/observability/logger';
+export type { FortressLogger, LogFn, LogLevel } from './core/observability/logger';
 
 export type {
   Attributes,
@@ -198,6 +216,7 @@ export type {
   FortressPluginDefinition,
   HookContext,
   HookResult,
+  JsonOf,
   LegacyPluginMethods,
   MiddlewareDefinition,
   ModelConstraint,
@@ -217,6 +236,7 @@ export type {
   RouteHandlerIncompatible,
   RouteHandlerKeyMismatch,
   RouteHandlerMissing,
+  RouteInputNotFlat,
   RuntimeFortressPlugin,
   ValidatePluginRoutes,
 } from './core/plugin';
@@ -291,6 +311,7 @@ export type {
   AuthTokenPair,
   ConditionRef,
   ConditionValue,
+  CreateServiceAccountInput,
   CreateUserInput,
   FortressUser,
   Group,
@@ -304,6 +325,9 @@ export type {
   RequestMeta,
   Role,
   RoleBinding,
+  ServiceAccount,
+  SessionInfo,
+  Subject,
   SubjectType,
   TokenClaims,
 } from './core/types';
@@ -320,6 +344,9 @@ export { assertSuccess, isImpersonation, isPending, isSuccess } from './core/typ
  * with the same shape fortress's own dispatch uses internally.
  */
 export { validateRequest } from './core/validation';
+
+/** Shape returned by {@link validateRequest}. */
+export type { ValidatedRequestData } from './core/validation';
 
 /** Type-safe method surface contributed by the account lockout plugin. */
 export type { AccountLockoutMethods } from './plugins/account-lockout';
@@ -344,6 +371,9 @@ export type { MagicLinkMethods } from './plugins/magic-link';
 
 /** Type-safe method surface and request/response shapes for the OAuth server plugin. */
 export type { AuthorizeRequestParams, ClientAuth, OAuthMethods, PendingFlowRecord, TokenRequestBody } from './plugins/oauth';
+
+/** Type-safe method surface contributed by the OpenAPI plugin. */
+export type { OpenAPIMethods } from './plugins/openapi';
 
 export type { OpenAPISpec, SpecBuilderOptions } from './plugins/openapi/spec-builder';
 

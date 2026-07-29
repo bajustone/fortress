@@ -44,7 +44,8 @@ export type { MountFortressOptions } from './handle';
 export { getClaims, getDb, getScopedDb, getSubject, getUserId } from './helpers';
 export type { FortressContext, FortressEnv, FortressVariables } from './middleware/auth';
 export { createCsrfMiddleware } from './middleware/csrf';
-export type { CsrfConfig } from './middleware/csrf';
+/** `HonoCsrfConfig` is an alias of this adapter's `CsrfConfig`, for files that also import the core type. */
+export type { CsrfConfig, CsrfConfig as HonoCsrfConfig } from './middleware/csrf';
 export { createPluginMiddleware } from './middleware/plugin-middleware';
 export type { RbacOptions, RouteMapping } from './middleware/rbac';
 export { createSecurityHeadersMiddleware } from './middleware/security-headers';
