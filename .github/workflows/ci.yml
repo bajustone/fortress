@@ -1,12 +1,6 @@
 name: CI
 on:
-  # `push` is scoped to the integration branch and release tags. An unscoped
-  # `push` would run this workflow twice for every same-repo pull request
-  # branch, and the two runs land in different concurrency groups (PR number
-  # vs. ref), so neither cancels the other.
   push:
-    branches: [main]
-    tags: ['v*']
   pull_request:
   schedule:
     # Nightly full run — exercises the heavier PostgreSQL/testcontainers matrix
@@ -14,7 +8,9 @@ on:
     - cron: '0 6 * * *'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Normalize push and same-repository PR runs onto the same head branch key,
+  # while keeping fork branches with identical names isolated by repository.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
   # Superseded branch and PR runs are cancelled. `main` and release tags are
   # not: those runs gate releases and must finish even when several commits or
   # tags land together.
