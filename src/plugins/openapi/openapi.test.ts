@@ -10,6 +10,20 @@ import { buildOpenAPISpec } from './spec-builder';
 
 const SECRET = 'openapi-test-secret-at-least-32-bytes!!';
 
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requireRecord<T>(record: Record<string, T>, key: string, description: string): T {
+  return requireValue(record[key], description);
+}
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  return requireValue(values[index], description);
+}
+
 function pathEndpoint(path: string, handler: string) {
   return endpoint('GET', path)
     .summary(`${handler} route`)
@@ -27,11 +41,13 @@ describe('spec-builder path parameters', () => {
       title: 'T',
       version: '1.0.0',
     });
-    expect(spec.paths['/items/{item-id}']).toBeDefined();
-    const params = spec.paths['/items/{item-id}'].get.parameters;
+    const itemPath = requireRecord(spec.paths, '/items/{item-id}', 'path /items/{item-id}');
+    const itemOperation = requireRecord(itemPath, 'get', 'GET operation for /items/{item-id}');
+    const params = requireValue(itemOperation.parameters, 'path parameters for /items/{item-id}');
     expect(params).toHaveLength(1);
-    expect(params![0].name).toBe('item-id');
-    expect(params![0].in).toBe('path');
+    const parameter = requireAt(params, 0, 'first path parameter for /items/{item-id}');
+    expect(parameter.name).toBe('item-id');
+    expect(parameter.in).toBe('path');
   });
 
   it('rejects a literal brace segment the router matches verbatim', () => {
@@ -92,9 +108,9 @@ describe('spec-builder', () => {
       version: '1.0.0',
     });
 
-    expect(spec.paths['/auth/login']).toBeDefined();
-    expect(spec.paths['/auth/login'].post).toBeDefined();
-    expect(spec.paths['/auth/login'].post.summary).toBe('Login with credentials');
+    const loginPath = requireRecord(spec.paths, '/auth/login', 'path /auth/login');
+    const loginOperation = requireRecord(loginPath, 'post', 'POST operation for /auth/login');
+    expect(loginOperation.summary).toBe('Login with credentials');
     expect(spec.paths['/auth/register']).toBeDefined();
     expect(spec.paths['/auth/refresh']).toBeDefined();
     expect(spec.paths['/auth/me']).toBeDefined();
@@ -107,10 +123,12 @@ describe('spec-builder', () => {
       version: '1.0.0',
     });
 
-    expect(spec.paths['/auth/sessions/{id}']).toBeDefined();
-    expect(spec.paths['/auth/sessions/{id}'].delete.parameters).toBeDefined();
-    expect(spec.paths['/auth/sessions/{id}'].delete.parameters![0].name).toBe('id');
-    expect(spec.paths['/auth/sessions/{id}'].delete.parameters![0].in).toBe('path');
+    const sessionPath = requireRecord(spec.paths, '/auth/sessions/{id}', 'path /auth/sessions/{id}');
+    const sessionOperation = requireRecord(sessionPath, 'delete', 'DELETE operation for /auth/sessions/{id}');
+    const parameters = requireValue(sessionOperation.parameters, 'path parameters for /auth/sessions/{id}');
+    const parameter = requireAt(parameters, 0, 'first path parameter for /auth/sessions/{id}');
+    expect(parameter.name).toBe('id');
+    expect(parameter.in).toBe('path');
   });
 
   it('includes request body schemas', () => {
@@ -119,10 +137,13 @@ describe('spec-builder', () => {
       version: '1.0.0',
     });
 
-    const loginOp = spec.paths['/auth/login'].post;
-    expect(loginOp.requestBody).toBeDefined();
-    expect(loginOp.requestBody!.content['application/json'].schema.properties).toHaveProperty('identifier');
-    expect(loginOp.requestBody!.content['application/json'].schema.properties).toHaveProperty('password');
+    const loginPath = requireRecord(spec.paths, '/auth/login', 'path /auth/login');
+    const loginOp = requireRecord(loginPath, 'post', 'POST operation for /auth/login');
+    const requestBody = requireValue(loginOp.requestBody, 'request body for /auth/login');
+    const mediaType = requireRecord(requestBody.content, 'application/json', 'JSON request body for /auth/login');
+    const properties = requireValue(mediaType.schema.properties, 'request properties for /auth/login');
+    expect(properties).toHaveProperty('identifier');
+    expect(properties).toHaveProperty('password');
   });
 
   it('includes response schemas', () => {
@@ -131,9 +152,10 @@ describe('spec-builder', () => {
       version: '1.0.0',
     });
 
-    const loginOp = spec.paths['/auth/login'].post;
-    expect(loginOp.responses['200']).toBeDefined();
-    expect(loginOp.responses['200'].description).toBe('Login successful');
+    const loginPath = requireRecord(spec.paths, '/auth/login', 'path /auth/login');
+    const loginOp = requireRecord(loginPath, 'post', 'POST operation for /auth/login');
+    const successResponse = requireRecord(loginOp.responses, '200', '200 response for /auth/login');
+    expect(successResponse.description).toBe('Login successful');
     expect(loginOp.responses['401']).toBeDefined();
   });
 
@@ -168,16 +190,18 @@ describe('spec-builder', () => {
       servers: [{ url: 'https://api.example.com', description: 'Production' }],
     });
 
-    expect(spec.servers).toHaveLength(1);
-    expect(spec.servers![0].url).toBe('https://api.example.com');
+    const servers = requireValue(spec.servers, 'OpenAPI servers');
+    expect(servers).toHaveLength(1);
+    expect(requireAt(servers, 0, 'first OpenAPI server').url).toBe('https://api.example.com');
   });
 
   it('handles endpoints without meta or responses', () => {
     const minimal = endpoint('GET', '/health').handler('health').build();
     const spec = buildOpenAPISpec([minimal], {}, { title: 'Test', version: '1.0.0' });
 
-    expect(spec.paths['/health'].get).toBeDefined();
-    expect(spec.paths['/health'].get.responses['200']).toBeDefined();
+    const healthPath = requireRecord(spec.paths, '/health', 'path /health');
+    const healthOperation = requireRecord(healthPath, 'get', 'GET operation for /health');
+    expect(healthOperation.responses['200']).toBeDefined();
   });
 
   it('strips Standard Schema/runtime internals from embedded schemas', () => {
@@ -202,7 +226,11 @@ describe('spec-builder', () => {
     const serialized = JSON.stringify(spec);
     expect(serialized).not.toContain('~standard');
     expect(serialized).not.toContain('extraFn');
-    expect(spec.paths['/schools'].post.requestBody!.content['application/json'].schema).toEqual({
+    const schoolsPath = requireRecord(spec.paths, '/schools', 'path /schools');
+    const schoolsOperation = requireRecord(schoolsPath, 'post', 'POST operation for /schools');
+    const requestBody = requireValue(schoolsOperation.requestBody, 'request body for /schools');
+    const mediaType = requireRecord(requestBody.content, 'application/json', 'JSON request body for /schools');
+    expect(mediaType.schema).toEqual({
       type: 'object',
       properties: { name: { type: 'string' } },
       required: ['name'],
@@ -225,7 +253,8 @@ describe('spec-builder', () => {
     });
 
     expect(spec.tags).toEqual([{ name: 'Schools' }]);
-    expect(spec.paths['/api/v1/schools/{id}'].get.operationId).toBe('schools.get');
+    const schoolPath = requireRecord(spec.paths, '/api/v1/schools/{id}', 'path /api/v1/schools/{id}');
+    expect(requireRecord(schoolPath, 'get', 'GET operation for /api/v1/schools/{id}').operationId).toBe('schools.get');
   });
 });
 
@@ -248,8 +277,12 @@ describe('standalone toOpenAPI helper', () => {
     });
 
     expect(spec.info.title).toBe('REB EdIT API');
-    expect(spec.paths['/api/v1/schools/{id}'].get.operationId).toBe('schools.get');
-    expect(spec.paths['/api/v1/schools/{id}'].get.responses['200'].content?.['application/json'].schema).toMatchObject({
+    const schoolPath = requireRecord(spec.paths, '/api/v1/schools/{id}', 'path /api/v1/schools/{id}');
+    const schoolOperation = requireRecord(schoolPath, 'get', 'GET operation for /api/v1/schools/{id}');
+    expect(schoolOperation.operationId).toBe('schools.get');
+    const successResponse = requireRecord(schoolOperation.responses, '200', '200 response for /api/v1/schools/{id}');
+    const content = requireValue(successResponse.content, 'response content for /api/v1/schools/{id}');
+    expect(requireRecord(content, 'application/json', 'JSON response for /api/v1/schools/{id}').schema).toMatchObject({
       type: 'object',
       required: ['data'],
     });
@@ -316,8 +349,8 @@ describe('openapi plugin', () => {
     });
 
     const spec = await fortress.plugins.openapi.generateSpec();
-    expect(spec.paths['/api/v1/schools']).toBeDefined();
-    expect(spec.paths['/api/v1/schools'].get.operationId).toBe('schools.list');
+    const schoolsPath = requireRecord(spec.paths, '/api/v1/schools', 'path /api/v1/schools');
+    expect(requireRecord(schoolsPath, 'get', 'GET operation for /api/v1/schools').operationId).toBe('schools.list');
   });
 
   it('excludes core auth when configured', async () => {
@@ -422,31 +455,40 @@ describe('openapi resource/action enum enrichment', () => {
 
     const spec = await fortress.plugins.openapi.generateSpec();
 
-    // Permission should be a oneOf with per-resource branches
-    const permission = spec.components.schemas.Permission;
-    expect(permission.oneOf).toBeDefined();
-    expect(permission.oneOf).toHaveLength(2);
+    // Permission should be a oneOf with per-resource branches.
+    const permission = requireRecord(spec.components.schemas, 'Permission', 'Permission component schema');
+    const permissionBranches = requireValue(permission.oneOf, 'Permission oneOf branches');
+    expect(permissionBranches).toHaveLength(2);
 
-    // Each branch should have const resource and enum actions
-    const studentsBranch = permission.oneOf!.find(b => b.properties?.resource?.const === 'students');
-    expect(studentsBranch).toBeDefined();
-    expect(studentsBranch!.properties!.action.enum).toEqual(['read', 'write', 'delete']);
-    expect(studentsBranch!.properties!.effect!.enum).toEqual(['ALLOW', 'DENY']);
-    expect(studentsBranch!.required).toContain('id');
+    // Each branch should have const resource and enum actions.
+    const studentsBranch = requireValue(
+      permissionBranches.find(branch => branch.properties?.resource?.const === 'students'),
+      'students Permission branch',
+    );
+    const studentProperties = requireValue(studentsBranch.properties, 'students Permission properties');
+    expect(requireRecord(studentProperties, 'action', 'students Permission action property').enum).toEqual(['read', 'write', 'delete']);
+    expect(requireRecord(studentProperties, 'effect', 'students Permission effect property').enum).toEqual(['ALLOW', 'DENY']);
+    expect(studentsBranch.required).toContain('id');
 
-    const postsBranch = permission.oneOf!.find(b => b.properties?.resource?.const === 'posts');
-    expect(postsBranch).toBeDefined();
-    expect(postsBranch!.properties!.action.enum).toEqual(['read', 'publish']);
+    const postsBranch = requireValue(
+      permissionBranches.find(branch => branch.properties?.resource?.const === 'posts'),
+      'posts Permission branch',
+    );
+    const postProperties = requireValue(postsBranch.properties, 'posts Permission properties');
+    expect(requireRecord(postProperties, 'action', 'posts Permission action property').enum).toEqual(['read', 'publish']);
 
-    // PermissionInput should also be oneOf but without id
-    const permInput = spec.components.schemas.PermissionInput;
-    expect(permInput.oneOf).toBeDefined();
-    expect(permInput.oneOf).toHaveLength(2);
+    // PermissionInput should also be oneOf but without id.
+    const permInput = requireRecord(spec.components.schemas, 'PermissionInput', 'PermissionInput component schema');
+    const inputBranches = requireValue(permInput.oneOf, 'PermissionInput oneOf branches');
+    expect(inputBranches).toHaveLength(2);
 
-    const inputBranch = permInput.oneOf!.find(b => b.properties?.resource?.const === 'students');
-    expect(inputBranch).toBeDefined();
-    expect(inputBranch!.required).not.toContain('id');
-    expect(inputBranch!.properties!.action.enum).toEqual(['read', 'write', 'delete']);
+    const inputBranch = requireValue(
+      inputBranches.find(branch => branch.properties?.resource?.const === 'students'),
+      'students PermissionInput branch',
+    );
+    expect(inputBranch.required).not.toContain('id');
+    const inputProperties = requireValue(inputBranch.properties, 'students PermissionInput properties');
+    expect(requireRecord(inputProperties, 'action', 'students PermissionInput action property').enum).toEqual(['read', 'write', 'delete']);
   });
 
   it('adds flat enums to /iam/check inline body', async () => {
@@ -460,16 +502,19 @@ describe('openapi resource/action enum enrichment', () => {
     });
 
     const spec = await fortress.plugins.openapi.generateSpec();
-    const checkOp = spec.paths['/iam/check']?.post;
-    expect(checkOp).toBeDefined();
+    const checkPath = requireRecord(spec.paths, '/iam/check', 'path /iam/check');
+    const checkOp = requireRecord(checkPath, 'post', 'POST operation for /iam/check');
 
     // The body is a `oneOf` of the subject and legacy user forms; both
     // branches must document the same enums.
-    const bodySchema = checkOp.requestBody!.content['application/json'].schema;
-    expect(bodySchema.oneOf).toHaveLength(2);
-    for (const branch of bodySchema.oneOf!) {
-      expect(branch.properties!.resource.enum).toEqual(['posts', 'students']);
-      expect(branch.properties!.action.enum).toEqual(['delete', 'publish', 'read', 'write']);
+    const requestBody = requireValue(checkOp.requestBody, 'request body for /iam/check');
+    const mediaType = requireRecord(requestBody.content, 'application/json', 'JSON request body for /iam/check');
+    const branches = requireValue(mediaType.schema.oneOf, '/iam/check body oneOf branches');
+    expect(branches).toHaveLength(2);
+    for (const branch of branches) {
+      const properties = requireValue(branch.properties, '/iam/check body branch properties');
+      expect(requireRecord(properties, 'resource', '/iam/check resource property').enum).toEqual(['posts', 'students']);
+      expect(requireRecord(properties, 'action', '/iam/check action property').enum).toEqual(['delete', 'publish', 'read', 'write']);
     }
   });
 
@@ -482,10 +527,12 @@ describe('openapi resource/action enum enrichment', () => {
 
     const spec = await fortress.plugins.openapi.generateSpec();
 
-    // Should have the original static schemas, not oneOf
-    const permission = spec.components.schemas.Permission;
+    // Should have the original static schemas, not oneOf.
+    const permission = requireRecord(spec.components.schemas, 'Permission', 'Permission component schema');
     expect(permission.oneOf).toBeUndefined();
-    expect(permission.properties?.resource?.type).toBe('string');
-    expect(permission.properties?.resource?.enum).toBeUndefined();
+    const properties = requireValue(permission.properties, 'Permission properties');
+    const resource = requireRecord(properties, 'resource', 'Permission resource property');
+    expect(resource.type).toBe('string');
+    expect(resource.enum).toBeUndefined();
   });
 });

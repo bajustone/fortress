@@ -1,9 +1,19 @@
 import type { EndpointDefinition } from '../core/endpoint';
+import type { ExternalRoute } from './convert-routes';
 import { describe, expect, it } from 'vitest';
 import { obj, str } from '../core/schema-builder';
 import { convertRoutes } from './convert-routes';
 import { fetcherSchemaConverter, identitySchemaConverter, toJSONSchemaConverter } from './converters';
 import { buildRouteDefinition } from './openapi';
+
+function requireExactlyOne<T>(values: readonly T[], description: string): T {
+  if (values.length !== 1)
+    throw new Error(`Expected exactly one ${description}, received ${values.length}`);
+  const value = values[0];
+  if (value === undefined)
+    throw new Error(`Expected exactly one ${description}, received no value`);
+  return value;
+}
 
 describe('hono OpenAPI converters (Zod-free defaults)', () => {
   it('identitySchemaConverter passes JSON Schema through unchanged', () => {
@@ -37,13 +47,13 @@ describe('hono OpenAPI converters (Zod-free defaults)', () => {
   });
 
   it('convertRoutes imports a fetcher/fortress-authored route via toJSONSchemaConverter', () => {
-    const route = {
+    const route: ExternalRoute = {
       method: 'POST',
       path: '/users',
       responses: { 200: { description: 'ok' } },
       request: { body: { content: { 'application/json': { schema: obj({ name: str() }, 'name') } } } },
     };
-    const [ep] = convertRoutes([route as any], { schemaConverter: toJSONSchemaConverter });
+    const ep = requireExactlyOne(convertRoutes([route], { schemaConverter: toJSONSchemaConverter }), 'converted fetcher route');
     expect(ep.input?.body?.type).toBe('object');
     expect(ep.input?.body?.properties?.name?.type).toBe('string');
   });
