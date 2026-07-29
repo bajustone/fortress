@@ -45,6 +45,7 @@ export function createRbacMiddleware(
   options?: RbacOptions,
 ): MiddlewareHandler<FortressEnv> {
   const routeMap = options?.routeMap ?? {};
+  validateRouteMap(routeMap);
   const skipPaths = options?.skipPaths ?? [];
   const skipPatterns = skipPaths.map(p => pathToRegex(p));
   const unmappedRoutes = options?.unmappedRoutes
@@ -105,13 +106,27 @@ export function createRbacMiddleware(
  * Match a request against parameterized route map entries.
  * 'GET /api/users/:id' matches 'GET /api/users/123'
  */
+function parseRouteMapPattern(pattern: string): { method: string; path: string } {
+  const parts = pattern.split(' ');
+  const [method, path] = parts;
+  if (parts.length !== 2 || method === undefined || path === undefined || method === '' || !path.startsWith('/')) {
+    throw new Error(`Invalid route map pattern '${pattern}': expected 'METHOD /path'`);
+  }
+  return { method, path };
+}
+
+function validateRouteMap(routeMap: Record<string, RouteMapping>): void {
+  for (const pattern of Object.keys(routeMap))
+    parseRouteMapPattern(pattern);
+}
+
 function findRouteMapMatch(method: string, path: string, routeMap: Record<string, RouteMapping>): RouteMapping | null {
   for (const [pattern, mapping] of Object.entries(routeMap)) {
-    const [patternMethod, patternPath] = pattern.split(' ', 2);
-    if (patternMethod !== method)
+    const configured = parseRouteMapPattern(pattern);
+    if (configured.method !== method)
       continue;
 
-    const regex = pathToRegex(patternPath);
+    const regex = pathToRegex(configured.path);
     if (regex.test(path))
       return mapping;
   }

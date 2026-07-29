@@ -35,10 +35,17 @@ export interface HonoRateLimitOptions {
   extractIp?: (c: Context) => string | undefined;
 }
 
+function firstForwardedIp(value: string): string {
+  const [firstHop] = value.split(',');
+  if (firstHop === undefined)
+    throw new Error('Forwarded IP invariant violated: header has no first hop');
+  return firstHop.trim();
+}
+
 function defaultExtractIp(c: Context): string | undefined {
   const xff = c.req.header('x-forwarded-for');
   if (xff)
-    return xff.split(',')[0].trim();
+    return firstForwardedIp(xff);
   return c.req.header('x-real-ip');
 }
 

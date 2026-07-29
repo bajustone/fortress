@@ -9,6 +9,7 @@ import { rateLimit } from '../plugins/rate-limit';
 import { createTestAdapter } from '../testing';
 import { getDb, getScopedDb, getUserId } from './helpers';
 import { createHonoMiddleware } from './index';
+import { createRbacMiddleware } from './middleware/rbac';
 
 const SECRET = 'hono-test-secret-at-least-32chars!!';
 
@@ -187,6 +188,15 @@ describe('hono plugin middleware', () => {
 });
 
 describe('hono rbacMiddleware', () => {
+  it('rejects a later malformed route-map key during middleware construction', () => {
+    expect(() => createRbacMiddleware(fortress, {
+      routeMap: {
+        'GET /valid': { resource: 'valid', action: 'read' },
+        'GET': { resource: 'invalid', action: 'read' },
+      },
+    })).toThrow('Invalid route map pattern \'GET\'');
+  });
+
   it('allows access when user has permission', async () => {
     const token = await loginAndGetToken();
 

@@ -12,6 +12,13 @@ interface WindowRecord {
   lastWindowMs: number;
 }
 
+function oldestActiveTimestamp(timestamps: readonly number[]): number {
+  const [oldest] = timestamps;
+  if (oldest === undefined)
+    throw new Error('Rate-limit store invariant violated: active window has no oldest timestamp');
+  return oldest;
+}
+
 /** In-memory sliding-window store with per-key retention. */
 export function createMemoryStore(): RateLimitStore {
   const store = new Map<string, WindowRecord>();
@@ -41,7 +48,7 @@ export function createMemoryStore(): RateLimitStore {
       store.set(key, { timestamps: retained, maxWindowMs, lastWindowMs: windowMs });
 
       const active = retained.filter(timestamp => timestamp > now - windowMs);
-      return { count: active.length, resetAt: active[0] + windowMs };
+      return { count: active.length, resetAt: oldestActiveTimestamp(active) + windowMs };
     },
 
     async get(key: string): Promise<{ count: number; resetAt: number } | null> {
@@ -54,7 +61,7 @@ export function createMemoryStore(): RateLimitStore {
         return null;
       return {
         count: active.length,
-        resetAt: active[0] + record.lastWindowMs,
+        resetAt: oldestActiveTimestamp(active) + record.lastWindowMs,
       };
     },
   };

@@ -146,11 +146,18 @@ export function normalizeAccountIdentifier(identifier: string): string {
   return identifier.trim().normalize('NFC').toLowerCase();
 }
 
+function firstForwardedIp(value: string): string {
+  const [firstHop] = value.split(',');
+  if (firstHop === undefined)
+    throw new Error('Forwarded IP invariant violated: header has no first hop');
+  return firstHop.trim();
+}
+
 /** Read an IP from a standard web Request's forwarding headers. */
 function ipFromRequest(request: Request): string {
   const xff = request.headers.get('x-forwarded-for');
   if (xff)
-    return xff.split(',')[0].trim();
+    return firstForwardedIp(xff);
   return request.headers.get('x-real-ip') ?? '';
 }
 

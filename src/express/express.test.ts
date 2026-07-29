@@ -14,6 +14,19 @@ import { createAuthMiddleware, createCsrfMiddleware, createErrorHandler, createE
 
 const SECRET = 'express-test-secret-32-chars!!!x';
 
+describe('express route-map configuration', () => {
+  it('rejects a later malformed key during middleware construction', () => {
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
+
+    expect(() => createRbacMiddleware(fortress, {
+      routeMap: {
+        'GET /valid': { resource: 'valid', action: 'read' },
+        'GET': { resource: 'invalid', action: 'read' },
+      },
+    })).toThrow('Invalid route map pattern \'GET\'');
+  });
+});
+
 function mockRes(): ExpressResponse {
   let statusCode = 200;
   let body: unknown;

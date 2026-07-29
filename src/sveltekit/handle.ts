@@ -72,6 +72,7 @@ export function createSvelteKitHandle(
   const routeTable = buildRouteTable(fortress.manifest.filter(route => route.mounted));
   const skipPatterns = (options.skipPaths ?? []).map(p => pathToRegex(p));
   const routeMap = options.routeMap ?? {};
+  validateRouteMap(routeMap);
   const unmappedRoutes = options.unmappedRoutes ?? 'allow';
   // Coalesce overlapping SSR requests that arrive with the same expired
   // cookie pair. Entries remain until every request that joined has finished
@@ -341,6 +342,20 @@ function pathToRegex(pattern: string): RegExp {
   return new RegExp(`^${regexStr}$`);
 }
 
+function parseRouteMapPattern(pattern: string): { method: string; path: string } {
+  const parts = pattern.split(' ');
+  const [method, path] = parts;
+  if (parts.length !== 2 || method === undefined || path === undefined || method === '' || !path.startsWith('/')) {
+    throw new Error(`Invalid route map pattern '${pattern}': expected 'METHOD /path'`);
+  }
+  return { method, path };
+}
+
+function validateRouteMap(map: Record<string, { resource: string; action: string }>): void {
+  for (const pattern of Object.keys(map))
+    parseRouteMapPattern(pattern);
+}
+
 /** Look up a `(resource, action)` mapping for `METHOD path`. */
 function matchRouteMap(
   map: Record<string, { resource: string; action: string }>,
@@ -351,10 +366,10 @@ function matchRouteMap(
   if (exact)
     return exact;
   for (const [pattern, mapping] of Object.entries(map)) {
-    const [m, p] = pattern.split(' ', 2);
-    if (m !== method)
+    const configured = parseRouteMapPattern(pattern);
+    if (configured.method !== method)
       continue;
-    if (pathToRegex(p).test(path))
+    if (pathToRegex(configured.path).test(path))
       return mapping;
   }
   return null;

@@ -113,6 +113,8 @@ function parseSetCookie(raw: string): ParsedSetCookie | null {
   const opts: RequiredPathCookieOptions = { path: '/' };
   for (const part of parts) {
     const [k, v = ''] = part.split('=', 2);
+    if (k === undefined)
+      throw new Error('Set-Cookie attribute invariant violated: attribute has no key');
     const key = k.toLowerCase();
     if (key === 'path')
       opts.path = v;

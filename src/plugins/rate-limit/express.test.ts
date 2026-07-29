@@ -68,6 +68,22 @@ describe('expressRateLimit (framework wrapper)', () => {
     expect(r2.err).toBeInstanceOf(FortressError);
   });
 
+  it('uses the first header and first hop when forwarded-for is an array', async () => {
+    const fortress = setup(1);
+    const mw = expressRateLimit(fortress, 'api');
+
+    const first = await invoke(mw, mockReq({ headers: {
+      'x-forwarded-for': ['10.0.0.10, 203.0.113.1', '198.51.100.99'],
+    } }));
+    const second = await invoke(mw, mockReq({ headers: {
+      'x-forwarded-for': ['10.0.0.10, 203.0.113.2'],
+    } }));
+
+    expect(first.err).toBeUndefined();
+    // Different later hops must not select a new bucket.
+    expect(second.err).toBeInstanceOf(FortressError);
+  });
+
   it('keys by user when fortressUserId is present and keyByUser is on (default)', async () => {
     const fortress = setup(1);
     const mw = expressRateLimit(fortress, 'api');
