@@ -23,6 +23,32 @@ import { FORTRESS_TABLES } from './migrations';
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== 'undefined';
 
+function requireRow<T>(rows: readonly T[], query: string): T {
+  if (rows.length !== 1)
+    throw new Error(`Expected exactly one row from ${query}, received ${rows.length}`);
+  const row = rows[0];
+  if (row === undefined)
+    throw new Error(`Expected exactly one row from ${query}, received no row`);
+  return row;
+}
+
+function requirePair<T>(rows: readonly T[], query: string): [T, T] {
+  if (rows.length !== 2)
+    throw new Error(`Expected exactly two ordered rows from ${query}, received ${rows.length}`);
+  const first = rows[0];
+  const second = rows[1];
+  if (first === undefined || second === undefined)
+    throw new Error(`Expected exactly two ordered rows from ${query}, received an incomplete pair`);
+  return [first, second];
+}
+
+function requireAt<T>(rows: readonly T[], index: number, query: string): T {
+  const row = rows[index];
+  if (row === undefined)
+    throw new Error(`Expected row ${index + 1} from ${query}, received ${rows.length} rows`);
+  return row;
+}
+
 function createBareSqliteAdapter(): MigratableDatabaseAdapter<'sqlite'> {
   if (isBun) {
     // eslint-disable-next-line ts/no-require-imports
@@ -111,7 +137,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     const db = createBareSqliteAdapter();
     await migrateUp(db, 8);
     await db.rawQuery!('INSERT INTO fortress_user (email, name) VALUES (\'mfa@example.com\', \'MFA\')');
-    const [user] = await db.rawQuery!<{ id: string }>('SELECT id FROM fortress_user WHERE email = \'mfa@example.com\'');
+    const user = requireRow(await db.rawQuery!<{ id: string }>('SELECT id FROM fortress_user WHERE email = \'mfa@example.com\''), 'MFA fixture user');
     await db.rawQuery!(
       'INSERT INTO fortress_two_factor_secret (user_id, secret, is_enabled) VALUES (?, ?, 1)',
       [user.id, 'PLAINTEXT-TOTP-SEED'],
@@ -143,17 +169,17 @@ describe('migration upgrade fixture (bare sqlite)', () => {
       `INSERT INTO fortress_user (email, name, is_active) VALUES (?, ?, 1), (?, ?, 1)`,
       ['É@Example.COM', 'Oldest duplicate', 'E\u0301@example.com', 'Later duplicate'],
     );
-    const users = await db.rawQuery!<{ id: string; email: string }>(
+    const [oldestUser, duplicateUser] = requirePair(await db.rawQuery!<{ id: string; email: string }>(
       'SELECT id, email FROM fortress_user ORDER BY id',
-    );
+    ), 'canonical-email fixture users ordered by id');
     await db.rawQuery!(
       `INSERT INTO fortress_user (email, name, is_active) VALUES (?, ?, 1)`,
-      [`FORTRESS-DUPLICATE-${users[1].id}@INVALID`, 'Tombstone collision'],
+      [`FORTRESS-DUPLICATE-${duplicateUser.id}@INVALID`, 'Tombstone collision'],
     );
     await db.rawQuery!(
       `INSERT INTO fortress_login_identifier (user_id, type, value)
        VALUES (?, 'email', ?), (?, 'email', 'Alias@Example.COM'), (?, 'email', ?)`,
-      [users[0].id, users[0].email, users[0].id, users[1].id, users[1].email],
+      [oldestUser.id, oldestUser.email, oldestUser.id, duplicateUser.id, duplicateUser.email],
     );
     await db.rawQuery!(
       `INSERT INTO fortress_login_identifier (user_id, type, value)
@@ -162,7 +188,7 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     await db.rawQuery!(
       `INSERT INTO fortress_login_identifier (user_id, type, value)
        VALUES (?, 'email', 'CROSS@EXAMPLE.COM')`,
-      [users[0].id],
+      [oldestUser.id],
     );
     await db.rawQuery!(
       `INSERT INTO fortress_login_identifier (user_id, type, value)
@@ -171,13 +197,13 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     await db.rawQuery!(
       `INSERT INTO fortress_refresh_token (user_id, token_hash, token_family, is_revoked, expires_at)
        VALUES (?, ?, ?, 0, ?)`,
-      [users[1].id, 'duplicate-session', 'duplicate-family', 1_900_000_000],
+      [duplicateUser.id, 'duplicate-session', 'duplicate-family', 1_900_000_000],
     );
     await db.rawQuery!(
       `INSERT INTO fortress_oauth_refresh_token
         (token, family_id, client_id, user_id, issued_at, expires_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      ['oauth-duplicate-session', 'oauth-duplicate-family', 'client', users[1].id, 1_700_000_000, 1_900_000_000],
+      ['oauth-duplicate-session', 'oauth-duplicate-family', 'client', duplicateUser.id, 1_700_000_000, 1_900_000_000],
     );
 
     const upgrade = await migrateUp(db);
@@ -186,9 +212,11 @@ describe('migration upgrade fixture (bare sqlite)', () => {
     const migrated = await db.rawQuery!<{ id: string; email: string; is_active: number }>(
       'SELECT id, email, is_active FROM fortress_user ORDER BY id',
     );
-    expect(migrated[0]).toMatchObject({ email: 'é@example.com', is_active: 1 });
-    expect(migrated[1]).toMatchObject({
-      email: `fortress-duplicate-${users[1].id}-1@invalid`,
+    const migratedOldest = requireAt(migrated, 0, 'canonicalized users ordered by id');
+    const migratedDuplicate = requireAt(migrated, 1, 'canonicalized users ordered by id');
+    expect(migratedOldest).toMatchObject({ email: 'é@example.com', is_active: 1 });
+    expect(migratedDuplicate).toMatchObject({
+      email: `fortress-duplicate-${duplicateUser.id}-1@invalid`,
       is_active: 0,
     });
     const identifiers = await db.rawQuery!<{ value: string }>(
@@ -199,10 +227,10 @@ describe('migration upgrade fixture (bare sqlite)', () => {
       'alias@example.com',
       'cross@example.com',
     ]);
-    const [session] = await db.rawQuery!<{ is_revoked: number }>(
+    const session = requireRow(await db.rawQuery!<{ is_revoked: number }>(
       'SELECT is_revoked FROM fortress_refresh_token WHERE token_hash = ?',
       ['duplicate-session'],
-    );
+    ), 'duplicate refresh-token session');
     expect(session.is_revoked).toBe(1);
     expect(await db.count({ model: 'oauth_refresh_token' })).toBe(0);
 
@@ -236,11 +264,11 @@ describe('migration upgrade fixture (bare sqlite)', () => {
       `INSERT INTO fortress_user (email, name, is_active)
        VALUES ('Dup@Example.com', 'Winner', 1), ('dup@example.com', 'Loser', 1)`,
     );
-    const users = await db.rawQuery!<{ id: string; email: string }>('SELECT id, email FROM fortress_user ORDER BY id');
+    const [winner, loser] = requirePair(await db.rawQuery!<{ id: string; email: string }>('SELECT id, email FROM fortress_user ORDER BY id'), 'rollback fixture users ordered by id');
     await db.rawQuery!(
       `INSERT INTO fortress_login_identifier (user_id, type, value)
        VALUES (?, 'email', ?), (?, 'email', ?)`,
-      [users[0].id, users[0].email, users[1].id, users[1].email],
+      [winner.id, winner.email, loser.id, loser.email],
     );
     // Force the DDL step to fail after cleanup by occupying its index name.
     await db.rawQuery!('CREATE INDEX user_email_ci_unique ON fortress_user (name)');
@@ -267,10 +295,10 @@ describe('migration upgrade fixture (bare sqlite)', () => {
        VALUES (?, ?, ?, 1, ?, ?)`,
       ['legacy@test.com', 'Legacy', 'h', 1_700_000_000, 1_700_000_000],
     );
-    const [user] = await db.rawQuery!<{ id: string }>(
+    const user = requireRow(await db.rawQuery!<{ id: string }>(
       'SELECT id FROM fortress_user WHERE email = ?',
       ['legacy@test.com'],
-    );
+    ), 'legacy refresh-family user');
     await db.rawQuery!(
       `INSERT INTO fortress_refresh_token
         (user_id, token_hash, token_family, is_revoked, expires_at, created_at)
@@ -296,21 +324,21 @@ describe('migration upgrade fixture (bare sqlite)', () => {
       `INSERT INTO fortress_tenant (name, tax_id) VALUES (?, ?), (?, ?)`,
       ['Tenant A', 'tenant-a', 'Tenant B', 'tenant-b'],
     );
-    const tenants = await db.rawQuery!<{ id: string }>(
+    const [tenantA, tenantB] = requirePair(await db.rawQuery!<{ id: string }>(
       `SELECT id FROM fortress_tenant WHERE tax_id IN (?, ?) ORDER BY tax_id`,
       ['tenant-a', 'tenant-b'],
-    );
+    ), 'legacy tenants ordered by tax id');
     await db.rawQuery!(
       `INSERT INTO fortress_tenant_user (tenant_id, user_id, is_default) VALUES (?, ?, 1), (?, ?, 1)`,
-      [tenants[0].id, user.id, tenants[1].id, user.id],
+      [tenantA.id, user.id, tenantB.id, user.id],
     );
 
     const upgrade = await migrateUp(db);
     expect(upgrade.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
-    const [defaultCount] = await db.rawQuery!<{ count: number }>(
+    const defaultCount = requireRow(await db.rawQuery!<{ count: number }>(
       `SELECT COUNT(*) AS count FROM fortress_tenant_user WHERE user_id = ? AND is_default = 1`,
       [user.id],
-    );
+    ), 'default tenant-user count');
     expect(Number(defaultCount.count)).toBe(1);
     const tenantIndexes = await db.rawQuery!<{ name: string }>(
       `SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`,
@@ -347,10 +375,10 @@ describe('migration upgrade fixture (bare sqlite)', () => {
        VALUES (?, ?, ?, 0, ?)`,
       [user.id, 'default-hash', 'default-family', 1_900_000_000],
     );
-    const [defaulted] = await db.rawQuery!<{ family_created_at: number }>(
+    const defaulted = requireRow(await db.rawQuery!<{ family_created_at: number }>(
       'SELECT family_created_at FROM fortress_refresh_token WHERE token_hash = ?',
       ['default-hash'],
-    );
+    ), 'default refresh-token family timestamp');
     expect(defaulted.family_created_at).toBeGreaterThanOrEqual(beforeDefaultInsert);
 
     const drift = await detectMigrationDrift(db);
