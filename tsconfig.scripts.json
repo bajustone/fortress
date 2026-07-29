@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": [
+    "scripts/**/*.mjs",
+    "scripts/**/*.test.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

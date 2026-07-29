@@ -3,7 +3,10 @@ import { getContainerRuntimeClient } from 'testcontainers';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
-/** Probe the same Docker-compatible runtime discovery path Testcontainers uses. */
+/**
+ * Probe the same Docker-compatible runtime discovery path Testcontainers uses.
+ * @param {{ connect?: () => Promise<unknown>, timeoutMs?: number }} options
+ */
 export async function probeContainerRuntime({
   connect = getContainerRuntimeClient,
   timeoutMs = DEFAULT_TIMEOUT_MS,

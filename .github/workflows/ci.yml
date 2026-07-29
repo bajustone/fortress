@@ -17,8 +17,10 @@ jobs:
           bun-version-file: package.json
       - run: bun install
       - run: bun run lint
+      - run: bun run check:docs
       - run: bun run typecheck
       - run: bun run typecheck:examples
+      - run: bun run typecheck:scripts
       - name: Generated migration artifact parity
         run: bun run check:migration-artifacts
       - name: Exports parity (jsr.json ⇄ package.json ⇄ tsup)

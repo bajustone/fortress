@@ -23,7 +23,7 @@ adjust the imports to use SvelteKit's `$lib` / `$app` aliases.
 
 `src/lib/server/fortress.ts` registers the `oauth` plugin with
 `enableAuthorizeEndpoint`/`enableConsentApi` on, and seeds a demo user
-(`alice@example.com` / `hunter2`) plus a demo OAuth client at startup.
+(`alice@example.com` / `correct-horse-battery-staple`) plus a demo OAuth client at startup.
 The seeded `client_id` / `client_secret` are logged to the server console.
 
 To try the flow end-to-end:
@@ -84,24 +84,26 @@ handle hook intercepts paths the file handler would have served anyway.
 
 ## Cookie defaults
 
-In production (`NODE_ENV === 'production'`):
+Fortress defaults to secure, `__Host-`-prefixed cookies in every environment;
+it does not infer cookie security from `NODE_ENV`:
 
 ```
 Set-Cookie: __Host-fortress_access=...; HttpOnly; Secure; SameSite=Lax; Path=/
 Set-Cookie: __Host-fortress_refresh=...; HttpOnly; Secure; SameSite=Lax; Path=/
 ```
 
-In development:
+Because this example runs on plain HTTP, its configuration explicitly sets
+`cookies: { secure: false }`, producing local-only cookies without `Secure` or
+the `__Host-` prefix:
 
 ```
 Set-Cookie: fortress_access=...; HttpOnly; SameSite=Lax; Path=/
 Set-Cookie: fortress_refresh=...; HttpOnly; SameSite=Lax; Path=/
 ```
 
-(`__Host-` prefix requires `Secure`, which breaks localhost over HTTP.)
-
-Override via `FortressConfig.cookies` if you need different names, a
-`Domain`, or `SameSite=strict`.
+Remove that override when deploying behind HTTPS. Override other
+`FortressConfig.cookies` fields only when you need different names, a `Domain`,
+or `SameSite=strict`.
 
 ## CSRF posture
 

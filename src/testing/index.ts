@@ -11,7 +11,10 @@
  * import { createTestAdapter } from '@bajustone/fortress/testing';
  *
  * const db = createTestAdapter();
- * const fortress = createFortress({ database: db, jwt: { key: 'test' } });
+ * const fortress = createFortress({
+ *   database: db,
+ *   jwt: { key: 'test-only-jwt-secret-at-least-32-bytes' },
+ * });
  * ```
  *
  * @module
@@ -66,7 +69,10 @@ const runtimeRequire = (globalThis as typeof globalThis & { require?: NodeRequir
  *
  * Usage:
  *   import { createTestAdapter } from '@bajustone/fortress/testing';
- *   const fortress = createFortress({ database: createTestAdapter(), jwt: { key: 'test' } });
+ *   const fortress = createFortress({
+ *     database: createTestAdapter(),
+ *     jwt: { key: 'test-only-jwt-secret-at-least-32-bytes' },
+ *   });
  */
 export function createTestAdapter(): MigratableDatabaseAdapter<'sqlite'> {
   if (isBun) {

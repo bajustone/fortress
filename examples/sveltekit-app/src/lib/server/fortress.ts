@@ -18,6 +18,9 @@ export const fortress = createFortress({
   },
   // In a real project, swap this for createSqliteDrizzleAdapter(...).
   database: createTestAdapter(),
+  // Fortress defaults to secure, __Host-prefixed cookies in every environment.
+  // This example serves plain HTTP locally, so it opts out explicitly.
+  cookies: { secure: false },
   plugins: [
     oauth({
       issuerUrl: 'http://localhost:5173',
@@ -46,14 +49,14 @@ export const fortress = createFortress({
  * persist them in your real database.
  */
 export const demoSeedPromise: Promise<{ clientId: string; clientSecret: string }> = (async () => {
-  // Demo user: alice@example.com / hunter2.
+  // Demo user: alice@example.com / correct-horse-battery-staple.
   // The in-memory adapter is wiped on each process boot, so we always
   // try to create — swallow conflicts if the module is re-evaluated.
   await fortress.auth
     .createUser({
       email: 'alice@example.com',
       name: 'Alice',
-      password: 'hunter2',
+      password: 'correct-horse-battery-staple',
     })
     .catch(() => undefined);
 

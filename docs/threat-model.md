@@ -76,7 +76,7 @@ Residual risks:
 Threats:
 - Cross-site POST using ambient auth/refresh cookies.
 - Silent SvelteKit refresh on unsafe requests.
-- Insecure cookie defaults in production due to missing `NODE_ENV`.
+- Hosts explicitly disabling secure cookies outside plain-HTTP local development.
 
 Mitigations:
 - Pipeline CSRF is on by default for unsafe methods carrying access or refresh cookies.

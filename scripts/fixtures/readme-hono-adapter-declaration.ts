@@ -26,7 +26,7 @@ export function honoAdapterQuickstartContract(database: DatabaseAdapter): void {
       'GET /posts': { resource: 'post', action: 'read' },
       'POST /posts': { resource: 'post', action: 'create' },
     },
-    defaultDeny: true,
+    unmappedRoutes: 'deny',
     skipPaths: ['/health'],
   });
 

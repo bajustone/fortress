@@ -15,7 +15,7 @@ import { createFortress } from '@bajustone/fortress';
 import { magicLink } from '@bajustone/fortress/plugins/magic-link';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     magicLink({
@@ -95,7 +95,7 @@ import { createFortress } from '@bajustone/fortress';
 import { magicLink } from '@bajustone/fortress/plugins/magic-link';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     magicLink({

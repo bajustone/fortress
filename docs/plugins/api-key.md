@@ -19,7 +19,7 @@ import { createFortress } from '@bajustone/fortress';
 import { apiKey } from '@bajustone/fortress/plugins/api-key';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     apiKey({

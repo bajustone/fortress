@@ -23,7 +23,7 @@ import { createFortress } from '@bajustone/fortress';
 import { tenancy } from '@bajustone/fortress/plugins/tenancy';
 
 const fortress = createFortress({
-  jwt: { key: 'your-secret-at-least-32-bytes!!' },
+  jwt: { key: 'your-secret-at-least-32-bytes!!!' },
   database: adapter,
   plugins: [
     tenancy({
