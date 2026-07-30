@@ -172,6 +172,272 @@ describe('schema builders', () => {
     expect(() => defineComponents({ 'Admin/User': obj({ id: str() }) })).toThrow(/Invalid OpenAPI component name/);
   });
 
+  function runtimeBoundRef(refValue: unknown) {
+    const schema = defineComponents({
+      User: obj({ name: str({ min: 2 }) }, 'name'),
+    }).ref('User');
+    Reflect.set(schema, '$ref', refValue);
+    return schema;
+  }
+
+  it.each([
+    ['absolute', 'https://example.test/schemas.json#/components/schemas/User'],
+    ['relative', '../schemas.json#/components/schemas/User'],
+  ])('rejects %s external refs lazily with their value and location', (_kind, refValue) => {
+    const schema = runtimeBoundRef(refValue);
+
+    expect(() => schema['~standard'].validate({ name: 'Ada' }))
+      .toThrow(`Unsupported external $ref ${JSON.stringify(refValue)} in runtime schema at $`);
+  });
+
+  it.each([
+    ['nested component pointer', '#/components/schemas/User/properties/name'],
+    ['$defs pointer', '#/$defs/User'],
+  ])('rejects %s rather than truncating its final segment', (_kind, refValue) => {
+    const schema = runtimeBoundRef(refValue);
+
+    expect(() => schema['~standard'].validate({ name: 'Ada' }))
+      .toThrow(`Unsupported local $ref ${JSON.stringify(refValue)} in runtime schema at $`);
+  });
+
+  it.each([
+    ['anchor', '#User', `fragment '#User' is not a JSON Pointer; $anchor references are not supported`],
+    ['bad percent encoding', '#/components/schemas/User%2', 'invalid percent-encoding'],
+    ['bad JSON Pointer escape', '#/components/schemas/User~2', 'invalid JSON Pointer escape'],
+    ['empty ref', '', 'empty reference'],
+  ])('rejects malformed runtime ref: %s', (_kind, refValue, reason) => {
+    const schema = runtimeBoundRef(refValue);
+
+    expect(() => schema['~standard'].validate({ name: 'Ada' }))
+      .toThrow(`Malformed $ref ${JSON.stringify(refValue)} in runtime schema at $: ${reason}`);
+  });
+
+  it.each([
+    ['number', 42, '42', 'number'],
+    ['null', null, 'null', 'object'],
+    ['object', { component: 'User' }, '[object]', 'object'],
+    ['array', ['User'], '[array]', 'object'],
+  ])('rejects an own non-string runtime ref: %s', (_kind, refValue, rendered, type) => {
+    const schema = runtimeBoundRef(refValue);
+
+    expect(() => schema['~standard'].validate({ name: 'Ada' }))
+      .toThrow(`Malformed $ref ${rendered} in runtime schema at $: expected a string, got ${type}`);
+  });
+
+  it('rejects an own $ref accessor without invoking it', () => {
+    const schema = runtimeBoundRef('#/components/schemas/User');
+    let accessed = false;
+    Object.defineProperty(schema, '$ref', {
+      configurable: true,
+      get() {
+        accessed = true;
+        return '#/components/schemas/User';
+      },
+    });
+
+    expect(() => schema['~standard'].validate({ name: 'Ada' }))
+      .toThrow('Malformed $ref [accessor] in runtime schema at $: accessor properties are not supported');
+    expect(accessed).toBe(false);
+  });
+
+  it('resolves an encoded legal component name under its decoded key', () => {
+    const schema = defineComponents({
+      'User-Profile': obj({ name: str({ min: 2 }) }, 'name'),
+    }).ref('User-Profile');
+    Reflect.set(schema, '$ref', '#/components/schemas/User%2DProfile');
+
+    expect((schema['~standard'].validate({ name: 'Ada' }) as any).issues).toBeUndefined();
+    expectIssues(schema['~standard'].validate({ name: 'A' }) as StandardSchemaV1.Result<any>);
+    // Runtime canonicalization must not rewrite the public/emitted schema.
+    expect(schema.$ref).toBe('#/components/schemas/User%2DProfile');
+  });
+
+  it.each([
+    ['percent-encoded slash', '#/components/schemas/User%2FProfile'],
+    ['JSON Pointer slash', '#/components/schemas/User~1Profile'],
+  ])('rejects a decoded component-name slash: %s', (_kind, refValue) => {
+    const schema = runtimeBoundRef(refValue);
+
+    expect(() => schema['~standard'].validate({ name: 'Ada' }))
+      .toThrow(/Invalid OpenAPI component name 'User\/Profile' in runtime schema \$ref at \$/);
+  });
+
+  it('ignores an inherited $ref getter without invoking it', () => {
+    const schema = obj({ name: str({ min: 2 }) }, 'name');
+    let accessed = false;
+    const poisonedPrototype = Object.create(Object.getPrototypeOf(schema), {
+      $ref: {
+        get() {
+          accessed = true;
+          return 'https://example.test/schemas.json#/components/schemas/User';
+        },
+      },
+    });
+    Object.setPrototypeOf(schema, poisonedPrototype);
+
+    expect((schema['~standard'].validate({ name: 'Ada' }) as any).issues).toBeUndefined();
+    expectIssues(schema['~standard'].validate({ name: 'A' }) as StandardSchemaV1.Result<any>);
+    expect(accessed).toBe(false);
+  });
+
+  it('reports a stable location for a malformed nested ref', () => {
+    const nested = runtimeBoundRef('#/components/schemas/User~2Profile');
+    const schema = obj({ payload: nested }, 'payload');
+
+    expect(() => schema['~standard'].validate({ payload: { name: 'Ada' } }))
+      .toThrow(/in runtime schema at \$\.properties\["payload"\]: invalid JSON Pointer escape/);
+  });
+
+  it.each([
+    ['items', '$.items'],
+    ['oneOf', '$.oneOf[0]'],
+    ['anyOf', '$.anyOf[0]'],
+    ['allOf', '$.allOf[0]'],
+    ['additionalProperties', '$.additionalProperties'],
+  ])('checks refs inside the %s traversal container', (container, location) => {
+    const nested = runtimeBoundRef('#User');
+    const schema = obj({});
+    if (container === 'items')
+      schema.items = nested;
+    else if (container === 'additionalProperties')
+      schema.additionalProperties = nested;
+    else
+      schema[container as 'oneOf' | 'anyOf' | 'allOf'] = [nested];
+
+    expect(() => schema['~standard'].validate({}))
+      .toThrow(`Malformed $ref "#User" in runtime schema at ${location}`);
+  });
+
+  it('preserves sibling validation while canonicalizing a component ref', () => {
+    const schema = runtimeBoundRef('#/components/schemas/User');
+    Object.assign(schema, {
+      type: 'object' as const,
+      properties: { role: literal('admin') },
+      required: ['role'],
+    });
+
+    expect((schema['~standard'].validate({ name: 'Ada', role: 'admin' }) as any).issues).toBeUndefined();
+    expectIssues(schema['~standard'].validate({ name: 'Ada' }) as StandardSchemaV1.Result<any>);
+    expectIssues(schema['~standard'].validate({ name: 'A', role: 'admin' }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('rejects unsupported refs only when lazy validation first compiles', () => {
+    let schema: ReturnType<typeof runtimeBoundRef> | undefined;
+    expect(() => {
+      schema = runtimeBoundRef('https://example.test/User');
+    }).not.toThrow();
+
+    expect(() => schema!['~standard'].validate({ name: 'Ada' }))
+      .toThrow(/Unsupported external \$ref/);
+  });
+
+  it.each([
+    ['external', 'https://example.test/schemas.json#/components/schemas/Choice', /Unsupported external \$ref/],
+    ['malformed', '#Choice', /Malformed \$ref.*\$anchor references are not supported/],
+  ])('rejects a oneOf root %s ref lazily', (_kind, refValue, expected) => {
+    let schema: ReturnType<typeof oneOf> | undefined;
+    expect(() => {
+      schema = oneOf(obj({ left: str() }, 'left'), obj({ right: str() }, 'right'));
+      Reflect.set(schema, '$ref', refValue);
+    }).not.toThrow();
+
+    expect(() => schema!['~standard'].validate({ left: 'yes' })).toThrow(expected);
+  });
+
+  it('rejects a oneOf root $ref accessor lazily without invoking it', () => {
+    const schema = oneOf(obj({ left: str() }, 'left'), obj({ right: str() }, 'right'));
+    let accessed = false;
+    expect(() => {
+      Object.defineProperty(schema, '$ref', {
+        configurable: true,
+        get() {
+          accessed = true;
+          return '#/components/schemas/Choice';
+        },
+      });
+    }).not.toThrow();
+    expect(accessed).toBe(false);
+
+    expect(() => schema['~standard'].validate({ left: 'yes' }))
+      .toThrow(/Malformed \$ref \[accessor\].*accessor properties are not supported/);
+    expect(accessed).toBe(false);
+  });
+
+  it('combines a oneOf root component ref and siblings with exact branch semantics', () => {
+    const schema = oneOf(obj({ left: str() }, 'left'), obj({ right: str() }, 'right'));
+    // Non-enumerable on purpose: the root-sibling bridge must copy the own
+    // descriptor rather than relying on object spread.
+    Object.defineProperty(schema, '$ref', {
+      configurable: true,
+      value: '#/components/schemas/Choice%2DMetadata',
+    });
+    Object.assign(schema, {
+      type: 'object' as const,
+      properties: { approved: literal(true) },
+      required: ['approved'],
+    });
+
+    const valid = { left: 'yes', approved: true };
+    expect(schema['~standard'].validate(valid)).toEqual({ value: valid });
+    expectIssues(schema['~standard'].validate({ left: 'yes' }) as StandardSchemaV1.Result<any>);
+    expectIssues(schema['~standard'].validate({ left: 'yes', right: 'yes', approved: true }) as StandardSchemaV1.Result<any>);
+  });
+
+  it('keeps nullable own external refs lazy and rejects them at validation', () => {
+    const inner = str();
+    Reflect.set(inner, '$ref', 'https://example.test/schemas.json#/components/schemas/Name');
+    let schema: FortressSchema<string | null> | undefined;
+
+    expect(() => {
+      schema = nullable(inner);
+    }).not.toThrow();
+    expect(() => schema!['~standard'].validate('Ada')).toThrow(/Unsupported external \$ref/);
+  });
+
+  it('keeps nullable own $ref accessors lazy and never invokes them', () => {
+    const inner = str();
+    let accessed = false;
+    Object.defineProperty(inner, '$ref', {
+      configurable: true,
+      get() {
+        accessed = true;
+        return '#/components/schemas/Name';
+      },
+    });
+    let schema: FortressSchema<string | null> | undefined;
+
+    expect(() => {
+      schema = nullable(inner);
+    }).not.toThrow();
+    expect(accessed).toBe(false);
+    expect(() => schema!['~standard'].validate('Ada'))
+      .toThrow(/Malformed \$ref \[accessor\].*accessor properties are not supported/);
+    expect(accessed).toBe(false);
+  });
+
+  it('ignores an inherited $ref getter when constructing and validating nullable', () => {
+    const inner = str({ min: 2 });
+    let accessed = false;
+    const poisonedPrototype = Object.create(Object.getPrototypeOf(inner), {
+      $ref: {
+        get() {
+          accessed = true;
+          return 'https://example.test/schemas.json#/components/schemas/Name';
+        },
+      },
+    });
+    Object.setPrototypeOf(inner, poisonedPrototype);
+    let schema: FortressSchema<string | null> | undefined;
+
+    expect(() => {
+      schema = nullable(inner);
+    }).not.toThrow();
+    expect((schema!['~standard'].validate('Ada') as any).issues).toBeUndefined();
+    expect((schema!['~standard'].validate(null) as any).issues).toBeUndefined();
+    expectIssues(schema!['~standard'].validate('A') as StandardSchemaV1.Result<any>);
+    expect(accessed).toBe(false);
+  });
+
   it('snapshots component bindings before lazy validation', () => {
     const original = obj({ kind: literal('original') }, 'kind');
     const replacement = obj({ kind: literal('replacement') }, 'kind');
