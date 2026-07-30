@@ -1,3 +1,4 @@
+import type { RouteManifestEntryLike } from './route-manifest';
 import { describe, expect, it } from 'vitest';
 import { admin } from '../../plugins/admin';
 import { createFortress } from '../fortress';
@@ -95,7 +96,7 @@ describe('describeRouteSurface', () => {
     const surface = describeRouteSurface(makeConfig());
     const fortress = createFortress({ ...makeConfig(), database: {} as never });
 
-    const summarise = (entries: typeof surface.manifest): string[] =>
+    const summarise = (entries: readonly RouteManifestEntryLike[]): string[] =>
       entries.map(entry => `${entry.method} ${entry.path} ${entry.plugin} ${entry.classification} ${entry.mounted}`).sort();
 
     expect(summarise(surface.manifest)).toEqual(summarise(fortress.manifest));

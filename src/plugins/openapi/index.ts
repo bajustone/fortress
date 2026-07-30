@@ -9,7 +9,7 @@
  * @module
  */
 
-import type { ComponentSchemas, EndpointDefinition } from '../../core/endpoint';
+import type { ComponentSchemas, EndpointDefinition, EndpointDefinitionLike } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
 import type { JSONSchema } from '../../core/json-schema';
 import type { FortressPlugin, PluginContext } from '../../core/plugin';
@@ -47,7 +47,7 @@ export interface OpenAPIConfig {
   /** Additional component schemas to include */
   additionalSchemas?: ComponentSchemas;
   /** Additional endpoint definitions to include in the spec (for app-specific routes) */
-  additionalEndpoints?: EndpointDefinition[];
+  additionalEndpoints?: readonly EndpointDefinitionLike[];
 }
 
 export interface OpenAPIMethods {
@@ -132,16 +132,17 @@ function buildResourceBranch(
  * per-resource `oneOf` discriminated branches, and patch the `/iam/check`
  * endpoint's inline body with flat resource/action enums.
  *
- * Mutates `componentSchemas` and the matching endpoint in `allEndpoints`.
+ * Mutates `componentSchemas` and returns an endpoint array with a cloned,
+ * enriched `/iam/check` container. Published inputs are never reassigned.
  */
 function enrichIamSchemas(
   componentSchemas: ComponentSchemas,
-  allEndpoints: EndpointDefinition[],
+  allEndpoints: readonly EndpointDefinitionLike[],
   resourceFile: ResourceFile,
-): void {
+): EndpointDefinitionLike[] {
   const entries = Object.entries(resourceFile.resources);
   if (entries.length === 0)
-    return;
+    return [...allEndpoints];
 
   // Shared fields for Permission (response schema — has id, description, conditions)
   const permissionShared: Record<string, JSONSchema> = {
@@ -177,10 +178,12 @@ function enrichIamSchemas(
   // Patch /iam/check inline body with flat enums
   const allResourceNames = entries.map(([name]) => name).sort();
   const allActions = [...new Set(entries.flatMap(([, def]) => def.actions))].sort();
+  let enriched = false;
 
-  for (const ep of allEndpoints) {
-    if (ep.path !== '/iam/check' || !ep.input?.body)
-      continue;
+  return allEndpoints.map((ep) => {
+    if (enriched || ep.path !== '/iam/check' || !ep.input?.body)
+      return ep;
+    enriched = true;
     // Clone to avoid mutating the static endpoint definition
     const bodyClone: JSONSchema = JSON.parse(JSON.stringify(ep.input.body)) as JSONSchema;
     // The body is a `oneOf` of the subject and legacy user forms, so each
@@ -196,9 +199,8 @@ function enrichIamSchemas(
         branch.properties.action = { ...branch.properties.action, enum: allActions };
       }
     }
-    ep.input = { ...ep.input, body: bodyClone };
-    break;
-  }
+    return { ...ep, input: { ...ep.input, body: bodyClone } };
+  });
 }
 
 /**
@@ -249,7 +251,7 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', O
           return cachedSpec;
 
         // Collect all endpoints from the fortress config
-        const allEndpoints: EndpointDefinition[] = [];
+        let allEndpoints: EndpointDefinitionLike[] = [];
 
         // Add core auth endpoints
         if (config.includeCoreAuth !== false) {
@@ -292,7 +294,7 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', O
         if (config.includeCoreIam !== false && ctx.iam) {
           try {
             const resourceFile = await ctx.iam.getResources();
-            enrichIamSchemas(componentSchemas, allEndpoints, resourceFile);
+            allEndpoints = enrichIamSchemas(componentSchemas, allEndpoints, resourceFile);
           }
           catch {
             // If resource fetch fails, fall back to plain string schemas

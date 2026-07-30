@@ -13,7 +13,7 @@
  * `fortress.syncPermissionsFromManifest()`.
  */
 
-import type { EndpointDefinition } from '../endpoint';
+import type { EndpointDefinitionLike } from '../endpoint';
 import type { Permission } from '../types';
 import type { IamService } from './iam-service';
 import { Errors } from '../errors';
@@ -25,7 +25,7 @@ export interface PermissionSyncOptions {
    * full set registered on the Fortress instance when called via
    * {@link import('../fortress').Fortress.syncPermissionsFromManifest}.
    */
-  endpoints?: EndpointDefinition[];
+  endpoints?: readonly EndpointDefinitionLike[];
 
   /**
    * Optional role-name → permissions map. For each role:
@@ -70,7 +70,7 @@ interface PermissionKey {
   action: string;
 }
 
-function collectUniquePermissions(endpoints: EndpointDefinition[]): PermissionKey[] {
+function collectUniquePermissions(endpoints: readonly EndpointDefinitionLike[]): PermissionKey[] {
   const seen = new Set<string>();
   const result: PermissionKey[] = [];
   for (const ep of endpoints) {
@@ -116,7 +116,7 @@ function dedupePermissions(perms: readonly PermissionKey[]): PermissionKey[] {
  */
 export async function runPermissionSync(
   iam: IamService,
-  endpoints: EndpointDefinition[],
+  endpoints: readonly EndpointDefinitionLike[],
   opts: PermissionSyncOptions = {},
 ): Promise<PermissionSyncResult> {
   const unique = collectUniquePermissions(endpoints);

@@ -1,4 +1,5 @@
 import type {
+  AnyPublishedEndpointDefinition,
   AuthCookiePayload,
   AuthEndpointsMap,
   AuthService,
@@ -6,6 +7,7 @@ import type {
   CreateServiceAccountInput,
   CsrfConfig,
   DatabaseAdapter,
+  EndpointDefinitionLike,
   EndpointPermission,
   IamEndpointsMap,
   JsonOf,
@@ -13,9 +15,19 @@ import type {
   LogLevel,
   OpenAPIMethods,
   PluginRouteContext,
+  ProtectableEndpointDefinition,
+  PublishedEndpointDefinition,
+  PublishedEndpointInput,
+  PublishedEndpointMeta,
+  PublishedEndpointOf,
+  PublishedEndpointPermission,
+  PublishedEndpointResponse,
+  PublishedRouteManifest,
+  PublishedRouteManifestEntry,
   ResolvedCookieConfig,
   ResolvedPrincipal,
   RouteInputNotFlat,
+  RouteManifestEntryLike,
   ServiceAccount,
   SessionInfo,
   Subject,
@@ -61,6 +73,18 @@ export interface ReachableCoreTypes {
   iamEndpointsMap: IamEndpointsMap;
   serialized: JsonOf<{ when: Date; nested: { count: number } }>;
   routeInputNotFlat: RouteInputNotFlat<'handlerName'>;
+  anyPublishedEndpoint: AnyPublishedEndpointDefinition;
+  endpointDefinitionLike: EndpointDefinitionLike;
+  protectableEndpoint: ProtectableEndpointDefinition;
+  publishedEndpoint: PublishedEndpointDefinition;
+  publishedEndpointInput: PublishedEndpointInput;
+  publishedEndpointMeta: PublishedEndpointMeta;
+  publishedEndpointOf: PublishedEndpointOf<EndpointDefinitionLike>;
+  publishedEndpointPermission: PublishedEndpointPermission;
+  publishedEndpointResponse: PublishedEndpointResponse;
+  publishedManifest: PublishedRouteManifest;
+  publishedManifestEntry: PublishedRouteManifestEntry;
+  routeManifestEntryLike: RouteManifestEntryLike;
 }
 
 /** Every plugin method surface is reachable from root, including OpenAPI's. */

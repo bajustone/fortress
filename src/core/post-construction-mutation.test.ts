@@ -18,7 +18,8 @@
  */
 
 import type { FortressConfig } from './config';
-import type { EndpointDefinition } from './endpoint';
+import type { EndpointDefinition, SecurityRequirement } from './endpoint';
+import type { RouteManifestEntry } from './manifest/route-manifest';
 import type { RuntimeFortressPlugin } from './plugin';
 import { describe, expect, it, vi } from 'vitest';
 import { admin } from '../plugins/admin';
@@ -157,18 +158,18 @@ describe('published route set is a snapshot', () => {
     const fortress = build([plugin]);
     const published = fortress.endpoints.find(e => e.handler === 'ping')!;
 
-    expect(() => fortress.endpoints.push(protectedRoute('/x', 'x'))).toThrow(TypeError);
+    expect(() => (fortress.endpoints as unknown as EndpointDefinition[]).push(protectedRoute('/x', 'x'))).toThrow(TypeError);
     expect(() => {
       (published as { path: string }).path = '/nope';
     }).toThrow(TypeError);
     expect(() => {
-      published.meta!.bearerKind = 'oauth';
+      (published.meta as { bearerKind?: string }).bearerKind = 'oauth';
     }).toThrow(TypeError);
     expect(() => {
-      published.meta!.permission!.action = 'admin';
+      (published.meta!.permission as { action: string }).action = 'admin';
     }).toThrow(TypeError);
     expect(() => {
-      published.responses![200]!.description = 'changed';
+      (published.responses![200] as { description: string }).description = 'changed';
     }).toThrow(TypeError);
   });
 
@@ -178,12 +179,22 @@ describe('published route set is a snapshot', () => {
     const fortress = build([plugin]);
     const entry = fortress.manifest.find(e => e.path === '/thing/ping')!;
 
-    expect(() => fortress.manifest.pop()).toThrow(TypeError);
+    expect(() => (fortress.manifest as unknown as RouteManifestEntry[]).pop()).toThrow(TypeError);
     expect(() => {
       (entry as { path: string }).path = '/nope';
     }).toThrow(TypeError);
-    // A directly built manifest is the caller's own array and stays mutable.
-    expect(Object.isFrozen(buildRouteManifest(fortress))).toBe(false);
+    expect(() => {
+      (entry.security as SecurityRequirement[]).push('none');
+    }).toThrow(TypeError);
+    expect(() => {
+      (entry.permission as { action: string }).action = 'admin';
+    }).toThrow(TypeError);
+    // A directly built manifest and its nested adjustment surfaces stay mutable.
+    const direct = buildRouteManifest(fortress);
+    const directEntry = direct.find(e => e.path === '/thing/ping')!;
+    expect(Object.isFrozen(direct)).toBe(false);
+    directEntry.security.push('none');
+    directEntry.permission!.action = 'adjusted';
   });
 
   it('keeps validation schemas referentially shared — a documented non-goal', () => {

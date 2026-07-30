@@ -1,6 +1,7 @@
 import type { FortressProtectRuntime } from '../core/capabilities';
 import type { EndpointDefinition } from '../core/endpoint';
 import type {
+  ProtectableEndpointDefinition,
   ProtectedRouteContext,
   ProtectedRouteHandler,
   ProtectedRouteTarget,
@@ -18,7 +19,7 @@ import { replayCookies } from './cookies';
  */
 export type SvelteKitProtectedRouteHandler<
 
-  E extends EndpointDefinition<any, any, any, any> = EndpointDefinition,
+  E extends ProtectableEndpointDefinition = EndpointDefinition,
   TResult = unknown,
 > = (
   event: SvelteKitRequestEvent,
@@ -37,7 +38,7 @@ export type SvelteKitProtectedRouteHandler<
  */
 export function protectedRoute<
 
-  E extends EndpointDefinition<any, any, any, any>,
+  E extends ProtectableEndpointDefinition,
   TResult = unknown,
 >(
   fortress: FortressProtectRuntime,

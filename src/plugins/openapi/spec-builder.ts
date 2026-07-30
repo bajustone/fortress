@@ -1,4 +1,4 @@
-import type { ComponentSchemas, EndpointDefinition, SecurityRequirement } from '../../core/endpoint';
+import type { ComponentSchemas, EndpointDefinitionLike, SecurityRequirement } from '../../core/endpoint';
 import type { JSONSchema } from '../../core/json-schema';
 import { parsePathSegments } from '../../core/http/match';
 import { cleanJsonSchema } from '../../core/json-schema-utils';
@@ -64,7 +64,7 @@ export interface SpecBuilderOptions {
    * generator. `fortress.toOpenAPI()` defaults this to `'handler'` so host
    * specs match the endpoint contract names consumers already chose.
    */
-  operationId?: 'methodPath' | 'handler' | ((endpoint: EndpointDefinition) => string | undefined);
+  operationId?: 'methodPath' | 'handler' | ((endpoint: EndpointDefinitionLike) => string | undefined);
 }
 
 const SECURITY_SCHEMES: Record<string, OpenAPISecurityScheme> = {
@@ -189,7 +189,7 @@ function extractQueryParams(querySchema?: JSONSchema): OpenAPIParameter[] {
   return params;
 }
 
-function resolveOperationId(endpoint: EndpointDefinition, options: SpecBuilderOptions): string | undefined {
+function resolveOperationId(endpoint: EndpointDefinitionLike, options: SpecBuilderOptions): string | undefined {
   if (typeof options.operationId === 'function')
     return options.operationId(endpoint);
   if (options.operationId === 'handler')
@@ -199,7 +199,7 @@ function resolveOperationId(endpoint: EndpointDefinition, options: SpecBuilderOp
 
 /** Walk every endpoint definition and component-schemas record and emit a complete OpenAPI 3.1 {@link OpenAPISpec}. */
 export function buildOpenAPISpec(
-  endpoints: EndpointDefinition[],
+  endpoints: readonly EndpointDefinitionLike[],
   componentSchemas: ComponentSchemas,
   options: SpecBuilderOptions,
 ): OpenAPISpec {
@@ -248,7 +248,7 @@ export function buildOpenAPISpec(
       if (ep.meta.description)
         operation.description = ep.meta.description;
       if (ep.meta.tags)
-        operation.tags = ep.meta.tags;
+        operation.tags = [...ep.meta.tags];
       if (ep.meta.deprecated)
         operation.deprecated = true;
 

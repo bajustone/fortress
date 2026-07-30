@@ -1,5 +1,12 @@
 import type { FortressConfig } from './config';
-import type { EndpointDefinition, EndpointMeta, EndpointResponse } from './endpoint';
+import type {
+  AnyEndpointDefinition,
+  AnyPublishedEndpointDefinition,
+  EndpointDefinition,
+  EndpointDefinitionLike,
+  EndpointMeta,
+  EndpointResponse,
+} from './endpoint';
 import type { FortressPlugin, PluginDependency, RuntimeFortressPlugin } from './plugin';
 import { authEndpoints } from './auth/auth-endpoints';
 import { isHttpMethod } from './endpoint';
@@ -58,12 +65,12 @@ export interface EndpointProvenance {
  * Provenance recorded for a snapshot endpoint, or `undefined` for any object
  * that did not come from {@link assembleEndpoints}.
  */
-export function endpointProvenance(endpoint: EndpointDefinition): EndpointProvenance | undefined {
+export function endpointProvenance(endpoint: EndpointDefinitionLike): EndpointProvenance | undefined {
   return endpointProvenanceRegistry.get(endpoint);
 }
 
 /** Stable dispatch owner for a snapshot endpoint. */
-export function endpointOwner(endpoint: EndpointDefinition): EndpointOwner | undefined {
+export function endpointOwner(endpoint: EndpointDefinitionLike): EndpointOwner | undefined {
   return endpointProvenanceRegistry.get(endpoint)?.owner;
 }
 
@@ -110,7 +117,7 @@ const OAUTH_SELF_MANAGED_ROUTES = new Map<string, OAuthProtocolRoute>([
 ]);
 
 /** The approved protocol route for this endpoint's owner, method, path, and handler. */
-function approvedOAuthProtocolRoute(endpoint: EndpointDefinition): OAuthProtocolRoute | undefined {
+function approvedOAuthProtocolRoute(endpoint: EndpointDefinitionLike): OAuthProtocolRoute | undefined {
   if (endpoint.meta?.bearerKind !== 'oauth')
     return undefined;
   if (endpointProvenance(endpoint)?.owner !== OAUTH_PLUGIN_NAME)
@@ -127,7 +134,7 @@ function approvedOAuthProtocolRoute(endpoint: EndpointDefinition): OAuthProtocol
  * Strictly narrower than {@link isApprovedOAuthSelfManagedRoute}: it holds for
  * `POST /oauth/token`, `/oauth/introspect`, and `/oauth/revoke` only.
  */
-function isApprovedOAuthBasicClientAuthRoute(endpoint: EndpointDefinition): boolean {
+function isApprovedOAuthBasicClientAuthRoute(endpoint: EndpointDefinitionLike): boolean {
   return approvedOAuthProtocolRoute(endpoint)?.verifiesBasicClientAuth === true;
 }
 
@@ -140,7 +147,7 @@ function isApprovedOAuthBasicClientAuthRoute(endpoint: EndpointDefinition): bool
  * Requires provenance, so it answers `false` for anything that did not come
  * from {@link assembleEndpoints}. Construction validation uses this.
  */
-export function isApprovedOAuthSelfManagedRoute(endpoint: EndpointDefinition): boolean {
+export function isApprovedOAuthSelfManagedRoute(endpoint: EndpointDefinitionLike): boolean {
   return approvedOAuthProtocolRoute(endpoint) !== undefined;
 }
 
@@ -157,7 +164,7 @@ export function isApprovedOAuthSelfManagedRoute(endpoint: EndpointDefinition): b
  * fallback deliberately trusts a caller-supplied fake or capability runtime;
  * every real Fortress snapshot carries provenance and takes the strict path.
  */
-export function isSelfManagedOAuthRoute(endpoint: EndpointDefinition): boolean {
+export function isSelfManagedOAuthRoute(endpoint: EndpointDefinitionLike): boolean {
   if (endpoint.meta?.bearerKind !== 'oauth')
     return false;
   if (endpointProvenance(endpoint) === undefined)
@@ -180,7 +187,7 @@ export function isSelfManagedOAuthRoute(endpoint: EndpointDefinition): boolean {
  * resolution. Schema mutability is therefore a documented non-goal — this
  * freezes the route contract, not the validation schemas hanging off it.
  */
-function snapshotEndpoint(endpoint: EndpointDefinition): EndpointDefinition {
+function snapshotEndpoint(endpoint: AnyEndpointDefinition): AnyPublishedEndpointDefinition {
   const clone: EndpointDefinition = { ...endpoint };
 
   if (endpoint.meta) {
@@ -223,7 +230,7 @@ export interface AssembledRoutes {
   /** Configured plugins, with the synthetic `__host` plugin prepended when present. */
   plugins: readonly RuntimeFortressPlugin[];
   /** Deduplicated endpoint set, in registration order. */
-  endpoints: EndpointDefinition[];
+  endpoints: AnyPublishedEndpointDefinition[];
   /**
    * Owner per canonical `METHOD /path` key: {@link CORE_ENDPOINT_OWNER} for a
    * built-in route, or the owning plugin's name (top-level `routes` are owned
@@ -483,10 +490,10 @@ export function assertPluginDependencyCapabilities(
 function mergeEndpoints(
   plugins: readonly RuntimeFortressPlugin[],
 ): Pick<AssembledRoutes, 'endpointOwners' | 'endpoints'> {
-  const endpointMap = new Map<string, EndpointDefinition>();
+  const endpointMap = new Map<string, AnyPublishedEndpointDefinition>();
   const endpointOwners = new Map<string, EndpointOwner>();
 
-  const routeKeyOf = (endpoint: EndpointDefinition): string =>
+  const routeKeyOf = (endpoint: EndpointDefinitionLike): string =>
     `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
 
   const coreEndpoints: { endpoint: EndpointDefinition; label: string }[] = [
@@ -569,7 +576,7 @@ function mergeEndpoints(
  * public access) and bypasses the normal plugin/JWT/RBAC/JSON-validation
  * pipeline, so any unapproved route trying to use it is a latent auth bypass.
  */
-function assertRouteSecurityInvariants(endpoints: readonly EndpointDefinition[]): void {
+function assertRouteSecurityInvariants(endpoints: readonly AnyPublishedEndpointDefinition[]): void {
   for (const ep of endpoints) {
     const security = ep.meta?.security ?? [];
 

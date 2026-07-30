@@ -2,6 +2,7 @@ import type { Context, Env, MiddlewareHandler } from 'hono';
 import type { FortressProtectRuntime } from '../core/capabilities';
 import type { EndpointDefinition } from '../core/endpoint';
 import type {
+  ProtectableEndpointDefinition,
   ProtectedRouteContext,
   ProtectedRouteHandler,
   ProtectedRouteTarget,
@@ -20,7 +21,7 @@ import { protect } from '../core/http/protect';
  */
 export type HonoProtectedRouteHandler<
 
-  E extends EndpointDefinition<any, any, any, any> = EndpointDefinition,
+  E extends ProtectableEndpointDefinition = EndpointDefinition,
   HEnv extends Env = Env,
   TResult = unknown,
 > = (
@@ -40,7 +41,7 @@ export type HonoProtectedRouteHandler<
  */
 export function protectedRoute<
 
-  E extends EndpointDefinition<any, any, any, any>,
+  E extends ProtectableEndpointDefinition,
   HEnv extends Env = Env,
   TResult = unknown,
 >(

@@ -22,7 +22,7 @@ import type { ClientAuth, TokenRequestBody } from '../../plugins/oauth';
 import type { AuthEndpointsMap } from '../auth/auth-endpoints';
 import type { FortressRuntime } from '../capabilities';
 import type {
-  EndpointDefinition,
+  EndpointDefinitionLike,
   InferEndpointBody,
 } from '../endpoint';
 import type { IamEndpointsMap } from '../iam/iam-endpoints';
@@ -72,7 +72,7 @@ export type DispatchResult = Response;
 export async function dispatchEndpoint(
   fortress: FortressRuntime,
   request: Request,
-  endpoint: EndpointDefinition,
+  endpoint: EndpointDefinitionLike,
   input: ValidatedRequestData,
   auth: DispatchAuth,
 ): Promise<DispatchResult> {
@@ -188,7 +188,7 @@ function isPluginMethodRecord(value: unknown): value is Record<string, PluginMet
  * capabilities under the literal name `oauth`, so matching on metadata alone
  * would dispatch another plugin's route against this plugin's methods.
  */
-function isOAuthDispatchRoute(pluginName: string, endpoint: EndpointDefinition): boolean {
+function isOAuthDispatchRoute(pluginName: string, endpoint: EndpointDefinitionLike): boolean {
   // `dispatchKind` selects the bespoke parser for the consent-flow routes,
   // which authenticate normally; it is unrelated to the self-managed security
   // exemption and is left as declared.
@@ -207,7 +207,7 @@ function isOAuthDispatchRoute(pluginName: string, endpoint: EndpointDefinition):
  * than the descriptor keeps that true even if `plugin.name` is later
  * reassigned, since dispatch resolves the surface through `resolvePlugin`.
  */
-function findOwningPluginName(endpoint: EndpointDefinition): string | undefined {
+function findOwningPluginName(endpoint: EndpointDefinitionLike): string | undefined {
   const owner = endpointOwner(endpoint);
   // A symbol owner is a Fortress core route (dispatched through the auth/IAM
   // switches below); `__host` routes are metadata-only and have no plugin
@@ -220,7 +220,7 @@ function findOwningPluginName(endpoint: EndpointDefinition): string | undefined 
 async function dispatchPlugin(
   fortress: FortressRuntime,
   pluginName: string,
-  endpoint: EndpointDefinition,
+  endpoint: EndpointDefinitionLike,
   body: Record<string, unknown>,
   query: Record<string, unknown>,
   pathParams: Record<string, unknown>,
@@ -285,7 +285,7 @@ function resolveOAuthMethod<M extends OAuthCapabilityMethod>(
 async function dispatchOAuth(
   fortress: FortressRuntime,
   request: Request,
-  endpoint: EndpointDefinition,
+  endpoint: EndpointDefinitionLike,
   auth: DispatchAuth,
 ): Promise<Response> {
   const handlerName = endpoint.handler;

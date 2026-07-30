@@ -15,13 +15,13 @@
 import type { OpenAPISpec } from '../plugins/openapi/spec-builder';
 import type { AuthService } from './auth/auth-service';
 import type { FortressConfig, ResolvedCookieConfig } from './config';
-import type { EndpointDefinition } from './endpoint';
+import type { AnyPublishedEndpointDefinition, EndpointDefinitionLike } from './endpoint';
 import type { AuthCookiePayload } from './http/cookie-serialize';
 import type { PluginRequestContext } from './http/plugin-middleware';
 import type { ResolvedPrincipal } from './http/principal';
 import type { IamService } from './iam/iam-service';
 import type { PermissionSyncOptions, PermissionSyncResult } from './iam/permission-sync';
-import type { RouteManifestEntry } from './manifest/route-manifest';
+import type { PublishedRouteManifest } from './manifest/route-manifest';
 import type { MigrationApplyResult } from './migrations/engine';
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
@@ -31,7 +31,7 @@ import type { MiddlewareDefinition } from './plugin';
 /** Options accepted by {@link FortressManifestRuntime.toOpenAPI}. */
 export interface FortressToOpenAPIOptions extends ToOpenAPIOptions {
   /** Override the endpoints to emit. Defaults to the instance's `endpoints`. */
-  endpoints?: EndpointDefinition[];
+  endpoints?: readonly EndpointDefinitionLike[];
 }
 
 /** Options accepted by {@link FortressMigrationRuntime.migrate}. */
@@ -65,9 +65,9 @@ export type PluginMethodsValidator<T> = (value: unknown) => value is T;
  */
 export interface FortressHttpRuntime {
   /** All endpoint definitions (auth + IAM + plugins) with JSON Schema metadata. */
-  readonly endpoints: EndpointDefinition[];
+  readonly endpoints: readonly AnyPublishedEndpointDefinition[];
   /** Canonical generated route-security manifest derived from endpoint metadata. */
-  readonly manifest: RouteManifestEntry[];
+  readonly manifest: PublishedRouteManifest;
   readonly config: Readonly<FortressConfig>;
   /**
    * Handle a Fortress-managed request and return a web-standard `Response`.
@@ -146,8 +146,8 @@ export interface FortressPluginRuntime {
  * manifest, and OpenAPI emission — what CI checks and docs tooling consume.
  */
 export interface FortressManifestRuntime {
-  readonly endpoints: EndpointDefinition[];
-  readonly manifest: RouteManifestEntry[];
+  readonly endpoints: readonly AnyPublishedEndpointDefinition[];
+  readonly manifest: PublishedRouteManifest;
   readonly config: Readonly<FortressConfig>;
   /**
    * Emit a complete OpenAPI 3.1 spec from the endpoint definitions Fortress

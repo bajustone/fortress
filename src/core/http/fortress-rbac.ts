@@ -17,7 +17,7 @@
  * each adapter — this module only handles fortress's own routes.
  */
 
-import type { EndpointDefinition } from '../endpoint';
+import type { EndpointDefinition, EndpointDefinitionLike } from '../endpoint';
 import type { RuntimeFortressPlugin } from '../plugin';
 import type { Subject } from '../types';
 import { isAuthenticationOnlyEndpoint } from '../endpoint-security';
@@ -97,7 +97,7 @@ export interface PermissionEnforcement {
  * or the JWT fallback) and supplying the resulting `subject`.
  */
 export async function enforceFortressPermission(
-  endpoint: EndpointDefinition,
+  endpoint: EndpointDefinitionLike,
   subject: Subject | undefined,
   enforcement: PermissionEnforcement,
   scopes?: string[] | null,

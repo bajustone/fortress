@@ -1,7 +1,7 @@
 import type { OpenAPISpec } from '../../plugins/openapi/spec-builder';
 import type { FortressManifestRuntime } from '../capabilities';
-import type { EndpointDefinition } from '../endpoint';
-import type { RouteManifestEntry } from './route-manifest';
+import type { EndpointDefinitionLike } from '../endpoint';
+import type { RouteManifestEntryLike } from './route-manifest';
 import { buildRouteManifest } from './route-manifest';
 
 export interface RouteManifestDrift {
@@ -17,15 +17,15 @@ export interface RouteManifestDrift {
 }
 
 export interface DetectRouteManifestDriftOptions {
-  manifest?: RouteManifestEntry[];
+  manifest?: readonly RouteManifestEntryLike[];
   openapi?: OpenAPISpec;
 }
 
-function endpointKey(route: Pick<EndpointDefinition, 'method' | 'path'>): string {
+function endpointKey(route: Pick<EndpointDefinitionLike, 'method' | 'path'>): string {
   return `${route.method.toUpperCase()} ${route.path}`;
 }
 
-function manifestKey(route: Pick<RouteManifestEntry, 'method' | 'path'>): string {
+function manifestKey(route: Pick<RouteManifestEntryLike, 'method' | 'path'>): string {
   return `${route.method.toUpperCase()} ${route.path}`;
 }
 
