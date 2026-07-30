@@ -43,7 +43,7 @@ import type { ValidatedRequestData } from '../validation';
 import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
 import { resolvePluginCapability } from '../plugin-methods-map';
-import { endpointOwner, HOST_ROUTES_PLUGIN_NAME } from '../route-assembly';
+import { endpointOwner, HOST_ROUTES_PLUGIN_NAME, isSelfManagedOAuthRoute } from '../route-assembly';
 
 /** Auth context resolved by `handleRequest` before dispatch. */
 export interface DispatchAuth {
@@ -189,8 +189,11 @@ function isPluginMethodRecord(value: unknown): value is Record<string, PluginMet
  * would dispatch another plugin's route against this plugin's methods.
  */
 function isOAuthDispatchRoute(pluginName: string, endpoint: EndpointDefinition): boolean {
+  // `dispatchKind` selects the bespoke parser for the consent-flow routes,
+  // which authenticate normally; it is unrelated to the self-managed security
+  // exemption and is left as declared.
   return pluginName === 'oauth'
-    && (endpoint.meta?.bearerKind === 'oauth' || endpoint.meta?.dispatchKind === 'oauth');
+    && (isSelfManagedOAuthRoute(endpoint) || endpoint.meta?.dispatchKind === 'oauth');
 }
 
 /**

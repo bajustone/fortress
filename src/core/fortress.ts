@@ -56,6 +56,7 @@ import {
   CORE_ENDPOINT_OWNER,
   endpointOwner,
   HOST_ROUTES_PLUGIN_NAME,
+  isSelfManagedOAuthRoute,
   normalizePlugins,
 } from './route-assembly';
 
@@ -427,7 +428,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     for (const endpoint of endpoints) {
       if (endpointOwner(endpoint) !== plugin.name)
         continue;
-      if (endpoint.meta?.bearerKind !== 'oauth')
+      if (!isSelfManagedOAuthRoute(endpoint))
         genericRoutes[endpoint.handler] = endpoint;
     }
     pluginCallTree[plugin.name] = buildCall(instance, genericRoutes);

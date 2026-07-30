@@ -4,7 +4,7 @@ import type { MiddlewareDefinition, RuntimeFortressPlugin } from '../plugin';
 import { authEndpoints } from '../auth/auth-endpoints';
 import { resolveCsrfConfig } from '../http/csrf';
 import { iamEndpoints } from '../iam/iam-endpoints';
-import { endpointProvenance } from '../route-assembly';
+import { endpointProvenance, isSelfManagedOAuthRoute } from '../route-assembly';
 
 export type RouteClassification = 'public' | 'authenticated' | 'rbac' | 'oauth-protocol' | 'default-deny';
 
@@ -35,13 +35,17 @@ function endpointKey(endpoint: Pick<EndpointDefinition, 'method' | 'path'>): str
 
 function classifyEndpoint(endpoint: EndpointDefinition): RouteClassification {
   const security = endpoint.meta?.security ?? [];
-  if (endpoint.meta?.bearerKind === 'oauth')
+  if (isSelfManagedOAuthRoute(endpoint))
     return 'oauth-protocol';
   if (security.includes('none'))
     return 'public';
   if (endpoint.meta?.permission)
     return 'rbac';
-  if (security.includes('bearer') || security.includes('apiKey') || security.includes('basic'))
+  // `basic` is deliberately absent: Fortress has no Basic verifier, so a
+  // Basic route with no permission is not authenticated. Construction rejects
+  // it outright; an unassembled runtime lands here and is reported
+  // `default-deny` rather than being mislabelled as authenticated.
+  if (security.includes('bearer') || security.includes('apiKey'))
     return 'authenticated';
   return 'default-deny';
 }

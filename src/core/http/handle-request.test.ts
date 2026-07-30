@@ -1,7 +1,7 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin, PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
 import type { PermissionContext, Subject } from '../types';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { oauth } from '../../plugins/oauth';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
@@ -29,6 +29,100 @@ describe('fortress.handleRequest', () => {
 
   beforeEach(() => {
     fortress = makeFortress();
+  });
+
+  // The migration path for an unsupported `security: ['basic']` route is to
+  // declare a permission and resolve a subject for it. This proves that
+  // contract end to end: Basic alone never authenticates, a credential plugin
+  // supplies the subject, and Fortress IAM decides.
+  describe('basic-auth routes with an IAM permission', () => {
+    function basicRoute(): EndpointDefinition {
+      return endpoint('GET', '/reports/list')
+        .summary('List reports')
+        .security('basic')
+        .permission('reports', 'read')
+        .response(200, 'OK', obj({ ok: str() }, 'ok'))
+        .handler('list')
+        .build() as EndpointDefinition;
+    }
+
+    function buildFortress(options: { resolvesBasic: boolean }) {
+      let seenContext: PluginRouteContext | undefined;
+      const handler = vi.fn(async (_input: unknown, ctx: PluginRouteContext) => {
+        seenContext = ctx;
+        return { ok: 'yes' };
+      });
+
+      const plugin: FortressPlugin = {
+        name: 'reports',
+        routes: { list: basicRoute() },
+        methods: () => ({ list: handler }),
+      };
+      if (options.resolvesBasic) {
+        plugin.resolvePrincipal = async (request, _ctx) => (
+          request.headers.get('authorization')?.startsWith('Basic ')
+            ? { subject: { type: 'USER', id: 'client-1' } }
+            : null
+        );
+      }
+
+      const instance = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [plugin],
+      });
+      return { instance, handler, context: () => seenContext };
+    }
+
+    const withBasic = { headers: { authorization: `Basic ${btoa('client-1:secret')}` } };
+
+    it('rejects a request with no credential', async () => {
+      const { instance, handler } = buildFortress({ resolvesBasic: true });
+
+      const res = await instance.handleRequest(new Request('http://localhost/reports/list'));
+      expect(res.status).toBe(401);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('rejects Basic credentials when no plugin resolves them', async () => {
+      const { instance, handler } = buildFortress({ resolvesBasic: false });
+
+      const res = await instance.handleRequest(new Request('http://localhost/reports/list', withBasic));
+      expect(res.status).toBe(401);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('denies a resolved subject when IAM refuses the permission', async () => {
+      const { instance, handler } = buildFortress({ resolvesBasic: true });
+      const checkPermission = vi.fn(async (
+        _subject: Subject,
+        _resource: string,
+        _action: string,
+        _context?: PermissionContext,
+      ) => false);
+      instance.iam.checkPermission = checkPermission;
+
+      const res = await instance.handleRequest(new Request('http://localhost/reports/list', withBasic));
+      expect(res.status).toBe(403);
+      expect(handler).not.toHaveBeenCalled();
+      expect(checkPermission).toHaveBeenCalledWith(
+        { type: 'USER', id: 'client-1' },
+        'reports',
+        'read',
+        expect.anything(),
+      );
+    });
+
+    it('dispatches with the resolved subject when IAM allows the permission', async () => {
+      const { instance, handler, context } = buildFortress({ resolvesBasic: true });
+      instance.iam.checkPermission = async () => true;
+
+      const res = await instance.handleRequest(new Request('http://localhost/reports/list', withBasic));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: 'yes' });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(context()?.subject).toEqual({ type: 'USER', id: 'client-1' });
+    });
   });
 
   describe('public endpoints', () => {
@@ -973,7 +1067,7 @@ describe('fortress.handleRequest', () => {
           handler: 'oauthRoute',
           // P3.6 hardening: arbitrary plugin routes may no longer opt out of
           // the auth pipeline with bearerKind:'oauth'. Only known OAuth
-          // protocol routes are allowed to self-auth.
+          // protocol routes may manage their own protocol security.
           meta: { summary: 'Host app OAuth route under /oauth/*', tags: ['Test'], security: ['bearer'], bearerKind: 'oauth' as const },
           responses: { 200: { description: 'ok' } },
         };
@@ -1028,7 +1122,7 @@ describe('fortress.handleRequest', () => {
     it('rejects arbitrary plugin routes that set bearerKind="oauth" (P3.6)', async () => {
       const { plugin } = makeOauthBearerPlugin(true);
       expect(() => createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins: [plugin] }))
-        .toThrow(/not an approved self-auth OAuth protocol route/);
+        .toThrow(/not an approved self-managed OAuth protocol route/);
     });
   });
 });

@@ -16,6 +16,32 @@ function fakeFortress(endpoints: EndpointDefinition[], plugins: any[] = [], csrf
 }
 
 describe('route manifest', () => {
+  it('does not classify a permissionless Basic route as authenticated', () => {
+    // Fortress ships no Basic verifier, so such a route is unauthenticated.
+    // Construction rejects it outright; an unassembled runtime reaching the
+    // builder must report `default-deny` rather than mislabel it.
+    const basicOnly = endpoint('GET', '/plugin/basic')
+      .summary('Basic')
+      .security('basic')
+      .response(200, 'OK', obj({ ok: str() }, 'ok'))
+      .handler('basicOnly')
+      .build() as EndpointDefinition;
+    const basicWithPermission = endpoint('GET', '/plugin/basic-rbac')
+      .summary('Basic RBAC')
+      .security('basic')
+      .permission('plugin', 'read')
+      .response(200, 'OK', obj({ ok: str() }, 'ok'))
+      .handler('basicRbac')
+      .build() as EndpointDefinition;
+
+    const manifest = buildRouteManifest(
+      fakeFortress([basicOnly, basicWithPermission]) as any,
+    );
+
+    expect(manifest.find(e => e.path === '/plugin/basic')!.classification).toBe('default-deny');
+    expect(manifest.find(e => e.path === '/plugin/basic-rbac')!.classification).toBe('rbac');
+  });
+
   it('classifies public, authenticated, rbac, and oauth protocol routes', () => {
     const routes = {
       publicPing: endpoint('GET', '/plugin/ping')

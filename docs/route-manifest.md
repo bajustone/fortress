@@ -14,9 +14,9 @@ Each entry contains:
 - `plugin` — `auth`, `iam`, a registered plugin name, or `null` when the origin cannot be inferred.
 - `classification` — one of:
   - `public` — `meta.security` includes `none`.
-  - `authenticated` — bearer/basic/API-key route without an IAM permission.
+  - `authenticated` — bearer/API-key route without an IAM permission.
   - `rbac` — route has `meta.permission` and requires IAM authorization.
-  - `oauth-protocol` — route has `meta.bearerKind: 'oauth'` and self-authenticates as an OAuth protocol endpoint.
+  - `oauth-protocol` — route has `meta.bearerKind: 'oauth'`; its handler manages OAuth protocol security (authentication or intentional public access) and bypasses the Fortress principal/RBAC pipeline.
   - `default-deny` — no usable security metadata; the request pipeline denies it.
 - `permission`, `security`, `bearerKind` — direct endpoint security metadata.
 - `csrfApplicable` — unsafe method and not skipped by `config.csrf`.

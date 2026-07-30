@@ -5,7 +5,9 @@
  * the endpoint's `meta.security` and `meta.permission` declarations to
  * decide whether the caller is allowed through:
  *
- * - `security: 'none'` or `security: 'basic'` → public, allow.
+ * - `security: 'none'` → public, allow. `basic` is not public: Fortress ships
+ *   no Basic credential verifier, so a Basic route without a permission is
+ *   rejected at construction and denied here.
  * - `meta.permission` set → require auth + IAM `checkPermission`.
  * - `security: 'bearer'` (no permission) → require auth, no IAM check.
  * - Anything else → deny (security-first default).
@@ -80,7 +82,7 @@ export interface PermissionEnforcement {
 /**
  * Enforce fortress's default-deny policy for an already-matched endpoint.
  *
- * - Public endpoints (`security: 'none'` / `'basic'`) pass through.
+ * - Public endpoints (`security: 'none'`) pass through.
  * - Endpoints with `meta.permission` require an authenticated subject and a
  *   passing `checkPermission` call — otherwise throws `UNAUTHORIZED` /
  *   `FORBIDDEN`.
@@ -122,8 +124,12 @@ export async function enforceFortressPermission(
     return;
   }
 
-  // Public/self-authenticated routes without an IAM requirement.
-  if (security?.includes('none') || security?.includes('basic'))
+  // Only `none` is public. `basic` deliberately is not: Fortress ships no
+  // Basic credential verifier, so a Basic route with no permission is
+  // unauthenticated rather than self-authenticated. Route assembly rejects
+  // that combination outright; falling through to default-deny below keeps
+  // this function closed for any caller that reaches it directly.
+  if (security?.includes('none'))
     return;
 
   // Bearer-only routes — auth required, no IAM check

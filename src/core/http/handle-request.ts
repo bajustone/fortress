@@ -18,6 +18,7 @@ import type { ValidatedRequestData } from '../validation';
 import type { RouteEntry } from './match';
 import { resolveCookieConfig } from '../config';
 import { Errors, FortressError } from '../errors';
+import { isSelfManagedOAuthRoute } from '../route-assembly';
 import { coerceBySchema, validateRequest } from '../validation';
 import { clearAuthCookies, serializeAuthCookies } from './cookie-serialize';
 import { enforceCsrf, resolveCsrfConfig } from './csrf';
@@ -118,9 +119,9 @@ export function buildHandleRequest(
           //        request and the endpoint declared `security: 'bearer'`.
           //    3c. Routes that declare `meta.bearerKind: 'oauth'` (the OAuth
           //        protocol endpoints — token, userinfo, introspect, revoke,
-          //        authorize, jwks, discovery) self-parse their bearer
-          //        (which is an OAuth access token, not a Fortress JWT) so
-          //        we skip both the resolver chain and the JWT check here.
+          //        authorize, JWKS, discovery) manage their own protocol
+          //        security, including intentional public access for JWKS and
+          //        discovery, so we bypass the Fortress principal pipeline.
           //        Other `/oauth/*` routes — e.g. the consent-flow endpoints
           //        `/oauth/flows/:flowId{,/approve,/deny}` — default to
           //        `bearerKind: 'jwt'` and go through the normal auth
@@ -130,7 +131,7 @@ export function buildHandleRequest(
           let userId: string | undefined;
           let claims: TokenClaims | undefined;
           let scopes: string[] | null | undefined;
-          const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
+          const selfManagedBearer = isSelfManagedOAuthRoute(endpoint);
 
           if (!selfManagedBearer) {
             const resolved = await tryPluginPrincipal(fortress, request, plugins);
@@ -179,9 +180,9 @@ export function buildHandleRequest(
           });
 
           // 5. Fortress-managed default-deny RBAC. Routes flagged
-          //    `bearerKind: 'oauth'` self-authenticate inside their handlers
-          //    (the bearer is an OAuth token, not a JWT) so they're exempt
-          //    from the IAM check too.
+          //    `bearerKind: 'oauth'` manage their own OAuth protocol security
+          //    (authentication or intentional public access), so they bypass
+          //    Fortress IAM too.
           if (!selfManagedBearer) {
             await enforceFortressPermission(endpoint, subject, {
               checkPermission: (subj, resource, action, credentialScopes): Promise<boolean> =>
