@@ -13,7 +13,7 @@
  */
 
 import type { PluginRequestContext } from '../../core/http/plugin-middleware';
-import type { FortressPlugin, MiddlewareDefinition, PluginContext } from '../../core/plugin';
+import type { FortressPlugin, MiddlewareDefinition, PluginContext, PluginHooks } from '../../core/plugin';
 import type { RateLimitStore } from './memory-store';
 import { Errors } from '../../core/errors';
 import { definePlugin } from '../../core/plugin';
@@ -299,14 +299,17 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin<'rate-li
     methodFilter: string[] | undefined,
     position: 'before-auth' | 'after-auth',
   ): void => {
+    const runtimeMethods = methodFilter ? Object.freeze([...methodFilter]) : undefined;
+    const descriptorMethods = runtimeMethods ? [...runtimeMethods] : undefined;
     middleware.push({
       path: match,
       position,
+      ...(descriptorMethods ? { methods: descriptorMethods } : {}),
       handler: async (_ctx: PluginContext, request: PluginRequestContext, next: () => Promise<void>) => {
         const req = request.request;
         if (!(req instanceof Request))
           throw Errors.badRequest('PluginRequestContext.request is required');
-        if (methodFilter && !methodFilter.includes(req.method)) {
+        if (runtimeMethods && !runtimeMethods.includes(req.method)) {
           await next();
           return;
         }
@@ -332,14 +335,17 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin<'rate-li
 
     const position = binding.position ?? 'before-auth';
     const methodFilter = binding.methods?.map(m => m.toUpperCase());
+    const runtimeMethods = methodFilter ? Object.freeze([...methodFilter]) : undefined;
+    const descriptorMethods = runtimeMethods ? [...runtimeMethods] : undefined;
     middleware.push({
       path: binding.match,
       position,
+      ...(descriptorMethods ? { methods: descriptorMethods } : {}),
       handler: async (_ctx: PluginContext, request: PluginRequestContext, next: () => Promise<void>) => {
         const req = request.request;
         if (!(req instanceof Request))
           throw Errors.badRequest('PluginRequestContext.request is required');
-        if (methodFilter && !methodFilter.includes(req.method)) {
+        if (runtimeMethods && !runtimeMethods.includes(req.method)) {
           await next();
           return;
         }
@@ -350,42 +356,40 @@ export function rateLimit(config: RateLimitConfig = {}): FortressPlugin<'rate-li
     });
   }
 
+  const hooks: PluginHooks = {};
+  if (loginCfg) {
+    hooks.beforeLogin = async (ctx) => {
+      const ip = ctx.meta?.ipAddress;
+      const email = ctx.email;
+      // Per-IP
+      if (loginCfg.maxPerIp != null)
+        await check('login', { ip });
+      // Per-account (identifier keyed as userId slot on the synthetic rule)
+      if (loginCfg.maxPerAccount != null)
+        await check('login:account', { userId: normalizeAccountIdentifier(email) });
+    };
+  }
+  if (registerCfg) {
+    hooks.beforeRegister = async (ctx) => {
+      await check('register', { ip: ctx.meta?.ipAddress });
+    };
+  }
+  if (refreshCfg) {
+    hooks.beforeTokenRefresh = async (ctx) => {
+      const ip = ctx.meta?.ipAddress;
+      // Best-effort per-user limit: the hook runs before the refresh token
+      // is verified, so userId isn't known yet. IP-only here; per-user is
+      // enforced via the `/auth/refresh`-aware middleware when you mount
+      // refresh under a user-scoped wrapper in your own code.
+      await check('refresh', { ip });
+    };
+  }
+
   return definePlugin({
     name: 'rate-limit',
 
     ...(middleware.length > 0 ? { middleware } : {}),
-
-    hooks: {
-      async beforeLogin(ctx) {
-        if (!loginCfg)
-          return;
-        const ip = ctx.meta?.ipAddress;
-        const email = ctx.email;
-        // Per-IP
-        if (loginCfg.maxPerIp != null)
-          await check('login', { ip });
-        // Per-account (identifier keyed as userId slot on the synthetic rule)
-        if (loginCfg.maxPerAccount != null)
-          await check('login:account', { userId: normalizeAccountIdentifier(email) });
-      },
-
-      async beforeRegister(ctx) {
-        if (!registerCfg)
-          return;
-        await check('register', { ip: ctx.meta?.ipAddress });
-      },
-
-      async beforeTokenRefresh(ctx) {
-        if (!refreshCfg)
-          return;
-        const ip = ctx.meta?.ipAddress;
-        // Best-effort per-user limit: the hook runs before the refresh token
-        // is verified, so userId isn't known yet. IP-only here; per-user is
-        // enforced via the `/auth/refresh`-aware middleware when you mount
-        // refresh under a user-scoped wrapper in your own code.
-        await check('refresh', { ip });
-      },
-    },
+    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
 
     methods: (_ctx: PluginContext) => ({
       check,

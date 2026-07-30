@@ -13,7 +13,7 @@ import { isAuthenticationOnlyEndpoint } from '../endpoint-security';
 import { resolveCsrfConfig } from '../http/csrf';
 import { iamEndpoints } from '../iam/iam-endpoints';
 import { snapshotPluginMembership } from '../plugin-membership';
-import { endpointProvenance, isSelfManagedOAuthRoute } from '../route-assembly';
+import { endpointProvenance, HOST_ROUTES_PLUGIN_NAME, isSelfManagedOAuthRoute } from '../route-assembly';
 
 export type RouteClassification = 'public' | 'authenticated' | 'rbac' | 'oauth-protocol' | 'default-deny';
 
@@ -93,7 +93,7 @@ function middlewareMatchesEndpoint(middleware: MiddlewareDefinition, endpoint: E
   if (!pathPatternToRegex(middleware.path).test(endpoint.path))
     return false;
 
-  const methods = (middleware as MiddlewareDefinition & { methods?: string[] }).methods;
+  const methods = middleware.methods;
   if (methods && !methods.map(m => m.toUpperCase()).includes(endpoint.method.toUpperCase()))
     return false;
 
@@ -110,15 +110,19 @@ function isRateLimited(endpoint: EndpointDefinitionLike, plugins: readonly Runti
     }
   }
 
-  // The rate-limit plugin's login/register/refresh protections are hook-based,
-  // not path middleware. Surface those as rate-limited in the manifest too.
-  if (plugins.some(plugin => plugin.name === 'rate-limit')) {
-    if (endpoint.method === 'POST' && endpoint.path === '/auth/login')
-      return true;
-    if (endpoint.method === 'POST' && endpoint.path === '/auth/register')
-      return true;
-    if (endpoint.method === 'POST' && endpoint.path === '/auth/refresh')
-      return true;
+  // The built-in auth protections are hook-based rather than path middleware.
+  // Classify only the specific hook captured in the validated plugin snapshot.
+  if (endpoint.method === 'POST' && endpoint.path === '/auth/login') {
+    return plugins.some(plugin =>
+      plugin.name === 'rate-limit' && typeof plugin.hooks?.beforeLogin === 'function');
+  }
+  if (endpoint.method === 'POST' && endpoint.path === '/auth/register') {
+    return plugins.some(plugin =>
+      plugin.name === 'rate-limit' && typeof plugin.hooks?.beforeRegister === 'function');
+  }
+  if (endpoint.method === 'POST' && endpoint.path === '/auth/refresh') {
+    return plugins.some(plugin =>
+      plugin.name === 'rate-limit' && typeof plugin.hooks?.beforeTokenRefresh === 'function');
   }
 
   return false;
@@ -150,12 +154,18 @@ function collectEndpointOrigins(
   for (const endpoint of coreIam)
     origins.set(endpointKey(endpoint), { endpoint, plugin: 'iam' });
 
-  for (const endpoint of Object.values(fortress.config.routes ?? {}) as EndpointDefinition[]) {
-    origins.set(endpointKey(endpoint), { endpoint, plugin: null });
+  // Genuine instances publish the synthetic host descriptor in the validated
+  // capability view. Focused config-only fixtures retain the legacy fallback.
+  if (!plugins.some(plugin => plugin.name === HOST_ROUTES_PLUGIN_NAME)) {
+    for (const endpoint of Object.values(fortress.config.routes ?? {}) as EndpointDefinition[])
+      origins.set(endpointKey(endpoint), { endpoint, plugin: null });
   }
   for (const plugin of plugins) {
     for (const endpoint of Object.values(plugin.routes ?? {}) as EndpointDefinition[]) {
-      origins.set(endpointKey(endpoint), { endpoint, plugin: plugin.name });
+      origins.set(endpointKey(endpoint), {
+        endpoint,
+        plugin: plugin.name === HOST_ROUTES_PLUGIN_NAME ? null : plugin.name,
+      });
     }
   }
 

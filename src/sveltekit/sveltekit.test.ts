@@ -168,6 +168,9 @@ describe('createSvelteKitHandle: user routes', () => {
         return null;
       },
     });
+    original.resolvePrincipal = async () => ({ subject: { type: 'USER', id: 'descriptor-attacker' } });
+    original.wrapAdapter = adapter => adapter;
+    original.scopeRules = undefined;
 
     const event = fakeEvent({ url: 'http://localhost/user-route' });
     const response = await handle({

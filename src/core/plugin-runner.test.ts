@@ -1,9 +1,10 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { FortressConfig } from './config';
-import type { FortressPlugin } from './plugin';
+import type { FortressPlugin, PluginContext, RuntimeFortressPlugin } from './plugin';
 
 import { describe, expect, it, vi } from 'vitest';
 import { definePlugin } from './plugin';
+import { snapshotPluginMembership } from './plugin-membership';
 import {
   chainAdapterWrappers,
   collectScopeRules,
@@ -81,6 +82,46 @@ describe('processPlugins', () => {
     const methods = requireValue(result.defined, 'defined plugin methods');
     const greet = requireValue(methods.greet, 'defined plugin greet method');
     expect(greet('Ada')).toBe(`${mockConfig.jwt.key}:Ada`);
+  });
+
+  it('finalizes standalone post-factory capability additions', async () => {
+    let capturedContext: PluginContext | undefined;
+    const originalResolver = vi.fn(async () => null);
+    const originalMiddleware = vi.fn(async (_ctx: unknown, _request: unknown, next: () => Promise<void>) => next());
+    const lateResolver = vi.fn(async () => ({ subject: { type: 'USER' as const, id: 'late' } }));
+    const plugin: RuntimeFortressPlugin = {
+      name: 'standalone',
+      methods: (ctx) => {
+        capturedContext = ctx;
+        plugin.resolvePrincipal = originalResolver;
+        plugin.middleware = [{ path: '/*', position: 'before-auth', handler: originalMiddleware }];
+        return {};
+      },
+    };
+
+    processPlugins([plugin], mockDb, mockConfig);
+    const view = snapshotPluginMembership(capturedContext!);
+    plugin.resolvePrincipal = lateResolver;
+    plugin.middleware!.splice(0);
+
+    await expect(view[0]!.resolvePrincipal!(new Request('https://example.test'), capturedContext!)).resolves.toBeNull();
+    expect(originalResolver).toHaveBeenCalledOnce();
+    expect(lateResolver).not.toHaveBeenCalled();
+    expect(view[0]!.middleware).toHaveLength(1);
+  });
+
+  it('invalidates a standalone view when a factory fails', () => {
+    let capturedContext: PluginContext | undefined;
+    const plugin: RuntimeFortressPlugin = {
+      name: 'failed-standalone',
+      methods: (ctx) => {
+        capturedContext = ctx;
+        throw new Error('factory failed');
+      },
+    };
+
+    expect(() => processPlugins([plugin], mockDb, mockConfig)).toThrow('factory failed');
+    expect(() => snapshotPluginMembership(capturedContext!)[0]!.name).toThrow('failed construction');
   });
 
   it('handles multiple plugins', () => {
@@ -189,6 +230,32 @@ describe('executePluginMiddleware', () => {
       '/auth//login/',
       { db: mockDb, config: mockConfig },
       request,
+    );
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('enforces middleware methods case-insensitively from the request method', async () => {
+    const handler = vi.fn(async (_ctx, _request, next) => next());
+    const plugin = testPlugin({
+      middleware: [{ position: 'before-auth', path: '/submit', methods: ['post'], handler }],
+    });
+    const context = { db: mockDb, config: mockConfig };
+
+    await executePluginMiddleware(
+      [plugin],
+      'before-auth',
+      '/submit',
+      context,
+      { request: new Request('http://localhost/submit') },
+    );
+    expect(handler).not.toHaveBeenCalled();
+
+    await executePluginMiddleware(
+      [plugin],
+      'before-auth',
+      '/submit',
+      context,
+      { request: new Request('http://localhost/submit', { method: 'POST' }) },
     );
     expect(handler).toHaveBeenCalledOnce();
   });

@@ -48,6 +48,11 @@ import { instrumentAdapter } from './observability/db-instrumentation';
 import { SILENT_LOGGER } from './observability/logger';
 import { NO_OP_TELEMETRY } from './observability/types';
 import { toOpenAPI as endpointsToOpenAPI } from './openapi';
+import {
+  bindPublishedPluginRoutes,
+  createPluginCapabilityController,
+  materializePluginCapabilities,
+} from './plugin-capabilities';
 import { publishPluginMembership } from './plugin-membership';
 import { processPlugins } from './plugin-runner';
 import {
@@ -195,275 +200,288 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // plugin factory runs. The authoritative endpoint set is re-derived after
   // the factories, below.
   const plugins = normalizePlugins(config);
+  // Built-in factories capture this stable construction-local view. Its
+  // facades read live declarations during factories, then switch atomically to
+  // the validated post-factory snapshots before the instance is published.
+  const capabilityController = createPluginCapabilityController(plugins);
 
-  // Composition check, deliberately not shared with `describeRouteSurface()`:
-  // a plugin declaring a dependency on an unregistered plugin can never boot,
-  // and rejecting it here means no factory starts a worker or opens a database
-  // handle first. Re-checked after the factories, which may mutate the graph.
-  assertPluginDependencyProviders(plugins);
+  try {
+    // Composition check, deliberately not shared with `describeRouteSurface()`:
+    // a plugin declaring a dependency on an unregistered plugin can never boot,
+    // and rejecting it here means no factory starts a worker or opens a database
+    // handle first. Re-checked after the factories, which may mutate the graph.
+    assertPluginDependencyProviders(plugins);
 
-  // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
-  // zero-allocation singletons — if the caller doesn't opt in, Fortress
-  // never writes to stderr and every metric/span call is a no-op.
-  const logger = config.logger ?? SILENT_LOGGER;
-  const telemetry = config.observability ?? NO_OP_TELEMETRY;
+    // Resolve observability defaults. SILENT_LOGGER and NO_OP_TELEMETRY are
+    // zero-allocation singletons — if the caller doesn't opt in, Fortress
+    // never writes to stderr and every metric/span call is a no-op.
+    const logger = config.logger ?? SILENT_LOGGER;
+    const telemetry = config.observability ?? NO_OP_TELEMETRY;
 
-  // Wrap the adapter with DB instrumentation. When `telemetry` is the
-  // no-op default, the wrapper records into a no-op histogram — essentially
-  // free. When a real OTel adapter is wired, every Fortress-internal query
-  // (and every plugin query that also uses this adapter) emits the stable
-  // `db.client.operation.duration` metric with standard attributes.
-  const db = instrumentAdapter(config.database, telemetry);
+    // Wrap the adapter with DB instrumentation. When `telemetry` is the
+    // no-op default, the wrapper records into a no-op histogram — essentially
+    // free. When a real OTel adapter is wired, every Fortress-internal query
+    // (and every plugin query that also uses this adapter) emits the stable
+    // `db.client.operation.duration` metric with standard attributes.
+    const db = instrumentAdapter(config.database, telemetry);
 
-  // Token-verify histogram is built before the auth service so it can be
-  // passed in via deps. Kept here (not inside auth-service) so the metric
-  // catalog lives in one place.
-  const tokenVerifyDuration = telemetry.meter.createHistogram('fortress.auth.token_verify.duration', {
-    unit: 's',
-    description: 'JWT access token verification latency',
-    boundaries: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1],
-  });
+    // Token-verify histogram is built before the auth service so it can be
+    // passed in via deps. Kept here (not inside auth-service) so the metric
+    // catalog lives in one place.
+    const tokenVerifyDuration = telemetry.meter.createHistogram('fortress.auth.token_verify.duration', {
+      unit: 's',
+      description: 'JWT access token verification latency',
+      boundaries: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1],
+    });
 
-  const auth = createAuthService(db, config, plugins, { logger, telemetry, tokenVerifyDuration });
-  const iam = createIamService(db, config, { logger, telemetry });
-  const pluginMethods = processPlugins(plugins, db, config, auth, iam, logger);
+    const auth = createAuthService(db, config, capabilityController.plugins, { logger, telemetry, tokenVerifyDuration });
+    const iam = createIamService(db, config, { logger, telemetry });
+    const pluginMethods = processPlugins(plugins, db, config, auth, iam, logger, capabilityController.plugins);
 
-  // Derive and revalidate the authoritative graph and route set now that every
-  // plugin factory has run. Factories receive live config/route objects and can
-  // mutate them, so this pass must precede capability dereferencing as well as
-  // publication.
-  const { endpoints, endpointOwners } = assembleEndpoints(plugins);
-  // The published route set is the authority for dispatch, the manifest,
-  // OpenAPI, and the call tree. Its entries were cloned and frozen during
-  // assembly; freezing the array itself stops a consumer adding or dropping
-  // routes from the validated set after construction.
-  Object.freeze(endpoints);
+    // Materialize each known descriptor field exactly once after every factory
+    // returns, then validate and assemble routes from that single candidate view.
+    const materializedPlugins = materializePluginCapabilities(plugins);
+    const { endpoints, endpointOwners } = assembleEndpoints(materializedPlugins);
+    // The published route set is the authority for dispatch, the manifest,
+    // OpenAPI, and the call tree. Its entries were cloned and frozen during
+    // assembly; freezing the array itself stops a consumer adding or dropping
+    // routes from the validated set after construction.
+    Object.freeze(endpoints);
 
-  // Route key -> snapshot endpoint. Call trees bind these clones rather than
-  // the originals a plugin still holds, so mutating a declared route object
-  // later cannot change what `fortress.call.*` invokes.
-  const snapshotByRouteKey = new Map<string, AnyPublishedEndpointDefinition>(
-    endpoints.map(endpoint => [
-      `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`,
-      endpoint,
-    ]),
-  );
-  assertPluginDependencyCapabilities(plugins, pluginMethods);
+    // Route key -> snapshot endpoint. Call trees bind these clones rather than
+    // the originals a plugin still holds, so mutating a declared route object
+    // later cannot change what `fortress.call.*` invokes.
+    const snapshotByRouteKey = new Map<string, AnyPublishedEndpointDefinition>(
+      endpoints.map(endpoint => [
+        `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`,
+        endpoint,
+      ]),
+    );
+    assertPluginDependencyCapabilities(materializedPlugins, pluginMethods);
 
-  // A Fortress-mounted plugin route is executable only when its handler is
-  // an own callable method. Fail at startup rather than publishing a call
-  // namespace whose first request would 404; top-level host routes remain
-  // metadata-only and are intentionally exempt.
-  for (const plugin of plugins) {
-    if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
-      continue;
-    const methods = pluginMethods[plugin.name];
-    if (methods === undefined)
-      throw Errors.badRequest(`Plugin "${plugin.name}" did not provide a method map`);
-    for (const endpoint of Object.values(plugin.routes)) {
-      if (!Object.hasOwn(methods, endpoint.handler) || typeof methods[endpoint.handler] !== 'function') {
-        throw Errors.badRequest(
-          `Plugin "${plugin.name}" route handler "${endpoint.handler}" must be an own callable method`,
-        );
+    // A Fortress-mounted plugin route is executable only when its handler is
+    // an own callable method. Fail at startup rather than publishing a call
+    // namespace whose first request would 404; top-level host routes remain
+    // metadata-only and are intentionally exempt.
+    for (const plugin of materializedPlugins) {
+      const methods = pluginMethods[plugin.name];
+      if (methods === undefined)
+        throw Errors.badRequest(`Plugin "${plugin.name}" did not provide a method map`);
+      if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
+        continue;
+      for (const endpoint of Object.values(plugin.routes)) {
+        if (!Object.hasOwn(methods, endpoint.handler) || typeof methods[endpoint.handler] !== 'function') {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" route handler "${endpoint.handler}" must be an own callable method`,
+          );
+        }
       }
     }
-  }
 
-  // --- Wire built-in telemetry observers ------------------------------
-  //
-  // Translate AuthEvent / IamEvent / PermissionCheckEvent into metric
-  // updates. Attribute keys follow the Prometheus `.total` convention
-  // for counters and seconds for durations. User IDs are NEVER placed
-  // on metric attributes (cardinality bomb) — they go on spans/logs.
-  const authEventCounter = telemetry.meter.createCounter('fortress.auth.events.total', {
-    description: 'Auth lifecycle events (login, register, refresh, logout, token reuse)',
-  });
-  const iamEventCounter = telemetry.meter.createCounter('fortress.iam.events.total', {
-    description: 'IAM mutation events (role/permission/binding/group changes)',
-  });
-  const permissionCheckDuration = telemetry.meter.createHistogram('fortress.iam.permission_check.duration', {
-    unit: 's',
-    description: 'Permission check latency',
-    boundaries: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1],
-  });
-  const cacheHitCounter = telemetry.meter.createCounter('fortress.iam.permission_check.cache.hits', {
-    description: 'Permission check resolved from cache',
-  });
-  const cacheMissCounter = telemetry.meter.createCounter('fortress.iam.permission_check.cache.misses', {
-    description: 'Permission check that hit the database',
-  });
+    const finalizedPlugins = bindPublishedPluginRoutes(materializedPlugins, endpoints);
+    capabilityController.finalize(finalizedPlugins);
+    const runtimePlugins = capabilityController.plugins;
 
-  auth.addAuthObserver((event: AuthEvent) => {
-    authEventCounter.add(1, {
-      event: event.eventType,
-      outcome: event.outcome ?? 'n/a',
-      method: event.method ?? 'n/a',
+    // --- Wire built-in telemetry observers ------------------------------
+    //
+    // Translate AuthEvent / IamEvent / PermissionCheckEvent into metric
+    // updates. Attribute keys follow the Prometheus `.total` convention
+    // for counters and seconds for durations. User IDs are NEVER placed
+    // on metric attributes (cardinality bomb) — they go on spans/logs.
+    const authEventCounter = telemetry.meter.createCounter('fortress.auth.events.total', {
+      description: 'Auth lifecycle events (login, register, refresh, logout, token reuse)',
     });
-  });
-
-  iam.addIamObserver((event: IamEvent) => {
-    iamEventCounter.add(1, { event: event.eventType });
-  });
-
-  iam.addPermissionCheckObserver((event: PermissionCheckEvent) => {
-    permissionCheckDuration.record(event.durationSeconds, {
-      subject_type: event.subjectType,
-      result: event.allowed ? 'allow' : 'deny',
-      cached: event.cached ? 'true' : 'false',
+    const iamEventCounter = telemetry.meter.createCounter('fortress.iam.events.total', {
+      description: 'IAM mutation events (role/permission/binding/group changes)',
     });
-    if (event.cached) {
-      cacheHitCounter.add(1);
+    const permissionCheckDuration = telemetry.meter.createHistogram('fortress.iam.permission_check.duration', {
+      unit: 's',
+      description: 'Permission check latency',
+      boundaries: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1],
+    });
+    const cacheHitCounter = telemetry.meter.createCounter('fortress.iam.permission_check.cache.hits', {
+      description: 'Permission check resolved from cache',
+    });
+    const cacheMissCounter = telemetry.meter.createCounter('fortress.iam.permission_check.cache.misses', {
+      description: 'Permission check that hit the database',
+    });
+
+    auth.addAuthObserver((event: AuthEvent) => {
+      authEventCounter.add(1, {
+        event: event.eventType,
+        outcome: event.outcome ?? 'n/a',
+        method: event.method ?? 'n/a',
+      });
+    });
+
+    iam.addIamObserver((event: IamEvent) => {
+      iamEventCounter.add(1, { event: event.eventType });
+    });
+
+    iam.addPermissionCheckObserver((event: PermissionCheckEvent) => {
+      permissionCheckDuration.record(event.durationSeconds, {
+        subject_type: event.subjectType,
+        result: event.allowed ? 'allow' : 'deny',
+        cached: event.cached ? 'true' : 'false',
+      });
+      if (event.cached) {
+        cacheHitCounter.add(1);
+      }
+      else {
+        cacheMissCounter.add(1);
+      }
+    });
+
+    // Wire IAM events → audit log if the plugin is registered.
+    if (Object.hasOwn(pluginMethods, 'audit-log')) {
+      const auditMethods = pluginMethods['audit-log'];
+      if (auditMethods === undefined)
+        throw Errors.badRequest('Plugin "audit-log" did not provide a method map');
+      if (Object.hasOwn(auditMethods, 'logCustomEvent')) {
+        const logCustomEvent = auditMethods.logCustomEvent;
+        if (typeof logCustomEvent !== 'function')
+          throw Errors.badRequest('Plugin "audit-log" method "logCustomEvent" must be callable');
+        iam.addIamObserver(event => logCustomEvent(event));
+      }
     }
-    else {
-      cacheMissCounter.add(1);
-    }
-  });
 
-  // Wire IAM events → audit log if the plugin is registered.
-  if (Object.hasOwn(pluginMethods, 'audit-log')) {
-    const auditMethods = pluginMethods['audit-log'];
-    if (auditMethods === undefined)
-      throw Errors.badRequest('Plugin "audit-log" did not provide a method map');
-    if (Object.hasOwn(auditMethods, 'logCustomEvent')) {
-      const logCustomEvent = auditMethods.logCustomEvent;
-      if (typeof logCustomEvent !== 'function')
-        throw Errors.badRequest('Plugin "audit-log" method "logCustomEvent" must be callable');
-      iam.addIamObserver(event => logCustomEvent(event));
-    }
-  }
+    // Resolve cookie config once at startup so all HTTP entry points share names.
+    const cookies = resolveCookieConfig(config.cookies);
 
-  // Resolve cookie config once at startup so all HTTP entry points share names.
-  const cookies = resolveCookieConfig(config.cookies);
+    // Build the framework-agnostic HTTP auxiliary closures upfront. `handleRequest`
+    // and `call` both get bound after the instance is constructed because
+    // they need the assembled `Fortress` object (route table is built from
+    // `endpoints`; `call` delegates to `handleRequest`).
+    let routeManifest: PublishedRouteManifest | undefined;
 
-  // Build the framework-agnostic HTTP auxiliary closures upfront. `handleRequest`
-  // and `call` both get bound after the instance is constructed because
-  // they need the assembled `Fortress` object (route table is built from
-  // `endpoints`; `call` delegates to `handleRequest`).
-  let routeManifest: PublishedRouteManifest | undefined;
-
-  const resolvePlugin = (<TMethods>(name: string, validator?: PluginMethodsValidator<TMethods>): TMethods | unknown => {
+    const resolvePlugin = (<TMethods>(name: string, validator?: PluginMethodsValidator<TMethods>): TMethods | unknown => {
     // Dynamic lookup is erased by design: without a runtime validator the
     // caller gets `unknown`. Static access goes through `fortress.plugins`.
-    if (!Object.hasOwn(pluginMethods, name))
-      throw Errors.notFound(`Plugin '${name}' is not registered`);
-    const methods = (pluginMethods as Record<string, unknown>)[name];
-    if (validator && !validator(methods))
-      throw Errors.badRequest(`Plugin '${name}' methods failed runtime validation`);
-    return methods;
-  }) as Fortress<T>['resolvePlugin'];
+      if (!Object.hasOwn(pluginMethods, name))
+        throw Errors.notFound(`Plugin '${name}' is not registered`);
+      const methods = (pluginMethods as Record<string, unknown>)[name];
+      if (validator && !validator(methods))
+        throw Errors.badRequest(`Plugin '${name}' methods failed runtime validation`);
+      return methods;
+    }) as Fortress<T>['resolvePlugin'];
 
-  const instance: Fortress<T> = {
-    auth,
-    iam,
-    plugins: pluginMethods as InferPlugins<T>,
-    call: Object.assign(Object.create(null), {
-      auth: Object.create(null),
-      iam: Object.create(null),
-      plugins: Object.create(null),
-    }) as Fortress<T>['call'],
-    resolvePlugin,
-    config,
-    endpoints,
-    get manifest(): PublishedRouteManifest {
+    const instance: Fortress<T> = {
+      auth,
+      iam,
+      plugins: pluginMethods as InferPlugins<T>,
+      call: Object.assign(Object.create(null), {
+        auth: Object.create(null),
+        iam: Object.create(null),
+        plugins: Object.create(null),
+      }) as Fortress<T>['call'],
+      resolvePlugin,
+      config,
+      endpoints,
+      get manifest(): PublishedRouteManifest {
       // Derived once and frozen. This is the authoritative view of the
       // validated route set, so a consumer must not be able to edit the
       // baseline it is checking against. Only the instance's cached manifest
       // is frozen; a direct `buildRouteManifest()` result stays a plain array
       // for callers that legitimately build and adjust their own.
-      routeManifest ??= Object.freeze(
-        buildRouteManifest(this).map((entry) => {
-          Object.freeze(entry.security);
-          if (entry.permission)
-            Object.freeze(entry.permission);
-          return Object.freeze(entry);
+        routeManifest ??= Object.freeze(
+          buildRouteManifest(this).map((entry) => {
+            Object.freeze(entry.security);
+            if (entry.permission)
+              Object.freeze(entry.permission);
+            return Object.freeze(entry);
+          }),
+        );
+        return routeManifest;
+      },
+      cookies,
+      logger,
+      telemetry,
+      handleRequest: undefined as unknown as (request: Request) => Promise<Response>,
+      runPluginMiddleware: (phase, ctx): Promise<void> => runPluginMiddlewareFn(runtimePlugins, config, phase, ctx),
+      extractAccessToken: (request: Request): string | null => extractAccessTokenFn(request, cookies),
+      resolvePrincipal: (request: Request): Promise<ResolvedPrincipal | null> =>
+        resolveRequestPrincipalFn(instance, request, runtimePlugins),
+      serializeAuthCookies: (payload: AuthCookiePayload): string[] =>
+        serializeAuthCookiesFn(payload, cookies, {
+          access: config.jwt.accessTokenExpirySeconds ?? 900,
+          refresh: config.jwt.refreshTokenExpirySeconds ?? 604_800,
         }),
-      );
-      return routeManifest;
-    },
-    cookies,
-    logger,
-    telemetry,
-    handleRequest: undefined as unknown as (request: Request) => Promise<Response>,
-    runPluginMiddleware: (phase, ctx): Promise<void> => runPluginMiddlewareFn(plugins, config, phase, ctx),
-    extractAccessToken: (request: Request): string | null => extractAccessTokenFn(request, cookies),
-    resolvePrincipal: (request: Request): Promise<ResolvedPrincipal | null> =>
-      resolveRequestPrincipalFn(instance, request, plugins),
-    serializeAuthCookies: (payload: AuthCookiePayload): string[] =>
-      serializeAuthCookiesFn(payload, cookies, {
-        access: config.jwt.accessTokenExpirySeconds ?? 900,
-        refresh: config.jwt.refreshTokenExpirySeconds ?? 604_800,
-      }),
-    async migrate(opts?: MigrateOptions): Promise<MigrateResult> {
+      async migrate(opts?: MigrateOptions): Promise<MigrateResult> {
       // Fortress migrations first — app schemas commonly FK to Fortress
       // tables, so this order is the safe default. The configured adapter
       // owns the migration dialect; instrumentation preserves that capability.
-      assertMigratableDatabaseAdapter(db);
-      const fortressResult = await migrateUp(db, opts?.targetVersion);
-      let appRan = false;
-      if (opts?.migrateApp) {
-        await opts.migrateApp();
-        appRan = true;
-      }
-      return { fortress: fortressResult, appRan };
-    },
-    syncPermissionsFromManifest(opts?: PermissionSyncOptions): Promise<PermissionSyncResult> {
-      return runPermissionSync(iam, opts?.endpoints ?? instance.endpoints, opts);
-    },
-    toOpenAPI(opts?: FortressToOpenAPIOptions): OpenAPISpec {
-      return endpointsToOpenAPI(opts?.endpoints ?? instance.endpoints, opts);
-    },
-  };
+        assertMigratableDatabaseAdapter(db);
+        const fortressResult = await migrateUp(db, opts?.targetVersion);
+        let appRan = false;
+        if (opts?.migrateApp) {
+          await opts.migrateApp();
+          appRan = true;
+        }
+        return { fortress: fortressResult, appRan };
+      },
+      syncPermissionsFromManifest(opts?: PermissionSyncOptions): Promise<PermissionSyncResult> {
+        return runPermissionSync(iam, opts?.endpoints ?? instance.endpoints, opts);
+      },
+      toOpenAPI(opts?: FortressToOpenAPIOptions): OpenAPISpec {
+        return endpointsToOpenAPI(opts?.endpoints ?? instance.endpoints, opts);
+      },
+    };
 
-  // Publish only after every startup validation has succeeded. A global-symbol
-  // property plus the shared registry keeps the snapshot visible when an
-  // instance crosses independently loaded ESM/CJS adapter bundles.
-  publishPluginMembership(instance, plugins);
-  instance.handleRequest = buildHandleRequest(instance, plugins);
+    // Publish only after every startup validation has succeeded. A global-symbol
+    // property plus the shared registry keeps the snapshot visible when an
+    // instance crosses independently loaded ESM/CJS adapter bundles.
+    publishPluginMembership(instance, runtimePlugins);
+    instance.handleRequest = buildHandleRequest(instance, runtimePlugins);
 
-  // Assemble the namespaced typed call tree (ADR 0001 §5). Core auth/IAM
-  // callables live under fixed namespaces; each plugin with routes gets its
-  // own namespace keyed by its (startup-unique) name, so cross-plugin call
-  // collisions are impossible by construction. Top-level `routes` are
-  // metadata for manifest/OpenAPI/protected host routes; they carry no
-  // plugin methods, so exposing them as callables would create a runtime
-  // `NOT_FOUND` footgun — the `__host` virtual plugin is skipped.
-  const pluginCallTree: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
-  for (const plugin of plugins) {
-    if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
-      continue;
-    // Derived from the validated snapshot, keyed by handler — plugin route
-    // keys are required to equal their handler, so this reproduces the
-    // declared namespace without reading the mutable route record.
-    const genericRoutes = Object.create(null) as Record<string, AnyPublishedEndpointDefinition>;
-    for (const endpoint of endpoints) {
-      if (endpointOwner(endpoint) !== plugin.name)
+    // Assemble the namespaced typed call tree (ADR 0001 §5). Core auth/IAM
+    // callables live under fixed namespaces; each plugin with routes gets its
+    // own namespace keyed by its (startup-unique) name, so cross-plugin call
+    // collisions are impossible by construction. Top-level `routes` are
+    // metadata for manifest/OpenAPI/protected host routes; they carry no
+    // plugin methods, so exposing them as callables would create a runtime
+    // `NOT_FOUND` footgun — the `__host` virtual plugin is skipped.
+    const pluginCallTree: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+    for (const plugin of runtimePlugins) {
+      if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
         continue;
-      if (!isSelfManagedOAuthRoute(endpoint))
-        genericRoutes[endpoint.handler] = endpoint;
+      // Derived from the validated snapshot, keyed by handler — plugin route
+      // keys are required to equal their handler, so this reproduces the
+      // declared namespace without reading the mutable route record.
+      const genericRoutes = Object.create(null) as Record<string, AnyPublishedEndpointDefinition>;
+      for (const endpoint of endpoints) {
+        if (endpointOwner(endpoint) !== plugin.name)
+          continue;
+        if (!isSelfManagedOAuthRoute(endpoint))
+          genericRoutes[endpoint.handler] = endpoint;
+      }
+      pluginCallTree[plugin.name] = buildCall(instance, genericRoutes);
     }
-    pluginCallTree[plugin.name] = buildCall(instance, genericRoutes);
-  }
-  // `call` is readonly on the returned public surface, but is populated once
-  // here after `handleRequest` has been bound.
-  const effectiveCoreRoutes = (
-    routes: Record<string, EndpointDefinition>,
-  ): Record<string, AnyPublishedEndpointDefinition> => {
-    const effective = Object.create(null) as Record<string, AnyPublishedEndpointDefinition>;
-    for (const [name, endpoint] of Object.entries(routes)) {
-      const key = `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
-      // Core route names come from the built-in maps, but the values bound
-      // into the call tree are the per-instance clones.
-      const snapshot = snapshotByRouteKey.get(key);
-      if (snapshot && endpointOwners.get(key) === CORE_ENDPOINT_OWNER)
-        effective[name] = snapshot;
-    }
-    return effective;
-  };
-  (instance as { call: unknown }).call = Object.assign(Object.create(null), {
-    auth: buildCall(instance, effectiveCoreRoutes(authEndpoints as unknown as Record<string, EndpointDefinition>)),
-    iam: buildCall(instance, effectiveCoreRoutes(iamEndpoints as unknown as Record<string, EndpointDefinition>)),
-    plugins: pluginCallTree,
-  });
+    // `call` is readonly on the returned public surface, but is populated once
+    // here after `handleRequest` has been bound.
+    const effectiveCoreRoutes = (
+      routes: Record<string, EndpointDefinition>,
+    ): Record<string, AnyPublishedEndpointDefinition> => {
+      const effective = Object.create(null) as Record<string, AnyPublishedEndpointDefinition>;
+      for (const [name, endpoint] of Object.entries(routes)) {
+        const key = `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
+        // Core route names come from the built-in maps, but the values bound
+        // into the call tree are the per-instance clones.
+        const snapshot = snapshotByRouteKey.get(key);
+        if (snapshot && endpointOwners.get(key) === CORE_ENDPOINT_OWNER)
+          effective[name] = snapshot;
+      }
+      return effective;
+    };
+    (instance as { call: unknown }).call = Object.assign(Object.create(null), {
+      auth: buildCall(instance, effectiveCoreRoutes(authEndpoints as unknown as Record<string, EndpointDefinition>)),
+      iam: buildCall(instance, effectiveCoreRoutes(iamEndpoints as unknown as Record<string, EndpointDefinition>)),
+      plugins: pluginCallTree,
+    });
 
-  return instance;
+    return instance;
+  }
+  catch (error) {
+    capabilityController.fail();
+    throw error;
+  }
 }

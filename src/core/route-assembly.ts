@@ -4,8 +4,6 @@ import type {
   AnyPublishedEndpointDefinition,
   EndpointDefinition,
   EndpointDefinitionLike,
-  EndpointMeta,
-  EndpointResponse,
 } from './endpoint';
 import type { FortressPlugin, PluginDependency, RuntimeFortressPlugin } from './plugin';
 import { authEndpoints } from './auth/auth-endpoints';
@@ -187,40 +185,121 @@ export function isSelfManagedOAuthRoute(endpoint: EndpointDefinitionLike): boole
  * resolution. Schema mutability is therefore a documented non-goal — this
  * freezes the route contract, not the validation schemas hanging off it.
  */
-function snapshotEndpoint(endpoint: AnyEndpointDefinition): AnyPublishedEndpointDefinition {
-  const clone: EndpointDefinition = { ...endpoint };
+/** Whether a property belongs to the declared public shape without invoking it. */
+function isOwnEnumerable(source: object, field: PropertyKey): boolean {
+  return Object.prototype.propertyIsEnumerable.call(source, field);
+}
 
-  if (endpoint.meta) {
-    const meta: EndpointMeta = { ...endpoint.meta };
-    if (endpoint.meta.tags)
-      meta.tags = Object.freeze([...endpoint.meta.tags]) as unknown as string[];
-    if (endpoint.meta.security)
-      meta.security = Object.freeze([...endpoint.meta.security]) as unknown as EndpointMeta['security'];
-    if (endpoint.meta.permission)
-      meta.permission = Object.freeze({ ...endpoint.meta.permission });
-    clone.meta = Object.freeze(meta);
+/** Capture the accepted own-enumerable fields, invoking each accessor at most once. */
+function captureOwnFields(source: object, fields: readonly string[]): Record<string, unknown> {
+  const captured: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (isOwnEnumerable(source, field))
+      captured[field] = Reflect.get(source, field) as unknown;
+  }
+  return captured;
+}
+
+/** Internal bounded endpoint snapshot shared with plugin capability publication. */
+export function snapshotEndpointDefinition(endpoint: AnyEndpointDefinition): AnyPublishedEndpointDefinition {
+  if (!endpoint || typeof endpoint !== 'object' || Array.isArray(endpoint))
+    throw Errors.badRequest('Endpoint definition must be an object');
+
+  // Routing identity may not come from a prototype. Checking enumerability via
+  // descriptors does not invoke accessors; each accepted value is then read once.
+  for (const field of ['method', 'path', 'handler'] as const) {
+    if (!isOwnEnumerable(endpoint, field))
+      throw Errors.badRequest(`Endpoint ${field} must be an own enumerable property`);
+  }
+  const method = Reflect.get(endpoint, 'method') as EndpointDefinition['method'];
+  const path = Reflect.get(endpoint, 'path') as EndpointDefinition['path'];
+  const handler = Reflect.get(endpoint, 'handler') as EndpointDefinition['handler'];
+  const topLevel = captureOwnFields(endpoint, ['meta', 'input', 'responses', '__types']);
+  const clone: Record<string, unknown> = { method, path, handler };
+
+  if (Object.hasOwn(topLevel, 'meta')) {
+    const metaValue = topLevel.meta;
+    if (metaValue === undefined) {
+      clone.meta = undefined;
+    }
+    else {
+      if (!metaValue || typeof metaValue !== 'object' || Array.isArray(metaValue))
+        throw Errors.badRequest('Endpoint meta must be an object');
+      const meta = captureOwnFields(metaValue, [
+        'summary',
+        'description',
+        'tags',
+        'security',
+        'deprecated',
+        'permission',
+        'bearerKind',
+        'dispatchKind',
+      ]);
+      if (Object.hasOwn(meta, 'tags')) {
+        if (meta.tags !== undefined && !Array.isArray(meta.tags))
+          throw Errors.badRequest('Endpoint meta.tags must be an array');
+        if (meta.tags !== undefined)
+          meta.tags = Object.freeze(Array.from(meta.tags));
+      }
+      if (Object.hasOwn(meta, 'security')) {
+        if (meta.security !== undefined && !Array.isArray(meta.security))
+          throw Errors.badRequest('Endpoint meta.security must be an array');
+        if (meta.security !== undefined)
+          meta.security = Object.freeze(Array.from(meta.security));
+      }
+      if (Object.hasOwn(meta, 'permission') && meta.permission !== undefined) {
+        if (!meta.permission || typeof meta.permission !== 'object' || Array.isArray(meta.permission))
+          throw Errors.badRequest('Endpoint permission must be an object');
+        meta.permission = Object.freeze(captureOwnFields(meta.permission, ['resource', 'action']));
+      }
+      clone.meta = Object.freeze(meta);
+    }
   }
 
-  // Container only — `body`/`query`/`params` and their Standard Schema
-  // counterparts stay referentially identical to the declared schemas.
-  if (endpoint.input)
-    clone.input = Object.freeze({ ...endpoint.input });
-
-  // `endpointSuccessStatus` reads this on the request path, so the status map
-  // and each response envelope are part of the frozen contract.
-  if (endpoint.responses) {
-    const source = endpoint.responses as Record<string, EndpointResponse>;
-    // Null-prototype, and copied under the original property key. `Number(key)`
-    // would rewrite a non-numeric key such as `default` to `NaN`; a plain `{}`
-    // target would route an own `__proto__` key into the prototype setter
-    // instead of preserving it. Both would silently drop a declared response.
-    const responses = Object.create(null) as Record<string, EndpointResponse>;
-    for (const [key, response] of Object.entries(source))
-      responses[key] = Object.freeze({ ...response });
-    clone.responses = Object.freeze(responses) as Record<number, EndpointResponse>;
+  // Container only — schemas remain referentially identical. Missing and
+  // inherited slots stay missing rather than becoming own `undefined` fields.
+  if (Object.hasOwn(topLevel, 'input')) {
+    const inputValue = topLevel.input;
+    if (inputValue === undefined) {
+      clone.input = undefined;
+    }
+    else {
+      if (!inputValue || typeof inputValue !== 'object' || Array.isArray(inputValue))
+        throw Errors.badRequest('Endpoint input must be an object');
+      clone.input = Object.freeze(captureOwnFields(inputValue, [
+        'body',
+        'query',
+        'params',
+        'bodySchema',
+        'querySchema',
+        'paramsSchema',
+      ]));
+    }
   }
 
-  return Object.freeze(clone);
+  // The status map and each own response envelope are part of the contract.
+  if (Object.hasOwn(topLevel, 'responses')) {
+    const responsesValue = topLevel.responses;
+    if (responsesValue === undefined) {
+      clone.responses = undefined;
+    }
+    else {
+      if (!responsesValue || typeof responsesValue !== 'object' || Array.isArray(responsesValue))
+        throw Errors.badRequest('Endpoint responses must be an object');
+      const responses = Object.create(null) as Record<string, Readonly<Record<string, unknown>>>;
+      for (const key of Object.keys(responsesValue)) {
+        const response = Reflect.get(responsesValue, key) as unknown;
+        if (!response || typeof response !== 'object' || Array.isArray(response))
+          throw Errors.badRequest(`Endpoint response "${key}" must be an object`);
+        responses[key] = Object.freeze(captureOwnFields(response, ['description', 'schema']));
+      }
+      clone.responses = Object.freeze(responses);
+    }
+  }
+
+  if (Object.hasOwn(topLevel, '__types'))
+    clone.__types = topLevel.__types;
+  return Object.freeze(clone) as unknown as AnyPublishedEndpointDefinition;
 }
 
 /** The declarative half of a Fortress config — everything route assembly reads. */
@@ -507,7 +586,7 @@ function mergeEndpoints(
   // would make constructing one Fortress mutate global state for all others.
   for (const { endpoint, label } of coreEndpoints) {
     const routeKey = routeKeyOf(endpoint);
-    const snapshot = snapshotEndpoint(endpoint);
+    const snapshot = snapshotEndpointDefinition(endpoint);
     endpointProvenanceRegistry.set(snapshot, Object.freeze({
       owner: CORE_ENDPOINT_OWNER,
       manifestLabel: label,
@@ -546,7 +625,7 @@ function mergeEndpoints(
         }
         appliedCoreOverrides.add(coreHandler);
       }
-      const snapshot = snapshotEndpoint(endpoint);
+      const snapshot = snapshotEndpointDefinition(endpoint);
       endpointProvenanceRegistry.set(snapshot, Object.freeze({
         owner: plugin.name,
         // Top-level `routes` are reported with no owning plugin.
