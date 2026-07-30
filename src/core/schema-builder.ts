@@ -4,7 +4,7 @@ import type { StandardSchemaV1 } from './standard-schema';
 import { fromJSONSchema } from '@bajustone/fetcher/openapi';
 import { date as fDate, datetime as fDatetime, email as fEmail, time as fTime, url as fUrl, uuid as fUuid } from '@bajustone/fetcher/schema';
 import { isHttpMethod } from './endpoint';
-import { assertComponentName } from './openapi-ref';
+import { assertComponentName, parseSchemaRef } from './openapi-ref';
 
 /** Shorthands for the Standard Schema wire-input and validated-output types. */
 type InferSchemaInput<T extends StandardSchemaV1> = StandardSchemaV1.InferInput<T>;
@@ -73,32 +73,98 @@ export interface NumberOptions {
 
 // ── Standard Schema wiring ─────────────────────────────────────────
 
+/** Render an untrusted `$ref` value without invoking object coercion hooks. */
+function renderRuntimeRef(value: unknown): string {
+  if (typeof value === 'string')
+    return JSON.stringify(value);
+  if (value === null)
+    return 'null';
+  switch (typeof value) {
+    case 'undefined':
+    case 'number':
+    case 'boolean':
+    case 'bigint':
+    case 'symbol':
+      return String(value);
+    case 'function':
+      return '[function]';
+    default:
+      return Array.isArray(value) ? '[array]' : '[object]';
+  }
+}
+
 /**
- * Collect the component names referenced by `$ref` anywhere in a schema tree
- * (the last path segment, e.g. `PermissionInput` for
- * `#/components/schemas/PermissionInput`).
+ * Return the decoded component name denoted by an own runtime `$ref`.
+ *
+ * Fortress's runtime definition bridge supports exactly local
+ * `#/components/schemas/<name>` refs. Reading the own descriptor ensures a
+ * non-string value is rejected rather than disappearing, while an inherited
+ * or prototype-poisoned `$ref` is never observed. Accessors are rejected
+ * without invocation.
  */
-function collectRefNames(schema: JSONSchema | undefined, acc: Set<string>): Set<string> {
+function runtimeComponentName(node: JSONSchema, where: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(node, '$ref');
+  if (!descriptor)
+    return undefined;
+  if (!('value' in descriptor)) {
+    throw new Error(
+      `Malformed $ref [accessor] in runtime schema at ${where}: accessor properties are not supported`,
+    );
+  }
+
+  const refValue: unknown = descriptor.value;
+  const rendered = renderRuntimeRef(refValue);
+  const parsed = parseSchemaRef(refValue);
+  switch (parsed.kind) {
+    case 'component':
+      assertComponentName(parsed.name, `runtime schema $ref at ${where}`);
+      return parsed.name;
+    case 'external':
+      throw new Error(
+        `Unsupported external $ref ${rendered} in runtime schema at ${where}; `
+        + `only local '#/components/schemas/<name>' refs are supported`,
+      );
+    case 'other-local':
+      throw new Error(
+        `Unsupported local $ref ${rendered} in runtime schema at ${where}; `
+        + `expected exactly '#/components/schemas/<name>'`,
+      );
+    case 'malformed':
+      throw new Error(`Malformed $ref ${rendered} in runtime schema at ${where}: ${parsed.reason}`);
+  }
+}
+
+function childSchemaPath(where: string, container: string, key: string | number): string {
+  return typeof key === 'number'
+    ? `${where}.${container}[${key}]`
+    : `${where}.${container}[${JSON.stringify(key)}]`;
+}
+
+/** Collect decoded names from every supported schema container. */
+function collectRefNames(
+  schema: JSONSchema | undefined,
+  acc: Set<string>,
+  where = '$',
+): Set<string> {
   if (!schema || typeof schema !== 'object')
     return acc;
-  if (typeof schema.$ref === 'string') {
-    const i = schema.$ref.lastIndexOf('/');
-    acc.add(i >= 0 ? schema.$ref.slice(i + 1) : schema.$ref);
-  }
+  const name = runtimeComponentName(schema, where);
+  if (name !== undefined)
+    acc.add(name);
   if (schema.properties) {
     for (const key of Object.keys(schema.properties))
-      collectRefNames(schema.properties[key], acc);
+      collectRefNames(schema.properties[key], acc, childSchemaPath(where, 'properties', key));
   }
-  collectRefNames(schema.items, acc);
+  collectRefNames(schema.items, acc, `${where}.items`);
   for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
     const variants = schema[key];
     if (variants) {
-      for (const variant of variants)
-        collectRefNames(variant, acc);
+      for (let i = 0; i < variants.length; i++)
+        collectRefNames(variants[i], acc, childSchemaPath(where, key, i));
     }
   }
   if (schema.additionalProperties && typeof schema.additionalProperties === 'object')
-    collectRefNames(schema.additionalProperties, acc);
+    collectRefNames(schema.additionalProperties, acc, `${where}.additionalProperties`);
   return acc;
 }
 
@@ -109,16 +175,6 @@ function collectRefNames(schema: JSONSchema | undefined, acc: Set<string>): Set<
  * `User` schema from overwriting each other before lazy validation runs.
  */
 const refDefinitionContexts = new WeakMap<object, Record<string, JSONSchema>>();
-
-function refName(refPath: string): string {
-  const i = refPath.lastIndexOf('/');
-  return i >= 0 ? refPath.slice(i + 1) : refPath;
-}
-
-// OpenAPI 3.x component-map keys are restricted to this grammar. Rejecting
-// unsupported names is safer than emitting an ambiguous JSON Pointer that
-// silently resolves to a different final path segment. Shared with the CLI's
-// `--module` path so both accept the same names.
 
 /**
  * Build the definitions map fed to `fromJSONSchema`, resolving each `$ref`
@@ -137,12 +193,16 @@ function resolveRefDefs(schema: JSONSchema): Record<string, JSONSchema> | undefi
   const unresolved = new Set<string>();
   const hasOwn = (value: object, key: string): boolean => Object.hasOwn(value, key);
 
-  const visit = (node: JSONSchema | undefined, inherited?: Record<string, JSONSchema>): void => {
+  const visit = (
+    node: JSONSchema | undefined,
+    inherited?: Record<string, JSONSchema>,
+    where = '$',
+  ): void => {
     if (!node || typeof node !== 'object')
       return;
     const context = refDefinitionContexts.get(node) ?? inherited;
-    if (typeof node.$ref === 'string') {
-      const name = refName(node.$ref);
+    const name = runtimeComponentName(node, where);
+    if (name !== undefined) {
       const component = context && hasOwn(context, name) ? context[name] : undefined;
       if (component) {
         if (hasOwn(defs, name) && !unresolved.has(name) && defs[name] !== component) {
@@ -151,7 +211,7 @@ function resolveRefDefs(schema: JSONSchema): Record<string, JSONSchema> | undefi
         const firstResolution = !hasOwn(defs, name) || unresolved.delete(name);
         defs[name] = component;
         if (firstResolution)
-          visit(component, context);
+          visit(component, context, `components[${JSON.stringify(name)}]`);
       }
       else if (!hasOwn(defs, name)) {
         defs[name] = {};
@@ -159,20 +219,94 @@ function resolveRefDefs(schema: JSONSchema): Record<string, JSONSchema> | undefi
       }
     }
     if (node.properties) {
-      for (const child of Object.values(node.properties))
-        visit(child, context);
+      for (const key of Object.keys(node.properties))
+        visit(node.properties[key], context, childSchemaPath(where, 'properties', key));
     }
-    visit(node.items, context);
+    visit(node.items, context, `${where}.items`);
     for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
-      for (const child of node[key] ?? [])
-        visit(child, context);
+      const variants = node[key] ?? [];
+      for (let i = 0; i < variants.length; i++)
+        visit(variants[i], context, childSchemaPath(where, key, i));
     }
     if (node.additionalProperties && typeof node.additionalProperties === 'object')
-      visit(node.additionalProperties, context);
+      visit(node.additionalProperties, context, `${where}.additionalProperties`);
   };
 
   visit(schema);
   return defs;
+}
+
+/**
+ * Clone a schema graph for the runtime validator and canonicalize accepted
+ * component refs to their decoded key. The public/emitted schema is never
+ * mutated. Every clone owns `$ref` (undefined when absent), which prevents the
+ * downstream validator from observing a poisoned prototype. A shared WeakMap
+ * preserves shared identity and handles actual object cycles.
+ */
+function normalizeRuntimeSchema(
+  node: JSONSchema,
+  clones: WeakMap<object, JSONSchema>,
+  where: string,
+): JSONSchema {
+  const existing = clones.get(node);
+  if (existing)
+    return existing;
+
+  // Parse before spreading so an own accessor is rejected without invocation.
+  const name = runtimeComponentName(node, where);
+  const clone: JSONSchema = { ...node, $ref: undefined };
+  clones.set(node, clone);
+  if (name !== undefined)
+    clone.$ref = `#/components/schemas/${name}`;
+
+  if (node.properties) {
+    const properties = Object.create(null) as Record<string, JSONSchema>;
+    clone.properties = properties;
+    for (const key of Object.keys(node.properties)) {
+      properties[key] = normalizeRuntimeSchema(
+        node.properties[key]!,
+        clones,
+        childSchemaPath(where, 'properties', key),
+      );
+    }
+  }
+  if (node.items)
+    clone.items = normalizeRuntimeSchema(node.items, clones, `${where}.items`);
+  for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
+    const variants = node[key];
+    if (variants) {
+      clone[key] = variants.map((variant, index) =>
+        normalizeRuntimeSchema(variant, clones, childSchemaPath(where, key, index)));
+    }
+  }
+  if (node.additionalProperties && typeof node.additionalProperties === 'object') {
+    clone.additionalProperties = normalizeRuntimeSchema(
+      node.additionalProperties,
+      clones,
+      `${where}.additionalProperties`,
+    );
+  }
+  return clone;
+}
+
+function normalizeRuntimeSchemas(
+  schema: JSONSchema,
+  definitions: Record<string, JSONSchema> | undefined,
+): { schema: JSONSchema; definitions: Record<string, JSONSchema> | undefined } {
+  const clones = new WeakMap<object, JSONSchema>();
+  const normalizedSchema = normalizeRuntimeSchema(schema, clones, '$');
+  if (!definitions)
+    return { schema: normalizedSchema, definitions: undefined };
+
+  const normalizedDefinitions = Object.create(null) as Record<string, JSONSchema>;
+  for (const name of Object.keys(definitions)) {
+    normalizedDefinitions[name] = normalizeRuntimeSchema(
+      definitions[name]!,
+      clones,
+      `components[${JSON.stringify(name)}]`,
+    );
+  }
+  return { schema: normalizedSchema, definitions: normalizedDefinitions };
 }
 
 /**
@@ -199,7 +333,8 @@ function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~st
     validate(value: unknown): StandardSchemaV1.Result<T> | Promise<StandardSchemaV1.Result<T>> {
       if (!validateFn) {
         const defs = resolveRefDefs(schema);
-        validateFn = fromJSONSchema<T>(schema, defs)['~standard'].validate as ValidateFn;
+        const normalized = normalizeRuntimeSchemas(schema, defs);
+        validateFn = fromJSONSchema<T>(normalized.schema, normalized.definitions)['~standard'].validate as ValidateFn;
       }
       return validateFn(value);
     },
@@ -207,26 +342,67 @@ function createStandardProps<T>(schema: JSONSchema): StandardSchemaV1<T, T>['~st
 }
 
 /**
+ * Copy a `oneOf()` root's sibling keywords without invoking `$ref` accessors.
+ * `oneOf` is excluded because its exact-branch semantics are evaluated
+ * separately, and `~standard` must never be fed back into the JSON-Schema
+ * bridge. Own non-enumerable refs survive through their descriptor.
+ */
+function oneOfSiblingSchema(root: JSONSchema): JSONSchema {
+  // Fail lazily, before descriptor copying, without invoking an accessor.
+  runtimeComponentName(root, '$');
+  const descriptors = Object.getOwnPropertyDescriptors(root);
+  delete descriptors.oneOf;
+  delete descriptors['~standard'];
+  const sibling = Object.defineProperties(Object.create(null), descriptors) as JSONSchema;
+  const context = refDefinitionContexts.get(root);
+  if (context)
+    refDefinitionContexts.set(sibling, context);
+  return sibling;
+}
+
+/**
  * Standard Schema validation for builder `oneOf`: JSON Schema requires that
  * exactly one branch succeeds, while some validator bridges treat it as an
- * ordinary union. Validate each branch directly so this invariant is retained
- * independently of the bridge, including for branches backed by `$ref`.
+ * ordinary union. Root sibling keywords (including `$ref`) run through the
+ * ordinary lazy runtime-ref bridge with `oneOf` removed; branch validators
+ * retain exact-one semantics without introducing duplicate union validation
+ * or cross-branch definition conflicts.
  */
-function createExactOneOfProps<T>(schemas: readonly FortressSchema<any>[]): StandardSchemaV1<T, T>['~standard'] {
+function createExactOneOfProps<T>(
+  root: JSONSchema,
+  schemas: readonly FortressSchema<any>[],
+): StandardSchemaV1<T, T>['~standard'] {
   type Result = StandardSchemaV1.Result<T>;
   type ValidateFn = (value: unknown) => Result | Promise<Result>;
+  let validateSiblings: ValidateFn | undefined;
   const validate: ValidateFn = (value) => {
-    const results = schemas.map(schema => schema['~standard'].validate(value));
-    if (results.some(result => result instanceof Promise)) {
-      return Promise.all(results).then(resolved => exactOneResult(resolved));
+    if (!validateSiblings) {
+      const sibling = oneOfSiblingSchema(root);
+      validateSiblings = createStandardProps<T>(sibling).validate as ValidateFn;
     }
-    return exactOneResult(results as Result[]);
+
+    const siblingResult = validateSiblings(value);
+    const branchResults = schemas.map(schema => schema['~standard'].validate(value));
+    if (siblingResult instanceof Promise || branchResults.some(result => result instanceof Promise)) {
+      return Promise.all([Promise.resolve(siblingResult), ...branchResults.map(result => Promise.resolve(result))])
+        .then(([resolvedSibling, ...resolvedBranches]) =>
+          combineOneOfResults(resolvedSibling!, exactOneResult(resolvedBranches)));
+    }
+    return combineOneOfResults(siblingResult, exactOneResult(branchResults as Result[]));
   };
   return {
     version: 1,
     vendor: 'fortress',
     validate,
   };
+}
+
+/** Preserve the exact branch's value; sibling validation only gates it. */
+function combineOneOfResults<T>(
+  sibling: StandardSchemaV1.Result<T>,
+  exact: StandardSchemaV1.Result<T>,
+): StandardSchemaV1.Result<T> {
+  return sibling.issues ? { issues: sibling.issues } : exact;
 }
 
 function exactOneResult<T>(results: readonly StandardSchemaV1.Result<T>[]): StandardSchemaV1.Result<T> {
@@ -374,9 +550,10 @@ export function obj<
 /** Wrap a schema so it also accepts `null`. */
 export function nullable<T>(schema: FortressSchema<T>): FortressSchema<T | null> {
   // Fetcher's JSON-Schema bridge resolves `$ref` before OpenAPI's legacy
-  // `nullable` sibling. Use a real union for refs so null is enforced
-  // correctly; keep the established compact shape for inline schemas.
-  if (typeof schema.$ref === 'string')
+  // `nullable` sibling. Use a real union whenever the schema owns a `$ref`
+  // descriptor, without reading it: malformed values and accessors must stay
+  // lazy for the runtime bridge to reject, while inherited refs are ignored.
+  if (Object.getOwnPropertyDescriptor(schema, '$ref'))
     return toFortressSchema<T | null>({ oneOf: [schema, { type: 'null' }] });
   const s: JSONSchema = { ...schema, nullable: true };
   return toFortressSchema<T | null>(s, refDefinitionContexts.get(schema));
@@ -390,7 +567,7 @@ export function oneOf<S extends FortressSchema<any>[]>(
   return toFortressSchema<Infer<S[number]>>(
     schema,
     undefined,
-    createExactOneOfProps<Infer<S[number]>>(schemas),
+    createExactOneOfProps<Infer<S[number]>>(schema, schemas),
   );
 }
 
