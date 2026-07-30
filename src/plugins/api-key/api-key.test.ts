@@ -1,8 +1,8 @@
 import type { Fortress } from '../../core/fortress';
-import type { PluginRouteContext } from '../../core/plugin';
+import type { FortressPlugin, PluginRouteContext } from '../../core/plugin';
 import type { Subject } from '../../core/types';
 import type { ApiKeyConfig, ApiKeyMethods } from './index';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { bool, endpoint, obj, str } from '../../core/schema-builder';
 import { createTestAdapter } from '../../testing';
@@ -288,6 +288,178 @@ describe('api-key plugin — programmatic methods', () => {
       }));
       expect(allowed.status).toBe(200);
     });
+  });
+});
+
+describe('api-key plugin — authenticated-only route enforcement', () => {
+  async function setupRuntimeMatrix() {
+    const apiKeyOnlyHandler = vi.fn(async (_input: unknown, ctx: PluginRouteContext) => ({
+      type: ctx.subject!.type,
+      id: ctx.subject!.id,
+    }));
+    const alternativesHandler = vi.fn(async (_input: unknown, ctx: PluginRouteContext) => ({
+      type: ctx.subject!.type,
+      id: ctx.subject!.id,
+    }));
+    const publicAlternativeHandler = vi.fn(async () => ({ ok: 'yes' }));
+    const routesPlugin: FortressPlugin = {
+      name: 'api-key-auth-matrix',
+      routes: {
+        apiKeyOnly: endpoint('GET', '/api-key-auth/api-key-only')
+          .summary('API key only')
+          .security('apiKey')
+          .response(200, 'Identity', obj({ type: str(), id: str() }, 'type', 'id'))
+          .handler('apiKeyOnly')
+          .build(),
+        alternatives: endpoint('GET', '/api-key-auth/alternatives')
+          .summary('Bearer or API key')
+          .security('bearer', 'apiKey')
+          .response(200, 'Identity', obj({ type: str(), id: str() }, 'type', 'id'))
+          .handler('alternatives')
+          .build(),
+        publicAlternative: endpoint('GET', '/api-key-auth/public-alternative')
+          .summary('Public or API key')
+          .security('none', 'apiKey')
+          .response(200, 'Public', obj({ ok: str() }, 'ok'))
+          .handler('publicAlternative')
+          .build(),
+      },
+      methods: () => ({
+        apiKeyOnly: apiKeyOnlyHandler,
+        alternatives: alternativesHandler,
+        publicAlternative: publicAlternativeHandler,
+      }),
+    };
+    const fortress = createFortress({
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [apiKey({ prefix: 'test' }), routesPlugin],
+    });
+    const methods = fortress.plugins['api-key'] as unknown as ApiKeyMethods;
+    const user = await fortress.auth.createUser({
+      email: 'identity@example.com',
+      name: 'Identity User',
+      password: 'password-123456',
+    });
+    const login = await fortress.auth.login('identity@example.com', 'password-123456');
+    if (login.status !== 'success')
+      throw new Error('expected login success');
+    const serviceAccount = await fortress.iam.createServiceAccount({ name: 'identity-service' });
+    const userKey = await methods.createKey({ subject: userSubject(user.id), name: 'User identity' });
+    const serviceKey = await methods.createKey({
+      subject: { type: 'SERVICE_ACCOUNT', id: serviceAccount.id },
+      name: 'Service identity',
+    });
+    const checkPermission = vi.fn(async () => true);
+    fortress.iam.checkPermission = checkPermission;
+
+    return {
+      fortress,
+      methods,
+      user,
+      accessToken: login.accessToken,
+      serviceAccount,
+      userKey,
+      serviceKey,
+      checkPermission,
+      apiKeyOnlyHandler,
+      alternativesHandler,
+      publicAlternativeHandler,
+    };
+  }
+
+  it('accepts resolved subjects and rejects unresolved credentials or a valid Bearer JWT on an API-key-only route', async () => {
+    const ctx = await setupRuntimeMatrix();
+    const expiredKey = await ctx.methods.createKey({
+      subject: userSubject(ctx.user.id),
+      name: 'Expired identity',
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    const revokedKey = await ctx.methods.createKey({ subject: userSubject(ctx.user.id), name: 'Revoked identity' });
+    await ctx.methods.revokeKey({ subject: userSubject(ctx.user.id), id: revokedKey.id });
+    const url = 'http://localhost/api-key-auth/api-key-only';
+
+    // API-key-only does not trigger the duplicated Bearer fallback path.
+    const userResponse = await ctx.fortress.handleRequest(new Request(url, {
+      headers: { 'x-api-key': ctx.userKey.key },
+    }));
+    expect(userResponse.status).toBe(200);
+    await expect(userResponse.json()).resolves.toEqual({ type: 'USER', id: ctx.user.id });
+
+    const serviceResponse = await ctx.fortress.handleRequest(new Request(url, {
+      headers: { authorization: `ApiKey ${ctx.serviceKey.key}` },
+    }));
+    expect(serviceResponse.status).toBe(200);
+    await expect(serviceResponse.json()).resolves.toEqual({
+      type: 'SERVICE_ACCOUNT',
+      id: ctx.serviceAccount.id,
+    });
+    expect(ctx.checkPermission).not.toHaveBeenCalled();
+
+    ctx.apiKeyOnlyHandler.mockClear();
+    const rejected = await Promise.all([
+      ctx.fortress.handleRequest(new Request(url)),
+      ctx.fortress.handleRequest(new Request(url, { headers: { authorization: 'ApiKey test_sk_invalid' } })),
+      ctx.fortress.handleRequest(new Request(url, { headers: { authorization: `ApiKey ${expiredKey.key}` } })),
+      ctx.fortress.handleRequest(new Request(url, { headers: { authorization: `ApiKey ${revokedKey.key}` } })),
+      ctx.fortress.handleRequest(new Request(url, { headers: { authorization: `Bearer ${ctx.accessToken}` } })),
+    ]);
+    expect(rejected.map(response => response.status)).toEqual([401, 401, 401, 401, 401]);
+    expect(ctx.apiKeyOnlyHandler).not.toHaveBeenCalled();
+    expect(ctx.checkPermission).not.toHaveBeenCalled();
+  });
+
+  it('supports Bearer/API-key alternatives and gives a resolved plugin principal precedence', async () => {
+    const ctx = await setupRuntimeMatrix();
+    const url = 'http://localhost/api-key-auth/alternatives';
+
+    const bearer = await ctx.fortress.handleRequest(new Request(url, {
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    }));
+    expect(bearer.status).toBe(200);
+    await expect(bearer.json()).resolves.toEqual({ type: 'USER', id: ctx.user.id });
+
+    const apiKeyResponse = await ctx.fortress.handleRequest(new Request(url, {
+      headers: { authorization: `ApiKey ${ctx.serviceKey.key}` },
+    }));
+    expect(apiKeyResponse.status).toBe(200);
+    await expect(apiKeyResponse.json()).resolves.toEqual({
+      type: 'SERVICE_ACCOUNT',
+      id: ctx.serviceAccount.id,
+    });
+
+    const both = await ctx.fortress.handleRequest(new Request(url, {
+      headers: {
+        'authorization': `Bearer ${ctx.accessToken}`,
+        'x-api-key': ctx.serviceKey.key,
+      },
+    }));
+    expect(both.status).toBe(200);
+    await expect(both.json()).resolves.toEqual({
+      type: 'SERVICE_ACCOUNT',
+      id: ctx.serviceAccount.id,
+    });
+    expect(ctx.checkPermission).not.toHaveBeenCalled();
+
+    ctx.alternativesHandler.mockClear();
+    const missing = await ctx.fortress.handleRequest(new Request(url));
+    expect(missing.status).toBe(401);
+    expect(ctx.alternativesHandler).not.toHaveBeenCalled();
+    expect(ctx.checkPermission).not.toHaveBeenCalled();
+  });
+
+  it('keeps none/API-key alternatives public at runtime', async () => {
+    const ctx = await setupRuntimeMatrix();
+    const response = await ctx.fortress.handleRequest(
+      new Request('http://localhost/api-key-auth/public-alternative'),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: 'yes' });
+    expect(ctx.publicAlternativeHandler).toHaveBeenCalledTimes(1);
+    expect(ctx.fortress.manifest.find(route => route.path === '/api-key-auth/public-alternative'))
+      .toMatchObject({ classification: 'public' });
+    expect(ctx.checkPermission).not.toHaveBeenCalled();
   });
 });
 

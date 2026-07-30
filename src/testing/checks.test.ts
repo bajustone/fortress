@@ -26,7 +26,7 @@ function makeFortress(extraRoutes?: Parameters<typeof publicLeakPlugin>[0]) {
   });
 }
 
-function publicLeakPlugin(opts: { unexpectedPublic?: boolean }) {
+function publicLeakPlugin(opts: { unexpectedPublic?: boolean; security?: 'none' | 'bearer' | 'apiKey' }) {
   // Tiny throw-away plugin so we can introduce a non-allow-listed public
   // route on demand. Exposes a single GET handler classified as `public`.
   return {
@@ -34,7 +34,7 @@ function publicLeakPlugin(opts: { unexpectedPublic?: boolean }) {
     routes: {
       ping: endpoint('GET', '/leak/ping')
         .summary('Leaky test route')
-        .security(opts.unexpectedPublic ? 'none' : 'bearer')
+        .security(opts.security ?? (opts.unexpectedPublic ? 'none' : 'bearer'))
         .response(200, 'ok', obj({ ok: str() }, 'ok'))
         .handler('ping')
         .build(),
@@ -56,6 +56,17 @@ describe('checkPublicRoutes', () => {
   it('passes when every public route is on the default allow-list', () => {
     const fortress = makeFortress();
     const result = checkPublicRoutes(fortress);
+    expect(result.ok).toBe(true);
+    expect(result.unexpected).toEqual([]);
+  });
+
+  it('does not treat an API-key-authenticated-only route as public', () => {
+    const fortress = makeFortress({ security: 'apiKey' });
+    const result = checkPublicRoutes(fortress);
+
+    expect(fortress.manifest.find(route => route.path === '/leak/ping')).toMatchObject({
+      classification: 'authenticated',
+    });
     expect(result.ok).toBe(true);
     expect(result.unexpected).toEqual([]);
   });

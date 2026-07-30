@@ -113,11 +113,14 @@ Threats:
 
 Mitigations:
 - API keys resolve through plugin principal chain to `USER` or `SERVICE_ACCOUNT` subject.
-- RBAC uses subject type and optional credential scopes.
+- API-key routes without `meta.permission` require a resolved subject and return 401 when resolution fails; they do not invoke IAM.
+- Routes with `meta.permission` use subject type and optional credential scopes in the IAM decision.
 - Self-service API-key routes deny API-key credentials from minting/listing/revoking/rotating keys.
 - Keys are stored hashed and can expire/revoke; admin routes require explicit permissions.
 
 Residual risks:
+- API-key scopes are credential-level narrowing for declared IAM permissions, not standalone route permissions. Sensitive routes must declare `.permission(...)`; an authenticated-only route accepts any successfully resolved subject without an IAM decision.
+- Route security metadata does not add credential-provenance tagging beyond the configured principal resolver pipeline.
 - Hosts should rate-limit key usage and rotate/revoke leaked keys quickly.
 
 ### Tenancy and data isolation

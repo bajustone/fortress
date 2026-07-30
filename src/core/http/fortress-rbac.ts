@@ -9,7 +9,8 @@
  *   no Basic credential verifier, so a Basic route without a permission is
  *   rejected at construction and denied here.
  * - `meta.permission` set → require auth + IAM `checkPermission`.
- * - `security: 'bearer'` (no permission) → require auth, no IAM check.
+ * - `security: 'bearer'` or `'apiKey'` (no permission) → require auth,
+ *   no IAM check.
  * - Anything else → deny (security-first default).
  *
  * Adapter-side route maps (Hono/Express user-route protection) live in
@@ -19,6 +20,7 @@
 import type { EndpointDefinition } from '../endpoint';
 import type { RuntimeFortressPlugin } from '../plugin';
 import type { Subject } from '../types';
+import { isAuthenticationOnlyEndpoint } from '../endpoint-security';
 import { Errors } from '../errors';
 
 const FORTRESS_CORE_PREFIXES = ['/iam/'];
@@ -86,7 +88,8 @@ export interface PermissionEnforcement {
  * - Endpoints with `meta.permission` require an authenticated subject and a
  *   passing `checkPermission` call — otherwise throws `UNAUTHORIZED` /
  *   `FORBIDDEN`.
- * - Bearer-only endpoints require an authenticated subject but skip IAM.
+ * - Bearer/API-key authenticated-only endpoints require an authenticated
+ *   subject but skip IAM.
  * - Endpoints with no security metadata are denied.
  *
  * The caller (typically `fortress.handleRequest`) is responsible for first
@@ -132,8 +135,10 @@ export async function enforceFortressPermission(
   if (security?.includes('none'))
     return;
 
-  // Bearer-only routes — auth required, no IAM check
-  if (security?.includes('bearer')) {
+  // Authenticated-only routes — resolved subject required, no IAM check.
+  // API-key scopes narrow IAM checks only when a permission is declared; they
+  // are not standalone permissions on an authenticated-only route.
+  if (isAuthenticationOnlyEndpoint(endpoint)) {
     if (!subject)
       throw Errors.unauthorized('Not authenticated');
     return;

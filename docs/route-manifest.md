@@ -13,8 +13,8 @@ Each entry contains:
 - `method`, `path`, `handler` — the HTTP route and dispatcher handler.
 - `plugin` — `auth`, `iam`, a registered plugin name, or `null` when the origin cannot be inferred.
 - `classification` — one of:
-  - `public` — `meta.security` includes `none`.
-  - `authenticated` — bearer/API-key route without an IAM permission.
+  - `public` — `meta.security` includes `none` (`none` takes precedence over other listed alternatives).
+  - `authenticated` — bearer/API-key route without an IAM permission. Runtime enforcement requires a successfully resolved subject and otherwise returns 401, but does not call IAM.
   - `rbac` — route has `meta.permission` and requires IAM authorization.
   - `oauth-protocol` — route has `meta.bearerKind: 'oauth'`; its handler manages OAuth protocol security (authentication or intentional public access) and bypasses the Fortress principal/RBAC pipeline.
   - `default-deny` — no usable security metadata; the request pipeline denies it.
@@ -22,6 +22,8 @@ Each entry contains:
 - `csrfApplicable` — unsafe method and not skipped by `config.csrf`.
 - `rateLimited` — route matches plugin rate-limit middleware, or a rate-limit hook protects the auth gate.
 - `mounted` — `true` for routes present in the active `fortress.endpoints` union.
+
+For `authenticated` API-key routes, credential scopes are carried in request context but are not standalone permissions. IAM and credential-scope enforcement run only when the endpoint declares `meta.permission`. Sensitive routes should therefore declare `.permission(resource, action)` rather than relying on API-key scopes alone. The classification describes route authorization semantics; it does not add principal-provenance tagging beyond the configured resolver pipeline.
 
 ## CLI
 
