@@ -12,10 +12,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
+      - name: Verify release tag and main ancestry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          EXPECTED_TAG="v$(node -p 'require("./package.json").version')"
+          test "$RELEASE_TAG" = "$EXPECTED_TAG"
+          git fetch --no-tags --force origin +refs/heads/main:refs/remotes/origin/main
+          TAG_COMMIT=$(git rev-parse "$RELEASE_SHA^{commit}")
+          CHECKED_OUT_COMMIT=$(git rev-parse 'HEAD^{commit}')
+          test "$CHECKED_OUT_COMMIT" = "$TAG_COMMIT"
+          git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main
       - run: bun run check:version
 
   quality:
