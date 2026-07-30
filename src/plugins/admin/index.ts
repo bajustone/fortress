@@ -12,7 +12,7 @@
 
 import type { EndpointDefinition, EndpointPermission } from '../../core/endpoint';
 import type { ResourceFile } from '../../core/iam/resource-sync';
-import type { FortressPlugin, PluginContext, PluginRouteContext, PluginRoutes } from '../../core/plugin';
+import type { FortressPlugin, PluginContext, PluginRouteContext, PluginRoutes, RuntimeFortressPlugin } from '../../core/plugin';
 import type { FortressUser, Group, Permission, PermissionInput, Role, SubjectType } from '../../core/types';
 import type { ApiKeyInfo } from '../api-key/core';
 import type { ApiKeyMethods } from '../api-key/index';
@@ -21,6 +21,8 @@ import { Errors } from '../../core/errors';
 import { iamEndpoints } from '../../core/iam/iam-endpoints';
 import { pullResources } from '../../core/iam/resource-sync';
 import { definePlugin } from '../../core/plugin';
+import { snapshotPluginMembership } from '../../core/plugin-membership';
+import { HOST_ROUTES_PLUGIN_NAME } from '../../core/route-assembly';
 import { listKeysForSubject, revokeKeyAsAdmin } from '../api-key/core';
 
 export interface AdminPluginOptions {
@@ -1019,7 +1021,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin<'admin',
       ...Object.entries(iamEndpoints),
     ]),
 
-    methods: (ctx: PluginContext) => ({
+    methods: (ctx: PluginContext) => ((plugins: readonly RuntimeFortressPlugin[]) => ({
       async getResources(): Promise<ResourceFile> {
         return pullResources(ctx.db);
       },
@@ -1073,10 +1075,9 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin<'admin',
           }
 
           // Auto-discover all permissions from endpoint definitions
-          const plugins = ctx.config.plugins ?? [];
           const pluginEndpoints: EndpointDefinition[] = [];
           for (const plugin of plugins) {
-            if (plugin.routes)
+            if (plugin.name !== HOST_ROUTES_PLUGIN_NAME && plugin.routes)
               pluginEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
           }
           const allEndpoints: EndpointDefinition[] = [
@@ -1650,7 +1651,7 @@ export function admin(options: AdminPluginOptions = {}): FortressPlugin<'admin',
         );
         return { ok: true };
       },
-    }),
+    }))(snapshotPluginMembership(ctx)),
   });
 }
 

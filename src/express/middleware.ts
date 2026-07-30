@@ -4,6 +4,7 @@ import type { PluginRequestContext } from '../core/http/plugin-middleware';
 import type { MiddlewareDefinition, PluginContext } from '../core/plugin';
 import type { Subject, TokenClaims } from '../core/types';
 import { FortressError } from '../core/errors';
+import { snapshotPluginMembership } from '../core/plugin-membership';
 import {
   chainAdapterWrappers,
   collectScopeRules,
@@ -108,6 +109,7 @@ export interface RbacOptions {
  * `fortressClaims`, `fortressDb`, and `fortressGetScopedDb` on the request.
  */
 export function createAuthMiddleware(fortress: Pick<FortressAuthRuntime, 'resolvePrincipal' | 'config'>): ExpressMiddleware {
+  const plugins = snapshotPluginMembership(fortress);
   return async (req, _res, next) => {
     try {
       // Adapt the Express request into a minimal web Request so
@@ -143,7 +145,6 @@ export function createAuthMiddleware(fortress: Pick<FortressAuthRuntime, 'resolv
       if (scopes !== undefined)
         req.fortressScopes = scopes;
 
-      const plugins = fortress.config.plugins ?? [];
       // Tenant comes from the verified JWT claim, never a client header.
       const requestContext: Record<string, unknown> = {
         tenantId: claims?.customClaims?.tenantId,
@@ -333,7 +334,7 @@ export function createExpressPluginMiddleware(
   fortress: Pick<FortressPluginRuntime, 'config'>,
   position: MiddlewareDefinition['position'],
 ): ExpressMiddleware {
-  const plugins = fortress.config.plugins ?? [];
+  const plugins = snapshotPluginMembership(fortress);
 
   return async (req, _res, next) => {
     try {

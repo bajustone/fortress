@@ -17,6 +17,8 @@ import type { OpenAPISpec, SpecBuilderOptions } from './spec-builder';
 import { authComponentSchemas, authEndpoints } from '../../core/auth/auth-endpoints';
 import { iamComponentSchemas, iamEndpoints } from '../../core/iam/iam-endpoints';
 import { definePlugin } from '../../core/plugin';
+import { snapshotPluginMembership } from '../../core/plugin-membership';
+import { HOST_ROUTES_PLUGIN_NAME } from '../../core/route-assembly';
 import { buildOpenAPISpec } from './spec-builder';
 
 export interface OpenAPIConfig {
@@ -241,13 +243,13 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', O
     routes,
 
     methods: (ctx: PluginContext) => {
+      const plugins = snapshotPluginMembership(ctx);
       async function generateSpec(): Promise<OpenAPISpec> {
         if (cachedSpec)
           return cachedSpec;
 
         // Collect all endpoints from the fortress config
         const allEndpoints: EndpointDefinition[] = [];
-        const plugins = ctx.config.plugins ?? [];
 
         // Add core auth endpoints
         if (config.includeCoreAuth !== false) {
@@ -269,7 +271,7 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', O
 
         // Add plugin endpoints (excluding our own)
         for (const plugin of plugins) {
-          if (plugin.name === 'openapi' || !plugin.routes)
+          if (plugin.name === 'openapi' || plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
             continue;
           allEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
         }

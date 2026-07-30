@@ -20,6 +20,7 @@ import type { RouteManifestEntry } from '../manifest/route-manifest';
 import type { Subject, TokenClaims } from '../types';
 import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
+import { snapshotPluginMembership } from '../plugin-membership';
 import { isSelfManagedOAuthRoute } from '../route-assembly';
 import { coerceBySchema, validateRequest } from '../validation';
 import { enforceCsrf, resolveCsrfConfig } from './csrf';
@@ -277,7 +278,7 @@ export function protect(
   const manifest = findManifestEntry(fortress, endpoint);
   const endpointRouteTable = buildRouteTable([endpoint]);
   const csrfConfig = resolveCsrfConfig(fortress.config.csrf);
-  const plugins = fortress.config.plugins ?? [];
+  const plugins = snapshotPluginMembership(fortress);
 
   return async function protectedRequestHandler(request: Request): Promise<Response> {
     let response: Response | undefined;
@@ -296,7 +297,7 @@ export function protect(
       const selfManagedBearer = isSelfManagedOAuthRoute(endpoint);
 
       if (!selfManagedBearer) {
-        const pluginResolved = await tryPluginPrincipal(fortress, pipelineRequest);
+        const pluginResolved = await tryPluginPrincipal(fortress, pipelineRequest, plugins);
         if (pluginResolved) {
           subject = pluginResolved.subject;
           claims = pluginResolved.claims;

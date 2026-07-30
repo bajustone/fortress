@@ -1,8 +1,9 @@
 import type { Fortress } from '../core/fortress';
 import type { PluginRequestContext } from '../core/http/plugin-middleware';
+import type { RuntimeFortressPlugin } from '../core/plugin';
 import type { FortressEnv } from './middleware/auth';
 import { Hono } from 'hono';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../core/fortress';
 import { dataIsolation } from '../plugins/data-isolation';
 import { rateLimit } from '../plugins/rate-limit';
@@ -283,6 +284,84 @@ describe('hono rbacMiddleware', () => {
 });
 
 describe('hono authMiddleware — fortressDb and getScopedDb', () => {
+  it('snapshots adapter wrappers and scope rules despite reorder and append', async () => {
+    const calls: string[] = [];
+    const first: RuntimeFortressPlugin = {
+      name: 'first',
+      resolvePrincipal: async () => ({ subject: { type: 'USER', id: 'member' } }),
+      wrapAdapter: (adapter) => {
+        calls.push('wrap:first');
+        return adapter;
+      },
+      scopeRules: async () => {
+        calls.push('scope:first');
+        return null;
+      },
+      middleware: [{
+        path: '/*',
+        position: 'before-auth',
+        handler: async (_ctx, _request, next) => {
+          calls.push('middleware:first');
+          await next();
+        },
+      }],
+    };
+    const second: RuntimeFortressPlugin = {
+      name: 'second',
+      wrapAdapter: (adapter) => {
+        calls.push('wrap:second');
+        return adapter;
+      },
+      scopeRules: async () => {
+        calls.push('scope:second');
+        return null;
+      },
+      middleware: [{
+        path: '/*',
+        position: 'before-auth',
+        handler: async (_ctx, _request, next) => {
+          calls.push('middleware:second');
+          await next();
+        },
+      }],
+    };
+    const lateWrapper = vi.fn(adapter => adapter);
+    const lateScope = vi.fn(async () => null);
+    const plugins: RuntimeFortressPlugin[] = [first, second];
+    const localFortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins });
+    const { authMiddleware, pluginMiddleware } = createHonoMiddleware(localFortress);
+    const lateMiddleware = vi.fn(async (_ctx, _request, next) => next());
+    plugins.reverse();
+    plugins.push({
+      name: 'late',
+      wrapAdapter: lateWrapper,
+      scopeRules: lateScope,
+      middleware: [{ path: '/*', position: 'before-auth', handler: lateMiddleware }],
+    });
+
+    const localApp = new Hono<FortressEnv>();
+    localApp.use('/scoped', pluginMiddleware.beforeAuth);
+    localApp.use('/scoped', authMiddleware);
+    localApp.get('/scoped', async (c) => {
+      await c.get('fortressGetScopedDb')('document');
+      return c.json({ id: c.get('fortressSubject').id });
+    });
+
+    const response = await localApp.request('/scoped');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ id: 'member' });
+    expect(calls).toEqual([
+      'middleware:first',
+      'middleware:second',
+      'wrap:first',
+      'wrap:second',
+      'scope:first',
+      'scope:second',
+    ]);
+    expect(lateWrapper).not.toHaveBeenCalled();
+    expect(lateScope).not.toHaveBeenCalled();
+    expect(lateMiddleware).not.toHaveBeenCalled();
+  });
   let dbApp: Hono<FortressEnv>;
   let dbFortress: Fortress;
 

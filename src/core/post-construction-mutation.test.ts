@@ -17,8 +17,12 @@
  * deliberate rather than accidental.
  */
 
+import type { FortressConfig } from './config';
 import type { EndpointDefinition } from './endpoint';
+import type { RuntimeFortressPlugin } from './plugin';
 import { describe, expect, it, vi } from 'vitest';
+import { admin } from '../plugins/admin';
+import { openapi } from '../plugins/openapi';
 import { checkPublicRoutes } from '../testing/checks';
 import { createTestAdapter } from '../testing/index';
 import { authEndpoints } from './auth/auth-endpoints';
@@ -26,6 +30,7 @@ import { createFortress } from './fortress';
 import { protect } from './http/protect';
 import { detectRouteManifestDrift, hasRouteManifestDrift } from './manifest/drift';
 import { buildRouteManifest } from './manifest/route-manifest';
+import { definePlugin } from './plugin';
 import { endpointProvenance } from './route-assembly';
 import { endpoint, obj, str } from './schema-builder';
 
@@ -316,6 +321,255 @@ describe('plugin membership comes from the validated snapshot', () => {
 
     await fortress.runPluginMiddleware('before-auth', { request: get('/thing/open') });
     expect(lateMiddleware).not.toHaveBeenCalled();
+  });
+});
+
+describe('all membership consumers retain configured membership and order', () => {
+  const mutations: Array<{
+    name: string;
+    apply: (plugins: RuntimeFortressPlugin[], late: RuntimeFortressPlugin) => void;
+  }> = [
+    { name: 'append', apply: (plugins, late) => plugins.push(late) },
+    { name: 'remove', apply: plugins => plugins.splice(0, 1) },
+    { name: 'replace', apply: (plugins, late) => { plugins[0] = late; } },
+    { name: 'reorder', apply: plugins => plugins.reverse() },
+  ];
+
+  it.each(mutations)('ignores a late $name in core and protect pipelines', async ({ apply }) => {
+    const calls: string[] = [];
+    const membershipPlugin = (name: string): RuntimeFortressPlugin => definePlugin({
+      name,
+      resolvePrincipal: async () => {
+        calls.push(`principal:${name}`);
+        return null;
+      },
+      middleware: [{
+        path: '/*',
+        position: 'before-auth',
+        handler: async (_ctx, _request, next) => {
+          calls.push(`middleware:${name}`);
+          await next();
+        },
+      }],
+    });
+    const first = membershipPlugin('first');
+    const second = membershipPlugin('second');
+    const late = definePlugin({
+      name: 'late',
+      resolvePrincipal: async () => ({ subject: { type: 'USER', id: 'attacker' } }),
+      middleware: [{
+        path: '/*',
+        position: 'before-auth',
+        handler: async (_ctx, _request, next) => {
+          calls.push('middleware:late');
+          await next();
+        },
+      }],
+    });
+    const plugins: RuntimeFortressPlugin[] = [first, second];
+    const route = protectedRoute('/host/secret', 'hostSecret');
+    // Bearer-only makes the original exploit observable as a 200: a late
+    // resolver can fully satisfy auth without needing an IAM binding.
+    route.meta!.permission = undefined;
+    route.meta!.security = ['bearer'];
+    const config = {
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      routes: { hostSecret: route },
+      plugins,
+    };
+    const fortress = createFortress(config);
+
+    expect(Object.isFrozen(plugins)).toBe(false);
+    expect(Object.isFrozen(config)).toBe(false);
+    expect(fortress.config).toBe(config);
+    expect(fortress.config.plugins).toBe(plugins);
+    apply(plugins, late);
+
+    expect(await fortress.resolvePrincipal(get('/host/secret'))).toBeNull();
+    expect(calls.splice(0)).toEqual(['principal:first', 'principal:second']);
+
+    await fortress.runPluginMiddleware('before-auth', { request: get('/host/secret') });
+    expect(calls.splice(0)).toEqual(['middleware:first', 'middleware:second']);
+
+    const handler = vi.fn(async () => ({ ok: true }));
+    const response = await protect(fortress, route, handler)(get('/host/secret'));
+    expect(response.status).toBe(401);
+    expect(handler).not.toHaveBeenCalled();
+    expect(calls).toEqual([
+      'middleware:first',
+      'middleware:second',
+      'principal:first',
+      'principal:second',
+    ]);
+  });
+
+  it('uses snapshotted membership for manifest rate-limit classification', () => {
+    const limiter = definePlugin({
+      name: 'rate-limit',
+      middleware: [{
+        path: '/auth/login',
+        position: 'before-auth',
+        handler: async (_ctx, _request, next) => next(),
+      }],
+    });
+    const configured: RuntimeFortressPlugin[] = [limiter];
+    const withLimiter = build(configured);
+    configured.length = 0;
+    expect(buildRouteManifest(withLimiter).find(entry => entry.path === '/auth/login')?.rateLimited).toBe(true);
+
+    const initiallyEmpty: RuntimeFortressPlugin[] = [];
+    const withoutLimiter = build(initiallyEmpty);
+    initiallyEmpty.push(limiter);
+    expect(buildRouteManifest(withoutLimiter).find(entry => entry.path === '/auth/login')?.rateLimited).toBe(false);
+  });
+
+  it('isolates outer built-in factories from re-entrant construction with the same config', async () => {
+    const outerRoute = protectedRoute('/outer/report', 'outerReport');
+    const outerSurface = {
+      name: 'outer-surface',
+      routes: { outerReport: outerRoute },
+      methods: () => ({ outerReport: async () => ({ ok: 'outer' }) }),
+    } as RuntimeFortressPlugin;
+    const nestedRoute = protectedRoute('/nested/report', 'nestedReport');
+    nestedRoute.meta!.permission = { resource: 'nested', action: 'takeover' };
+    const nestedSurface = {
+      name: 'nested-surface',
+      routes: { nestedReport: nestedRoute },
+      methods: () => ({ nestedReport: async () => ({ ok: 'nested' }) }),
+    } as RuntimeFortressPlugin;
+    let sharedConfig: FortressConfig;
+    const reentrant = definePlugin({
+      name: 'reentrant',
+      methods: () => {
+        sharedConfig.plugins = [nestedSurface];
+        createFortress(sharedConfig);
+        return {};
+      },
+    });
+    sharedConfig = {
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [
+        reentrant,
+        outerSurface,
+        admin({ bootstrap: { enabled: true, secret: 'reentrant-bootstrap' } }),
+        openapi({ includeCoreIam: false }),
+      ],
+    };
+
+    const outer = createFortress(sharedConfig);
+    const methods = (outer.plugins as Record<string, unknown>).openapi as {
+      getSpec: () => Promise<{ paths: Record<string, unknown> }>;
+    };
+    const spec = await methods.getSpec();
+
+    expect(spec.paths).toHaveProperty('/outer/report');
+    expect(spec.paths).not.toHaveProperty('/nested/report');
+
+    const user = await outer.auth.createUser({
+      email: 'reentrant-admin@example.com',
+      name: 'Reentrant Admin',
+      password: 'password-123456',
+    });
+    const adminMethods = (outer.plugins as Record<string, unknown>).admin as {
+      bootstrap: (input: { userId: string; secret: string }) => Promise<unknown>;
+    };
+    await adminMethods.bootstrap({ userId: user.id, secret: 'reentrant-bootstrap' });
+    const permissions = await outer.iam.getPermissionsForSubject({ type: 'USER', id: user.id });
+    expect(permissions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resource: 'thing', action: 'read' }),
+    ]));
+    expect(permissions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ resource: 'nested', action: 'takeover' }),
+    ]));
+    expect(sharedConfig.plugins).toEqual([nestedSurface]);
+  });
+
+  it('does not let failed construction seed later config tooling membership', () => {
+    const failedConfig: FortressConfig = {
+      jwt: { key: SECRET },
+      database: createTestAdapter(),
+      plugins: [{
+        name: 'failed-factory',
+        methods: () => ({ invalid: 'not callable' as never }),
+      }],
+    };
+    expect(() => createFortress(failedConfig)).toThrow('must be callable');
+
+    const limiter = definePlugin({
+      name: 'rate-limit',
+      middleware: [{
+        path: '/auth/login',
+        position: 'before-auth',
+        handler: async (_ctx, _request, next) => next(),
+      }],
+    });
+    failedConfig.plugins = [limiter];
+    const manifest = buildRouteManifest({
+      config: failedConfig,
+      endpoints: Object.values(authEndpoints) as EndpointDefinition[],
+    });
+
+    expect(manifest.find(entry => entry.path === '/auth/login')?.rateLimited).toBe(true);
+  });
+
+  it('keeps OpenAPI plugin endpoint discovery on startup membership', async () => {
+    const initialRoute = publicRoute('/initial/report', 'report');
+    const initial = {
+      name: 'initial',
+      routes: { report: initialRoute },
+      methods: () => ({ report: async () => ({ ok: 'initial' }) }),
+    } as RuntimeFortressPlugin;
+    const replacementRoute = publicRoute('/late/report', 'report');
+    const replacement = {
+      name: 'replacement',
+      routes: { report: replacementRoute },
+      methods: () => ({ report: async () => ({ ok: 'late' }) }),
+    } as RuntimeFortressPlugin;
+    const plugins: RuntimeFortressPlugin[] = [initial, openapi()];
+    const fortress = build(plugins);
+    plugins.splice(0, plugins.length, replacement);
+
+    const methods = (fortress.plugins as Record<string, unknown>).openapi as { getSpec: () => Promise<{ paths: Record<string, unknown> }> };
+    const spec = await methods.getSpec();
+    expect(spec.paths).toHaveProperty('/initial/report');
+    expect(spec.paths).not.toHaveProperty('/late/report');
+  });
+
+  it('keeps admin bootstrap permission discovery on startup membership', async () => {
+    const initial = {
+      name: 'initial-admin-surface',
+      routes: { report: protectedRoute('/initial/admin-report', 'report') },
+      methods: () => ({ report: async () => ({ ok: 'initial' }) }),
+    } as RuntimeFortressPlugin;
+    const replacementRoute = protectedRoute('/late/admin-report', 'lateReport');
+    replacementRoute.meta!.permission = { resource: 'late', action: 'takeover' };
+    const replacement = {
+      name: 'replacement-admin-surface',
+      routes: { lateReport: replacementRoute },
+      methods: () => ({ lateReport: async () => ({ ok: 'late' }) }),
+    } as RuntimeFortressPlugin;
+    const plugins: RuntimeFortressPlugin[] = [initial, admin({ bootstrap: { enabled: true, secret: 'bootstrap-secret' } })];
+    const fortress = build(plugins);
+    const user = await fortress.auth.createUser({
+      email: 'membership-admin@example.com',
+      name: 'Membership Admin',
+      password: 'password-123456',
+    });
+    plugins.splice(0, plugins.length, replacement);
+
+    const adminMethods = (fortress.plugins as Record<string, unknown>).admin as {
+      bootstrap: (input: { userId: string; secret: string }) => Promise<unknown>;
+    };
+    await adminMethods.bootstrap({ userId: user.id, secret: 'bootstrap-secret' });
+    const permissions = await fortress.iam.getPermissionsForSubject({ type: 'USER', id: user.id });
+    expect(permissions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resource: 'thing', action: 'read' }),
+    ]));
+    expect(permissions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ resource: 'late', action: 'takeover' }),
+    ]));
   });
 });
 

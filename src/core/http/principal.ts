@@ -20,6 +20,7 @@
 import type { FortressAuthRuntime } from '../capabilities';
 import type { RuntimeFortressPlugin } from '../plugin';
 import type { Subject, TokenClaims } from '../types';
+import { snapshotPluginMembership } from '../plugin-membership';
 
 /** Result of a successful principal resolution. */
 export interface ResolvedPrincipal {
@@ -38,11 +39,10 @@ export async function tryPluginPrincipal(
   request: Request,
   validatedPlugins?: readonly RuntimeFortressPlugin[],
 ): Promise<ResolvedPrincipal | null> {
-  // `config.plugins` is live and can be appended to after construction, which
-  // would let a plugin join the credential-resolution chain without having
-  // been validated at startup. Callers inside `createFortress` pass the
-  // validated membership; standalone callers keep the previous behaviour.
-  const plugins = validatedPlugins ?? fortress.config.plugins ?? [];
+  // Genuine instances expose their construction-validated snapshot through
+  // the internal membership boundary. Standalone capability fixtures retain a
+  // frozen copy on first use rather than re-reading live config on every call.
+  const plugins = validatedPlugins ?? snapshotPluginMembership(fortress);
   for (const plugin of plugins) {
     if (!plugin.resolvePrincipal)
       continue;

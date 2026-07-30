@@ -5,6 +5,7 @@
  */
 
 import type { RequestEvent } from '@sveltejs/kit';
+import type { RuntimeFortressPlugin } from '../core/plugin';
 import type { Subject } from '../core/types';
 import type { FortressLocals, SvelteKitCookieOptions, SvelteKitCookies } from './types';
 import { isActionFailure, isRedirect } from '@sveltejs/kit';
@@ -138,6 +139,49 @@ describe('createSvelteKitHandle: fortress paths', () => {
 // ── createSvelteKitHandle: user-route auth + auto-refresh ───────────
 
 describe('createSvelteKitHandle: user routes', () => {
+  it('snapshots principal plugins, wrappers, and scope rules for request locals', async () => {
+    const calls: string[] = [];
+    const original: RuntimeFortressPlugin = {
+      name: 'original',
+      resolvePrincipal: async () => ({ subject: { type: 'USER', id: 'member' } }),
+      wrapAdapter: (adapter) => {
+        calls.push('wrap:original');
+        return adapter;
+      },
+      scopeRules: async () => {
+        calls.push('scope:original');
+        return null;
+      },
+    };
+    const plugins: RuntimeFortressPlugin[] = [original];
+    const localFortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins });
+    const handle = createSvelteKitHandle(localFortress);
+    plugins.splice(0, plugins.length, {
+      name: 'late',
+      resolvePrincipal: async () => ({ subject: { type: 'USER', id: 'attacker' } }),
+      wrapAdapter: (adapter) => {
+        calls.push('wrap:late');
+        return adapter;
+      },
+      scopeRules: async () => {
+        calls.push('scope:late');
+        return null;
+      },
+    });
+
+    const event = fakeEvent({ url: 'http://localhost/user-route' });
+    const response = await handle({
+      event,
+      resolve: async (resolvedEvent) => {
+        const locals = resolvedEvent.locals as unknown as FortressLocals;
+        await locals.fortress?.getScopedDb?.('document');
+        return new Response(locals.fortress?.subject?.id);
+      },
+    });
+
+    expect(await response.text()).toBe('member');
+    expect(calls).toEqual(['wrap:original', 'scope:original']);
+  });
   let fortress: ReturnType<typeof makeFortress>;
   let accessToken: string;
 

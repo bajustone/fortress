@@ -156,6 +156,33 @@ describe('tryPluginPrincipal', () => {
     expect(calls).toEqual(['first', 'second']);
   });
 
+  it('bounds standalone capability fixtures to membership from their first call', async () => {
+    const baseline = createFortress({ jwt: { key: SECRET }, database: createTestAdapter() });
+    const calls: string[] = [];
+    const plugins: FortressPlugin[] = [{
+      name: 'initial',
+      resolvePrincipal: async () => {
+        calls.push('initial');
+        return null;
+      },
+    }];
+    const fixture = {
+      auth: baseline.auth,
+      iam: baseline.iam,
+      config: { ...baseline.config, plugins },
+      extractAccessToken: baseline.extractAccessToken,
+    };
+    const request = new Request('http://localhost/fixture');
+
+    expect(await tryPluginPrincipal(fixture, request)).toBeNull();
+    plugins.splice(0, plugins.length, {
+      name: 'late',
+      resolvePrincipal: async () => ({ subject: { type: 'USER', id: 'attacker' } }),
+    });
+    expect(await tryPluginPrincipal(fixture, request)).toBeNull();
+    expect(calls).toEqual(['initial', 'initial']);
+  });
+
   it('skips plugins that do not implement resolvePrincipal', async () => {
     const unrelated: FortressPlugin = { name: 'unrelated' };
     const hit: FortressPlugin = {
