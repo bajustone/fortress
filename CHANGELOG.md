@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.0.0] - 2026-07-30
 
 ### Changed (breaking)
 - **Drizzle construction is dialect-specific.** `createDrizzleAdapter` is removed; use `createSqliteDrizzleAdapter` or `createPostgresDrizzleAdapter`. Both return a `MigratableDatabaseAdapter` with a literal dialect and required `rawQuery` capability.
@@ -17,6 +17,19 @@
 ### Added
 - **Migration SQL artifacts are generated and release-gated.** `bun run generate:migrations` projects the canonical runtime catalog into all SQLite/PostgreSQL up/down files; `--check` fails on missing, extra, or byte-modified artifacts in CI and publish workflows.
 
+- test: gate TypeScript 5.0 and Express 4 (#64)
+- test: validate CommonJS consumer declarations (#63)
+- chore: stage noUncheckedIndexedAccess adoption (#54)
+- feat: make the public type surface and adapter conformance intentional (#55)
+- ci: harden contributor workflow policy (#53)
+- docs: correct stale examples and guidance (#52)
+- test: fail fast without a container runtime (#51)
+- docs: make contributor setup deterministic (#49)
+- feat: make CLI route checks app-aware (#43)
+- feat!: require explicit migration dialect capabilities (#40)
+- test: add dual consumer contract gate (#37)
+- feat!: definition-derived Fortress API with capability-based runtime boundaries (#33)
+
 ### Changed
 - **OAuth introspection and revocation validate the `token` parameter.** `POST /oauth/introspect` and `POST /oauth/revoke` now reject a missing or duplicated `token` form parameter with a 400 `invalid_request` rather than introspecting an absent token or letting a trailing duplicate win. Precedence is explicit: an absent or unparseable `Authorization: Basic` fails with 401 `invalid_client` before the body is read, and once credentials are syntactically present, form-shape errors are raised before the client secret is verified. The exported `OAuthMethods` handlers keep their required `token: string` contract.
 - **npm and JSR publication contents are explicit and attested.** npm is the only channel that ships the Bun CLI; JSR remains source-first and programmatic. Both registry dry runs now enforce required entrypoints/migrations and reject tests, snapshots, project-only documents, and Rust rewrite material. npm no longer ships source tests, and tagged JSR publication uses the same pinned Deno toolchain as validation.
@@ -31,6 +44,20 @@
 - Accept Express 5 applications in `mountFortress` without casts while retaining support for lightweight Express-compatible hosts.
 - Close a forged self-managed OAuth security bypass. `bearerKind: 'oauth'` assigns the handler responsibility for protocol security (authentication or intentional public access) and bypasses principal resolution, the bearer requirement, RBAC, and body validation, but was approved by method and path alone — so any plugin could claim the exemption by declaring a route at an OAuth protocol path and serve it unauthenticated. Approval now additionally requires the validated snapshot to record `oauth` as the route's owner and the route to use the handler expected to serve it. Every site that acts on the marker — the auth and RBAC skips in `handleRequest` and `protect()`, manifest classification, call-tree exclusion, and OAuth parser selection — shares one predicate so they cannot drift apart. Endpoints from a hand-built capability runtime carry no provenance and keep their declared behaviour; `dispatchKind: 'oauth'` consent-flow dispatch is unchanged.
 - Stop post-construction route mutation from diverging from the validated route set. Dispatch, the plugin and core call trees, `protect()`, and the route manifest resolve routes, ownership, and auth metadata from the startup snapshot and its recorded provenance rather than re-reading live configuration. Rewriting or deleting a plugin's `routes` record, renaming a plugin, or flipping `bearerKind`/`security`/`permission` on a declared route therefore no longer changes how a validated endpoint is dispatched or authenticated. Separately, a plugin appended to `config.plugins` after construction does not join the core services and request closures, which retain the membership validated at construction — `fortress.handleRequest`, `fortress.resolvePrincipal`, `fortress.runPluginMiddleware`, and the auth service's lifecycle hooks, post-auth gates, and claim enrichment. `protect()` and SvelteKit principal resolution, and framework adapter middleware and adapter wrappers, may still read live configuration.
+
+- fix: parse runtime component refs (#62)
+- fix: enforce Basic route security (#61)
+- fix: snapshot validated route ownership (#57)
+- fix: scope social-login provider caches to the plugin instance (#56)
+- fix: make built-package checks self-contained (#50)
+- fix: validate plugin startup dependencies and diagnostics (#48)
+- fix: replace hard-coded plugin dispatch casts (#47)
+- fix: align npm and JSR publication manifests (#42)
+- fix: make migration CLI execution and artifacts reliable (#41)
+- fix: restore Deno outbound header compatibility (#39)
+- fix: accept Express 5 apps in mountFortress (#35)
+- fix: restore precise Fortress call types (#10)
+- fix: accept typed Fortress consumer boundaries (#9)
 
 ## [1.0.2] - 2026-07-14
 
