@@ -734,7 +734,12 @@ seed().then(() => {
             // Extract params
             const params: Record<string, string> = {};
             route.paramNames.forEach((name, i) => {
-              params[name] = match[i + 1];
+              // Each param name owns a mandatory `([^/]+)` group, so a matched
+              // route always captures every one of them.
+              const value = match[i + 1];
+              if (value === undefined)
+                throw new Error(`Route ${route.method} ${route.path} matched '${path}' without capturing ':${name}'`);
+              params[name] = value;
             });
             req.params = params;
 
