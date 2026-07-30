@@ -30,9 +30,23 @@ works under Node 20.19+ unchanged. Deno + workerd can import and use the runtime
 
 The Express adapter uses minimal duck-typed interfaces (`ExpressRequest`,
 `ExpressResponse`, `ExpressMiddleware`) so consumers bring their own
-Express version. The SvelteKit subpath uses the optional `@sveltejs/kit@^2`
+Express version. CI compiles the generated package declarations against real
+`express@4.21.2` / `@types/express@4.17.23` and Express 5.2 / types 5.x
+applications in isolated fixtures; the Express 4 lane verifies that its
+transitive `express-serve-static-core` remains v4 rather than ambient v5. The
+SvelteKit subpath uses the optional `@sveltejs/kit@^2`
 peer directly for its strict public `Handle`/`Action` types and runtime
 `redirect()`/`fail()` primitives; install that peer when using the adapter.
+
+## TypeScript declarations
+
+The package peer floor remains TypeScript 5.0. CI builds once, then exact
+TypeScript 5.0.4 compiles both npm declaration branches: ESM `import.types`
+(`.d.ts`) and Node16 CommonJS `require.types` (`.d.cts`). The current compiler
+runs the same two consumer contracts first, plus the isolated Express 4 and
+Express 5 fixtures. These checks validate generated package declarations; they
+do not add Express as a production dependency or widen the documented support
+ranges.
 
 ## Databases
 
@@ -71,18 +85,20 @@ required literal dialect and `rawQuery`; both named Drizzle factories provide it
 The repository workflow ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml))
 executes:
 
-- **`lint`** — eslint + `tsc --noEmit` (Bun, ubuntu-latest).
+- **`lint`** — eslint, source typechecks, export parity, a fresh generated-package
+  build, current-compiler ESM/CJS/Express 4+5 consumer contracts, and exact
+  TypeScript 5.0.4 ESM/CJS declaration-floor checks (Bun, ubuntu-latest).
 - **`unit`** — the full SQLite test suite across a runtime matrix:
-  **Bun**, **Node 20**, and **Node 22**. Bun runs `bun:sqlite`; the Node
+  **Bun**, **Node 20**, **Node 22**, and **Node 24**. Bun runs `bun:sqlite`; the Node
   jobs run the same vitest suite under `better-sqlite3`, keeping the
   Node-compatible build honest.
 - **`integration`** — the PostgreSQL suite via testcontainers
   (`bun run test:integration`), covering the `pg` dialect, the tenancy
   connection-pinning / `search_path` isolation, the migration upgrade
   fixture, and the framework adapters end-to-end. This is the heavier job,
-  so it runs on pull requests, pushes to `main`, and a **nightly cron**
-  rather than every branch push.
-- **`jsr-check`** — `deno publish --dry-run` to guard JSR publishability.
+  and runs on every pull request and push, plus a **nightly cron**.
+- **`jsr-check`** — pinned Deno typechecking plus an attested JSR selected-file
+  manifest to guard source-first publishability.
 
 The consumer-facing drop-in workflow
 ([`docs/ci/github-actions.yml`](./ci/github-actions.yml)) is a separate

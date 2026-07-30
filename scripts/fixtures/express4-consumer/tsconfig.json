@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.consumer-base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "typeRoots": [
+      "../../../node_modules/@types/express4/node_modules/@types",
+      "../../../node_modules/@types"
+    ]
+  },
+  "include": ["index.ts"]
+}
