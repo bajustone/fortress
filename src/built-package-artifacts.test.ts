@@ -90,6 +90,7 @@ describe('built-package artifact preflight', () => {
 
     for (const name of [
       'check:consumer-contract:package',
+      'check:consumer-contract:cjs',
       'check:declarations:ts50',
       'check:testing-esm',
     ]) {
