@@ -42,6 +42,37 @@ describe('route manifest', () => {
     expect(manifest.find(e => e.path === '/plugin/basic-rbac')!.classification).toBe('rbac');
   });
 
+  it('classifies API-key alternatives consistently without exposing them as public', () => {
+    const routes = [
+      endpoint('GET', '/plugin/api-key-only')
+        .summary('API key only')
+        .security('apiKey')
+        .response(200, 'OK')
+        .handler('apiKeyOnly')
+        .build(),
+      endpoint('GET', '/plugin/bearer-or-api-key')
+        .summary('Bearer or API key')
+        .security('bearer', 'apiKey')
+        .response(200, 'OK')
+        .handler('bearerOrApiKey')
+        .build(),
+      endpoint('GET', '/plugin/public-or-api-key')
+        .summary('Public or API key')
+        .security('none', 'apiKey')
+        .response(200, 'OK')
+        .handler('publicOrApiKey')
+        .build(),
+    ] as EndpointDefinition[];
+
+    const manifest = buildRouteManifest(fakeFortress(routes) as any);
+    expect(manifest.map(entry => [entry.path, entry.classification])).toEqual([
+      ['/plugin/api-key-only', 'authenticated'],
+      ['/plugin/bearer-or-api-key', 'authenticated'],
+      ['/plugin/public-or-api-key', 'public'],
+    ]);
+    expect(manifest.find(entry => entry.path === '/plugin/api-key-only')?.classification).not.toBe('public');
+  });
+
   it('classifies public, authenticated, rbac, and oauth protocol routes', () => {
     const routes = {
       publicPing: endpoint('GET', '/plugin/ping')

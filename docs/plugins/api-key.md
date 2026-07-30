@@ -145,19 +145,24 @@ Authorization: ApiKey myapp_sk_a1b2c3d4...
 X-API-Key: myapp_sk_a1b2c3d4...
 ```
 
-If neither header is present, the pipeline falls back to the JWT path. If both a JWT and an api-key are present, the api-key wins (resolvers run before the JWT fallback).
+If no plugin resolves a subject, the pipeline uses the JWT fallback only when the route declares bearer security or an IAM permission. An API-key-authenticated-only route does not require a bearer token and instead returns 401 when no subject resolves. If both a JWT and an api-key are present, the api-key wins (resolvers run before the JWT fallback).
 
 > Note: api-key authentication works uniformly on Fortress-owned routes (`/auth/*`, `/iam/*`, plugin routes) *and* your own custom routes — any route protected by the adapter's auth middleware goes through `fortress.resolvePrincipal`, which tries the plugin chain before the JWT fallback. The resolved principal is available as `fortressSubject` on the adapter request context (Hono `c.get('fortressSubject')` / Express `req.fortressSubject` / SvelteKit `event.locals.fortress.subject`).
 
-Once resolved, the principal flows through the same RBAC machinery as a JWT-authenticated request:
+What happens after resolution depends on the endpoint metadata:
+
+- `security: ['apiKey']` with no permission is authenticated-only. Any successfully resolved subject is allowed, missing/invalid/expired/revoked credentials return 401, and Fortress does not call IAM.
+- An endpoint with `.permission(resource, action)` requires a resolved subject and runs the normal IAM decision. API-key scopes are supplied as credential-level narrowing for that decision.
+
+API-key scopes are not standalone route permissions. Declare `.permission(...)` on sensitive routes; otherwise a scope such as `deploy:run` neither grants nor denies access to an authenticated-only route. These rules describe authorization after the configured resolver pipeline produces a subject and do not add separate credential-provenance tagging.
 
 ```ts
-// Inside a fortress-managed route or an adapter middleware RBAC check
-await fortress.iam.checkPermission(
-  ctx.subject,  // { type: 'USER' | 'SERVICE_ACCOUNT', id }
-  'deploy',
-  'run',
-);
+const deployRoute = endpoint('POST', '/deploy/run')
+  .security('apiKey')
+  .permission('deploy', 'run')
+  .response(200, 'Deployed')
+  .handler('deploy')
+  .build();
 ```
 
 ### Scoped keys
@@ -172,7 +177,7 @@ const { key } = await fortress.plugins['api-key'].createKey({
 });
 ```
 
-When the key is resolved, the scopes are returned so your application can enforce them:
+When the key is resolved, the scopes are returned. Fortress automatically applies them when a route declares an IAM permission; application code can also inspect them for its own non-route policy:
 
 ```ts
 const result = await fortress.plugins['api-key'].resolveKey(rawKey);

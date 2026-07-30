@@ -53,12 +53,20 @@ describe('enforceFortressPermission', () => {
     )).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
-  it('still passes through a route declaring security:[\'none\']', async () => {
+  it('still passes through routes declaring none, including none/API-key alternatives', async () => {
+    const checkPermission = vi.fn(async () => false);
+
     await expect(enforceFortressPermission(
       transportOnlyEndpoint(['none']),
       undefined,
-      { checkPermission: vi.fn(async () => false) },
+      { checkPermission },
     )).resolves.toBeUndefined();
+    await expect(enforceFortressPermission(
+      transportOnlyEndpoint(['none', 'apiKey']),
+      undefined,
+      { checkPermission },
+    )).resolves.toBeUndefined();
+    expect(checkPermission).not.toHaveBeenCalled();
   });
 
   it('enforces permission before basic transport metadata', async () => {
@@ -81,11 +89,50 @@ describe('enforceFortressPermission', () => {
     );
   });
 
+  it('allows a resolved subject on an API-key-authenticated-only route without IAM', async () => {
+    const checkPermission = vi.fn(async () => false);
+
+    await expect(enforceFortressPermission(
+      transportOnlyEndpoint(['apiKey']),
+      { type: 'USER', id: '1' },
+      { checkPermission },
+    )).resolves.toBeUndefined();
+    expect(checkPermission).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 for an unresolved API-key-authenticated-only route without invoking IAM', async () => {
+    const checkPermission = vi.fn(async () => true);
+
+    await expect(enforceFortressPermission(
+      transportOnlyEndpoint(['apiKey']),
+      undefined,
+      { checkPermission },
+    )).rejects.toMatchObject({ code: 'UNAUTHORIZED', statusCode: 401 });
+    expect(checkPermission).not.toHaveBeenCalled();
+  });
+
   it('requires a subject for api-key permission routes', async () => {
     await expect(enforceFortressPermission(
       endpoint(['apiKey']),
       undefined,
       { checkPermission: async () => true },
     )).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+  });
+
+  it('passes API-key credential scopes to IAM on permission-bearing routes', async () => {
+    const checkPermission = vi.fn(async () => true);
+
+    await expect(enforceFortressPermission(
+      endpoint(['apiKey']),
+      { type: 'SERVICE_ACCOUNT', id: '7' },
+      { checkPermission },
+      ['billing:read'],
+    )).resolves.toBeUndefined();
+    expect(checkPermission).toHaveBeenCalledWith(
+      { type: 'SERVICE_ACCOUNT', id: '7' },
+      'billing',
+      'read',
+      ['billing:read'],
+    );
   });
 });

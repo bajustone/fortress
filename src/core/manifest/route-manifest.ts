@@ -2,6 +2,7 @@ import type { FortressManifestRuntime } from '../capabilities';
 import type { EndpointDefinition, EndpointPermission, HttpMethod, SecurityRequirement } from '../endpoint';
 import type { MiddlewareDefinition, RuntimeFortressPlugin } from '../plugin';
 import { authEndpoints } from '../auth/auth-endpoints';
+import { isAuthenticationOnlyEndpoint } from '../endpoint-security';
 import { resolveCsrfConfig } from '../http/csrf';
 import { iamEndpoints } from '../iam/iam-endpoints';
 import { snapshotPluginMembership } from '../plugin-membership';
@@ -46,7 +47,7 @@ function classifyEndpoint(endpoint: EndpointDefinition): RouteClassification {
   // Basic route with no permission is not authenticated. Construction rejects
   // it outright; an unassembled runtime lands here and is reported
   // `default-deny` rather than being mislabelled as authenticated.
-  if (security.includes('bearer') || security.includes('apiKey'))
+  if (isAuthenticationOnlyEndpoint(endpoint))
     return 'authenticated';
   return 'default-deny';
 }

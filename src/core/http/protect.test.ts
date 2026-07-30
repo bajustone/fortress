@@ -1,8 +1,10 @@
+import type { ApiKeyMethods } from '../../plugins/api-key';
 import type { EndpointDefinition } from '../endpoint';
 import type { FortressPlugin } from '../plugin';
 import type { StandardSchemaV1 } from '../standard-schema';
 import type { ProtectedRouteContext } from './protect';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { apiKey } from '../../plugins/api-key';
 import { createTestAdapter } from '../../testing';
 import { createFortress } from '../fortress';
 import { buildRouteManifest } from '../manifest/route-manifest';
@@ -157,6 +159,63 @@ describe('protect()', () => {
     });
     expect(checked).toHaveLength(1);
     expect(checked[0]).toEqual([{ type: 'USER', id: '7' }, 'report', 'read', { credentialScopes: undefined }]);
+  });
+
+  it('matches handleRequest semantics for API-key-authenticated-only host handlers', async () => {
+    const ep = endpoint('GET', '/host/api-key-identity')
+      .summary('API key identity')
+      .security('apiKey')
+      .response(200, 'Identity', obj({ type: str(), id: str() }, 'type', 'id'))
+      .handler('apiKeyIdentity')
+      .build();
+    const fortress = createFortress({
+      database: createTestAdapter(),
+      jwt: { key: secret },
+      csrf: { enabled: false },
+      routes: { apiKeyIdentity: ep },
+      plugins: [apiKey({ prefix: 'protect' })],
+    });
+    const user = await fortress.auth.createUser({
+      email: 'protect-api-key@example.com',
+      name: 'Protect API Key',
+      password: 'password-123456',
+    });
+    const login = await fortress.auth.login('protect-api-key@example.com', 'password-123456');
+    if (login.status !== 'success')
+      throw new Error('expected login success');
+    const apiKeys = fortress.plugins['api-key'] as unknown as ApiKeyMethods;
+    const { key } = await apiKeys.createKey({
+      subject: { type: 'USER', id: user.id },
+      name: 'Protect key',
+    });
+    const checkPermission = vi.fn(async () => true);
+    fortress.iam.checkPermission = checkPermission;
+    const callback = vi.fn((ctx: ProtectedRouteContext<typeof ep>) => ({
+      type: ctx.subject!.type,
+      id: ctx.subject!.id,
+    }));
+    const handler = protect(fortress, ep, callback);
+
+    const valid = await handler(new Request('http://localhost/host/api-key-identity', {
+      headers: { 'x-api-key': key },
+    }));
+    expect(valid.status).toBe(200);
+    await expect(valid.json()).resolves.toEqual({ type: 'USER', id: user.id });
+    expect(checkPermission).not.toHaveBeenCalled();
+
+    callback.mockClear();
+    const missing = await handler(new Request('http://localhost/host/api-key-identity'));
+    const invalid = await handler(new Request('http://localhost/host/api-key-identity', {
+      headers: { authorization: 'ApiKey protect_sk_invalid' },
+    }));
+    const bearer = await handler(new Request('http://localhost/host/api-key-identity', {
+      headers: { authorization: `Bearer ${login.accessToken}` },
+    }));
+    expect(missing.status).toBe(401);
+    expect(invalid.status).toBe(401);
+    expect(bearer.status).toBe(401);
+    expect(callback).not.toHaveBeenCalled();
+    expect(checkPermission).not.toHaveBeenCalled();
   });
 
   it('attaches auth cookies for token-shaped handler results', async () => {
