@@ -91,10 +91,27 @@ describe('built-package artifact preflight', () => {
     for (const name of [
       'check:consumer-contract:package',
       'check:consumer-contract:cjs',
+      'check:consumer-contract:express4',
       'check:declarations:ts50',
       'check:testing-esm',
     ]) {
       expect(pkg.scripts[name], name).toContain('check:built-package-artifacts');
     }
+  });
+
+  it('keeps TS5 ESM/CJS checks after the fresh built-package contract', () => {
+    const pkg = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8'));
+    const ts50 = String(pkg.scripts['check:declarations:ts50']);
+    expect(ts50).toContain('scripts/tsconfig.consumer-package.json');
+    expect(ts50).toContain('scripts/fixtures/cjs-consumer/tsconfig.json');
+
+    const release = String(pkg.scripts['check:release']);
+    expect(release.indexOf('check:consumer-contract')).toBeGreaterThanOrEqual(0);
+    expect(release.indexOf('check:declarations:ts50')).toBeGreaterThan(release.indexOf('check:consumer-contract'));
+
+    const workflow = readFileSync(join(repositoryRoot, '.github/workflows/ci.yml'), 'utf8');
+    expect(workflow.indexOf('bun run check:consumer-contract')).toBeGreaterThanOrEqual(0);
+    expect(workflow.indexOf('bun run check:declarations:ts50'))
+      .toBeGreaterThan(workflow.indexOf('bun run check:consumer-contract'));
   });
 });

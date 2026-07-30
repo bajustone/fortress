@@ -49,7 +49,11 @@ The checks require every declared entrypoint, reject test/repository debris,
 assert npm includes the CLI, and assert JSR does not. Built-package validation
 compiles both the `import.types` (`.d.ts`) and `require.types` (`.d.cts`)
 consumer contracts after one clean tsup build; strict export parity binds all
-four conditional leaves to the same tsup entry. Migration expectations
+four conditional leaves to the same tsup entry. The release floor then runs
+exact TypeScript 5.0.4 over both generated declaration branches without
+rebuilding. A separate current-compiler package contract verifies a real
+Express 4 application against isolated Express 4/core-v4 types; the existing
+Express 5 contract remains in the ESM/source matrix. Migration expectations
 come from the migration definitions rather than the `migrations/` tree, so a
 dropped migration cannot regenerate into a self-consistent short set. CI,
 release validation, and publication workflows run the same checks.

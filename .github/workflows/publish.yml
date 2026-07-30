@@ -43,9 +43,10 @@ jobs:
       - run: bun run typecheck:scripts
       - run: bun run test
       - run: bun run test:integration
-      - name: Source, ESM, and CJS consumer contracts
+      - name: Source, ESM, CJS, and Express 4 consumer contracts
         run: bun run check:consumer-contract
-      - run: bun run check:declarations:ts50
+      - name: TypeScript 5.0 ESM and CJS declaration floor
+        run: bun run check:declarations:ts50
       - run: bun run check:repository-publication-policy
       - run: bun run check:package-cli
 
