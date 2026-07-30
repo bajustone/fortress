@@ -1,11 +1,15 @@
-import type { FortressManifestRuntime } from '../capabilities';
 import type { FortressConfig } from '../config';
+import type { AnyPublishedEndpointDefinition } from '../endpoint';
 import type { RouteManifestEntry } from './route-manifest';
 import { assembleRoutes } from '../route-assembly';
 import { buildRouteManifest } from './route-manifest';
 
-/** The introspection surface, derived without constructing a Fortress instance. */
-export type RouteSurface = Pick<FortressManifestRuntime, 'config' | 'endpoints' | 'manifest'>;
+/** The adjustable introspection surface derived without publishing a Fortress instance. */
+export interface RouteSurface {
+  readonly config: Readonly<FortressConfig>;
+  endpoints: AnyPublishedEndpointDefinition[];
+  manifest: RouteManifestEntry[];
+}
 
 /**
  * Derive the route surface — every endpoint plus the generated manifest —

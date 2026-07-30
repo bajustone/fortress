@@ -44,7 +44,7 @@
 
 import type { CallClient } from '../call-tree';
 import type { FortressHttpRuntime } from '../capabilities';
-import type { EndpointDefinition } from '../endpoint';
+import type { EndpointDefinitionLike } from '../endpoint';
 import { Errors } from '../errors';
 
 /** Optional per-call options. */
@@ -72,7 +72,7 @@ function schemaKeys(schema: unknown): Set<string> {
  * success-response phantoms. `createFortress` composes these clients into its
  * namespaced `CallTree` without changing their per-handler contracts.
  */
-export function buildCall<const TEndpoints extends Record<string, EndpointDefinition>>(
+export function buildCall<const TEndpoints extends Record<string, EndpointDefinitionLike>>(
   fortress: Pick<FortressHttpRuntime, 'handleRequest'>,
   endpoints: TEndpoints,
 ): CallClient<TEndpoints> {

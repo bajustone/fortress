@@ -1,5 +1,12 @@
 import type { FortressManifestRuntime } from '../capabilities';
-import type { EndpointDefinition, EndpointPermission, HttpMethod, SecurityRequirement } from '../endpoint';
+import type {
+  EndpointDefinition,
+  EndpointDefinitionLike,
+  EndpointPermission,
+  HttpMethod,
+  PublishedEndpointPermission,
+  SecurityRequirement,
+} from '../endpoint';
 import type { MiddlewareDefinition, RuntimeFortressPlugin } from '../plugin';
 import { authEndpoints } from '../auth/auth-endpoints';
 import { isAuthenticationOnlyEndpoint } from '../endpoint-security';
@@ -24,18 +31,39 @@ export interface RouteManifestEntry {
   mounted: boolean;
 }
 
+/** One immutable entry in the cached manifest published by a Fortress instance. */
+export interface PublishedRouteManifestEntry {
+  readonly method: HttpMethod;
+  readonly path: string;
+  readonly handler: string;
+  readonly plugin: string | null;
+  readonly classification: RouteClassification;
+  readonly permission?: PublishedEndpointPermission;
+  readonly security: readonly SecurityRequirement[];
+  readonly bearerKind?: 'jwt' | 'oauth';
+  readonly csrfApplicable: boolean;
+  readonly rateLimited: boolean;
+  readonly mounted: boolean;
+}
+
+/** The frozen manifest array published by a Fortress instance. */
+export type PublishedRouteManifest = readonly PublishedRouteManifestEntry[];
+
+/** A mutable generated entry or immutable instance-published entry. */
+export type RouteManifestEntryLike = RouteManifestEntry | PublishedRouteManifestEntry;
+
 interface EndpointWithOrigin {
-  endpoint: EndpointDefinition;
+  endpoint: EndpointDefinitionLike;
   plugin: string | null;
 }
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-function endpointKey(endpoint: Pick<EndpointDefinition, 'method' | 'path'>): string {
+function endpointKey(endpoint: Pick<EndpointDefinitionLike, 'method' | 'path'>): string {
   return `${endpoint.method.toUpperCase()} ${endpoint.path}`;
 }
 
-function classifyEndpoint(endpoint: EndpointDefinition): RouteClassification {
+function classifyEndpoint(endpoint: EndpointDefinitionLike): RouteClassification {
   const security = endpoint.meta?.security ?? [];
   if (isSelfManagedOAuthRoute(endpoint))
     return 'oauth-protocol';
@@ -61,7 +89,7 @@ function pathPatternToRegex(pattern: string): RegExp {
   return new RegExp(`^${regexStr}$`);
 }
 
-function middlewareMatchesEndpoint(middleware: MiddlewareDefinition, endpoint: EndpointDefinition): boolean {
+function middlewareMatchesEndpoint(middleware: MiddlewareDefinition, endpoint: EndpointDefinitionLike): boolean {
   if (!pathPatternToRegex(middleware.path).test(endpoint.path))
     return false;
 
@@ -72,7 +100,7 @@ function middlewareMatchesEndpoint(middleware: MiddlewareDefinition, endpoint: E
   return true;
 }
 
-function isRateLimited(endpoint: EndpointDefinition, plugins: readonly RuntimeFortressPlugin[]): boolean {
+function isRateLimited(endpoint: EndpointDefinitionLike, plugins: readonly RuntimeFortressPlugin[]): boolean {
   for (const plugin of plugins) {
     if (plugin.name !== 'rate-limit')
       continue;
@@ -96,7 +124,7 @@ function isRateLimited(endpoint: EndpointDefinition, plugins: readonly RuntimeFo
   return false;
 }
 
-function csrfApplies(endpoint: EndpointDefinition, fortress: Pick<FortressManifestRuntime, 'config'>): boolean {
+function csrfApplies(endpoint: EndpointDefinitionLike, fortress: Pick<FortressManifestRuntime, 'config'>): boolean {
   const csrf = resolveCsrfConfig(fortress.config.csrf);
   if (!csrf.enabled)
     return false;
@@ -160,8 +188,8 @@ export function buildRouteManifest(fortress: Pick<FortressManifestRuntime, 'endp
         handler: endpoint.handler,
         plugin,
         classification: classifyEndpoint(endpoint),
-        ...(endpoint.meta?.permission ? { permission: endpoint.meta.permission } : {}),
-        security,
+        ...(endpoint.meta?.permission ? { permission: { ...endpoint.meta.permission } } : {}),
+        security: [...security],
         ...(endpoint.meta?.bearerKind ? { bearerKind: endpoint.meta.bearerKind } : {}),
         csrfApplicable: csrfApplies(endpoint, fortress),
         rateLimited: isRateLimited(endpoint, plugins),

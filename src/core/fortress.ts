@@ -15,12 +15,12 @@ import type {
   PluginMethodsValidator,
 } from './capabilities';
 import type { FortressConfig } from './config';
-import type { EndpointDefinition } from './endpoint';
+import type { AnyPublishedEndpointDefinition, EndpointDefinition } from './endpoint';
 import type { AuthCookiePayload } from './http/cookie-serialize';
 import type { ResolvedPrincipal } from './http/principal';
 import type { IamEvent, PermissionCheckEvent } from './iam/iam-service';
 import type { PermissionSyncOptions, PermissionSyncResult } from './iam/permission-sync';
-import type { RouteManifestEntry } from './manifest/route-manifest';
+import type { PublishedRouteManifest } from './manifest/route-manifest';
 import type {
   PluginMethod,
   PluginMethodsOf,
@@ -242,7 +242,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // Route key -> snapshot endpoint. Call trees bind these clones rather than
   // the originals a plugin still holds, so mutating a declared route object
   // later cannot change what `fortress.call.*` invokes.
-  const snapshotByRouteKey = new Map<string, EndpointDefinition>(
+  const snapshotByRouteKey = new Map<string, AnyPublishedEndpointDefinition>(
     endpoints.map(endpoint => [
       `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`,
       endpoint,
@@ -339,7 +339,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // and `call` both get bound after the instance is constructed because
   // they need the assembled `Fortress` object (route table is built from
   // `endpoints`; `call` delegates to `handleRequest`).
-  let routeManifest: RouteManifestEntry[] | undefined;
+  let routeManifest: PublishedRouteManifest | undefined;
 
   const resolvePlugin = (<TMethods>(name: string, validator?: PluginMethodsValidator<TMethods>): TMethods | unknown => {
     // Dynamic lookup is erased by design: without a runtime validator the
@@ -364,15 +364,20 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     resolvePlugin,
     config,
     endpoints,
-    get manifest(): RouteManifestEntry[] {
+    get manifest(): PublishedRouteManifest {
       // Derived once and frozen. This is the authoritative view of the
       // validated route set, so a consumer must not be able to edit the
       // baseline it is checking against. Only the instance's cached manifest
       // is frozen; a direct `buildRouteManifest()` result stays a plain array
       // for callers that legitimately build and adjust their own.
       routeManifest ??= Object.freeze(
-        buildRouteManifest(this).map(entry => Object.freeze(entry)),
-      ) as RouteManifestEntry[];
+        buildRouteManifest(this).map((entry) => {
+          Object.freeze(entry.security);
+          if (entry.permission)
+            Object.freeze(entry.permission);
+          return Object.freeze(entry);
+        }),
+      );
       return routeManifest;
     },
     cookies,
@@ -429,7 +434,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     // Derived from the validated snapshot, keyed by handler — plugin route
     // keys are required to equal their handler, so this reproduces the
     // declared namespace without reading the mutable route record.
-    const genericRoutes = Object.create(null) as Record<string, EndpointDefinition>;
+    const genericRoutes = Object.create(null) as Record<string, AnyPublishedEndpointDefinition>;
     for (const endpoint of endpoints) {
       if (endpointOwner(endpoint) !== plugin.name)
         continue;
@@ -442,8 +447,8 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // here after `handleRequest` has been bound.
   const effectiveCoreRoutes = (
     routes: Record<string, EndpointDefinition>,
-  ): Record<string, EndpointDefinition> => {
-    const effective = Object.create(null) as Record<string, EndpointDefinition>;
+  ): Record<string, AnyPublishedEndpointDefinition> => {
+    const effective = Object.create(null) as Record<string, AnyPublishedEndpointDefinition>;
     for (const [name, endpoint] of Object.entries(routes)) {
       const key = `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
       // Core route names come from the built-in maps, but the values bound

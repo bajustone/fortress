@@ -16,6 +16,7 @@
     "fixtures/migration-adapter-declaration.ts",
     "fixtures/plugin-contract-declaration.ts",
     "fixtures/public-type-inventory-declaration.ts",
+    "fixtures/published-snapshots-declaration.ts",
     "fixtures/readme-hono-adapter-declaration.ts",
     "fixtures/readme-hono-declaration.ts"
   ]

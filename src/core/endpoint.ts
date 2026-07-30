@@ -75,6 +75,49 @@ export interface EndpointResponse {
   schema?: JSONSchema;
 }
 
+/** Read-only IAM permission exposed on a published Fortress endpoint snapshot. */
+export interface PublishedEndpointPermission {
+  readonly resource: string;
+  readonly action: string;
+}
+
+/**
+ * Read-only metadata exposed on a published Fortress endpoint snapshot.
+ * Arrays are readonly because the runtime freezes them independently.
+ */
+export interface PublishedEndpointMeta {
+  readonly summary: string;
+  readonly description?: string;
+  readonly tags?: readonly string[];
+  readonly security?: readonly SecurityRequirement[];
+  readonly deprecated?: boolean;
+  readonly permission?: PublishedEndpointPermission;
+  readonly bearerKind?: 'jwt' | 'oauth';
+  readonly dispatchKind?: 'oauth';
+}
+
+/**
+ * Read-only input container exposed on a published endpoint snapshot.
+ * Schema values deliberately retain their existing mutable reference types.
+ */
+export interface PublishedEndpointInput {
+  readonly body?: JSONSchema;
+  readonly query?: JSONSchema;
+  readonly params?: JSONSchema;
+  readonly bodySchema?: StandardSchemaV1;
+  readonly querySchema?: StandardSchemaV1;
+  readonly paramsSchema?: StandardSchemaV1;
+}
+
+/**
+ * Read-only response envelope exposed on a published endpoint snapshot.
+ * The schema itself deliberately remains mutable and shared by reference.
+ */
+export interface PublishedEndpointResponse {
+  readonly description: string;
+  readonly schema?: JSONSchema;
+}
+
 /**
  * Declarative description of one HTTP endpoint.
  *
@@ -135,8 +178,89 @@ export interface EndpointDefinition<
  */
 export type AnyEndpointDefinition = EndpointDefinition<any, any, any, any, string, HttpMethod, string, any, any, any>;
 
+/**
+ * The immutable endpoint contract published through `fortress.endpoints`.
+ *
+ * This mirrors the bounded runtime snapshot: routing fields, metadata, the
+ * input container, the response map, and response envelopes are readonly,
+ * while JSON Schema and Standard Schema objects remain shared mutable
+ * references. Its phantom generics exactly match {@link EndpointDefinition}
+ * so inference survives when a published endpoint is passed to `protect()`.
+ */
+export interface PublishedEndpointDefinition<
+  // eslint-disable-next-line ts/no-empty-object-type -- mirrors EndpointDefinition defaults
+  TBody = {},
+  // eslint-disable-next-line ts/no-empty-object-type
+  TQuery = {},
+  // eslint-disable-next-line ts/no-empty-object-type
+  TParams = {},
+  // eslint-disable-next-line ts/no-empty-object-type
+  TResponses extends Record<number, unknown> = {},
+  THandler extends string = string,
+  TMethod extends HttpMethod = HttpMethod,
+  TPath extends string = string,
+  TBodyInput = TBody,
+  TQueryInput = TQuery,
+  TParamsInput = TParams,
+> {
+  readonly method: TMethod;
+  readonly path: TPath;
+  readonly handler: THandler;
+  readonly meta?: PublishedEndpointMeta;
+  readonly input?: PublishedEndpointInput;
+  readonly responses?: Readonly<Record<number, PublishedEndpointResponse>>;
+  /** Phantom — never present at runtime. Consumed by `InferEndpoint*` helpers. */
+  readonly __types?: {
+    body: TBody;
+    query: TQuery;
+    params: TParams;
+    responses: TResponses;
+    bodyInput: TBodyInput;
+    queryInput: TQueryInput;
+    paramsInput: TParamsInput;
+  };
+}
+
+/** Any published endpoint snapshot, regardless of its inferred phantom contract. */
+export type AnyPublishedEndpointDefinition = PublishedEndpointDefinition<any, any, any, any, string, HttpMethod, string, any, any, any>;
+
+/** A mutable declaration or immutable published snapshot, for erased read-only consumers. */
+export type EndpointDefinitionLike = AnyEndpointDefinition | AnyPublishedEndpointDefinition;
+
+/**
+ * Project any mutable or already-published endpoint contract to its immutable
+ * published form without losing any of its ten phantom generic parameters.
+ */
+export type PublishedEndpointOf<E> = E extends
+  | EndpointDefinition<
+    infer B,
+    infer Q,
+    infer P,
+    infer R,
+    infer H,
+    infer M,
+    infer Path,
+    infer BI,
+    infer QI,
+    infer PI
+  >
+  | PublishedEndpointDefinition<
+    infer B,
+    infer Q,
+    infer P,
+    infer R,
+    infer H,
+    infer M,
+    infer Path,
+    infer BI,
+    infer QI,
+    infer PI
+  >
+  ? PublishedEndpointDefinition<B, Q, P, R, H, M, Path, BI, QI, PI>
+  : never;
+
 /** Select the lowest numeric 2xx response key, defaulting to 200. */
-export function endpointSuccessStatus(endpoint: EndpointDefinition): number {
+export function endpointSuccessStatus(endpoint: EndpointDefinitionLike): number {
   const statuses = Object.keys(endpoint.responses ?? {})
     .map(Number)
     .filter(status => Number.isInteger(status) && status >= 200 && status < 300);
@@ -145,22 +269,22 @@ export function endpointSuccessStatus(endpoint: EndpointDefinition): number {
 
 // ── Endpoint type inference helpers ────────────────────────────────
 
-/** Extract the validated request-body type from an {@link EndpointDefinition}. */
-export type InferEndpointBody<E> = E extends EndpointDefinition<infer B, any, any, any, any, any, any, any, any, any> ? B : never;
-/** Extract the validated query-string type from an {@link EndpointDefinition}. */
-export type InferEndpointQuery<E> = E extends EndpointDefinition<any, infer Q, any, any, any, any, any, any, any, any> ? Q : never;
-/** Extract the validated path-params type from an {@link EndpointDefinition}. */
-export type InferEndpointParams<E> = E extends EndpointDefinition<any, any, infer P, any, any, any, any, any, any, any> ? P : never;
+/** Extract the validated request-body type from an endpoint declaration or published snapshot. */
+export type InferEndpointBody<E> = E extends EndpointDefinition<infer B, any, any, any, any, any, any, any, any, any> | PublishedEndpointDefinition<infer B, any, any, any, any, any, any, any, any, any> ? B : never;
+/** Extract the validated query-string type from an endpoint declaration or published snapshot. */
+export type InferEndpointQuery<E> = E extends EndpointDefinition<any, infer Q, any, any, any, any, any, any, any, any> | PublishedEndpointDefinition<any, infer Q, any, any, any, any, any, any, any, any> ? Q : never;
+/** Extract the validated path-params type from an endpoint declaration or published snapshot. */
+export type InferEndpointParams<E> = E extends EndpointDefinition<any, any, infer P, any, any, any, any, any, any, any> | PublishedEndpointDefinition<any, any, infer P, any, any, any, any, any, any, any> ? P : never;
 /** Extract the wire request-body type accepted by Standard Schema. */
-export type InferEndpointBodyInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, infer B, any, any> ? B : never;
+export type InferEndpointBodyInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, infer B, any, any> | PublishedEndpointDefinition<any, any, any, any, any, any, any, infer B, any, any> ? B : never;
 /** Extract the wire query-string type accepted by Standard Schema. */
-export type InferEndpointQueryInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, any, infer Q, any> ? Q : never;
+export type InferEndpointQueryInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, any, infer Q, any> | PublishedEndpointDefinition<any, any, any, any, any, any, any, any, infer Q, any> ? Q : never;
 /** Extract the wire path-params type accepted by Standard Schema. */
-export type InferEndpointParamsInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, any, any, infer P> ? P : never;
-/** Extract the full `Record<status, body>` response map from an {@link EndpointDefinition}. */
-export type InferEndpointResponses<E> = E extends EndpointDefinition<any, any, any, infer R, any, any, any, any, any, any> ? R : never;
-/** Extract the literal handler name from an {@link EndpointDefinition}. */
-export type InferEndpointHandler<E> = E extends EndpointDefinition<any, any, any, any, infer H, any, any, any, any, any> ? H : never;
+export type InferEndpointParamsInput<E> = E extends EndpointDefinition<any, any, any, any, any, any, any, any, any, infer P> | PublishedEndpointDefinition<any, any, any, any, any, any, any, any, any, infer P> ? P : never;
+/** Extract the full `Record<status, body>` response map from an endpoint declaration or snapshot. */
+export type InferEndpointResponses<E> = E extends EndpointDefinition<any, any, any, infer R, any, any, any, any, any, any> | PublishedEndpointDefinition<any, any, any, infer R, any, any, any, any, any, any> ? R : never;
+/** Extract the literal handler name from an endpoint declaration or published snapshot. */
+export type InferEndpointHandler<E> = E extends EndpointDefinition<any, any, any, any, infer H, any, any, any, any, any> | PublishedEndpointDefinition<any, any, any, any, infer H, any, any, any, any, any> ? H : never;
 
 /** Ordered exact HTTP success statuses used by hand-authored definitions. */
 /* eslint-disable antfu/consistent-list-newline -- grouped by decade for readability */

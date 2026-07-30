@@ -9,14 +9,18 @@
 
 import type { FortressProtectRuntime } from '../capabilities';
 import type {
+  AnyEndpointDefinition,
+  AnyPublishedEndpointDefinition,
   EndpointDefinition,
+  EndpointDefinitionLike,
   InferEndpointBody,
   InferEndpointParams,
   InferEndpointQuery,
   InferEndpointResponses,
   InferEndpointValidatedInput,
+  PublishedEndpointOf,
 } from '../endpoint';
-import type { RouteManifestEntry } from '../manifest/route-manifest';
+import type { PublishedRouteManifestEntry } from '../manifest/route-manifest';
 import type { Subject, TokenClaims } from '../types';
 import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
@@ -37,7 +41,10 @@ import { tryPluginPrincipal } from './principal';
  * (looser typing, falls back to `Record<string, unknown>` / `unknown`).
  */
 
-export type ProtectedRouteTarget<E extends EndpointDefinition<any, any, any, any> = EndpointDefinition>
+export type ProtectableEndpointDefinition
+  = AnyEndpointDefinition | AnyPublishedEndpointDefinition;
+
+export type ProtectedRouteTarget<E extends ProtectableEndpointDefinition = ProtectableEndpointDefinition>
   = string | E;
 
 /**
@@ -72,12 +79,12 @@ export interface ProtectOptions {
  */
 export interface ProtectedRouteContext<
 
-  E extends EndpointDefinition<any, any, any, any> = EndpointDefinition,
+  E extends ProtectableEndpointDefinition = EndpointDefinition,
 > {
   request: Request;
-  /** The resolved endpoint definition (typed when the target was typed). */
-  endpoint: E;
-  manifest: RouteManifestEntry;
+  /** The resolved frozen snapshot, preserving the target's endpoint generics. */
+  endpoint: PublishedEndpointOf<E>;
+  manifest: PublishedRouteManifestEntry;
   subject?: Subject;
   userId?: string;
   claims?: TokenClaims;
@@ -137,7 +144,7 @@ export interface ProtectedRouteContext<
 
 export type ProtectedRouteHandler<
 
-  E extends EndpointDefinition<any, any, any, any> = EndpointDefinition,
+  E extends ProtectableEndpointDefinition = EndpointDefinition,
   TResult = unknown,
 > = (
   ctx: ProtectedRouteContext<E>,
@@ -147,19 +154,24 @@ function targetLabel(target: ProtectedRouteTarget): string {
   return typeof target === 'string' ? target : `${target.method} ${target.path}`;
 }
 
-function routeKey(route: Pick<EndpointDefinition, 'method' | 'path'>): string {
+function routeKey(route: Pick<EndpointDefinitionLike, 'method' | 'path'>): string {
   return `${route.method.toUpperCase()} ${route.path}`;
 }
 
-function findEndpoint(fortress: FortressProtectRuntime, target: ProtectedRouteTarget, method?: string): EndpointDefinition {
+function findEndpoint(
+  fortress: FortressProtectRuntime,
+  target: ProtectedRouteTarget,
+  method?: string,
+): AnyPublishedEndpointDefinition {
   if (typeof target !== 'string') {
-    // The caller keeps a reference to this object and can mutate it after
-    // `protect()` has returned — flipping `bearerKind` to `'oauth'` would make
-    // an already-built handler skip its auth pipeline. `findManifestEntry`
-    // already requires the route to be registered, so when the target names a
-    // route in the validated snapshot that snapshot entry is authoritative.
+    // The caller may retain and mutate a configuration-time declaration after
+    // `protect()` returns. Resolve it to the registered frozen snapshot so the
+    // handler context and security pipeline always observe published state.
     const key = routeKey(target);
-    return fortress.endpoints.find(endpoint => routeKey(endpoint) === key) ?? target;
+    const endpoint = fortress.endpoints.find(candidate => routeKey(candidate) === key);
+    if (!endpoint)
+      throw Errors.notFound(`No endpoint found for ${key}`);
+    return endpoint;
   }
 
   const matches = fortress.endpoints.filter(endpoint => endpoint.handler === target);
@@ -184,7 +196,7 @@ function findEndpoint(fortress: FortressProtectRuntime, target: ProtectedRouteTa
   return endpoint;
 }
 
-function findManifestEntry(fortress: FortressProtectRuntime, endpoint: EndpointDefinition): RouteManifestEntry {
+function findManifestEntry(fortress: FortressProtectRuntime, endpoint: EndpointDefinitionLike): PublishedRouteManifestEntry {
   const key = routeKey(endpoint);
   const entry = fortress.manifest.find(route => `${route.method.toUpperCase()} ${route.path}` === key);
   if (!entry)
@@ -253,7 +265,7 @@ function maybeAttachAuthCookies(fortress: FortressProtectRuntime, result: Respon
  */
 export function protect<
 
-  E extends EndpointDefinition<any, any, any, any>,
+  E extends ProtectableEndpointDefinition,
   TResult = unknown,
 >(
   fortress: FortressProtectRuntime,
@@ -395,11 +407,21 @@ export function protect(
 }
 
 /** Resolve an endpoint eagerly; useful for adapter wrappers and diagnostics. */
+export function resolveProtectedEndpoint<E extends ProtectableEndpointDefinition>(
+  fortress: FortressProtectRuntime,
+  target: E,
+  method?: string,
+): PublishedEndpointOf<E>;
+export function resolveProtectedEndpoint(
+  fortress: FortressProtectRuntime,
+  target: string,
+  method?: string,
+): AnyPublishedEndpointDefinition;
 export function resolveProtectedEndpoint(
   fortress: FortressProtectRuntime,
   target: ProtectedRouteTarget,
   method?: string,
-): EndpointDefinition {
+): AnyPublishedEndpointDefinition {
   return findEndpoint(fortress, target, method);
 }
 

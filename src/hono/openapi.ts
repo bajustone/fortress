@@ -11,7 +11,7 @@
  */
 
 import type { FortressHttpRuntime } from '../core/capabilities';
-import type { EndpointDefinition } from '../core/endpoint';
+import type { EndpointDefinitionLike } from '../core/endpoint';
 import type { JSONSchema } from '../core/json-schema';
 
 /**
@@ -46,7 +46,7 @@ function toOpenAPIPath(path: string): string {
  * The schemaConverter transforms JSON Schema into whatever the target framework expects.
  */
 export function buildRouteDefinition<T>(
-  ep: EndpointDefinition,
+  ep: EndpointDefinitionLike,
   schemaConverter: SchemaConverter<T>,
 ): Record<string, unknown> {
   const openAPIPath = toOpenAPIPath(ep.path);
@@ -221,7 +221,7 @@ export function getFortressRoutes<T>(
 
 // ── Auto-handler wiring ──────���──────────────────────────────────────
 
-function createAutoHandler(fortress: Pick<FortressHttpRuntime, 'handleRequest'>, _ep: EndpointDefinition): (c: any) => Promise<Response> {
+function createAutoHandler(fortress: Pick<FortressHttpRuntime, 'handleRequest'>, _ep: EndpointDefinitionLike): (c: any) => Promise<Response> {
   return async (c: any) => {
     const raw = c.req?.raw as Request | undefined;
     if (raw)

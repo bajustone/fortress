@@ -1,5 +1,5 @@
 import type { OpenAPISpec, SpecBuilderOptions } from '../plugins/openapi/spec-builder';
-import type { ComponentSchemas, EndpointDefinition } from './endpoint';
+import type { ComponentSchemas, EndpointDefinitionLike } from './endpoint';
 import { buildOpenAPISpec } from '../plugins/openapi/spec-builder';
 
 /** Options accepted by {@link toOpenAPI}. */
@@ -33,7 +33,7 @@ export interface ToOpenAPIOptions extends Partial<SpecBuilderOptions> {
  * historical generated IDs.
  */
 export function toOpenAPI(
-  endpoints: readonly EndpointDefinition[],
+  endpoints: readonly EndpointDefinitionLike[],
   opts: ToOpenAPIOptions = {},
 ): OpenAPISpec {
   return buildOpenAPISpec([...endpoints], opts.schemas ?? {}, {

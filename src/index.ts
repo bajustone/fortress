@@ -90,8 +90,10 @@ export type { DefinedEndpoints, ValidEndpointRecord } from './core/define-endpoi
  */
 export type {
   AnyEndpointDefinition,
+  AnyPublishedEndpointDefinition,
   ComponentSchemas,
   EndpointDefinition,
+  EndpointDefinitionLike,
   EndpointInput,
   EndpointMeta,
   EndpointPermission,
@@ -108,6 +110,12 @@ export type {
   InferEndpointResponses,
   InferEndpointSuccessResponse,
   InferEndpointValidatedInput,
+  PublishedEndpointDefinition,
+  PublishedEndpointInput,
+  PublishedEndpointMeta,
+  PublishedEndpointOf,
+  PublishedEndpointPermission,
+  PublishedEndpointResponse,
   SecurityRequirement,
 } from './core/endpoint';
 /** Single error class plus the typed factory used throughout fortress. */
@@ -142,7 +150,7 @@ export type { PluginRequestContext } from './core/http/plugin-middleware';
 /** The authenticated subject resolved from a request by `protect` and the adapters. */
 export type { ResolvedPrincipal } from './core/http/principal';
 export { describeProtectedTarget, protect, resolveProtectedEndpoint } from './core/http/protect';
-export type { ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';
+export type { ProtectableEndpointDefinition, ProtectedRouteContext, ProtectedRouteHandler, ProtectedRouteTarget, ProtectOptions } from './core/http/protect';
 
 /** Permission debugging helper — "why does subject X have / not have permission Y?". */
 export { explainPermission } from './core/iam/explain';
@@ -176,7 +184,13 @@ export { detectRouteManifestDrift, hasRouteManifestDrift } from './core/manifest
 export type { DetectRouteManifestDriftOptions, RouteManifestDrift } from './core/manifest/drift';
 
 export { buildRouteManifest } from './core/manifest/route-manifest';
-export type { RouteClassification, RouteManifestEntry } from './core/manifest/route-manifest';
+export type {
+  PublishedRouteManifest,
+  PublishedRouteManifestEntry,
+  RouteClassification,
+  RouteManifestEntry,
+  RouteManifestEntryLike,
+} from './core/manifest/route-manifest';
 export { describeRouteSurface } from './core/manifest/route-surface';
 export type { RouteSurface } from './core/manifest/route-surface';
 /** Fortress schema migration metadata and runner helpers. */

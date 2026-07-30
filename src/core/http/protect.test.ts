@@ -86,7 +86,9 @@ describe('protect()', () => {
       plugins: [plugin],
     });
 
-    const handler = protect(fortress, 'createHostThing', (ctx) => {
+    let handlerEndpoint: unknown;
+    const handler = protect(fortress, ep, (ctx) => {
+      handlerEndpoint = ctx.endpoint;
       expect(ctx.manifest.classification).toBe('public');
       expect(ctx.input).toEqual({ name: 'ALPHA', draft: 'true', id: '123' });
       expect(ctx.params).toEqual({ id: '123' });
@@ -101,6 +103,9 @@ describe('protect()', () => {
 
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual({ ok: 'yes' });
+    expect(handlerEndpoint).toBe(fortress.endpoints.find(candidate => candidate.handler === ep.handler));
+    expect(handlerEndpoint).not.toBe(ep);
+    expect(Object.isFrozen(handlerEndpoint)).toBe(true);
     expect(calls).toEqual(['before-auth', 'after-auth', 'after-rbac']);
   });
 
