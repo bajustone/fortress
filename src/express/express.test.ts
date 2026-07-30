@@ -1,16 +1,17 @@
 import type { ErrorRequestHandler, Express, RequestHandler } from 'express';
 import type { PluginRequestContext } from '../core/http/plugin-middleware';
+import type { RuntimeFortressPlugin } from '../core/plugin';
 import type { ExpressMiddleware, ExpressNextFunction, ExpressRequest, ExpressResponse } from './middleware';
 import { once } from 'node:events';
 import express from 'express';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FortressError } from '../core/errors';
 import { createFortress } from '../core/fortress';
 import { assertSuccess } from '../core/types';
 import { rateLimit } from '../plugins/rate-limit';
 import { createTestAdapter } from '../testing';
 import { expressToWebRequest, mountFortress } from './handle';
-import { createAuthMiddleware, createCsrfMiddleware, createErrorHandler, createExpressMiddleware, createRbacMiddleware, getClaims, getDb, getUserId } from './middleware';
+import { createAuthMiddleware, createCsrfMiddleware, createErrorHandler, createExpressMiddleware, createExpressPluginMiddleware, createRbacMiddleware, getClaims, getDb, getUserId } from './middleware';
 
 const SECRET = 'express-test-secret-32-chars!!!x';
 
@@ -115,6 +116,68 @@ describe('express adapter', () => {
 
     expect(registeredMiddleware).toHaveLength(1);
     expect(registeredMiddleware[0]).toBeTypeOf('function');
+  });
+
+  it('auth middleware snapshots adapter wrappers and scope rules in configured order', async () => {
+    const calls: string[] = [];
+    const plugin = (name: string, resolves = false): RuntimeFortressPlugin => ({
+      name,
+      resolvePrincipal: resolves
+        ? async () => ({ subject: { type: 'USER', id: 'member' } })
+        : undefined,
+      wrapAdapter: (adapter) => {
+        calls.push(`wrap:${name}`);
+        return adapter;
+      },
+      scopeRules: async () => {
+        calls.push(`scope:${name}`);
+        return null;
+      },
+      middleware: [{
+        path: '/*',
+        position: 'before-auth',
+        handler: async (_ctx, _request, next) => {
+          calls.push(`middleware:${name}`);
+          await next();
+        },
+      }],
+    });
+    const first = plugin('first', true);
+    const second = plugin('second');
+    const lateWrapper = vi.fn(adapter => adapter);
+    const lateScope = vi.fn(async () => null);
+    const plugins: RuntimeFortressPlugin[] = [first, second];
+    const fortress = createFortress({ jwt: { key: SECRET }, database: createTestAdapter(), plugins });
+    const middleware = createAuthMiddleware(fortress);
+    const pluginMiddleware = createExpressPluginMiddleware(fortress, 'before-auth');
+    const lateMiddleware = vi.fn(async (_ctx, _request, next) => next());
+
+    plugins.splice(0, plugins.length, {
+      name: 'late',
+      resolvePrincipal: async () => ({ subject: { type: 'USER', id: 'attacker' } }),
+      wrapAdapter: lateWrapper,
+      scopeRules: lateScope,
+      middleware: [{ path: '/*', position: 'before-auth', handler: lateMiddleware }],
+    });
+
+    const req: ExpressRequest = { headers: {}, method: 'GET', path: '/user-route' };
+    let nextError: unknown;
+    await middleware(req, mockRes(), ((error?: unknown) => {
+      nextError = error;
+    }) as ExpressNextFunction);
+    expect(nextError).toBeUndefined();
+    expect(req.fortressSubject).toEqual({ type: 'USER', id: 'member' });
+    expect(calls.splice(0)).toEqual(['wrap:first', 'wrap:second']);
+
+    await req.fortressGetScopedDb?.('document');
+    expect(calls).toEqual(['scope:first', 'scope:second']);
+    expect(lateWrapper).not.toHaveBeenCalled();
+    expect(lateScope).not.toHaveBeenCalled();
+
+    calls.length = 0;
+    await pluginMiddleware(req, mockRes(), (() => {}) as ExpressNextFunction);
+    expect(calls).toEqual(['middleware:first', 'middleware:second']);
+    expect(lateMiddleware).not.toHaveBeenCalled();
   });
 
   it('auth middleware rejects missing Authorization header', async () => {

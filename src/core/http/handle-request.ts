@@ -18,6 +18,7 @@ import type { ValidatedRequestData } from '../validation';
 import type { RouteEntry } from './match';
 import { resolveCookieConfig } from '../config';
 import { Errors, FortressError } from '../errors';
+import { snapshotPluginMembership } from '../plugin-membership';
 import { isSelfManagedOAuthRoute } from '../route-assembly';
 import { coerceBySchema, validateRequest } from '../validation';
 import { clearAuthCookies, serializeAuthCookies } from './cookie-serialize';
@@ -62,7 +63,7 @@ export function buildHandleRequest(
   // Validated startup membership when constructed by `createFortress`, so a
   // later `config.plugins` mutation cannot add or remove middleware and
   // credential resolvers from the request pipeline.
-  const plugins = validatedPlugins ?? fortress.config.plugins ?? [];
+  const plugins = validatedPlugins ?? snapshotPluginMembership(fortress);
   const pluginPathPrefixes = getPluginPathPrefixes(plugins);
   const startActiveSpan = fortress.telemetry.tracer.startActiveSpan?.bind(fortress.telemetry.tracer)
     ?? (async (name, attributes, callback) => callback(

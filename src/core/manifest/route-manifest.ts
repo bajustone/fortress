@@ -4,6 +4,7 @@ import type { MiddlewareDefinition, RuntimeFortressPlugin } from '../plugin';
 import { authEndpoints } from '../auth/auth-endpoints';
 import { resolveCsrfConfig } from '../http/csrf';
 import { iamEndpoints } from '../iam/iam-endpoints';
+import { snapshotPluginMembership } from '../plugin-membership';
 import { endpointProvenance, isSelfManagedOAuthRoute } from '../route-assembly';
 
 export type RouteClassification = 'public' | 'authenticated' | 'rbac' | 'oauth-protocol' | 'default-deny';
@@ -107,7 +108,10 @@ function csrfApplies(endpoint: EndpointDefinition, fortress: Pick<FortressManife
   return true;
 }
 
-function collectEndpointOrigins(fortress: Pick<FortressManifestRuntime, 'endpoints' | 'config'>): EndpointWithOrigin[] {
+function collectEndpointOrigins(
+  fortress: Pick<FortressManifestRuntime, 'endpoints' | 'config'>,
+  plugins: readonly RuntimeFortressPlugin[],
+): EndpointWithOrigin[] {
   const origins = new Map<string, EndpointWithOrigin>();
 
   const coreAuth = Object.values(authEndpoints) as EndpointDefinition[];
@@ -120,7 +124,7 @@ function collectEndpointOrigins(fortress: Pick<FortressManifestRuntime, 'endpoin
   for (const endpoint of Object.values(fortress.config.routes ?? {}) as EndpointDefinition[]) {
     origins.set(endpointKey(endpoint), { endpoint, plugin: null });
   }
-  for (const plugin of fortress.config.plugins ?? []) {
+  for (const plugin of plugins) {
     for (const endpoint of Object.values(plugin.routes ?? {}) as EndpointDefinition[]) {
       origins.set(endpointKey(endpoint), { endpoint, plugin: plugin.name });
     }
@@ -145,8 +149,8 @@ function collectEndpointOrigins(fortress: Pick<FortressManifestRuntime, 'endpoin
 }
 
 export function buildRouteManifest(fortress: Pick<FortressManifestRuntime, 'endpoints' | 'config'>): RouteManifestEntry[] {
-  const plugins = fortress.config.plugins ?? [];
-  return collectEndpointOrigins(fortress)
+  const plugins = snapshotPluginMembership(fortress);
+  return collectEndpointOrigins(fortress, plugins)
     .map(({ endpoint, plugin }) => {
       const security = endpoint.meta?.security ?? [];
       return {

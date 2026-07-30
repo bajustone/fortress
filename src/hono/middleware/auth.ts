@@ -4,6 +4,7 @@ import type { FortressAuthRuntime } from '../../core/capabilities';
 import type { PluginContext } from '../../core/plugin';
 import type { Subject, TokenClaims } from '../../core/types';
 import { FortressError } from '../../core/errors';
+import { snapshotPluginMembership } from '../../core/plugin-membership';
 import {
   chainAdapterWrappers,
   collectScopeRules,
@@ -85,6 +86,7 @@ export type FortressContext<E extends Env = FortressEnv> = Context<E>;
 export function createAuthMiddleware(
   fortress: Pick<FortressAuthRuntime, 'resolvePrincipal' | 'config'>,
 ): MiddlewareHandler<FortressEnv> {
+  const plugins = snapshotPluginMembership(fortress);
   // Internally typed as the base FortressEnv. The middleware is variance-safe
   // when mounted on a `Hono<FortressEnv<MyApp>>()` because the augmented env's
   // Variables are a superset of FortressVariables — Hono accepts the wider
@@ -111,7 +113,6 @@ export function createAuthMiddleware(
     // Build request context for plugin adapter wrappers. The tenant is taken
     // from the verified JWT claim (set by tenancy's enrichTokenClaims), never
     // a client header — so a caller can only reach a tenant they belong to.
-    const plugins = fortress.config.plugins ?? [];
     const requestContext: Record<string, unknown> = {
       tenantId: claims?.customClaims?.tenantId,
       ipAddress:

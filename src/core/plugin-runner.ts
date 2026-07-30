@@ -8,6 +8,7 @@ import type { FortressLogger } from './observability/logger';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext, PluginMethod, RuntimeFortressPlugin } from './plugin';
 import { Errors } from './errors';
 import { canonicalizePath } from './http/match';
+import { publishPluginMembership } from './plugin-membership';
 
 /**
  * Process registered plugins and return their exposed methods.
@@ -39,6 +40,10 @@ export function processPlugins(
       return result[name];
     },
   };
+  // The context is construction-owned, unlike `config`. Binding membership to
+  // it before the first factory prevents a re-entrant createFortress(config)
+  // call from changing what later factories in this construction observe.
+  publishPluginMembership(ctx, plugins);
 
   for (const plugin of plugins) {
     initializingPlugin = plugin.name;

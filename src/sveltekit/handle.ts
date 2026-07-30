@@ -47,6 +47,7 @@ import { Errors, FortressError } from '../core/errors';
 import { errorToResponse } from '../core/http/error-response';
 import { buildRouteTable, matchRoute } from '../core/http/match';
 import { tryPluginPrincipal } from '../core/http/principal';
+import { snapshotPluginMembership } from '../core/plugin-membership';
 import {
   chainAdapterWrappers,
   collectScopeRules,
@@ -67,6 +68,7 @@ export function createSvelteKitHandle(
   options: SvelteKitAdapterOptions = {},
 ): SvelteKitHandle {
   const basePath = options.basePath ?? '';
+  const plugins = snapshotPluginMembership(fortress);
   // Pre-build the route table at startup so the handle hook can quickly
   // detect whether a path is a Fortress endpoint without re-parsing.
   const routeTable = buildRouteTable(fortress.manifest.filter(route => route.mounted));
@@ -149,7 +151,7 @@ export function createSvelteKitHandle(
       let claims: TokenClaims | undefined;
       let scopes: string[] | null | undefined;
 
-      const pluginResolved = await tryPluginPrincipal(fortress, event.request);
+      const pluginResolved = await tryPluginPrincipal(fortress, event.request, plugins);
       if (pluginResolved) {
         subject = pluginResolved.subject;
         claims = pluginResolved.claims;
@@ -199,6 +201,7 @@ export function createSvelteKitHandle(
           subject,
           claims,
           scopes,
+          plugins,
         );
       }
       else {
@@ -281,8 +284,8 @@ function populateLocals(
   subject: Subject,
   claims: TokenClaims | undefined,
   scopes: string[] | null | undefined,
+  plugins: ReturnType<typeof snapshotPluginMembership>,
 ): void {
-  const plugins = fortress.config.plugins ?? [];
   // Tenant comes from the verified JWT claim, never a client header.
   const requestContext: Record<string, unknown> = {
     tenantId: claims?.customClaims?.tenantId,

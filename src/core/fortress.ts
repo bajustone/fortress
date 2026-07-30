@@ -48,6 +48,7 @@ import { instrumentAdapter } from './observability/db-instrumentation';
 import { SILENT_LOGGER } from './observability/logger';
 import { NO_OP_TELEMETRY } from './observability/types';
 import { toOpenAPI as endpointsToOpenAPI } from './openapi';
+import { publishPluginMembership } from './plugin-membership';
 import { processPlugins } from './plugin-runner';
 import {
   assembleEndpoints,
@@ -408,6 +409,10 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     },
   };
 
+  // Publish only after every startup validation has succeeded. A global-symbol
+  // property plus the shared registry keeps the snapshot visible when an
+  // instance crosses independently loaded ESM/CJS adapter bundles.
+  publishPluginMembership(instance, plugins);
   instance.handleRequest = buildHandleRequest(instance, plugins);
 
   // Assemble the namespaced typed call tree (ADR 0001 §5). Core auth/IAM

@@ -3,6 +3,7 @@ import type { FortressPluginRuntime } from '../../core/capabilities';
 import type { PluginRequestContext } from '../../core/http/plugin-middleware';
 import type { MiddlewareDefinition } from '../../core/plugin';
 import type { FortressEnv } from './auth';
+import { snapshotPluginMembership } from '../../core/plugin-membership';
 import { executePluginMiddleware } from '../../core/plugin-runner';
 
 /**
@@ -16,7 +17,7 @@ export function createPluginMiddleware(
   fortress: Pick<FortressPluginRuntime, 'config'>,
   position: MiddlewareDefinition['position'],
 ): MiddlewareHandler<FortressEnv> {
-  const plugins = fortress.config.plugins ?? [];
+  const plugins = snapshotPluginMembership(fortress);
 
   return async (c, next) => {
     const path = c.req.path;
