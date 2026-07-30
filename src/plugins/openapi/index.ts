@@ -18,7 +18,6 @@ import { authComponentSchemas, authEndpoints } from '../../core/auth/auth-endpoi
 import { iamComponentSchemas, iamEndpoints } from '../../core/iam/iam-endpoints';
 import { definePlugin } from '../../core/plugin';
 import { snapshotPluginMembership } from '../../core/plugin-membership';
-import { HOST_ROUTES_PLUGIN_NAME } from '../../core/route-assembly';
 import { buildOpenAPISpec } from './spec-builder';
 
 export interface OpenAPIConfig {
@@ -263,17 +262,11 @@ export function openapi(config: OpenAPIConfig = {}): FortressPlugin<'openapi', O
           allEndpoints.push(...Object.values(iamEndpoints) as EndpointDefinition[]);
         }
 
-        // Add top-level host routes. These are synthesized into the
-        // Fortress instance at runtime, but ctx.config keeps the caller's
-        // original object; include them explicitly so the OpenAPI plugin sees
-        // `createFortress({ routes })` just like `fortress.toOpenAPI()` does.
-        if (ctx.config.routes) {
-          allEndpoints.push(...Object.values(ctx.config.routes) as EndpointDefinition[]);
-        }
-
-        // Add plugin endpoints (excluding our own)
+        // Add the finalized plugin route snapshots, including the synthetic
+        // host descriptor. Never re-read caller-owned `ctx.config.routes`
+        // after construction.
         for (const plugin of plugins) {
-          if (plugin.name === 'openapi' || plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
+          if (plugin.name === 'openapi' || !plugin.routes)
             continue;
           allEndpoints.push(...Object.values(plugin.routes) as EndpointDefinition[]);
         }

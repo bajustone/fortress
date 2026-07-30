@@ -8,6 +8,7 @@ import type { FortressLogger } from './observability/logger';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext, PluginMethod, RuntimeFortressPlugin } from './plugin';
 import { Errors } from './errors';
 import { canonicalizePath } from './http/match';
+import { createPluginCapabilityController, materializePluginCapabilities } from './plugin-capabilities';
 import { publishPluginMembership } from './plugin-membership';
 
 /**
@@ -21,7 +22,12 @@ export function processPlugins(
   auth?: AuthService,
   iam?: IamService,
   logger?: FortressLogger,
+  publishedPlugins?: readonly RuntimeFortressPlugin[],
 ): Record<string, Record<string, PluginMethod>> {
+  const standaloneController = publishedPlugins === undefined
+    ? createPluginCapabilityController(plugins)
+    : undefined;
+  const capabilityView = publishedPlugins ?? standaloneController!.plugins;
   const result: Record<string, Record<string, PluginMethod>> = Object.create(null) as Record<string, Record<string, PluginMethod>>;
   let initializingPlugin: string | undefined;
   const ctx: PluginContext = {
@@ -43,28 +49,35 @@ export function processPlugins(
   // The context is construction-owned, unlike `config`. Binding membership to
   // it before the first factory prevents a re-entrant createFortress(config)
   // call from changing what later factories in this construction observe.
-  publishPluginMembership(ctx, plugins);
+  publishPluginMembership(ctx, capabilityView);
 
-  for (const plugin of plugins) {
-    initializingPlugin = plugin.name;
-    const methods = plugin.methods ? plugin.methods(ctx) : Object.create(null) as object;
-    if (methods === null || typeof methods !== 'object')
-      throw Errors.badRequest(`Plugin "${plugin.name}" methods factory must return an object`);
-    for (const key of Reflect.ownKeys(methods)) {
-      if (typeof Reflect.get(methods, key) !== 'function') {
-        throw Errors.badRequest(
-          `Plugin "${plugin.name}" method "${String(key)}" must be callable`,
-        );
+  try {
+    for (const plugin of plugins) {
+      initializingPlugin = plugin.name;
+      const methods = plugin.methods ? plugin.methods(ctx) : Object.create(null) as object;
+      if (methods === null || typeof methods !== 'object')
+        throw Errors.badRequest(`Plugin "${plugin.name}" methods factory must return an object`);
+      for (const key of Reflect.ownKeys(methods)) {
+        if (typeof Reflect.get(methods, key) !== 'function') {
+          throw Errors.badRequest(
+            `Plugin "${plugin.name}" method "${String(key)}" must be callable`,
+          );
+        }
       }
+      // Keep each surface's own properties and `this` identity intact. Dispatch
+      // performs own-property checks, so inherited names can never become route
+      // handlers accidentally.
+      result[plugin.name] = methods as Record<string, PluginMethod>;
     }
-    // Keep each surface's own properties and `this` identity intact. Dispatch
-    // performs own-property checks, so inherited names can never become route
-    // handlers accidentally.
-    result[plugin.name] = methods as Record<string, PluginMethod>;
+    initializingPlugin = undefined;
+    if (standaloneController)
+      standaloneController.finalize(materializePluginCapabilities(plugins));
+    return result;
   }
-  initializingPlugin = undefined;
-
-  return result;
+  catch (error) {
+    standaloneController?.fail();
+    throw error;
+  }
 }
 
 /**
@@ -290,8 +303,12 @@ export async function executePluginMiddleware(
   request: PluginRequestContext,
 ): Promise<void> {
   const canonicalRequestPath = canonicalizePath(requestPath);
+  const requestMethod = request.request.method.toUpperCase();
   const matching = collectPluginMiddleware(plugins, position)
-    .filter(({ middleware: mw }) => middlewarePathToRegex(mw.path).test(canonicalRequestPath));
+    .filter(({ middleware: mw }) =>
+      middlewarePathToRegex(mw.path).test(canonicalRequestPath)
+      && (mw.methods === undefined || mw.methods.some(method => method.toUpperCase() === requestMethod)),
+    );
 
   if (matching.length === 0)
     return;

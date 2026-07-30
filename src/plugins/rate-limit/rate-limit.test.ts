@@ -1,6 +1,7 @@
 import type { Fortress } from '../../core/fortress';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
+import { endpoint } from '../../core/schema-builder';
 import { createTestAdapter } from '../../testing';
 import { normalizeAccountIdentifier, rateLimit } from './index';
 import { createMemoryStore } from './memory-store';
@@ -380,6 +381,10 @@ describe('rate-limit plugin', () => {
         ],
       });
 
+      expect(fortress.manifest.find(entry => entry.path === '/auth/login')?.rateLimited).toBe(true);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/register')?.rateLimited).toBe(true);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/refresh')?.rateLimited).toBe(true);
+
       await fortress.auth.createUser({
         email: 'r@example.com',
         name: 'R',
@@ -506,19 +511,21 @@ describe('rate-limit plugin', () => {
         oauthToken: { maxPerIp: 100, windowSeconds: 60 },
         apiKeyIssue: { maxPerIp: 10, windowSeconds: 3600 },
       });
-      const paths = (plugin.middleware ?? []).map(m => ({ path: m.path, pos: m.position }));
-      expect(paths).toContainEqual({ path: '/oauth/token', pos: 'before-auth' });
-      expect(paths).toContainEqual({ path: '/api-key/keys', pos: 'after-auth' });
+      const paths = (plugin.middleware ?? []).map(m => ({ path: m.path, pos: m.position, methods: m.methods }));
+      expect(paths).toContainEqual({ path: '/oauth/token', pos: 'before-auth', methods: ['POST'] });
+      expect(paths).toContainEqual({ path: '/api-key/keys', pos: 'after-auth', methods: ['POST'] });
     });
 
     it('registers middleware for user-defined paths', () => {
+      const configuredMethods = ['post'];
       const plugin = rateLimit({
         rules: { strict: { maxPerIp: 5, windowSeconds: 60 } },
         paths: [
-          { match: '/webhooks/*', methods: ['POST'], rule: 'strict' },
+          { match: '/webhooks/*', methods: configuredMethods, rule: 'strict' },
           { match: '/public/*', position: 'before-auth', rule: { maxPerIp: 100, windowSeconds: 60 } },
         ],
       });
+      configuredMethods[0] = 'GET';
       const middleware = plugin.middleware;
       if (middleware === undefined)
         throw new Error('Expected configured path middleware');
@@ -528,7 +535,9 @@ describe('rate-limit plugin', () => {
       if (webhookMiddleware === undefined || publicMiddleware === undefined)
         throw new Error('Expected both configured path middleware entries');
       expect(webhookMiddleware.path).toBe('/webhooks/*');
+      expect(webhookMiddleware.methods).toEqual(['POST']);
       expect(publicMiddleware.path).toBe('/public/*');
+      expect(publicMiddleware.methods).toBeUndefined();
     });
 
     it('fails closed when invoked without a valid PluginRequestContext', async () => {
@@ -553,9 +562,77 @@ describe('rate-limit plugin', () => {
       });
       expect(plugin.middleware).toBeUndefined();
     });
+
+    it('emits only hook-based protections whose resolved configs are active', () => {
+      const defaults = rateLimit();
+      expect(Object.keys(defaults.hooks ?? {})).toEqual(['beforeLogin', 'beforeRegister']);
+
+      const disabled = rateLimit({
+        login: { disabled: true },
+        register: { disabled: true },
+      });
+      expect(disabled.hooks).toBeUndefined();
+
+      const refreshOnly = rateLimit({
+        login: { disabled: true },
+        register: { disabled: true },
+        refresh: { maxPerIp: 5, windowSeconds: 60 },
+      });
+      expect(Object.keys(refreshOnly.hooks ?? {})).toEqual(['beforeTokenRefresh']);
+    });
   });
 
   describe('end-to-end via fortress.handleRequest', () => {
+    it('keeps the captured POST filter in manifest/runtime parity after exposed methods mutate', async () => {
+      const increment = vi.fn(async () => ({ count: 1, resetAt: Date.now() + 60_000 }));
+      const getShared = endpoint('GET', '/shared')
+        .summary('Get shared')
+        .security('none')
+        .handler('getShared')
+        .build();
+      const postShared = endpoint('POST', '/shared')
+        .summary('Post shared')
+        .security('none')
+        .handler('postShared')
+        .build();
+      const limiter = rateLimit({
+        rules: { postOnly: { maxPerIp: 5, windowSeconds: 60 } },
+        paths: [{ match: '/shared', methods: ['POST'], rule: 'postOnly' }],
+        store: { increment, get: async () => null },
+      });
+      const fortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [
+          limiter,
+          {
+            name: 'shared-surface',
+            routes: { getShared, postShared },
+            methods: () => ({
+              getShared: async () => ({ method: 'GET' }),
+              postShared: async () => ({ method: 'POST' }),
+            }),
+          },
+        ],
+      });
+
+      limiter.middleware?.[0]?.methods?.splice(0, 1, 'GET');
+      expect(limiter.middleware?.[0]?.methods).toEqual(['GET']);
+
+      const sharedManifest = fortress.manifest.filter(entry => entry.path === '/shared');
+      expect(sharedManifest.find(entry => entry.method === 'GET')?.rateLimited).toBe(false);
+      expect(sharedManifest.find(entry => entry.method === 'POST')?.rateLimited).toBe(true);
+
+      await fortress.runPluginMiddleware('before-auth', {
+        request: new Request('http://localhost/shared', { method: 'GET' }),
+      });
+      expect(increment).not.toHaveBeenCalled();
+      await fortress.runPluginMiddleware('before-auth', {
+        request: new Request('http://localhost/shared', { method: 'POST' }),
+      });
+      expect(increment).toHaveBeenCalledOnce();
+    });
+
     it('oauthToken middleware rate-limits POST /oauth/token through handleRequest', async () => {
       // Configure a tight limit and drive requests through handleRequest.
       // We intentionally don't mount the oauth plugin — the before-auth
@@ -676,6 +753,36 @@ describe('rate-limit plugin', () => {
   });
 
   describe('gate-block defaults (login/register always-on)', () => {
+    it('keeps disabled login and omitted refresh inactive in manifest and runtime while register defaults on', async () => {
+      const increment = vi.fn(async () => ({ count: 1, resetAt: Date.now() + 60_000 }));
+      const fortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [rateLimit({
+          login: { disabled: true },
+          store: { increment, get: async () => null },
+        })],
+      });
+
+      expect(fortress.manifest.find(entry => entry.path === '/auth/login')?.rateLimited).toBe(false);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/register')?.rateLimited).toBe(true);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/refresh')?.rateLimited).toBe(false);
+
+      await fortress.auth.createUser({
+        email: 'manifest-parity@example.com',
+        name: 'Manifest Parity',
+        password: 'valid-password-123456',
+      });
+      expect(increment).toHaveBeenCalledWith('register:ip:unknown', 3_600_000);
+
+      increment.mockClear();
+      const login = await fortress.auth.login('manifest-parity@example.com', 'valid-password-123456');
+      if (login.status !== 'success')
+        throw new Error('expected successful login');
+      await fortress.auth.refresh(login.refreshToken);
+      expect(increment).not.toHaveBeenCalled();
+    });
+
     it('login is rate-limited with defaults even when the config block is omitted', async () => {
       // Registering the plugin with NO login config must still enforce the
       // default per-IP login limit (10 / 15min). Guards against the 0.0.37
@@ -685,6 +792,10 @@ describe('rate-limit plugin', () => {
         database: createTestAdapter(),
         plugins: [rateLimit({})],
       });
+
+      expect(fortress.manifest.find(entry => entry.path === '/auth/login')?.rateLimited).toBe(true);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/register')?.rateLimited).toBe(true);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/refresh')?.rateLimited).toBe(false);
 
       await fortress.auth.createUser({
         email: 'default@example.com',
@@ -717,6 +828,10 @@ describe('rate-limit plugin', () => {
         database: createTestAdapter(),
         plugins: [rateLimit({ login: { disabled: true } })],
       });
+
+      expect(fortress.manifest.find(entry => entry.path === '/auth/login')?.rateLimited).toBe(false);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/register')?.rateLimited).toBe(true);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/refresh')?.rateLimited).toBe(false);
 
       await fortress.auth.createUser({
         email: 'off@example.com',
@@ -766,6 +881,10 @@ describe('rate-limit plugin', () => {
         database: createTestAdapter(),
         plugins: [rateLimit({ register: { disabled: true } })],
       });
+
+      expect(fortress.manifest.find(entry => entry.path === '/auth/login')?.rateLimited).toBe(true);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/register')?.rateLimited).toBe(false);
+      expect(fortress.manifest.find(entry => entry.path === '/auth/refresh')?.rateLimited).toBe(false);
 
       // Well past the default register limit — should all succeed.
       // Each createUser does a full Argon2id hash, so the loop dominates the

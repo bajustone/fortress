@@ -49,7 +49,24 @@ type CallableMethodSurface<TMethods extends object> = {
   [K in keyof TMethods]: TMethods[K] extends PluginMethod ? TMethods[K] : never;
 };
 
-/** Plugin fields shared by concrete and runtime-widened definitions. */
+/**
+ * Plugin fields shared by concrete and runtime-widened definitions.
+ *
+ * Descriptor slots are construction-time declarations. Fortress invokes every
+ * `methods()` factory first, then captures the final names, routes, hooks,
+ * middleware, and callable capability identities into an internal validated
+ * view. Reassigning, adding, removing, or reordering those caller-owned slots
+ * after `createFortress()` returns does not alter a running instance, and
+ * Fortress never freezes or rewrites the caller's objects.
+ *
+ * Captured functions and their closures are intentionally live. Each callable
+ * is invoked with the original descriptor/hook/middleware object as its
+ * receiver for compatibility. Plugins may keep counters, caches, key material,
+ * feature state, and other runtime state behind that receiver or closure;
+ * changing such retained state remains observable. The fixed boundary is
+ * descriptor/container membership and callable-slot identity, not arbitrary
+ * objects captured plugin code chooses to read.
+ */
 export interface FortressPluginDefinition<
   TName extends string,
   TRoutes extends PluginRoutes | undefined,
@@ -467,5 +484,7 @@ export interface PluginRouteContext {
 export interface MiddlewareDefinition {
   path: string;
   position: 'before-auth' | 'after-auth' | 'after-rbac';
+  /** Optional HTTP-method filter. Matching is case-insensitive; authoring arrays remain mutable. */
+  methods?: string[];
   handler: (ctx: PluginContext, request: PluginRequestContext, next: () => Promise<void>) => Promise<void>;
 }

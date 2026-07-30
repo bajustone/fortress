@@ -1,5 +1,6 @@
 import type { FortressConfig } from './config';
 import type { RuntimeFortressPlugin } from './plugin';
+import { isPluginCapabilityView, snapshotPluginCapabilities } from './plugin-capabilities';
 
 /**
  * Process-wide registry key. Package consumers can load the ESM core and a CJS
@@ -36,7 +37,7 @@ function membershipRegistry(): WeakMap<object, PluginMembershipRecord> {
 }
 
 function immutableCopy(plugins: readonly RuntimeFortressPlugin[]): PluginMembership {
-  return Object.freeze([...plugins]);
+  return isPluginCapabilityView(plugins) ? plugins : snapshotPluginCapabilities(plugins);
 }
 
 /**
@@ -52,10 +53,10 @@ export function publishPluginMembership(
 ): void {
   if (!Array.isArray(plugins))
     throw new TypeError('Fortress plugin membership must be an array');
-  // `processPlugins()` is also an internal entry point. Copy a mutable input
-  // rather than freezing an array its caller still owns; createFortress's
-  // normalized array is already frozen and remains the single instance copy.
-  const snapshot = Object.isFrozen(plugins) ? plugins : immutableCopy(plugins);
+  // `processPlugins()` is also an internal entry point. Materialize mutable,
+  // merely array-frozen, or caller-marked inputs. Only a module-local WeakSet
+  // can prove a capability view created by this module instance.
+  const snapshot = immutableCopy(plugins);
   const registry = membershipRegistry();
   // Define first: if the carrier is non-extensible or already published, no
   // registry-only proof is left behind. WeakMap#set cannot fail for `carrier`

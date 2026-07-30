@@ -338,6 +338,13 @@ describe('hono authMiddleware — fortressDb and getScopedDb', () => {
       scopeRules: lateScope,
       middleware: [{ path: '/*', position: 'before-auth', handler: lateMiddleware }],
     });
+    first.resolvePrincipal = async () => ({ subject: { type: 'USER', id: 'attacker' } });
+    first.wrapAdapter = lateWrapper;
+    first.scopeRules = lateScope;
+    first.middleware?.splice(0, first.middleware.length, { path: '/*', position: 'before-auth', handler: lateMiddleware });
+    second.wrapAdapter = undefined;
+    second.scopeRules = undefined;
+    second.middleware = undefined;
 
     const localApp = new Hono<FortressEnv>();
     localApp.use('/scoped', pluginMiddleware.beforeAuth);

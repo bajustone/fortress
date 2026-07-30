@@ -40,7 +40,9 @@ describe('internal plugin membership boundary', () => {
     const carrier = {};
     const configured = Object.freeze([{ name: 'configured' }]);
     publishPluginMembership(carrier, configured);
-    expect(snapshotPluginMembership(carrier)).toBe(configured);
+    const published = snapshotPluginMembership(carrier);
+    expect(published).not.toBe(configured);
+    expect(published.map(plugin => plugin.name)).toEqual(['configured']);
 
     const registry = Reflect.get(
       globalThis,
@@ -106,6 +108,114 @@ describe('internal plugin membership boundary', () => {
     Object.defineProperty(forged, membershipKey, { get: ownGetter });
     expect(() => snapshotPluginMembership(forged)).toThrow('snapshot is invalid');
     expect(ownGetter).not.toHaveBeenCalled();
+  });
+
+  it.each(['mutable', 'frozen'] as const)('does not trust a caller-forged capability marker on a $s array', async (kind) => {
+    const original = vi.fn(async () => null);
+    const replacement = vi.fn(async () => ({ subject: { type: 'USER' as const, id: 'late' } }));
+    const definition: RuntimeFortressPlugin = { name: 'forged-view', resolvePrincipal: original };
+    const configured: RuntimeFortressPlugin[] = [definition];
+    Object.defineProperty(
+      configured,
+      Symbol.for('@bajustone/fortress/internal/plugin-capability-view/v1'),
+      { value: true },
+    );
+    if (kind === 'frozen')
+      Object.freeze(configured);
+    const carrier = {};
+
+    publishPluginMembership(carrier, configured);
+    const snapshot = snapshotPluginMembership(carrier);
+    definition.resolvePrincipal = replacement;
+    const result = await snapshot[0]!.resolvePrincipal!(new Request('https://example.test'), {
+      db: createTestAdapter(),
+      config: { jwt: { key: SECRET }, database: createTestAdapter() },
+    });
+
+    expect(result).toBeNull();
+    expect(original).toHaveBeenCalledOnce();
+    expect(replacement).not.toHaveBeenCalled();
+    expect(snapshot).not.toBe(configured);
+  });
+
+  it('snapshots fallback descriptor capabilities on first use', async () => {
+    const original = vi.fn(async () => null);
+    const replacement = vi.fn(async () => ({ subject: { type: 'USER' as const, id: 'late' } }));
+    const middleware = vi.fn(async (_ctx: unknown, _request: unknown, next: () => Promise<void>) => next());
+    const definition: RuntimeFortressPlugin = {
+      name: 'fixture',
+      resolvePrincipal: original,
+      middleware: [{ path: '/*', position: 'before-auth', handler: middleware }],
+    };
+    const fixture = {
+      config: {
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [definition],
+      } satisfies FortressConfig,
+    };
+
+    const snapshot = snapshotPluginMembership(fixture);
+    definition.resolvePrincipal = replacement;
+    definition.middleware![0]!.path = '/late';
+    definition.middleware!.splice(0);
+
+    const result = await snapshot[0]!.resolvePrincipal!(new Request('https://example.test'), {
+      db: createTestAdapter(),
+      config: fixture.config,
+    });
+    expect(result).toBeNull();
+    expect(original).toHaveBeenCalledOnce();
+    expect(replacement).not.toHaveBeenCalled();
+    expect(snapshot[0]!.middleware?.[0]?.path).toBe('/*');
+    expect(Object.isFrozen(snapshot[0])).toBe(true);
+    expect(Object.isFrozen(snapshot[0]!.middleware)).toBe(true);
+    expect(Object.isFrozen(definition)).toBe(false);
+    expect(Object.isFrozen(definition.middleware)).toBe(false);
+  });
+
+  it('copies retained startup metadata without freezing caller inputs', () => {
+    const dependencyMethods = ['read'];
+    const dependencies = [{ plugin: 'provider', methods: dependencyMethods }];
+    const overrideNames = ['login'];
+    const constraintFields = ['tenantId'];
+    const constraints = [{ type: 'index' as const, fields: constraintFields }];
+    const fields = { tenantId: { type: 'string' as const, required: true } };
+    const models = [{ name: 'document', fields, constraints }];
+    const definition: RuntimeFortressPlugin = {
+      name: 'metadata',
+      dependencies,
+      coreOverrides: overrideNames,
+      models,
+    };
+    const fixture = {
+      config: {
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [definition],
+      } satisfies FortressConfig,
+    };
+
+    const snapshot = snapshotPluginMembership(fixture)[0]!;
+    dependencyMethods[0] = 'late';
+    dependencies.splice(0);
+    overrideNames[0] = 'late';
+    constraintFields[0] = 'late';
+    constraints.splice(0);
+    fields.tenantId.required = false;
+    models.splice(0);
+
+    expect(snapshot.dependencies).toEqual([{ plugin: 'provider', methods: ['read'] }]);
+    expect(snapshot.coreOverrides).toEqual(['login']);
+    expect(snapshot.models).toEqual([expect.objectContaining({
+      name: 'document',
+      fields: { tenantId: { type: 'string', required: true } },
+      constraints: [{ type: 'index', fields: ['tenantId'] }],
+    })]);
+    expect(Object.isFrozen(definition)).toBe(false);
+    expect(Object.isFrozen(dependencies)).toBe(false);
+    expect(Object.isFrozen(overrideNames)).toBe(false);
+    expect(Object.isFrozen(models)).toBe(false);
   });
 
   it('survives independently loaded module copies without mutating caller inputs', async () => {

@@ -1,4 +1,5 @@
 import type { Fortress } from '../fortress';
+import type { RuntimeFortressPlugin } from '../plugin';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTestAdapter } from '../../testing';
@@ -233,6 +234,72 @@ describe('plugin hooks', () => {
       await fortress.auth.login('hook-user@example.com', 'password-123456');
 
       expect(order).toEqual(['first', 'second']);
+    });
+  });
+
+  describe('post-construction descriptor mutation', () => {
+    it('invokes a captured hook with its original hook-container receiver', async () => {
+      const calls: string[] = [];
+      const hooks = {
+        label: 'original-hooks',
+        async beforeLogin(this: { label: string }) {
+          calls.push(this.label);
+        },
+      };
+      const plugin = { name: 'hook-receiver', hooks } as unknown as RuntimeFortressPlugin;
+      fortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [plugin],
+      });
+      hooks.beforeLogin = async () => {
+        calls.push('late');
+      };
+
+      await seedUser();
+      await fortress.auth.login('hook-user@example.com', 'password-123456');
+      expect(calls).toEqual(['original-hooks']);
+    });
+
+    it('keeps every auth lifecycle hook captured at construction', async () => {
+      const original = {
+        beforeLogin: vi.fn(async () => {}),
+        beforeTokenRefresh: vi.fn(async () => {}),
+        beforeLogout: vi.fn(async () => {}),
+        onLoginFailure: vi.fn(async () => {}),
+        afterLogin: vi.fn(async (_ctx, result) => result),
+        afterTokenRefresh: vi.fn(async (_ctx, result) => result),
+      } satisfies NonNullable<RuntimeFortressPlugin['hooks']>;
+      const captured = { ...original };
+      const plugin: RuntimeFortressPlugin = { name: 'snapshot-hooks', hooks: original };
+      fortress = createFortress({
+        jwt: { key: SECRET },
+        database: createTestAdapter(),
+        plugins: [plugin],
+      });
+      const late = vi.fn(async () => {});
+      plugin.hooks = {
+        beforeLogin: late,
+        beforeTokenRefresh: late,
+        beforeLogout: late,
+        onLoginFailure: late,
+      };
+      original.beforeLogin = late;
+
+      await seedUser();
+      await expect(fortress.auth.login('hook-user@example.com', 'wrong-password')).rejects.toThrow('Invalid credentials');
+      const login = await fortress.auth.login('hook-user@example.com', 'password-123456');
+      assertSuccess(login);
+      const refreshed = await fortress.auth.refresh(login.refreshToken);
+      await fortress.auth.logout(refreshed.refreshToken);
+
+      expect(captured.beforeLogin).toHaveBeenCalledTimes(2);
+      expect(captured.onLoginFailure).toHaveBeenCalledOnce();
+      expect(captured.afterLogin).toHaveBeenCalledOnce();
+      expect(captured.beforeTokenRefresh).toHaveBeenCalledOnce();
+      expect(captured.afterTokenRefresh).toHaveBeenCalledOnce();
+      expect(captured.beforeLogout).toHaveBeenCalledOnce();
+      expect(late).not.toHaveBeenCalled();
     });
   });
 

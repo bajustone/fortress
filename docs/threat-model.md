@@ -19,6 +19,7 @@ Scope: Fortress core auth/IAM, HTTP pipeline, adapters, and first-party plugins.
 | HTTP request ingress | Fortress pipeline / adapter wrapper | Browser, API clients, reverse proxies | route manifest, CSRF, auth, RBAC, validation |
 | JWT verification | Fortress `verifyToken` with pinned algorithm/issuer | Client-supplied bearer/cookie token | HS256 pinning, issuer check, reserved-claim stripping |
 | Plugin principal resolution | Registered plugin code | API key/OAuth/mTLS-like credential values | first non-null resolver wins, RBAC still applies |
+| Plugin descriptor publication | Post-factory validated capability snapshot | Caller-owned mutable descriptors and containers | construction-fixed callable identities and copied/frozen internal envelopes |
 | Database adapter | Fortress services + configured adapter | User-controlled fields | schema validation, parameterized adapter queries, migrations |
 | Tenant schema switching | Verified JWT custom claim + transaction-pinned adapter | Headers / route body tenant hints | no `X-Tenant-Code`, numeric schema ids, bound `set_config` |
 | OAuth redirects | Registered clients and redirect URI list | Browser redirect parameters | exact/loopback URI matching, issuer identification, PKCE |
@@ -122,6 +123,23 @@ Residual risks:
 - API-key scopes are credential-level narrowing for declared IAM permissions, not standalone route permissions. Sensitive routes must declare `.permission(...)`; an authenticated-only route accepts any successfully resolved subject without an IAM decision.
 - Route security metadata does not add credential-provenance tagging beyond the configured principal resolver pipeline.
 - Hosts should rate-limit key usage and rotate/revoke leaked keys quickly.
+
+### Plugin descriptor mutation
+
+Threats:
+- A caller adds or replaces a principal resolver, middleware handler, auth hook, adapter wrapper, or scope rule after startup validation.
+- Mutation of middleware/hook arrays changes ordering or makes the manifest disagree with the request pipeline.
+- Framework adapters or built-in plugins observe a different plugin view from core request handling.
+
+Mitigations:
+- Plugin factories run first; Fortress then materializes and validates known descriptor fields exactly once into a construction-owned capability view.
+- Membership, descriptors, hook/middleware envelopes, and ordering are fixed internally without freezing or rewriting caller-owned values.
+- Core, auth services, Express, Hono, SvelteKit, manifest generation, OpenAPI, and Admin share the same published view, including provenance-bearing endpoint snapshots.
+- Present callable slots and nested middleware/post-auth-gate definitions fail construction when malformed.
+
+Residual risks:
+- Captured plugin code is trusted. Callables retain their original descriptor/hook/middleware receiver for compatibility; state on that receiver, inside a closure, or in any external object the callable chooses to consult remains dynamic.
+- The object returned by `methods()` has a separate identity/dispatch compatibility boundary tracked independently; replacing the descriptor's `methods` factory after construction is already ineffective.
 
 ### Tenancy and data isolation
 
