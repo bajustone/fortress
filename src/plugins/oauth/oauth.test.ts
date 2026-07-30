@@ -7,6 +7,19 @@ import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
 import { generateCodeChallenge, generateCodeVerifier, matchRedirectUri, oauth, toOidcUserinfo } from './index';
 
+function requireFirst<T>(values: readonly T[], description: string): T {
+  const value = values[0];
+  if (value === undefined)
+    throw new Error(`Expected ${description}, received no values`);
+  return value;
+}
+
+function oauthError(reason: unknown): string | undefined {
+  if (typeof reason !== 'object' || reason === null || !('oauthError' in reason))
+    return undefined;
+  return typeof reason.oauthError === 'string' ? reason.oauthError : undefined;
+}
+
 describe('oauth plugin', () => {
   let db: DatabaseAdapter;
   let methods: OAuthMethods;
@@ -1447,7 +1460,7 @@ describe('oauth plugin', () => {
     it('id_token claims: iss, sub (string), aud, iat, exp, auth_time', async () => {
       const { idToken, clientId } = await issueIdTokenViaCode();
       const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      const key = await importJWK(jwks.keys[0], 'RS256');
+      const key = await importJWK(requireFirst(jwks.keys, 'published JWKS signing key'), 'RS256');
       const { payload } = await jwtVerify(idToken, key);
 
       expect(payload.iss).toBe('https://auth.example.com');
@@ -1463,7 +1476,7 @@ describe('oauth plugin', () => {
       const nonce = 'rp-supplied-nonce-12345';
       const { idToken } = await issueIdTokenViaCode({ nonce });
       const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      const key = await importJWK(jwks.keys[0], 'RS256');
+      const key = await importJWK(requireFirst(jwks.keys, 'published JWKS signing key'), 'RS256');
       const { payload } = await jwtVerify(idToken, key);
       expect(payload.nonce).toBe(nonce);
     });
@@ -1471,7 +1484,7 @@ describe('oauth plugin', () => {
     it('omits nonce claim when authorize request had no nonce', async () => {
       const { idToken } = await issueIdTokenViaCode();
       const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      const key = await importJWK(jwks.keys[0], 'RS256');
+      const key = await importJWK(requireFirst(jwks.keys, 'published JWKS signing key'), 'RS256');
       const { payload } = await jwtVerify(idToken, key);
       expect(payload.nonce).toBeUndefined();
     });
@@ -1479,7 +1492,7 @@ describe('oauth plugin', () => {
     it('id_token includes scope-gated email/name claims', async () => {
       const { idToken } = await issueIdTokenViaCode({ scope: 'openid email profile' });
       const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      const key = await importJWK(jwks.keys[0], 'RS256');
+      const key = await importJWK(requireFirst(jwks.keys, 'published JWKS signing key'), 'RS256');
       const { payload } = await jwtVerify(idToken, key);
       expect(payload.email).toBe('alice@example.com');
       expect(payload.name).toBe('Alice');
@@ -1489,7 +1502,7 @@ describe('oauth plugin', () => {
     it('id_token omits email and profile claims for openid-only scope', async () => {
       const { idToken } = await issueIdTokenViaCode({ scope: 'openid' });
       const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      const key = await importJWK(jwks.keys[0], 'RS256');
+      const key = await importJWK(requireFirst(jwks.keys, 'published JWKS signing key'), 'RS256');
       const { payload } = await jwtVerify(idToken, key);
       expect(payload.email).toBeUndefined();
       expect(payload.email_verified).toBeUndefined();
@@ -1500,7 +1513,7 @@ describe('oauth plugin', () => {
     it('id_token omits profile claims when only openid+email scope', async () => {
       const { idToken } = await issueIdTokenViaCode({ scope: 'openid email' });
       const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      const key = await importJWK(jwks.keys[0], 'RS256');
+      const key = await importJWK(requireFirst(jwks.keys, 'published JWKS signing key'), 'RS256');
       const { payload } = await jwtVerify(idToken, key);
       expect(payload.email).toBe('alice@example.com');
       expect(payload.name).toBeUndefined();
@@ -1548,7 +1561,7 @@ describe('oauth plugin', () => {
 
     it('jWKS keys carry kid + alg + use=sig', async () => {
       const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      const key = jwks.keys[0];
+      const key = requireFirst(jwks.keys, 'published JWKS signing key');
       expect(key.kid).toBeTruthy();
       expect(key.alg).toBe('RS256');
       expect(key.use).toBe('sig');
@@ -1578,7 +1591,7 @@ describe('oauth plugin', () => {
       // RFC 7517-style verification: simulate openid-client's behaviour by
       // building a JWKS resolver from our endpoint output.
       const jwks = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      const key = await importJWK(jwks.keys[0], 'RS256');
+      const key = await importJWK(requireFirst(jwks.keys, 'published JWKS signing key'), 'RS256');
       const { payload } = await jwtVerify(tokens.idToken, key, {
         issuer: 'https://auth.example.com',
         audience: client.clientId,
@@ -1595,7 +1608,7 @@ describe('oauth plugin', () => {
     it('jWKS persists across calls (same kid)', async () => {
       const a = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
       const b = await methods.handleJwksRequest() as { keys: import('jose').JWK[] };
-      expect(a.keys[0].kid).toBe(b.keys[0].kid);
+      expect(requireFirst(a.keys, 'first persisted JWKS key').kid).toBe(requireFirst(b.keys, 'first persisted JWKS key').kid);
     });
   });
 
@@ -1674,15 +1687,15 @@ describe('oauth plugin', () => {
       const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
       expect(fulfilled).toHaveLength(1);
       expect(rejected).toHaveLength(1);
-      expect((rejected[0].reason as { oauthError?: string }).oauthError).toBe('invalid_grant');
-      expect(String(rejected[0].reason)).toMatch(/reuse/i);
+      expect(oauthError(requireFirst(rejected, 'rejected concurrent OAuth result').reason)).toBe('invalid_grant');
+      expect(String(requireFirst(rejected, 'rejected concurrent OAuth result').reason)).toMatch(/reuse/i);
 
       // Strict replay semantics: the duplicate loser kills the token family,
       // including the winner's newly issued refresh token.
       await expect(methods.refreshTokenGrant({
         clientId,
         clientSecret,
-        refreshToken: fulfilled[0].value.refreshToken,
+        refreshToken: requireFirst(fulfilled, 'fulfilled concurrent refresh result').value.refreshToken,
       })).rejects.toThrow('Invalid refresh token');
     });
 
@@ -2086,7 +2099,7 @@ describe('oauth plugin', () => {
       const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
       expect(fulfilled).toBe(1);
       expect(rejected.length).toBe(1);
-      expect((rejected[0].reason as { oauthError?: string }).oauthError).toBe('invalid_grant');
+      expect(oauthError(requireFirst(rejected, 'rejected concurrent OAuth result').reason)).toBe('invalid_grant');
     });
   });
 
@@ -2113,9 +2126,9 @@ describe('oauth plugin', () => {
       const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
       expect(fulfilled).toHaveLength(1);
       expect(rejected).toHaveLength(1);
-      expect(String(rejected[0].reason)).toMatch(/not found/i);
+      expect(String(requireFirst(rejected, 'rejected concurrent OAuth result').reason)).toMatch(/not found/i);
 
-      const url = new URL(fulfilled[0].value.redirectUrl);
+      const url = new URL(requireFirst(fulfilled, 'fulfilled concurrent OAuth result').value.redirectUrl);
       expect(url.searchParams.get('code')).toBeTruthy();
       const codeCount = await db.count({
         model: 'oauth_authorization_code',
@@ -2275,7 +2288,12 @@ describe('oauth plugin', () => {
         paths: Record<string, { post: { responses?: Record<string, unknown> } }>;
       };
       for (const path of ['/oauth/introspect', '/oauth/revoke']) {
-        expect(Object.keys(spec.paths[path].post.responses ?? {}).sort()).toEqual(['200', '400', '401']);
+        const operation = spec.paths[path];
+        if (operation === undefined)
+          throw new Error(`Expected OpenAPI path ${path}`);
+        if (operation.post.responses === undefined)
+          throw new Error(`Expected OpenAPI responses for ${path}`);
+        expect(Object.keys(operation.post.responses).sort()).toEqual(['200', '400', '401']);
       }
     });
   });

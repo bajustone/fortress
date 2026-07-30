@@ -519,9 +519,16 @@ describe('rate-limit plugin', () => {
           { match: '/public/*', position: 'before-auth', rule: { maxPerIp: 100, windowSeconds: 60 } },
         ],
       });
-      expect(plugin.middleware).toHaveLength(2);
-      expect(plugin.middleware?.[0].path).toBe('/webhooks/*');
-      expect(plugin.middleware?.[1].path).toBe('/public/*');
+      const middleware = plugin.middleware;
+      if (middleware === undefined)
+        throw new Error('Expected configured path middleware');
+      expect(middleware).toHaveLength(2);
+      const webhookMiddleware = middleware[0];
+      const publicMiddleware = middleware[1];
+      if (webhookMiddleware === undefined || publicMiddleware === undefined)
+        throw new Error('Expected both configured path middleware entries');
+      expect(webhookMiddleware.path).toBe('/webhooks/*');
+      expect(publicMiddleware.path).toBe('/public/*');
     });
 
     it('fails closed when invoked without a valid PluginRequestContext', async () => {

@@ -8,6 +8,12 @@ import { createTestAdapter } from '../../testing';
 import { auditLog } from './index';
 
 const SECRET = 'audit-log-test-secret-32chars!!x';
+
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 
 describe('audit-log plugin', () => {
@@ -283,10 +289,10 @@ describe('audit-log plugin', () => {
 
   describe('hash chain', () => {
     it('declares string identifiers consistently with the public entry type', () => {
-      const model = auditLog().models?.find(candidate => candidate.name === 'audit_log');
-      expect(model?.fields.id.type).toBe('string');
-      expect(model?.fields.actorId?.type).toBe('string');
-      expect(model?.fields.targetId?.type).toBe('string');
+      const model = requireValue(auditLog().models?.find(candidate => candidate.name === 'audit_log'), 'audit-log model');
+      expect(requireValue(model.fields.id, 'audit-log ID field').type).toBe('string');
+      expect(requireValue(model.fields.actorId, 'audit-log actor ID field').type).toBe('string');
+      expect(requireValue(model.fields.targetId, 'audit-log target ID field').type).toBe('string');
     });
 
     it('creates previousHash entries when enabled', async () => {
@@ -310,12 +316,15 @@ describe('audit-log plugin', () => {
 
       // First entry should have no previousHash
       const sortedEntries = [...entries].sort((a, b) => a.id.localeCompare(b.id));
-      expect(sortedEntries[0].previousHash).toBeNull();
+      const firstEntry = requireValue(sortedEntries[0], 'first audit-chain entry');
+      const secondEntry = requireValue(sortedEntries[1], 'second audit-chain entry');
+      expect(firstEntry.previousHash).toBeNull();
 
-      // Second entry should have a previousHash linking to the first
-      expect(sortedEntries[1].previousHash).toBeTruthy();
-      expect(typeof sortedEntries[1].previousHash).toBe('string');
-      expect(sortedEntries[1].previousHash!.length).toBe(64); // SHA-256 hex is 64 chars
+      // Second entry should have a previousHash linking to the first.
+      expect(secondEntry.previousHash).toBeTruthy();
+      if (typeof secondEntry.previousHash !== 'string')
+        throw new Error('Expected a previous hash for the second audit-chain entry');
+      expect(secondEntry.previousHash.length).toBe(64); // SHA-256 hex is 64 chars
     });
 
     it('serializes concurrent writes into one unbranched chain', async () => {
@@ -746,7 +755,7 @@ describe('audit-log plugin', () => {
 
       // Should only have LOGIN_SUCCESS, not REGISTER
       expect(entries.length).toBe(1);
-      expect(entries[0].eventType).toBe('LOGIN_SUCCESS');
+      expect(requireValue(entries[0], 'filtered login audit entry').eventType).toBe('LOGIN_SUCCESS');
     });
   });
 });

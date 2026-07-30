@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { createTestAdapter } from '../../testing';
 import { dataIsolation } from './index';
 
+function requireValue<T>(value: T | null | undefined, description: string): T {
+  if (value == null)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  return requireValue(values[index], description);
+}
+
 describe('data-isolation plugin', () => {
   it('generates scope rules for matching models', async () => {
     const db = createTestAdapter();
@@ -70,8 +80,8 @@ describe('data-isolation plugin', () => {
     const ctx: PluginContext = { db, config: { jwt: { key: 'x'.repeat(32) }, database: db } };
     const rules = await plugin.scopeRules!('1', 'anything', ctx);
 
-    expect(rules).not.toBeNull();
-    expect(rules!.filters[0].value).toBe(1);
+    const resolvedRules = requireValue(rules, 'resolved tenant scope rules');
+    expect(requireAt(resolvedRules.filters, 0, 'tenant scope filter').value).toBe(1);
   });
 
   it.each([null, undefined])('denies by default when an applicable scope resolves to %s', async (value) => {
@@ -127,8 +137,9 @@ describe('data-isolation plugin', () => {
         return plugin.scopeRules!('1', 'sale', ctx);
       });
 
-      expect(rules!.filters).toHaveLength(1);
-      expect(rules!.filters[0].field).toBe('orgId');
+      const remainingRules = requireValue(rules, 'remaining organization scope rules');
+      expect(remainingRules.filters).toHaveLength(1);
+      expect(requireAt(remainingRules.filters, 0, 'remaining organization scope filter').field).toBe('orgId');
     });
 
     it('withoutScope explicitly bypasses an unresolved named scope', async () => {
@@ -191,7 +202,10 @@ describe('data-isolation plugin', () => {
       const [flowAResult, flowBResult] = await Promise.all([flowA, flowB]);
       expect(flowAResult).toBe('a-done');
       // Flow B is in its own async context — still scoped.
-      expect((flowBResult as { filters: { field: string }[] }).filters[0].field).toBe('orgId');
+      const flowBRules = requireValue(flowBResult, 'scoped concurrent flow result');
+      if (flowBRules === null || typeof flowBRules !== 'object' || !('filters' in flowBRules) || !Array.isArray(flowBRules.filters))
+        throw new Error('Expected scoped concurrent flow rules');
+      expect(requireAt(flowBRules.filters, 0, 'concurrent organization scope filter').field).toBe('orgId');
     });
   });
 });

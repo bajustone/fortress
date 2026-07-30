@@ -24,6 +24,15 @@ function userSubject(id: string): Subject {
   return { type: 'USER', id };
 }
 
+function requireExactlyOne<T>(values: readonly T[], description: string): T {
+  if (values.length !== 1)
+    throw new Error(`Expected exactly one ${description}, received ${values.length}`);
+  const value = values[0];
+  if (value === undefined)
+    throw new Error(`Expected exactly one ${description}, received no value`);
+  return value;
+}
+
 async function setup(config: ApiKeyConfig = { prefix: 'test', maxKeysPerSubject: 3 }): Promise<{
   fortress: Fortress<any>;
   methods: ApiKeyMethods;
@@ -114,15 +123,14 @@ describe('api-key plugin — programmatic methods', () => {
       await methods.revokeKey({ subject: userSubject(userId), id });
 
       const keys = await methods.listKeys({ subject: userSubject(userId) });
-      expect(keys).toHaveLength(1);
-      expect(keys[0].name).toBe('Key B');
+      expect(requireExactlyOne(keys, 'non-revoked API key').name).toBe('Key B');
     });
 
     it('never exposes the full key or hash', async () => {
       await methods.createKey({ subject: userSubject(userId), name: 'Secret Key' });
 
       const keys = await methods.listKeys({ subject: userSubject(userId) });
-      const key = keys[0] as unknown as Record<string, unknown>;
+      const key = requireExactlyOne(keys, 'redacted API key');
 
       expect(key.keyPrefix).toBeTruthy();
       expect(key).not.toHaveProperty('keyHash');
@@ -136,10 +144,8 @@ describe('api-key plugin — programmatic methods', () => {
       const aliceKeys = await methods.listKeys({ subject: userSubject(userId) });
       const bobKeys = await methods.listKeys({ subject: userSubject(otherUserId) });
 
-      expect(aliceKeys).toHaveLength(1);
-      expect(aliceKeys[0].name).toBe('Alice Key');
-      expect(bobKeys).toHaveLength(1);
-      expect(bobKeys[0].name).toBe('Bob Key');
+      expect(requireExactlyOne(aliceKeys, 'Alice API key').name).toBe('Alice Key');
+      expect(requireExactlyOne(bobKeys, 'Bob API key').name).toBe('Bob Key');
     });
   });
 
@@ -204,12 +210,12 @@ describe('api-key plugin — programmatic methods', () => {
       const { key } = await methods.createKey({ subject: userSubject(userId), name: 'Track Usage' });
 
       let keys = await methods.listKeys({ subject: userSubject(userId) });
-      expect(keys[0].lastUsedAt).toBeNull();
+      expect(requireExactlyOne(keys, 'tracked API key').lastUsedAt).toBeNull();
 
       await methods.resolveKey(key);
 
       keys = await methods.listKeys({ subject: userSubject(userId) });
-      expect(keys[0].lastUsedAt).toBeTruthy();
+      expect(requireExactlyOne(keys, 'tracked API key').lastUsedAt).toBeTruthy();
     });
 
     it('returns null for an unknown key', async () => {

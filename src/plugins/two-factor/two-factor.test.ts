@@ -8,6 +8,13 @@ import { generateTOTP, twoFactor } from './index';
 const SECRET = 'two-factor-test-secret-at-least32';
 const TOTP_ENCRYPTION_KEY = 't'.repeat(32);
 
+function requireBackupCode(codes: readonly string[], description: string): string {
+  const code = codes[0];
+  if (code === undefined)
+    throw new Error(`Expected a backup code for ${description}`);
+  return code;
+}
+
 interface TwoFactorMethods {
   enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
   confirmSetup: (userId: string, code: string, meta?: { userAgent?: string; trustedDeviceToken?: string; rememberDevice?: boolean }) => Promise<{ verified: true; trustedDeviceToken?: string }>;
@@ -109,7 +116,7 @@ describe('two-factor plugin', () => {
 
     it('accepts a backup code', async () => {
       const setup = await methods.enable(userId);
-      const backupCode = setup.backupCodes[0];
+      const backupCode = requireBackupCode(setup.backupCodes, 'two-factor setup');
 
       const result = await methods.confirmSetup(userId, backupCode);
       expect(result.verified).toBe(true);
@@ -117,7 +124,7 @@ describe('two-factor plugin', () => {
 
     it('rejects already-used backup code', async () => {
       const setup = await methods.enable(userId);
-      const backupCode = setup.backupCodes[0];
+      const backupCode = requireBackupCode(setup.backupCodes, 'two-factor setup');
 
       await methods.confirmSetup(userId, backupCode);
       await expect(methods.confirmSetup(userId, backupCode)).rejects.toThrow('Invalid two-factor code');
@@ -158,7 +165,7 @@ describe('two-factor plugin', () => {
       if (result.status !== 'pending' || !result.pending)
         throw new Error('Expected a two-factor continuation');
 
-      const completed = await methods.verify(result.pending.continuationToken, setup.backupCodes[0]);
+      const completed = await methods.verify(result.pending.continuationToken, requireBackupCode(setup.backupCodes, 'post-auth two-factor verification'));
       expect(completed).toMatchObject({ status: 'success', method: 'two-factor' });
       expect(await fortress.config.database.count({ model: 'refresh_token' })).toBe(1);
     });

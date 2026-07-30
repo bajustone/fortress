@@ -9,6 +9,15 @@ import { socialLogin } from './index';
 // We test the social-login plugin methods directly (not through createFortress)
 // since handleCallback requires mocking fetch for OAuth token exchange.
 
+function requireExactlyOne<T>(values: readonly T[], description: string): T {
+  if (values.length !== 1)
+    throw new Error(`Expected exactly one ${description}, received ${values.length}`);
+  const value = values[0];
+  if (value === undefined)
+    throw new Error(`Expected exactly one ${description}, received no value`);
+  return value;
+}
+
 interface SocialLoginMethods {
   getAuthorizationUrl: (provider: string, redirectUri: string) => Promise<{ url: string; state: string; codeVerifier: string; nonce: string }>;
   handleCallback: (provider: string, code: string, redirectUri: string, codeVerifier: string, returnedState: string, storedState: string, storedNonce: string) => Promise<{ user: FortressUser; profile: ProviderProfile; isNewUser: boolean }>;
@@ -441,9 +450,9 @@ describe('social-login plugin', () => {
       });
 
       const accounts = await methods.getLinkedAccounts(user.id);
-      expect(accounts).toHaveLength(1);
-      expect(accounts[0].provider).toBe('google');
-      expect(accounts[0].providerAccountId).toBe('google-123');
+      const account = requireExactlyOne(accounts, 'linked Google account');
+      expect(account.provider).toBe('google');
+      expect(account.providerAccountId).toBe('google-123');
     });
 
     it('returns empty array for user with no linked accounts', async () => {
@@ -475,7 +484,8 @@ describe('social-login plugin', () => {
         .setExpirationTime('5m')
         .sign(privateKey);
       const parts = idToken.split('.');
-      parts[2] = `${parts[2].startsWith('a') ? 'b' : 'a'}${parts[2].slice(1)}`;
+      const signature = requireExactlyOne(parts.slice(2), 'OIDC token signature');
+      parts[2] = `${signature.startsWith('a') ? 'b' : 'a'}${signature.slice(1)}`;
       const tampered = parts.join('.');
 
       vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
