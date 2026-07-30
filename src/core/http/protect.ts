@@ -20,6 +20,7 @@ import type { RouteManifestEntry } from '../manifest/route-manifest';
 import type { Subject, TokenClaims } from '../types';
 import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
+import { isSelfManagedOAuthRoute } from '../route-assembly';
 import { coerceBySchema, validateRequest } from '../validation';
 import { enforceCsrf, resolveCsrfConfig } from './csrf';
 import { errorToResponse, withCookies } from './error-response';
@@ -292,7 +293,7 @@ export function protect(
       let userId: string | undefined;
       let claims: TokenClaims | undefined;
       let scopes: string[] | null | undefined;
-      const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
+      const selfManagedBearer = isSelfManagedOAuthRoute(endpoint);
 
       if (!selfManagedBearer) {
         const pluginResolved = await tryPluginPrincipal(fortress, pipelineRequest);

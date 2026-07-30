@@ -67,6 +67,104 @@ export function endpointOwner(endpoint: EndpointDefinition): EndpointOwner | und
   return endpointProvenanceRegistry.get(endpoint)?.owner;
 }
 
+/** Owner every self-managed OAuth protocol route must be declared by. */
+const OAUTH_PLUGIN_NAME = 'oauth';
+
+/** What the approval table records about one OAuth protocol route. */
+interface OAuthProtocolRoute {
+  /** The handler that must serve this route. */
+  readonly handler: string;
+  /**
+   * Whether this handler verifies HTTP Basic *client* credentials, per
+   * RFC 6749 §2.3.1, RFC 7662, and RFC 7009.
+   *
+   * Owning protocol security and verifying Basic are not the same property.
+   * `authorize`, `userinfo`, discovery, and JWKS manage their own OAuth
+   * protocol security (including intentional public access for discovery and
+   * JWKS), but none checks a Basic credential — declaring one of them
+   * `security: ['basic']` would falsely claim Basic protection; discovery and
+   * JWKS would remain intentionally public. Only the three routes
+   * flagged here may carry Basic without an IAM permission.
+   */
+  readonly verifiesBasicClientAuth: boolean;
+}
+
+/**
+ * The only routes allowed to manage their own OAuth protocol security, keyed
+ * by `METHOD path`.
+ *
+ * `bearerKind: 'oauth'` means the handler owns that security — authentication
+ * or intentional public access — and bypasses Fortress principal resolution,
+ * the bearer requirement, RBAC, and body validation. Matching on path alone
+ * let any plugin claim the exemption by declaring a route at one of these
+ * paths, so the owner and handler are part of the contract too.
+ */
+const OAUTH_SELF_MANAGED_ROUTES = new Map<string, OAuthProtocolRoute>([
+  ['GET /oauth/authorize', { handler: 'handleAuthorizeRequest', verifiesBasicClientAuth: false }],
+  ['POST /oauth/token', { handler: 'handleTokenRequest', verifiesBasicClientAuth: true }],
+  ['POST /oauth/introspect', { handler: 'handleIntrospectRequest', verifiesBasicClientAuth: true }],
+  ['POST /oauth/revoke', { handler: 'handleRevokeRequest', verifiesBasicClientAuth: true }],
+  ['GET /oauth/userinfo', { handler: 'handleUserInfoRequest', verifiesBasicClientAuth: false }],
+  ['GET /oauth/.well-known/openid-configuration', { handler: 'handleDiscovery', verifiesBasicClientAuth: false }],
+  ['GET /oauth/.well-known/jwks.json', { handler: 'handleJwksRequest', verifiesBasicClientAuth: false }],
+]);
+
+/** The approved protocol route for this endpoint's owner, method, path, and handler. */
+function approvedOAuthProtocolRoute(endpoint: EndpointDefinition): OAuthProtocolRoute | undefined {
+  if (endpoint.meta?.bearerKind !== 'oauth')
+    return undefined;
+  if (endpointProvenance(endpoint)?.owner !== OAUTH_PLUGIN_NAME)
+    return undefined;
+  const approved = OAUTH_SELF_MANAGED_ROUTES.get(`${endpoint.method.toUpperCase()} ${endpoint.path}`);
+  return approved?.handler === endpoint.handler ? approved : undefined;
+}
+
+/**
+ * Whether an endpoint is an approved OAuth route that verifies Basic *client*
+ * credentials in its own handler, and may therefore declare `security:
+ * ['basic']` without an IAM permission.
+ *
+ * Strictly narrower than {@link isApprovedOAuthSelfManagedRoute}: it holds for
+ * `POST /oauth/token`, `/oauth/introspect`, and `/oauth/revoke` only.
+ */
+function isApprovedOAuthBasicClientAuthRoute(endpoint: EndpointDefinition): boolean {
+  return approvedOAuthProtocolRoute(endpoint)?.verifiesBasicClientAuth === true;
+}
+
+/**
+ * Whether an assembled endpoint is an approved self-managed OAuth protocol
+ * route: it declares `bearerKind: 'oauth'`, the validated snapshot
+ * records `oauth` as its owner, and its canonical method/path maps to exactly
+ * the handler expected to serve it.
+ *
+ * Requires provenance, so it answers `false` for anything that did not come
+ * from {@link assembleEndpoints}. Construction validation uses this.
+ */
+export function isApprovedOAuthSelfManagedRoute(endpoint: EndpointDefinition): boolean {
+  return approvedOAuthProtocolRoute(endpoint) !== undefined;
+}
+
+/**
+ * Whether a route should manage its own OAuth protocol security at request time.
+ *
+ * Every site that acts on `bearerKind: 'oauth'` — skipping auth, classifying
+ * the manifest, excluding a callable, selecting the OAuth parser — goes
+ * through this so they cannot drift apart.
+ *
+ * A provenance-bearing endpoint must be strictly approved. An endpoint with no
+ * provenance never went through {@link assembleEndpoints}, so there is nothing
+ * to check it against and its declared metadata is honoured as before. That
+ * fallback deliberately trusts a caller-supplied fake or capability runtime;
+ * every real Fortress snapshot carries provenance and takes the strict path.
+ */
+export function isSelfManagedOAuthRoute(endpoint: EndpointDefinition): boolean {
+  if (endpoint.meta?.bearerKind !== 'oauth')
+    return false;
+  if (endpointProvenance(endpoint) === undefined)
+    return true;
+  return isApprovedOAuthSelfManagedRoute(endpoint);
+}
+
 /**
  * Clone an endpoint's routing, auth, and response envelope, then freeze it.
  *
@@ -463,29 +561,49 @@ function mergeEndpoints(
 }
 
 /**
- * Fail fast on `security: ['none']` + `permission` collisions, and on
- * `bearerKind: 'oauth'` outside the OAuth protocol routes.
+ * Fail fast on incompatible security metadata and forged OAuth exemptions.
  *
- * The first two are mutually exclusive: an unauthenticated route has no
- * subject to evaluate the permission against, so default-deny RBAC would
- * always reject it. `bearerKind: 'oauth'` means "this handler
- * self-authenticates" and skips the normal plugin/JWT/RBAC/JSON-validation
- * pipeline, so any other route trying to use it is almost certainly a latent
- * auth bypass.
+ * An unauthenticated route has no subject to evaluate a permission against,
+ * so default-deny RBAC would always reject it. `bearerKind: 'oauth'` means the
+ * handler owns its OAuth protocol security (authentication or intentional
+ * public access) and bypasses the normal plugin/JWT/RBAC/JSON-validation
+ * pipeline, so any unapproved route trying to use it is a latent auth bypass.
  */
 function assertRouteSecurityInvariants(endpoints: readonly EndpointDefinition[]): void {
-  const oauthSelfAuthAllowlist = new Set([
-    'GET /oauth/authorize',
-    'POST /oauth/token',
-    'POST /oauth/introspect',
-    'POST /oauth/revoke',
-    'GET /oauth/userinfo',
-    'GET /oauth/.well-known/openid-configuration',
-    'GET /oauth/.well-known/jwks.json',
-  ]);
-
   for (const ep of endpoints) {
     const security = ep.meta?.security ?? [];
+
+    // 1. Anything claiming the self-managed security exemption must be a
+    //    genuine OAuth protocol route. Checked first: a forged route typically
+    //    also carries Basic, and the forgery is the more specific diagnosis.
+    if (ep.meta?.bearerKind === 'oauth' && !isApprovedOAuthSelfManagedRoute(ep)) {
+      const owner = endpointProvenance(ep)?.owner;
+      const expectedHandler = OAUTH_SELF_MANAGED_ROUTES.get(`${ep.method.toUpperCase()} ${ep.path}`)?.handler;
+      throw Errors.badRequest(
+        `Endpoint ${ep.method} ${ep.path} sets bearerKind:'oauth' but is not an approved self-managed OAuth protocol route `
+        + `(owner=${typeof owner === 'string' ? `'${owner}'` : 'core'}; expected owner '${OAUTH_PLUGIN_NAME}'`
+        + `${expectedHandler ? ` with handler '${expectedHandler}', got '${ep.handler}'` : ' and an approved method/path'}).`,
+        { details: { method: ep.method, path: ep.path, handler: ep.handler, expectedHandler } },
+      );
+    }
+
+    // 2. An approved self-managed route skips principal resolution and
+    //    Fortress RBAC outright, so a permission it declares would never be
+    //    evaluated — and would otherwise satisfy the Basic rule below, which
+    //    is how a permission could make discovery publicly readable while
+    //    looking protected.
+    if (isApprovedOAuthSelfManagedRoute(ep) && ep.meta?.permission) {
+      throw Errors.badRequest(
+        `Endpoint ${ep.method} ${ep.path} is a self-managed OAuth protocol route and cannot declare a permission `
+        + `(${ep.meta.permission.resource}:${ep.meta.permission.action}). These handlers own their OAuth protocol security `
+        + `(authentication or intentional public access) and bypass the Fortress principal/RBAC pipeline, so the permission `
+        + `would never be evaluated.`,
+        { details: { method: ep.method, path: ep.path, handler: ep.handler } },
+      );
+    }
+
+    // 3. An unauthenticated route has no subject to evaluate a permission
+    //    against, so default-deny RBAC would reject every request.
     if (security.includes('none') && ep.meta?.permission) {
       throw Errors.badRequest(
         `Endpoint ${ep.method} ${ep.path} declares security:['none'] AND a permission `
@@ -494,9 +612,17 @@ function assertRouteSecurityInvariants(endpoints: readonly EndpointDefinition[])
       );
     }
 
-    if (ep.meta?.bearerKind === 'oauth' && !oauthSelfAuthAllowlist.has(`${ep.method} ${ep.path}`)) {
+    // 4. Fortress ships no Basic credential verifier, so Basic metadata alone
+    //    does not require a credential and could leave a route unauthenticated.
+    //    Only the OAuth client-auth endpoints are exempt, because their handlers
+    //    verify those credentials.
+    if (security.includes('basic') && !ep.meta?.permission && !isApprovedOAuthBasicClientAuthRoute(ep)) {
       throw Errors.badRequest(
-        `Endpoint ${ep.method} ${ep.path} sets bearerKind:'oauth' but is not an approved self-auth OAuth protocol route.`,
+        `Endpoint ${ep.method} ${ep.path} declares security:['basic'] without a permission. `
+        + `Fortress ships no Basic credential verifier, so this route does not require Basic credentials and could be served unauthenticated. `
+        + `Add a permission and resolve a subject for it (a credential plugin's resolvePrincipal can supply one), `
+        + `use security:['bearer'], or use security:['none'] only if the route is intentionally public.`,
+        { details: { method: ep.method, path: ep.path, handler: ep.handler } },
       );
     }
   }

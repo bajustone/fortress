@@ -87,7 +87,8 @@ export interface PublicRouteCheckOptions {
    * Additional classifications considered "public-equivalent" for the
    * purposes of the allow-list. Defaults to `['public', 'oauth-protocol']`
    * because OAuth protocol endpoints are reachable without a Fortress
-   * session by design (the handler self-authenticates).
+   * session by design: their handlers manage protocol security, including
+   * intentional public access for discovery and JWKS.
    */
   classifications?: RouteClassification[];
 }
