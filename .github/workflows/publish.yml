@@ -43,7 +43,8 @@ jobs:
       - run: bun run typecheck:scripts
       - run: bun run test
       - run: bun run test:integration
-      - run: bun run check:consumer-contract
+      - name: Source, ESM, and CJS consumer contracts
+        run: bun run check:consumer-contract
       - run: bun run check:declarations:ts50
       - run: bun run check:repository-publication-policy
       - run: bun run check:package-cli
@@ -85,7 +86,9 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
-      - run: bunx tsup
+      # npm publish runs prepublishOnly after the version-exists guard. That
+      # lifecycle owns the clean tsup build plus ESM/CJS postbuild contracts,
+      # so building here would be redundant (and would run even on a skip).
       - name: Install npm with trusted-publishing support
         run: npm install --global npm@latest
       - name: Publish to npm

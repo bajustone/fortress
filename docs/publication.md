@@ -40,13 +40,16 @@ Registry dry runs are treated as the authority rather than trusting manifest
 patterns alone:
 
 ```sh
-bun run check:npm-publication   # build + npm pack manifest + installed CLI smoke
+bun run check:npm-publication   # clean build + ESM/CJS contracts + npm pack/CLI smoke
 bun run check:jsr-publication   # pinned Deno/JSR selected-file manifest
 bun run check:publication-files # repository policy + migration parity + both registries
 ```
 
 The checks require every declared entrypoint, reject test/repository debris,
-assert npm includes the CLI, and assert JSR does not. Migration expectations
+assert npm includes the CLI, and assert JSR does not. Built-package validation
+compiles both the `import.types` (`.d.ts`) and `require.types` (`.d.cts`)
+consumer contracts after one clean tsup build; strict export parity binds all
+four conditional leaves to the same tsup entry. Migration expectations
 come from the migration definitions rather than the `migrations/` tree, so a
 dropped migration cannot regenerate into a self-consistent short set. CI,
 release validation, and publication workflows run the same checks.

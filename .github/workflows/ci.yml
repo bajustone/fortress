@@ -48,7 +48,7 @@ jobs:
         run: bun run check:migration-artifacts
       - name: Exports parity (jsr.json ⇄ package.json ⇄ tsup)
         run: bun run check:exports
-      - name: Source and built-package consumer contract
+      - name: Source, ESM, and CJS consumer contracts
         run: bun run check:consumer-contract
       - name: TypeScript-branch publication policy
         run: bun run check:repository-publication-policy
