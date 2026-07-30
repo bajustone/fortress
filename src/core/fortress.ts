@@ -240,6 +240,8 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
       continue;
     const methods = pluginMethods[plugin.name];
+    if (methods === undefined)
+      throw Errors.badRequest(`Plugin "${plugin.name}" did not provide a method map`);
     for (const endpoint of Object.values(plugin.routes)) {
       if (!Object.hasOwn(methods, endpoint.handler) || typeof methods[endpoint.handler] !== 'function') {
         throw Errors.badRequest(
@@ -299,10 +301,17 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     }
   });
 
-  // Wire IAM events → audit log if the plugin is registered
-  if (Object.hasOwn(pluginMethods, 'audit-log') && Object.hasOwn(pluginMethods['audit-log'], 'logCustomEvent')) {
-    const logCustomEvent = pluginMethods['audit-log'].logCustomEvent as (event: IamEvent) => Promise<void>;
-    iam.addIamObserver(event => logCustomEvent(event));
+  // Wire IAM events → audit log if the plugin is registered.
+  if (Object.hasOwn(pluginMethods, 'audit-log')) {
+    const auditMethods = pluginMethods['audit-log'];
+    if (auditMethods === undefined)
+      throw Errors.badRequest('Plugin "audit-log" did not provide a method map');
+    if (Object.hasOwn(auditMethods, 'logCustomEvent')) {
+      const logCustomEvent = auditMethods.logCustomEvent;
+      if (typeof logCustomEvent !== 'function')
+        throw Errors.badRequest('Plugin "audit-log" method "logCustomEvent" must be callable');
+      iam.addIamObserver(event => logCustomEvent(event));
+    }
   }
 
   // Resolve cookie config once at startup so all HTTP entry points share names.

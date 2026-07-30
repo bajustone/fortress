@@ -725,6 +725,17 @@ describe('createSvelteKitHandle: api-key on user routes', () => {
     expect(locals.fortress?.subject).toBeUndefined();
   });
 
+  it('rejects a later malformed route-map key during handle construction', () => {
+    const fortress = makeFortress();
+
+    expect(() => createSvelteKitHandle(fortress, {
+      routeMap: {
+        'GET /valid': { resource: 'valid', action: 'read' },
+        'GET': { resource: 'invalid', action: 'read' },
+      },
+    })).toThrow('Invalid route map pattern \'GET\'');
+  });
+
   it('route-map RBAC allows a SERVICE_ACCOUNT with the required permission', async () => {
     const { fortress, saKey } = await setupWithApiKey();
     const handle = createSvelteKitHandle(fortress, {

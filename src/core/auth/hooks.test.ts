@@ -34,7 +34,7 @@ describe('plugin hooks', () => {
         password: 'password-123456',
       });
       expect(user.email).toBe('é.hook@example.com');
-      expect((await fortress.auth.getLoginIdentifiers(user.id))[0].value).toBe('é.hook@example.com');
+      expect(requireAt(await fortress.auth.getLoginIdentifiers(user.id), 0, 'email login identifier').value).toBe('é.hook@example.com');
     });
   });
 
@@ -249,3 +249,9 @@ describe('plugin hooks', () => {
     });
   });
 });
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

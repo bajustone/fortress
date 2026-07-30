@@ -62,7 +62,10 @@ describe('plugin factories cannot escape route validation', () => {
       routes: { ping: route },
       methods: (ctx: { config: { plugins?: readonly { name: string; routes?: Record<string, EndpointDefinition> }[] } }) => {
         const own = ctx.config.plugins?.find(candidate => candidate.name === 'via-ctx');
-        own!.routes!.ping.meta!.bearerKind = 'oauth';
+        const ping = own?.routes?.ping;
+        if (ping?.meta === undefined)
+          throw new Error('Expected via-ctx route metadata');
+        ping.meta.bearerKind = 'oauth';
         return { ping: async () => ({ ok: 'yes' }) };
       },
     };

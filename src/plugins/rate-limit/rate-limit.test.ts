@@ -311,6 +311,25 @@ describe('rate-limit plugin', () => {
       const result = await store.increment('key', 60_000);
       expect(result.resetAt).toBeGreaterThanOrEqual(before + 60_000);
     });
+
+    it('uses the actual oldest active timestamp and excludes the exact window boundary', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const store = createMemoryStore();
+        await store.increment('boundary', 1_000);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(await store.increment('boundary', 1_000)).toEqual({ count: 2, resetAt: 1_000 });
+
+        // The rate window is strict (`>`): timestamp 0 expires exactly at
+        // t=1000, leaving only the t=999 hit and its real reset time.
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await store.get('boundary')).toEqual({ count: 1, resetAt: 1_999 });
+      }
+      finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('custom store', () => {
@@ -500,9 +519,16 @@ describe('rate-limit plugin', () => {
           { match: '/public/*', position: 'before-auth', rule: { maxPerIp: 100, windowSeconds: 60 } },
         ],
       });
-      expect(plugin.middleware).toHaveLength(2);
-      expect(plugin.middleware?.[0].path).toBe('/webhooks/*');
-      expect(plugin.middleware?.[1].path).toBe('/public/*');
+      const middleware = plugin.middleware;
+      if (middleware === undefined)
+        throw new Error('Expected configured path middleware');
+      expect(middleware).toHaveLength(2);
+      const webhookMiddleware = middleware[0];
+      const publicMiddleware = middleware[1];
+      if (webhookMiddleware === undefined || publicMiddleware === undefined)
+        throw new Error('Expected both configured path middleware entries');
+      expect(webhookMiddleware.path).toBe('/webhooks/*');
+      expect(publicMiddleware.path).toBe('/public/*');
     });
 
     it('fails closed when invoked without a valid PluginRequestContext', async () => {

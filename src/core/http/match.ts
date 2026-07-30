@@ -139,6 +139,13 @@ export function matchRoute<T extends RouteLike>(
     for (let i = 0; i < route.segments.length; i++) {
       const routeSeg = route.segments[i];
       const pathSeg = pathSegments[i];
+      // Equal segment counts prove both lookups exist. Keep the guard explicit
+      // so malformed route tables fail as a non-match rather than decoding an
+      // undefined parameter or changing static/param/wildcard precedence.
+      if (routeSeg === undefined || pathSeg === undefined) {
+        matched = false;
+        break;
+      }
       if (routeSeg.startsWith(':')) {
         params[routeSeg.slice(1)] = decodeURIComponent(pathSeg);
       }

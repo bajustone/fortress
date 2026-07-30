@@ -7,6 +7,16 @@ import { tenancy } from './index';
 
 const SECRET = 'tenancy-test-secret-at-least-32!!';
 
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requirePlugin<T>(plugins: readonly T[] | undefined): T {
+  return requireValue(plugins?.[0], 'installed tenancy plugin');
+}
+
 function createFakePgAdapter(calls: Array<{ sql: string; params?: unknown[]; op?: string }>): DatabaseAdapter {
   const adapter: DatabaseAdapter = {
     dialect: 'pg',
@@ -103,7 +113,7 @@ describe('tenancy plugin', () => {
 
       const tenants = await methods.getUserTenants(userId);
       expect(tenants).toHaveLength(1);
-      expect(tenants[0].taxId).toBe('acme-001');
+      expect(requireValue(tenants[0], 'tenant membership').taxId).toBe('acme-001');
     });
 
     it('assigns exactly one default under concurrent first memberships', async () => {
@@ -166,8 +176,8 @@ describe('tenancy plugin', () => {
       await methods.switchTenant({ taxId: 'beta-001', userId });
 
       // Verify via enrichTokenClaims
-      const plugin = fortress.config.plugins![0];
-      const claims = await plugin.enrichTokenClaims!(userId, {
+      const plugin = requirePlugin(fortress.config.plugins);
+      const claims = await requireValue(plugin.enrichTokenClaims, 'tenancy claim enricher')(userId, {
         db: fortress.config.database,
         config: fortress.config,
       });
@@ -177,7 +187,7 @@ describe('tenancy plugin', () => {
       // Reverse direction exercises the partial-unique-index case where the
       // lower-id target row may be visited before the current default.
       await methods.switchTenant({ taxId: 'acme-001', userId });
-      const reversedClaims = await plugin.enrichTokenClaims!(userId, {
+      const reversedClaims = await requireValue(plugin.enrichTokenClaims, 'tenancy claim enricher')(userId, {
         db: fortress.config.database,
         config: fortress.config,
       });
@@ -261,37 +271,37 @@ describe('tenancy plugin', () => {
 
   describe('wrapAdapter', () => {
     it('is a pass-through on non-pg adapters even with a tenant claim', () => {
-      const plugin = fortress.config.plugins![0];
+      const plugin = requirePlugin(fortress.config.plugins);
       const base = fortress.config.database;
-      const wrapped = plugin.wrapAdapter!(base, { tenantId: '1' });
+      const wrapped = requireValue(plugin.wrapAdapter, 'tenancy adapter wrapper')(base, { tenantId: '1' });
       // SQLite test adapter: no schema switching, returns the adapter unchanged.
       expect(wrapped).toBe(base);
     });
 
     it('is a pass-through when no tenant claim is present', () => {
-      const plugin = fortress.config.plugins![0];
+      const plugin = requirePlugin(fortress.config.plugins);
       const base = fortress.config.database;
-      expect(plugin.wrapAdapter!(base, {})).toBe(base);
+      expect(requireValue(plugin.wrapAdapter, 'tenancy adapter wrapper')(base, {})).toBe(base);
     });
 
     it('rejects an invalid tenant claim instead of interpolating it into search_path', () => {
-      const plugin = fortress.config.plugins![0];
+      const plugin = requirePlugin(fortress.config.plugins);
       const base = createFakePgAdapter([]);
-      expect(() => plugin.wrapAdapter!(base, { tenantId: '1;DROP SCHEMA public' })).toThrow('Invalid tenant claim');
+      expect(() => requireValue(plugin.wrapAdapter, 'tenancy adapter wrapper')(base, { tenantId: '1;DROP SCHEMA public' })).toThrow('Invalid tenant claim');
     });
 
     it('pins PostgreSQL search_path inside the operation transaction using a bound parameter', async () => {
-      const plugin = fortress.config.plugins![0];
+      const plugin = requirePlugin(fortress.config.plugins);
       const calls: Array<{ sql: string; params?: unknown[]; op?: string }> = [];
-      const wrapped = plugin.wrapAdapter!(createFakePgAdapter(calls), { tenantId: '7' });
+      const wrapped = requireValue(plugin.wrapAdapter, 'tenancy adapter wrapper')(createFakePgAdapter(calls), { tenantId: '7' });
 
       await wrapped.findMany({ model: 'document' });
 
-      expect(calls[0]).toEqual({
+      expect(requireValue(calls[0], 'search_path setup call')).toEqual({
         sql: `SELECT set_config('search_path', ?, true)`,
         params: ['tenant_7, public'],
       });
-      expect(calls[1]).toEqual({ sql: '', op: 'findMany' });
+      expect(requireValue(calls[1], 'delegated findMany call')).toEqual({ sql: '', op: 'findMany' });
     });
   });
 
@@ -300,8 +310,8 @@ describe('tenancy plugin', () => {
       const tenant = await methods.createTenant({ name: 'Acme', taxId: 'acme-001' });
       await methods.addUserToTenant(userId, tenant.id);
 
-      const plugin = fortress.config.plugins![0];
-      const claims = await plugin.enrichTokenClaims!(userId, {
+      const plugin = requirePlugin(fortress.config.plugins);
+      const claims = await requireValue(plugin.enrichTokenClaims, 'tenancy claim enricher')(userId, {
         db: fortress.config.database,
         config: fortress.config,
       });
@@ -311,8 +321,8 @@ describe('tenancy plugin', () => {
     });
 
     it('returns empty claims when user has no tenant', async () => {
-      const plugin = fortress.config.plugins![0];
-      const claims = await plugin.enrichTokenClaims!(userId, {
+      const plugin = requirePlugin(fortress.config.plugins);
+      const claims = await requireValue(plugin.enrichTokenClaims, 'tenancy claim enricher')(userId, {
         db: fortress.config.database,
         config: fortress.config,
       });

@@ -29,6 +29,32 @@ import { createPostgresDrizzleAdapter } from '../adapter';
 
 const WEBHOOK_SECRET_PREFIX = /^whsec_/;
 
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requireExactlyOne<T>(values: readonly T[], description: string): T {
+  if (values.length !== 1)
+    throw new Error(`Expected exactly one ${description}, received ${values.length}`);
+  return requireValue(values[0], description);
+}
+
+function requireFirst<T>(values: readonly T[], description: string): T {
+  return requireValue(values[0], `at least one ${description}`);
+}
+
+function requirePair<T>(values: readonly T[], description: string): [T, T] {
+  if (values.length !== 2)
+    throw new Error(`Expected exactly two ${description}, received ${values.length}`);
+  const first = values[0];
+  const second = values[1];
+  if (first === undefined || second === undefined)
+    throw new Error(`Expected exactly two ${description}, received an incomplete pair`);
+  return [first, second];
+}
+
 const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS fortress_user (
     id SERIAL PRIMARY KEY,
@@ -552,8 +578,8 @@ describe('pg: date handling', () => {
       where: [{ field: 'expiresAt', operator: 'gt', value: new Date() }],
     });
 
-    expect(validTokens).toHaveLength(1);
-    expect(validTokens[0].tokenHash).toBe('valid');
+    const validToken = requireExactlyOne(validTokens, 'valid refresh token');
+    expect(validToken.tokenHash).toBe('valid');
   });
 
   it('handles nullable timestamp columns', async () => {
@@ -762,7 +788,7 @@ describe('pg: auth lifecycle', () => {
 
     const sessions = await fortress.auth.listSessions(login1.user.id);
     expect(sessions.length).toBeGreaterThanOrEqual(2);
-    expect(sessions[0].createdAt).toBeInstanceOf(Date);
+    expect(requireFirst(sessions, 'active session').createdAt).toBeInstanceOf(Date);
   });
 
   it('keeps the primary identifier synchronized across concurrent email updates', async () => {
@@ -781,8 +807,7 @@ describe('pg: auth lifecycle', () => {
     expect(['first-email@test.com', 'second-email@test.com']).toContain(finalUser.email);
     const emailIdentifiers = (await fortress.auth.getLoginIdentifiers(user.id))
       .filter(identifier => identifier.type === 'email');
-    expect(emailIdentifiers).toHaveLength(1);
-    expect(emailIdentifiers[0].value).toBe(finalUser.email);
+    expect(requireExactlyOne(emailIdentifiers, 'email login identifier').value).toBe(finalUser.email);
   });
 
   it('prevents duplicate user creation', async () => {
@@ -900,9 +925,9 @@ describe('pg: plugins', () => {
     expect(resolved.subject.id).toBe(user.id);
 
     const keys = await methods.listKeys({ subject: userSubject });
-    expect(keys).toHaveLength(1);
-    expect(keys[0].expiresAt).toBeInstanceOf(Date);
-    expect(keys[0].createdAt).toBeInstanceOf(Date);
+    const createdKey = requireExactlyOne<{ expiresAt: Date; createdAt: Date }>(keys, 'API key');
+    expect(createdKey.expiresAt).toBeInstanceOf(Date);
+    expect(createdKey.createdAt).toBeInstanceOf(Date);
   });
 
   it('email-verification plugin works with PG dates', async () => {
@@ -954,8 +979,9 @@ describe('pg: plugins', () => {
     const entries = await methods.getAuditLog();
 
     expect(entries).toHaveLength(12);
-    expect(entries[0].timestamp).toBeInstanceOf(Date);
-    expect(entries[0].createdAt).toBeInstanceOf(Date);
+    const firstEntry = requireFirst(entries, 'audit-log entry');
+    expect(firstEntry.timestamp).toBeInstanceOf(Date);
+    expect(firstEntry.createdAt).toBeInstanceOf(Date);
     expect(entries.filter(entry => entry.previousHash == null)).toHaveLength(1);
     await expect(methods.verifyChain()).resolves.toMatchObject({ valid: true, totalEntries: 12 });
   });
@@ -1005,16 +1031,18 @@ describe('pg: sorting', () => {
       sortBy: { field: 'email', direction: 'asc' },
     });
 
-    expect(ascending[0].email).toBe('a@test.com');
-    expect(ascending[1].email).toBe('z@test.com');
+    const [firstAscending, secondAscending] = requirePair(ascending, 'ascending users');
+    expect(firstAscending.email).toBe('a@test.com');
+    expect(secondAscending.email).toBe('z@test.com');
 
     const descending = await adapter.findMany<{ email: string }>({
       model: 'user',
       sortBy: { field: 'email', direction: 'desc' },
     });
 
-    expect(descending[0].email).toBe('z@test.com');
-    expect(descending[1].email).toBe('a@test.com');
+    const [firstDescending, secondDescending] = requirePair(descending, 'descending users');
+    expect(firstDescending.email).toBe('z@test.com');
+    expect(secondDescending.email).toBe('a@test.com');
   });
 });
 
@@ -1047,9 +1075,9 @@ describe('pg: tenancy plugin', () => {
     await fortress.plugins.tenancy.addUserToTenant(user.id, tenant.id);
 
     const tenants = await fortress.plugins.tenancy.getUserTenants(user.id);
-    expect(tenants).toHaveLength(1);
-    expect(tenants[0].taxId).toBe('acme');
-    expect(tenants[0].createdAt).toBeInstanceOf(Date);
+    const userTenant = requireExactlyOne(tenants, 'user tenant');
+    expect(userTenant.taxId).toBe('acme');
+    expect(userTenant.createdAt).toBeInstanceOf(Date);
   });
 
   it('switches defaults in both directions under the partial unique index', async () => {
@@ -1078,8 +1106,7 @@ describe('pg: tenancy plugin', () => {
         { field: 'isDefault', operator: '=', value: true },
       ],
     });
-    expect(defaults).toHaveLength(1);
-    expect(defaults[0].tenantId).toBe(first.id);
+    expect(requireExactlyOne(defaults, 'default tenant assignment').tenantId).toBe(first.id);
   });
 
   it('enriches JWT claims with tenant info after login', async () => {
@@ -1137,26 +1164,25 @@ describe('pg: tenancy plugin', () => {
 
   it('isolates tenant data via the transaction-pinned search_path (H2/H3)', async () => {
     // Each tenant gets an `items` table in its own schema via onSchemaCreated.
+    const tenantPlugin = tenancy({
+      onSchemaCreated: async (schemaName, rawQuery) => {
+        await rawQuery(`CREATE TABLE IF NOT EXISTS ${schemaName}.items (id SERIAL PRIMARY KEY, name TEXT NOT NULL)`);
+      },
+    });
     const fortress = createFortress({
       jwt: { key: SECRET },
       database: createPgAdapter(),
-      plugins: [
-        tenancy({
-          onSchemaCreated: async (schemaName, rawQuery) => {
-            await rawQuery(`CREATE TABLE IF NOT EXISTS ${schemaName}.items (id SERIAL PRIMARY KEY, name TEXT NOT NULL)`);
-          },
-        }),
-      ],
+      plugins: [tenantPlugin],
     });
 
-    const tenantPlugin = fortress.config.plugins![0];
+    const wrapAdapter = requireValue(tenantPlugin.wrapAdapter, 'tenancy plugin adapter wrapper');
     const base = fortress.config.database;
 
     const tA = await fortress.plugins.tenancy.createTenant({ name: 'A', taxId: 'iso-a' });
     const tB = await fortress.plugins.tenancy.createTenant({ name: 'B', taxId: 'iso-b' });
 
-    const dbA = tenantPlugin.wrapAdapter!(base, { tenantId: tA.id });
-    const dbB = tenantPlugin.wrapAdapter!(base, { tenantId: tB.id });
+    const dbA = wrapAdapter(base, { tenantId: tA.id });
+    const dbB = wrapAdapter(base, { tenantId: tB.id });
 
     // Writes route to each tenant's schema because the wrapped transaction pins
     // `search_path` on the same connection before the unqualified INSERT runs.
@@ -1173,7 +1199,7 @@ describe('pg: tenancy plugin', () => {
     // Fail closed: with no tenant claim, wrapAdapter is a pass-through. The
     // unqualified `items` table is not on the public search_path → it errors
     // rather than silently reading another tenant's schema.
-    const dbNone = tenantPlugin.wrapAdapter!(base, {});
+    const dbNone = wrapAdapter(base, {});
     expect(dbNone).toBe(base);
     await expect(
       dbNone.transaction(async tx => tx.rawQuery!(`SELECT name FROM items`)),
@@ -1502,7 +1528,7 @@ describe('pg: webhook plugin', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
     expect(delivered.length).toBeGreaterThanOrEqual(1);
-    const payload = JSON.parse(delivered[0]);
+    const payload = JSON.parse(requireFirst(delivered, 'webhook delivery payload'));
     expect(payload.event).toBe('auth.login.success');
 
     await methods.stop();

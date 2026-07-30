@@ -8,8 +8,8 @@
  * caller can pin the connection to it — closing the DNS-rebinding window
  * between validation and connect.
  *
- * Lifted verbatim from the original `index.ts` (logic unchanged); the delivery
- * transport (`delivery.ts`) pins {@link SafeWebhookTarget.address} via a custom
+ * Originally extracted from `index.ts`; the delivery transport (`delivery.ts`)
+ * pins {@link SafeWebhookTarget.address} via a custom
  * `lookup`, and {@link assertSafeWebhookUrl} is exported for custom transports.
  *
  * @module
@@ -29,14 +29,42 @@ function stripIpv6Brackets(host: string): string {
   return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
 }
 
-function parseIpv4(address: string): number[] | null {
+type Ipv4Octets = [number, number, number, number];
+type Ipv6Groups = [number, number, number, number, number, number, number, number];
+const DECIMAL_OCTET = /^\d+$/;
+const HEX_GROUP = /^[\da-f]{1,4}$/i;
+
+/** Parse one decimal IPv4 octet without accepting Number's permissive syntax. */
+function parseIpv4Octet(value: string): number | null {
+  if (!DECIMAL_OCTET.test(value))
+    return null;
+  const octet = Number(value);
+  return Number.isInteger(octet) && octet >= 0 && octet <= 255 ? octet : null;
+}
+
+/** Parse one complete IPv6 group; partial parseInt results are never valid IP input. */
+function parseIpv6Group(value: string): number | null {
+  if (!HEX_GROUP.test(value))
+    return null;
+  return Number.parseInt(value, 16);
+}
+
+function parseIpv4(address: string): Ipv4Octets | null {
   const parts = address.split('.');
   if (parts.length !== 4)
     return null;
-  const octets = parts.map(part => Number(part));
-  if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255))
+  const [first, second, third, fourth] = parts;
+  // The length check establishes these values exist; retain that proof so a
+  // malformed address cannot acquire a permissive default octet.
+  if (first === undefined || second === undefined || third === undefined || fourth === undefined)
     return null;
-  return octets;
+  const a = parseIpv4Octet(first);
+  const b = parseIpv4Octet(second);
+  const c = parseIpv4Octet(third);
+  const d = parseIpv4Octet(fourth);
+  if (a === null || b === null || c === null || d === null)
+    return null;
+  return [a, b, c, d];
 }
 
 function extractMappedIpv4(address: string): string | null {
@@ -49,17 +77,22 @@ function extractMappedIpv4(address: string): string | null {
   const words = tail.split(':');
   if (words.length !== 2)
     return null;
-  const hi = Number.parseInt(words[0], 16);
-  const lo = Number.parseInt(words[1], 16);
-  if (!Number.isInteger(hi) || !Number.isInteger(lo) || hi < 0 || hi > 0xFFFF || lo < 0 || lo > 0xFFFF)
+  const [highWord, lowWord] = words;
+  if (highWord === undefined || lowWord === undefined)
+    return null;
+  const hi = parseIpv6Group(highWord);
+  const lo = parseIpv6Group(lowWord);
+  if (hi === null || lo === null)
     return null;
   return `${hi >> 8}.${hi & 0xFF}.${lo >> 8}.${lo & 0xFF}`;
 }
 
 function isPrivateIpv4(address: string): boolean {
   const octets = parseIpv4(address);
-  if (!octets)
-    return false;
+  // A DNS result or literal that does not parse as an IPv4 address is never a
+  // public destination. The outer resolver rejects it rather than guessing.
+  if (octets === null)
+    return true;
   const [a, b] = octets;
   return a === 0
     || a === 10
@@ -76,7 +109,7 @@ function isPrivateIpv4(address: string): boolean {
  * Expand an IPv6 literal to its 8 16-bit groups, handling `::` compression and
  * a trailing embedded dotted-quad. Returns null for anything not well-formed.
  */
-function ipv6Groups(address: string): number[] | null {
+function ipv6Groups(address: string): Ipv6Groups | null {
   let host = stripIpv6Brackets(address).toLowerCase();
   const zone = host.indexOf('%');
   if (zone !== -1)
@@ -88,18 +121,22 @@ function ipv6Groups(address: string): number[] | null {
   if (host.includes('.')) {
     const lastColon = host.lastIndexOf(':');
     const v4 = parseIpv4(host.slice(lastColon + 1));
-    if (!v4)
+    if (v4 === null)
       return null;
-    const hi = ((v4[0] << 8) | v4[1]).toString(16);
-    const lo = ((v4[2] << 8) | v4[3]).toString(16);
+    const [a, b, c, d] = v4;
+    const hi = ((a << 8) | b).toString(16);
+    const lo = ((c << 8) | d).toString(16);
     host = `${host.slice(0, lastColon + 1)}${hi}:${lo}`;
   }
 
   const halves = host.split('::');
   if (halves.length > 2)
     return null;
-  const head = halves[0] === '' ? [] : halves[0].split(':');
-  const tail = halves.length === 2 ? (halves[1] === '' ? [] : halves[1].split(':')) : null;
+  const [firstHalf, secondHalf] = halves;
+  if (firstHalf === undefined)
+    return null;
+  const head = firstHalf === '' ? [] : firstHalf.split(':');
+  const tail = secondHalf === undefined ? null : (secondHalf === '' ? [] : secondHalf.split(':'));
 
   let parts: string[];
   if (tail === null) {
@@ -114,10 +151,19 @@ function ipv6Groups(address: string): number[] | null {
   if (parts.length !== 8)
     return null;
 
-  const groups = parts.map(part => Number.parseInt(part, 16));
-  if (groups.some(g => !Number.isInteger(g) || g < 0 || g > 0xFFFF))
+  const groups: number[] = [];
+  for (const part of parts) {
+    const group = parseIpv6Group(part);
+    if (group === null)
+      return null;
+    groups.push(group);
+  }
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+  if (g0 === undefined || g1 === undefined || g2 === undefined || g3 === undefined
+    || g4 === undefined || g5 === undefined || g6 === undefined || g7 === undefined) {
     return null;
-  return groups;
+  }
+  return [g0, g1, g2, g3, g4, g5, g6, g7];
 }
 
 /**
@@ -126,14 +172,10 @@ function ipv6Groups(address: string): number[] | null {
  * the gateway connects to this translated IPv4, so it must face the same
  * private-range checks — `64:ff9b::a9fe:a9fe` is the cloud metadata IP.
  */
-function extractNat64Ipv4(address: string): string | null {
-  const groups = ipv6Groups(address);
-  if (!groups)
-    return null;
-  if (groups[0] === 0x0064 && groups[1] === 0xFF9B
-    && groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0) {
-    const g6 = groups[6];
-    const g7 = groups[7];
+function extractNat64Ipv4(groups: Ipv6Groups): string | null {
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+  if (g0 === 0x0064 && g1 === 0xFF9B
+    && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
     return `${(g6 >> 8) & 0xFF}.${g6 & 0xFF}.${(g7 >> 8) & 0xFF}.${g7 & 0xFF}`;
   }
   return null;
@@ -142,14 +184,24 @@ function extractNat64Ipv4(address: string): string | null {
 /** `true` if `address` is a loopback/private/link-local/CGNAT/multicast IP (v4, v6, `::ffff:` mapped, or `64:ff9b::/96` NAT64). */
 export function isPrivateIp(address: string): boolean {
   const host = stripIpv6Brackets(address).toLowerCase();
+  const family = isIP(host);
+  // `isPrivateIp` only receives literal addresses from DNS/literal resolution.
+  // If it cannot prove this is one, treat the target as unsafe rather than
+  // allowing a parser disagreement to become a public destination.
+  if (family === 0)
+    return true;
+  if (family === 4)
+    return isPrivateIpv4(host);
+
   const mapped = extractMappedIpv4(host);
   if (mapped)
     return isPrivateIpv4(mapped);
-  const nat64 = extractNat64Ipv4(host);
+  const groups = ipv6Groups(host);
+  if (groups === null)
+    return true;
+  const nat64 = extractNat64Ipv4(groups);
   if (nat64)
     return isPrivateIpv4(nat64);
-  if (isPrivateIpv4(host))
-    return true;
   if (host === '::' || host === '::1')
     return true;
   return host.startsWith('fc')
@@ -183,7 +235,11 @@ export async function resolveSafeWebhookTarget(url: string): Promise<SafeWebhook
     throw new Error('Webhook URL resolves to a private address');
 
   const selected = records[0];
-  return { url: parsed, address: selected.address, family: selected.family as 4 | 6 };
+  if (selected === undefined)
+    throw new Error('Webhook URL host did not resolve');
+  if (selected.family !== 4 && selected.family !== 6)
+    throw new Error('Webhook URL resolved to an unsupported address family');
+  return { url: parsed, address: selected.address, family: selected.family };
 }
 
 /**

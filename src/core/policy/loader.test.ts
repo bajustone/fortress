@@ -25,7 +25,7 @@ describe('policy loader', () => {
     expect(await resolvePolicyPath({ cwd, env: 'production' }))
       .toBe(join(cwd, 'fortress.policy.production.json'));
     const { policy } = await loadPolicy({ cwd, env: 'production' });
-    expect(policy.roles?.[0].name).toBe('reader');
+    expect(requireAt(requireValue(policy.roles, 'policy roles'), 0, 'reader policy role').name).toBe('reader');
   });
 
   it('allows annotations and deduplicates equivalent ALLOW permissions', () => {
@@ -39,7 +39,7 @@ describe('policy loader', () => {
         ],
       }],
     });
-    expect(policy.roles?.[0].permissions).toEqual([
+    expect(requireAt(requireValue(policy.roles, 'policy roles'), 0, 'reader policy role').permissions).toEqual([
       { resource: 'article', action: 'read' },
     ]);
   });
@@ -61,3 +61,12 @@ describe('policy loader', () => {
     expect(() => parsePolicyDocument(value)).toThrow(message);
   });
 });
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  return requireValue(values[index], description);
+}

@@ -14,9 +14,29 @@ import {
   migrateDown,
   migrateUp,
 } from './engine';
-import { FORTRESS_INDEXES, FORTRESS_TABLES, getFortressMigrations } from './migrations';
+import { FORTRESS_INDEXES, FORTRESS_TABLES, getExpectedColumns, getFortressMigrations } from './migrations';
 
 const dialect = 'sqlite';
+const MIGRATION_DIALECTS: readonly ('sqlite' | 'pg')[] = ['sqlite', 'pg'];
+
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requireRow<T>(rows: readonly T[], query: string): T {
+  if (rows.length !== 1)
+    throw new Error(`Expected exactly one row from ${query}, received ${rows.length}`);
+  return requireValue(rows[0], `one row from ${query}`);
+}
+
+function requireMigration(version: number) {
+  return requireValue(
+    getFortressMigrations(dialect).find(item => item.version === version),
+    `SQLite migration version ${version}`,
+  );
+}
 
 function runMigrationChild(script: string, filename: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -156,9 +176,9 @@ describe('migration engine', () => {
     const result = await migrateDown(db, 99);
     expect(result).toMatchObject({ fromVersion: 2, toVersion: 2, rolledBack: [] });
     expect((await getMigrationStatus(db)).currentVersion).toBe(2);
-    const [checkpoint] = await db.rawQuery!<{ applied_at: number }>(
+    const checkpoint = requireRow(await db.rawQuery!<{ applied_at: number }>(
       'SELECT applied_at FROM fortress_schema_version WHERE id = 1',
-    );
+    ), 'SQLite schema-version checkpoint');
     expect(checkpoint.applied_at).toBe(123);
   });
 
@@ -227,7 +247,7 @@ describe('migration engine', () => {
   });
 
   it('uses runtime-stable data-step checksums and upgrades recognized legacy rows', async () => {
-    const migration = getFortressMigrations('sqlite')[5]!;
+    const migration = requireMigration(6);
     const checksum = await computeMigrationChecksum(migration);
     const equivalentCallback = { ...migration, beforeUp: () => Promise.resolve() };
     expect(await computeMigrationChecksum(equivalentCallback)).toBe(checksum);
@@ -248,10 +268,10 @@ describe('migration engine', () => {
         [legacyChecksum],
       );
       await expect(migrateUp(db), label).resolves.toMatchObject({ applied: [] });
-      const upgraded = await db.rawQuery!<{ checksum: string }>(
+      const upgraded = requireRow(await db.rawQuery!<{ checksum: string }>(
         'SELECT checksum FROM fortress_migration_journal WHERE version = 6',
-      );
-      expect(upgraded[0]?.checksum, label).toBe(checksum);
+      ), 'upgraded SQLite migration 6 journal row');
+      expect(upgraded.checksum, label).toBe(checksum);
     }
 
     await db.rawQuery!(
@@ -298,11 +318,11 @@ describe('migration engine', () => {
   it('fails closed when a data migration is applied as SQL without its runtime step', async () => {
     const db = createBareSqliteAdapter();
     await migrateUp(db, 5);
-    const migration = getFortressMigrations(dialect).find(item => item.version === 6)!;
-    const sentinelStatement = migration.up
+    const migration = requireMigration(6);
+    const sentinelStatement = requireValue(migration.up
       .split(';')
       .map(statement => statement.split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n').trim())
-      .find(Boolean)!;
+      .find(Boolean), 'a non-comment SQL statement from SQLite migration 6');
 
     await expect(db.rawQuery!(sentinelStatement)).rejects.toThrow();
     expect((await getMigrationStatus(db)).currentVersion).toBe(5);
@@ -325,6 +345,29 @@ describe('migration engine', () => {
     expect(drift.missingColumns).toEqual([]);
     expect(drift.missingIndexes).toEqual([]);
     expect(FORTRESS_TABLES.length).toBeGreaterThan(30);
+  });
+
+  it('extracts SQLite incremental ALTER TABLE columns', () => {
+    const expected = getExpectedColumns('sqlite');
+
+    // Exercises ADD COLUMN extraction from the controlled incremental SQLite
+    // migration rather than relying only on the baseline CREATE TABLE DDL.
+    expect(expected.fortress_auth_continuation).toEqual(expect.arrayContaining([
+      'failed_attempts',
+      'cooldown_seconds',
+    ]));
+  });
+
+  it.each(MIGRATION_DIALECTS)('extracts the final refresh-token shape for %s DDL', (migrationDialect) => {
+    const expected = getExpectedColumns(migrationDialect);
+
+    // SQLite rebuild migrations rename a replacement table over this name;
+    // both dialects must retain the final column set.
+    expect(expected.fortress_refresh_token).toEqual(expect.arrayContaining([
+      'family_created_at',
+      'successor_token_hash',
+      'rotated_at',
+    ]));
   });
 
   it('creates every required hot index with the expected column order', async () => {
@@ -365,8 +408,11 @@ describe('migration engine', () => {
 
     const drift = await detectMigrationDrift(db);
     expect(drift.missingTables).toEqual([]);
-    const flowDrift = drift.missingColumns.find(entry => entry.table === 'fortress_oauth_pending_flow');
-    expect(flowDrift?.columns).toEqual(expect.arrayContaining(['user_id', 'used_at']));
+    const flowDrift = requireValue(
+      drift.missingColumns.find(entry => entry.table === 'fortress_oauth_pending_flow'),
+      'drift details for fortress_oauth_pending_flow',
+    );
+    expect(flowDrift.columns).toEqual(expect.arrayContaining(['user_id', 'used_at']));
     expect(hasMigrationDrift(drift)).toBe(true);
   });
 });

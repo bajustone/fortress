@@ -42,14 +42,25 @@ export interface ExpressRateLimitOptions {
   extractIp?: (req: MinimalExpressRequest) => string | undefined;
 }
 
+function firstForwardedIp(value: string): string {
+  const [firstHop] = value.split(',');
+  if (firstHop === undefined)
+    throw new Error('Forwarded IP invariant violated: header has no first hop');
+  return firstHop.trim();
+}
+
 function defaultExtractIp(req: MinimalExpressRequest): string | undefined {
   if (req.ip)
     return req.ip;
   const xff = req.headers['x-forwarded-for'];
   if (typeof xff === 'string')
-    return xff.split(',')[0].trim();
-  if (Array.isArray(xff) && xff.length > 0)
-    return xff[0].split(',')[0].trim();
+    return firstForwardedIp(xff);
+  if (Array.isArray(xff) && xff.length > 0) {
+    const [firstHeader] = xff;
+    if (firstHeader === undefined)
+      throw new Error('Forwarded IP invariant violated: header array has no first value');
+    return firstForwardedIp(firstHeader);
+  }
   const xri = req.headers['x-real-ip'];
   return typeof xri === 'string' ? xri : undefined;
 }

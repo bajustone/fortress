@@ -7,6 +7,13 @@ import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
 import { webauthn } from './index';
 
+function requireFirst<T>(values: readonly T[], description: string): T {
+  const value = values[0];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
 // Minimal PluginRouteContext for tests that invoke plugin methods directly.
 // The dispatcher constructs the real ctx for HTTP calls; unit tests stub
 // just the userId (and a placeholder Request) since the handlers only read
@@ -201,9 +208,10 @@ describe('webauthn plugin', () => {
       (simplewebauthn.generateRegistrationOptions).mockClear();
       await methods.generateRegistrationOptions({}, httpCtx(userId));
 
-      const call = (simplewebauthn.generateRegistrationOptions).mock.calls[0][0];
-      expect(call.excludeCredentials).toHaveLength(1);
-      expect(call.excludeCredentials![0].id).toBe(MOCK_CREDENTIAL_ID);
+      const call = requireFirst((simplewebauthn.generateRegistrationOptions).mock.calls, 'registration options call');
+      expect(call).toEqual([expect.objectContaining({
+        excludeCredentials: [expect.objectContaining({ id: MOCK_CREDENTIAL_ID })],
+      })]);
     });
   });
 
@@ -262,17 +270,18 @@ describe('webauthn plugin', () => {
       (simplewebauthn.generateAuthenticationOptions).mockClear();
       await methods.generateAuthenticationOptions({ userId });
 
-      const call = (simplewebauthn.generateAuthenticationOptions).mock.calls[0][0];
-      expect(call.allowCredentials).toHaveLength(1);
-      expect(call.allowCredentials![0].id).toBe(MOCK_CREDENTIAL_ID);
+      const call = requireFirst((simplewebauthn.generateAuthenticationOptions).mock.calls, 'authentication options call');
+      expect(call).toEqual([expect.objectContaining({
+        allowCredentials: [expect.objectContaining({ id: MOCK_CREDENTIAL_ID })],
+      })]);
     });
 
     it('returns options without allowCredentials when no userId (discoverable)', async () => {
       (simplewebauthn.generateAuthenticationOptions).mockClear();
       await methods.generateAuthenticationOptions({});
 
-      const call = (simplewebauthn.generateAuthenticationOptions).mock.calls[0][0];
-      expect(call.allowCredentials).toBeUndefined();
+      const call = requireFirst((simplewebauthn.generateAuthenticationOptions).mock.calls, 'authentication options call');
+      expect(call).toEqual([expect.objectContaining({ allowCredentials: undefined })]);
     });
   });
 

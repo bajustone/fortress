@@ -863,11 +863,11 @@ export function createAuthService(
         // the database stores only its hash.
         const accessToken = await issueAccessToken(user, txAdapter.getUserGroups);
         const graceSeconds = config.jwt.session?.refreshGraceSeconds;
+        const primaryKey = Array.isArray(resolved.key) ? resolved.key[0] : resolved.key;
+        if (primaryKey === undefined)
+          throw Errors.unauthorized('Invalid refresh token');
         const newToken = graceSeconds != null && graceSeconds > 0
-          ? await deriveRefreshTokenSuccessor(
-              refreshToken,
-              Array.isArray(resolved.key) ? resolved.key[0] : resolved.key,
-            )
+          ? await deriveRefreshTokenSuccessor(refreshToken, primaryKey)
           : await generateRefreshToken();
 
         const newFingerprintHash = meta

@@ -63,9 +63,18 @@ function setup(opts: SetupOpts = {}): { fortress: Fortress; wh: WebhookMethods; 
   return { fortress, wh, calls: transport.calls };
 }
 
-async function waitFor(predicate: () => boolean, tries = 100): Promise<void> {
+async function waitFor(predicate: () => boolean, description = 'condition', tries = 100): Promise<void> {
   for (let i = 0; i < tries && !predicate(); i++)
     await new Promise(resolve => setTimeout(resolve, 10));
+  if (!predicate())
+    throw new Error(`Timed out waiting for ${description}`);
+}
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}, observed ${values.length} values`);
+  return value;
 }
 
 async function seedLogin(fortress: Fortress, email: string): Promise<void> {
@@ -84,10 +93,10 @@ describe('webhook plugin — built-in events', () => {
     const { fortress, wh, calls } = setup();
     await wh.registerEndpoint('https://example.com/hook', ['auth.login.success']);
     await seedLogin(fortress, 'alice@example.com');
-    await waitFor(() => calls.length >= 1);
+    await waitFor(() => calls.length >= 1, 'auth.login.success delivery');
 
     expect(calls.length).toBe(1);
-    const body = JSON.parse(calls[0].body);
+    const body = JSON.parse(requireAt(calls, 0, 'auth.login.success delivery').body);
     expect(body.event).toBe('auth.login.success');
     expect(body.email).toBe('alice@example.com');
   });
@@ -96,9 +105,9 @@ describe('webhook plugin — built-in events', () => {
     const { fortress, wh, calls } = setup();
     await wh.registerEndpoint('https://example.com/hook', ['auth.login.success']);
     await seedLogin(fortress, 'bob@example.com');
-    await waitFor(() => calls.length >= 1);
+    await waitFor(() => calls.length >= 1, 'signed auth.login.success delivery');
 
-    const headers = calls[0].headers;
+    const headers = requireAt(calls, 0, 'signed auth.login.success delivery').headers;
     expect(headers['webhook-id']).toMatch(/^msg_/);
     expect(Number(headers['webhook-timestamp'])).toBeGreaterThan(0);
     expect(headers['webhook-signature']).toMatch(/^v1,/);
@@ -109,14 +118,14 @@ describe('webhook plugin — built-in events', () => {
     await wh.registerEndpoint('https://example.com/login-hook', ['auth.login.success']);
     await wh.registerEndpoint('https://example.com/register-hook', ['auth.user.registered']);
     await seedLogin(fortress, 'carol@example.com');
-    await waitFor(() => calls.length >= 2);
+    await waitFor(() => calls.length >= 2, 'subscribed webhook deliveries');
 
     const login = calls.filter(c => c.url === 'https://example.com/login-hook');
     const register = calls.filter(c => c.url === 'https://example.com/register-hook');
     expect(login).toHaveLength(1);
-    expect(JSON.parse(login[0].body).event).toBe('auth.login.success');
+    expect(JSON.parse(requireAt(login, 0, 'login webhook delivery').body).event).toBe('auth.login.success');
     expect(register).toHaveLength(1);
-    expect(JSON.parse(register[0].body).event).toBe('auth.user.registered');
+    expect(JSON.parse(requireAt(register, 0, 'registration webhook delivery').body).event).toBe('auth.user.registered');
   });
 
   it('excluding a built-in event makes its hook a no-op', async () => {
@@ -142,8 +151,9 @@ describe('webhook plugin — endpoint management', () => {
     await wh.registerEndpoint('https://a.com/hook', ['auth.logout'], { secret: 'my-secret' });
     const list = await wh.listEndpoints();
     expect(list).toHaveLength(1);
-    expect((list[0] as { secret?: string }).secret).toBeUndefined();
-    expect(list[0].url).toBe('https://a.com/hook');
+    const endpoint = requireAt(list, 0, 'redacted webhook endpoint');
+    expect(endpoint).not.toHaveProperty('secret');
+    expect(endpoint.url).toBe('https://a.com/hook');
   });
 
   it('updateEndpoint patches (redacted) and rotateSecret returns a fresh secret', async () => {
@@ -190,8 +200,8 @@ describe('webhook plugin — custom events + emit()', () => {
     const { wh, calls } = setup({ events: [...builtinEvents(), { name: 'order.paid', schema: OrderPaid }] });
     await wh.registerEndpoint('https://example.com/hook', ['order.paid']);
     await wh.emit('order.paid', { orderId: 'o1' });
-    await waitFor(() => calls.length >= 1);
-    expect(JSON.parse(calls[0].body).orderId).toBe('o1');
+    await waitFor(() => calls.length >= 1, 'order.paid delivery');
+    expect(JSON.parse(requireAt(calls, 0, 'order.paid delivery').body).orderId).toBe('o1');
   });
 
   it('emit() rejects an oversized payload', async () => {
@@ -254,8 +264,9 @@ describe('webhook plugin — failure handling', () => {
 
     expect(reason).toBe('permanent_410');
     const list = await wh.listEndpoints();
-    expect(list[0].isActive).toBe(false);
-    expect(list[0].deactivatedReason).toBe('permanent_410');
+    const deactivated = requireAt(list, 0, 'deactivated webhook endpoint');
+    expect(deactivated.isActive).toBe(false);
+    expect(deactivated.deactivatedReason).toBe('permanent_410');
   });
 
   it('fails fast on a non-retriable 4xx (422) and fires onDeliveryFailed', async () => {

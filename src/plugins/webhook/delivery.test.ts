@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDeliveryClient, deliver, ssrfSafeFetch } from './delivery';
+import { isPrivateIp } from './ssrf';
 
 describe('webhook delivery request', () => {
   it('forwards the JSON body and caller-supplied signing headers', async () => {
@@ -73,5 +74,18 @@ describe('ssrfSafeFetch — SSRF guard in the delivery transport', () => {
     await expect(
       fetchFn(new Request('https://localhost/hook', { method: 'POST' })),
     ).rejects.toThrow(/not allowed/i);
+  });
+
+  it('treats malformed IP parser input as unsafe without blocking valid public literals', () => {
+    // A partial numeric parse used to classify the malformed mapped/NAT64 forms
+    // below as public. Resolver input must be a proven IP literal, never a
+    // best-effort interpretation, because this predicate guards DNS targets.
+    expect(isPrivateIp('8.8.8.8')).toBe(false);
+    expect(isPrivateIp('::ffff:8.8.8.8')).toBe(false);
+    expect(isPrivateIp('64:ff9b::808:808')).toBe(false);
+
+    expect(isPrivateIp('8.8.8.8not-an-ip')).toBe(true);
+    expect(isPrivateIp('::ffff:0808:0808oops')).toBe(true);
+    expect(isPrivateIp('64:ff9b::0808:zzzz')).toBe(true);
   });
 });

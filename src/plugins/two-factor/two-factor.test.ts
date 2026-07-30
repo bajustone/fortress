@@ -1,5 +1,5 @@
 import type { Fortress } from '../../core/fortress';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFortress } from '../../core/fortress';
 import { createTestAdapter } from '../../testing';
 import { accountLockout } from '../account-lockout';
@@ -7,6 +7,13 @@ import { generateTOTP, twoFactor } from './index';
 
 const SECRET = 'two-factor-test-secret-at-least32';
 const TOTP_ENCRYPTION_KEY = 't'.repeat(32);
+
+function requireBackupCode(codes: readonly string[], description: string): string {
+  const code = codes[0];
+  if (code === undefined)
+    throw new Error(`Expected a backup code for ${description}`);
+  return code;
+}
 
 interface TwoFactorMethods {
   enable: (userId: string) => Promise<{ secret: string; otpauthUrl: string; backupCodes: string[] }>;
@@ -71,6 +78,20 @@ describe('two-factor plugin', () => {
     });
   });
 
+  describe('totp generation', () => {
+    it('matches the RFC 6238 SHA-1 dynamic-truncation vector', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('1970-01-01T00:00:59.000Z'));
+      try {
+        // ASCII "12345678901234567890", 30s period, counter 1 → 94287082.
+        expect(await generateTOTP('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 30, 8)).toBe('94287082');
+      }
+      finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('verify', () => {
     it('verifies a valid TOTP code', async () => {
       const setup = await methods.enable(userId);
@@ -95,7 +116,7 @@ describe('two-factor plugin', () => {
 
     it('accepts a backup code', async () => {
       const setup = await methods.enable(userId);
-      const backupCode = setup.backupCodes[0];
+      const backupCode = requireBackupCode(setup.backupCodes, 'two-factor setup');
 
       const result = await methods.confirmSetup(userId, backupCode);
       expect(result.verified).toBe(true);
@@ -103,7 +124,7 @@ describe('two-factor plugin', () => {
 
     it('rejects already-used backup code', async () => {
       const setup = await methods.enable(userId);
-      const backupCode = setup.backupCodes[0];
+      const backupCode = requireBackupCode(setup.backupCodes, 'two-factor setup');
 
       await methods.confirmSetup(userId, backupCode);
       await expect(methods.confirmSetup(userId, backupCode)).rejects.toThrow('Invalid two-factor code');
@@ -144,7 +165,7 @@ describe('two-factor plugin', () => {
       if (result.status !== 'pending' || !result.pending)
         throw new Error('Expected a two-factor continuation');
 
-      const completed = await methods.verify(result.pending.continuationToken, setup.backupCodes[0]);
+      const completed = await methods.verify(result.pending.continuationToken, requireBackupCode(setup.backupCodes, 'post-auth two-factor verification'));
       expect(completed).toMatchObject({ status: 'success', method: 'two-factor' });
       expect(await fortress.config.database.count({ model: 'refresh_token' })).toBe(1);
     });

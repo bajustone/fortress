@@ -1,4 +1,3 @@
-/* eslint-disable ts/no-unsafe-function-type -- test uses Function type for plugin methods */
 import type { DatabaseAdapter } from '../adapters/database';
 import type { FortressConfig } from './config';
 import type { FortressPlugin } from './plugin';
@@ -35,7 +34,9 @@ describe('processPlugins', () => {
       }),
     });
     const result = processPlugins([plugin], mockDb, mockConfig);
-    expect((result['my-plugin'].greet as Function)('world')).toBe('hello world');
+    const methods = requireValue(result['my-plugin'], 'my-plugin methods');
+    const greet = requireValue(methods.greet, 'my-plugin greet method');
+    expect(greet('world')).toBe('hello world');
   });
 
   it('passes PluginContext to methods factory', () => {
@@ -77,7 +78,9 @@ describe('processPlugins', () => {
       }),
     });
     const result = processPlugins([plugin], mockDb, mockConfig);
-    expect((result.defined.greet as Function)('Ada')).toBe(`${mockConfig.jwt.key}:Ada`);
+    const methods = requireValue(result.defined, 'defined plugin methods');
+    const greet = requireValue(methods.greet, 'defined plugin greet method');
+    expect(greet('Ada')).toBe(`${mockConfig.jwt.key}:Ada`);
   });
 
   it('handles multiple plugins', () => {
@@ -268,3 +271,9 @@ describe('wrapAdapterWithScopeRules', () => {
     })).rejects.toThrow('Cannot update scoped field \'orgId\'');
   });
 });
+
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

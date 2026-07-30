@@ -63,6 +63,22 @@ describe('magic-link plugin', () => {
       expect(result.status === 'success' ? result.accessToken : null).toBeTruthy();
     });
 
+    it('jit-provisions the user with the email local part as its name', async () => {
+      const send = fortress.plugins['magic-link'].sendMagicLink;
+      await send('alice.smith@example.com');
+
+      const token = capturedToken;
+      if (token === null)
+        throw new Error('Expected magic-link sender to capture a token');
+      const verify = fortress.plugins['magic-link'].verify;
+      const result = await verify(token);
+
+      expect(result.user).toMatchObject({
+        email: 'alice.smith@example.com',
+        name: 'alice.smith',
+      });
+    });
+
     it('verifies through the core HTTP endpoint and attaches auth cookies', async () => {
       const send = fortress.plugins['magic-link'].sendMagicLink;
       await send('bob@example.com');

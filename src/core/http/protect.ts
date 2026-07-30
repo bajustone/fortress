@@ -170,7 +170,10 @@ function findEndpoint(fortress: FortressProtectRuntime, target: ProtectedRouteTa
     );
   }
 
-  return matches[0];
+  const [endpoint] = matches;
+  if (endpoint === undefined)
+    throw Errors.notFound(`No endpoint found for handler '${target}'`);
+  return endpoint;
 }
 
 function findManifestEntry(fortress: FortressProtectRuntime, endpoint: EndpointDefinition): RouteManifestEntry {

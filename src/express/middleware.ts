@@ -491,12 +491,21 @@ export function getScopedDb(req: ExpressRequest, model: string): Promise<Databas
 
 // --- Internal route matching ---
 
+function parseRouteMapPattern(pattern: string): { method: string; path: string } {
+  const parts = pattern.split(' ');
+  const [method, path] = parts;
+  if (parts.length !== 2 || method === undefined || path === undefined || method === '' || !path.startsWith('/')) {
+    throw new Error(`Invalid route map pattern '${pattern}': expected 'METHOD /path'`);
+  }
+  return { method, path };
+}
+
 function findRouteMapMatch(method: string, path: string, routeMap: Record<string, RouteMapping>): RouteMapping | null {
   for (const [pattern, mapping] of Object.entries(routeMap)) {
-    const [patternMethod, patternPath] = pattern.split(' ', 2);
-    if (patternMethod !== method)
+    const configured = parseRouteMapPattern(pattern);
+    if (configured.method !== method)
       continue;
-    if (pathToRegex(patternPath).test(path))
+    if (pathToRegex(configured.path).test(path))
       return mapping;
   }
   return null;
@@ -529,12 +538,8 @@ function matchesCsrfSkipPath(path: string, skipPaths: string[]): boolean {
 
 function normalizeRouteMap(routeMap: Record<string, RouteMapping>): Record<string, RouteMapping> {
   return Object.fromEntries(Object.entries(routeMap).map(([pattern, mapping]) => {
-    const separator = pattern.indexOf(' ');
-    if (separator < 0)
-      return [pattern, mapping];
-    const method = pattern.slice(0, separator);
-    const path = normalizeExpressPath(pattern.slice(separator + 1));
-    return [`${method} ${path}`, mapping];
+    const configured = parseRouteMapPattern(pattern);
+    return [`${configured.method} ${normalizeExpressPath(configured.path)}`, mapping];
   }));
 }
 

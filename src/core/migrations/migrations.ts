@@ -1236,6 +1236,18 @@ interface MigrationEmailIdentifier {
 }
 
 /**
+ * Groups below are built by pushing an existing row before iteration. An empty
+ * group therefore signals a programming error; selecting a fallback identity
+ * would silently alter which duplicate account survives the migration.
+ */
+function requireFirst<T>(items: readonly T[], description: string): T {
+  const first = items[0];
+  if (first === undefined)
+    throw new Error(`Migration invariant violated: ${description} is empty`);
+  return first;
+}
+
+/**
  * Canonicalize legacy emails before the case-insensitive indexes are created.
  * If multiple accounts collapse to one identity, the oldest numeric ID wins;
  * later accounts are disabled, assigned a non-routable unique tombstone, and
@@ -1278,7 +1290,8 @@ async function normalizeExistingUserEmails(db: DatabaseAdapter): Promise<void> {
   const duplicateUserIds = new Set<string>();
   const primaryOwnerByCanonical = new Map<string, string>();
   for (const [canonical, matches] of groups) {
-    const [survivor, ...duplicates] = matches;
+    const survivor = requireFirst(matches, `canonical email group '${canonical}'`);
+    const duplicates = matches.slice(1);
     primaryOwnerByCanonical.set(canonical, survivor.id);
     for (const duplicate of duplicates) {
       duplicateUserIds.add(duplicate.id);
@@ -1657,6 +1670,18 @@ const WHITESPACE_RE = /\s+/;
 const QUOTE_CHARS_RE = /["'`]/g;
 
 /**
+ * A matching controlled-DDL regex must carry every required capture. Do not
+ * turn a parser mismatch into an `undefined` table/column key: drift output
+ * must fail loudly rather than describe the wrong schema.
+ */
+function requireDdlCapture(match: RegExpExecArray, index: number, description: string): string {
+  const value = match[index];
+  if (value === undefined || value.length === 0)
+    throw new Error(`Malformed migration DDL: missing ${description}`);
+  return value;
+}
+
+/**
  * Parse the expected column set of every Fortress table directly out of the
  * bundled migration DDL. Because the migrations are the SQL-first source of
  * truth, this needs no schema description maintained on the side and no
@@ -1684,7 +1709,7 @@ export function getExpectedColumns(dialect: MigrationDialect): Record<string, st
 
   let match = CREATE_TABLE_RE.exec(sql);
   while (match !== null) {
-    const tableName = match[1];
+    const tableName = requireDdlCapture(match, 1, 'CREATE TABLE name');
     const bodyStart = match.index + match[0].length;
 
     // Walk forward tracking paren depth to find the matching close paren.
@@ -1696,6 +1721,8 @@ export function getExpectedColumns(dialect: MigrationDialect): Record<string, st
       else if (sql[i] === ')')
         depth--;
     }
+    if (depth !== 0)
+      throw new Error(`Malformed migration DDL: unclosed CREATE TABLE body for '${tableName}'`);
     const body = sql.slice(bodyStart, i - 1);
 
     result[tableName] = extractColumnNames(body);
@@ -1709,7 +1736,8 @@ export function getExpectedColumns(dialect: MigrationDialect): Record<string, st
   ADD_COLUMN_RE.lastIndex = 0;
   let addMatch = ADD_COLUMN_RE.exec(sql);
   while (addMatch !== null) {
-    const [, tableName, columnName] = addMatch;
+    const tableName = requireDdlCapture(addMatch, 1, 'ALTER TABLE name');
+    const columnName = requireDdlCapture(addMatch, 2, 'ALTER TABLE column name');
     const columns = result[tableName] ?? (result[tableName] = []);
     const normalized = columnName.toLowerCase();
     if (!columns.includes(normalized))
@@ -1722,9 +1750,11 @@ export function getExpectedColumns(dialect: MigrationDialect): Record<string, st
   RENAME_TABLE_RE.lastIndex = 0;
   let renameMatch = RENAME_TABLE_RE.exec(sql);
   while (renameMatch !== null) {
-    const [, fromName, toName] = renameMatch;
-    if (result[fromName]) {
-      result[toName] = result[fromName];
+    const fromName = requireDdlCapture(renameMatch, 1, 'ALTER TABLE rename source');
+    const toName = requireDdlCapture(renameMatch, 2, 'ALTER TABLE rename target');
+    const columns = result[fromName];
+    if (columns !== undefined) {
+      result[toName] = columns;
       delete result[fromName];
     }
     renameMatch = RENAME_TABLE_RE.exec(sql);
@@ -1743,8 +1773,13 @@ function extractColumnNames(body: string): string[] {
     current = '';
     if (!trimmed)
       return;
-    const firstWord = trimmed.split(WHITESPACE_RE)[0].replace(QUOTE_CHARS_RE, '').toLowerCase();
-    if (!firstWord || CONSTRAINT_KEYWORDS.has(firstWord))
+    const [firstToken] = trimmed.split(WHITESPACE_RE);
+    if (firstToken === undefined)
+      throw new Error('Malformed migration DDL: non-empty definition has no first token');
+    const firstWord = firstToken.replace(QUOTE_CHARS_RE, '').toLowerCase();
+    if (!firstWord)
+      throw new Error('Malformed migration DDL: column definition has no column name');
+    if (CONSTRAINT_KEYWORDS.has(firstWord))
       return;
     columns.push(firstWord);
   };

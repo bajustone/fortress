@@ -6,6 +6,22 @@ import { convertRoutes } from './convert-routes';
 /** Passthrough converter — returns whatever it receives as JSONSchema. */
 const identity = (schema: unknown): JSONSchema => schema as JSONSchema;
 
+function requireExactlyOne<T>(values: readonly T[], description: string): T {
+  if (values.length !== 1)
+    throw new Error(`Expected exactly one ${description}, received ${values.length}`);
+  const value = values[0];
+  if (value === undefined)
+    throw new Error(`Expected exactly one ${description}, received no value`);
+  return value;
+}
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description} at index ${index}, received ${values.length} routes`);
+  return value;
+}
+
 /** Tracking converter — records calls and returns the input. */
 function trackingConverter(): { converter: (s: unknown) => JSONSchema; calls: unknown[] } {
   const calls: unknown[] = [];
@@ -80,7 +96,7 @@ const LIST_ITEMS: ExternalRoute = {
 
 describe('convertRoutes', () => {
   it('converts a simple GET route', () => {
-    const [ep] = convertRoutes([GET_HEALTH], { schemaConverter: identity });
+    const ep = requireExactlyOne(convertRoutes([GET_HEALTH], { schemaConverter: identity }), 'converted health route');
 
     expect(ep.method).toBe('GET');
     expect(ep.path).toBe('/health');
@@ -93,7 +109,7 @@ describe('convertRoutes', () => {
   });
 
   it('converts a POST route with body and security', () => {
-    const [ep] = convertRoutes([POST_LOGIN], { schemaConverter: identity });
+    const ep = requireExactlyOne(convertRoutes([POST_LOGIN], { schemaConverter: identity }), 'converted login route');
 
     expect(ep.method).toBe('POST');
     expect(ep.path).toBe('/login');
@@ -108,7 +124,7 @@ describe('convertRoutes', () => {
   });
 
   it('converts {param} to :param in paths', () => {
-    const [ep] = convertRoutes([GET_USER], { schemaConverter: identity });
+    const ep = requireExactlyOne(convertRoutes([GET_USER], { schemaConverter: identity }), 'converted user route');
 
     expect(ep.path).toBe('/users/:id');
     expect(ep.input?.params).toEqual({
@@ -119,7 +135,7 @@ describe('convertRoutes', () => {
   });
 
   it('converts query parameters', () => {
-    const [ep] = convertRoutes([LIST_ITEMS], { schemaConverter: identity });
+    const ep = requireExactlyOne(convertRoutes([LIST_ITEMS], { schemaConverter: identity }), 'converted items route');
 
     expect(ep.input?.query).toEqual({
       type: 'object',
@@ -133,16 +149,18 @@ describe('convertRoutes', () => {
       prefix: '/api/v1',
     });
 
-    expect(endpoints[0].path).toBe('/api/v1/health');
-    expect(endpoints[0].handler).toBe('get_api_v1_health');
-    expect(endpoints[1].path).toBe('/api/v1/users/:id');
+    const healthEndpoint = requireAt(endpoints, 0, 'prefixed health route');
+    const userEndpoint = requireAt(endpoints, 1, 'prefixed user route');
+    expect(healthEndpoint.path).toBe('/api/v1/health');
+    expect(healthEndpoint.handler).toBe('get_api_v1_health');
+    expect(userEndpoint.path).toBe('/api/v1/users/:id');
   });
 
   it('strips trailing slash from prefix', () => {
-    const [ep] = convertRoutes([GET_HEALTH], {
+    const ep = requireExactlyOne(convertRoutes([GET_HEALTH], {
       schemaConverter: identity,
       prefix: '/api/v1/',
-    });
+    }), 'converted prefixed health route');
 
     expect(ep.path).toBe('/api/v1/health');
   });
@@ -184,15 +202,15 @@ describe('convertRoutes', () => {
 
     const endpoints = convertRoutes(routes, { schemaConverter: identity });
 
-    expect(endpoints[0].meta?.security).toEqual(['bearer']);
-    expect(endpoints[1].meta?.security).toEqual(['basic']);
-    expect(endpoints[2].meta?.security).toEqual(['apiKey']);
-    expect(endpoints[3].meta?.security).toEqual(['none']);
+    expect(requireAt(endpoints, 0, 'bearer security route').meta?.security).toEqual(['bearer']);
+    expect(requireAt(endpoints, 1, 'basic security route').meta?.security).toEqual(['basic']);
+    expect(requireAt(endpoints, 2, 'API key security route').meta?.security).toEqual(['apiKey']);
+    expect(requireAt(endpoints, 3, 'public security route').meta?.security).toEqual(['none']);
   });
 
   it('handles deprecated routes', () => {
     const route: ExternalRoute = { ...GET_HEALTH, deprecated: true };
-    const [ep] = convertRoutes([route], { schemaConverter: identity });
+    const ep = requireExactlyOne(convertRoutes([route], { schemaConverter: identity }), 'converted deprecated route');
 
     expect(ep.meta?.deprecated).toBe(true);
   });

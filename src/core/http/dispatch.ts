@@ -425,9 +425,10 @@ const FLOW_ID_PATTERN = /\/oauth\/flows\/([^/]+)/;
 function consentFlowIdFromUrl(url: string): string {
   const path = new URL(url).pathname;
   const match = FLOW_ID_PATTERN.exec(path);
-  if (!match)
+  const flowId = match?.[1];
+  if (flowId === undefined)
     throw Errors.badRequest('Invalid flow id');
-  return decodeURIComponent(match[1]);
+  return decodeURIComponent(flowId);
 }
 
 // ── Auth / IAM dispatch ──────────────────────────────────────────────

@@ -38,7 +38,7 @@ async function timeFailedLogin(identifier: string): Promise<number> {
 
 async function median(samples: number[]): Promise<number> {
   const sorted = [...samples].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
+  return requireAt(sorted, Math.floor(sorted.length / 2), 'median timing sample');
 }
 
 describe('login timing-oracle defense', () => {
@@ -75,3 +75,9 @@ describe('login timing-oracle defense', () => {
     expect(missMedian).toBeGreaterThan(hitMedian * 0.3);
   });
 });
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

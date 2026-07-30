@@ -87,7 +87,7 @@ describe('inline permissions (direct binding)', () => {
     const count = await fortress.config.database.count({
       model: 'direct_permission_binding',
       where: [
-        { field: 'permissionId', operator: '=', value: perms[0].id },
+        { field: 'permissionId', operator: '=', value: requireAt(perms, 0, 'first permission').id },
         { field: 'subjectType', operator: '=', value: 'USER' },
         { field: 'subjectId', operator: '=', value: user.id },
         { field: 'tenantId', operator: 'isNull', value: null },
@@ -300,11 +300,11 @@ describe('tenant-scoped IAM', () => {
 
     const permsA = await fortress.iam.getPermissionsForSubject({ type: 'USER', id: user.id }, 'tenant-a');
     expect(permsA).toHaveLength(1);
-    expect(permsA[0].action).toBe('write');
+    expect(requireAt(permsA, 0, 'first role A permission').action).toBe('write');
 
     const permsB = await fortress.iam.getPermissionsForSubject({ type: 'USER', id: user.id }, 'tenant-b');
     expect(permsB).toHaveLength(1);
-    expect(permsB[0].action).toBe('read');
+    expect(requireAt(permsB, 0, 'first role B permission').action).toBe('read');
   });
 });
 
@@ -410,8 +410,8 @@ describe('iam-service: admin CRUD', () => {
 
       expect(result.name).toBe('devs');
       expect(result.users).toHaveLength(1);
-      expect(result.users[0].email).toBe('dev@test.com');
-      expect(result.users[0]).not.toHaveProperty('passwordHash');
+      expect(requireAt(result.users, 0, 'listed user').email).toBe('dev@test.com');
+      expect(requireAt(result.users, 0, 'listed user')).not.toHaveProperty('passwordHash');
     });
 
     it('throws NOT_FOUND for missing group', async () => {
@@ -544,8 +544,8 @@ describe('iam-service: admin CRUD', () => {
       const users = await fortress.iam.getGroupUsers(group.id);
 
       expect(users).toHaveLength(1);
-      expect(users[0].email).toBe('member@test.com');
-      expect(users[0]).not.toHaveProperty('passwordHash');
+      expect(requireAt(users, 0, 'listed group user').email).toBe('member@test.com');
+      expect(requireAt(users, 0, 'listed group user')).not.toHaveProperty('passwordHash');
     });
 
     it('returns empty for group with no members', async () => {
@@ -827,3 +827,10 @@ describe('remediation regressions (P3.1, P3.3)', () => {
     expect(await fortress.iam.checkPermission({ type: 'USER', id: user.id }, 'doc', 'read')).toBe(true);
   });
 });
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

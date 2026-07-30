@@ -33,6 +33,32 @@ let container: StartedTestContainer;
 let pgClient: Sql;
 let connectionString: string;
 
+function requireRow<T>(rows: readonly T[], query: string): T {
+  if (rows.length !== 1)
+    throw new Error(`Expected exactly one row from ${query}, received ${rows.length}`);
+  const row = rows[0];
+  if (row === undefined)
+    throw new Error(`Expected exactly one row from ${query}, received no row`);
+  return row;
+}
+
+function requirePair<T>(rows: readonly T[], query: string): [T, T] {
+  if (rows.length !== 2)
+    throw new Error(`Expected exactly two ordered rows from ${query}, received ${rows.length}`);
+  const first = rows[0];
+  const second = rows[1];
+  if (first === undefined || second === undefined)
+    throw new Error(`Expected exactly two ordered rows from ${query}, received an incomplete pair`);
+  return [first, second];
+}
+
+function requireMigration(version: number): ReturnType<typeof getFortressMigrations>[number] {
+  const migration = getFortressMigrations('pg').find(item => item.version === version);
+  if (migration === undefined)
+    throw new Error(`Expected PostgreSQL migration version ${version}`);
+  return migration;
+}
+
 function adapterFor(client: Sql): MigratableDatabaseAdapter<'pg'> {
   return createPostgresDrizzleAdapter(drizzle(client) as any);
 }
@@ -85,10 +111,10 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
        VALUES (?, ?, ?, true, ?, ?)`,
       ['legacy-pg@test.com', 'Legacy PG', 'h', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z'],
     );
-    const [legacyUser] = await db.rawQuery!<{ id: string }>(
+    const legacyUser = requireRow(await db.rawQuery!<{ id: string }>(
       'SELECT id FROM fortress_user WHERE email = ?',
       ['legacy-pg@test.com'],
-    );
+    ), 'legacy PostgreSQL fixture user');
     await db.rawQuery!(
       `INSERT INTO fortress_refresh_token
         (user_id, token_hash, token_family, is_revoked, expires_at, created_at)
@@ -114,13 +140,13 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
       `INSERT INTO fortress_tenant (name, tax_id) VALUES (?, ?), (?, ?)`,
       ['Tenant A', 'tenant-a', 'Tenant B', 'tenant-b'],
     );
-    const tenantRows = await db.rawQuery!<{ id: string }>(
+    const [tenantA, tenantB] = requirePair(await db.rawQuery!<{ id: string }>(
       `SELECT id FROM fortress_tenant WHERE tax_id IN (?, ?) ORDER BY tax_id`,
       ['tenant-a', 'tenant-b'],
-    );
+    ), 'legacy PostgreSQL tenants ordered by tax id');
     await db.rawQuery!(
       `INSERT INTO fortress_tenant_user (tenant_id, user_id, is_default) VALUES (?, ?, true), (?, ?, true)`,
-      [tenantRows[0].id, legacyUser.id, tenantRows[1].id, legacyUser.id],
+      [tenantA.id, legacyUser.id, tenantB.id, legacyUser.id],
     );
 
     // Legacy case-variants are deterministically quarantined before the
@@ -129,18 +155,18 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
       `INSERT INTO fortress_user (email, name, is_active) VALUES (?, ?, true), (?, ?, true)`,
       ['Duplicate@Example.COM', 'Oldest duplicate', 'duplicate@example.com', 'Later duplicate'],
     );
-    const duplicateUsers = await db.rawQuery!<{ id: string; email: string }>(
+    const [oldestDuplicate, laterDuplicate] = requirePair(await db.rawQuery!<{ id: string; email: string }>(
       `SELECT id, email FROM fortress_user WHERE lower(email) = ? ORDER BY id`,
       ['duplicate@example.com'],
-    );
+    ), 'duplicate PostgreSQL users ordered by id');
     await db.rawQuery!(
       `INSERT INTO fortress_login_identifier (user_id, type, value) VALUES (?, 'email', ?), (?, 'email', ?)`,
-      [duplicateUsers[0].id, duplicateUsers[0].email, duplicateUsers[1].id, duplicateUsers[1].email],
+      [oldestDuplicate.id, oldestDuplicate.email, laterDuplicate.id, laterDuplicate.email],
     );
     await db.rawQuery!(
       `INSERT INTO fortress_refresh_token (user_id, token_hash, token_family, is_revoked, expires_at)
        VALUES (?, ?, ?, false, ?)`,
-      [duplicateUsers[1].id, 'duplicate-session', 'duplicate-family', '2030-01-01T00:00:00Z'],
+      [laterDuplicate.id, 'duplicate-session', 'duplicate-family', '2030-01-01T00:00:00Z'],
     );
 
     // Conversion must not depend on the session timezone: historical
@@ -151,11 +177,11 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(up.fromVersion).toBe(2);
     expect(up.toVersion).toBe(10);
     expect(up.applied.map(migration => migration.name)).toEqual(['auth_continuation', 'tenant_default_unique', 'hot_indexes_timestamptz', 'canonical_email', 'audit_chain_anchor', 'two_factor_hardening', 'encrypt_totp_secrets', 'bigint_append_only_ids']);
-    const defaults = await db.rawQuery!<{ count: string }>(
+    const defaultCount = requireRow(await db.rawQuery!<{ count: string }>(
       `SELECT COUNT(*) AS count FROM fortress_tenant_user WHERE user_id = ? AND is_default = true`,
       [legacyUser.id],
-    );
-    expect(Number(defaults[0].count)).toBe(1);
+    ), 'default PostgreSQL tenant-user count');
+    expect(Number(defaultCount.count)).toBe(1);
     const widened = await db.rawQuery!<{ tableName: string; dataType: string }>(
       `SELECT table_name AS "tableName", data_type AS "dataType"
        FROM information_schema.columns
@@ -167,22 +193,22 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     expect(widened).toHaveLength(3);
     expect(widened.every(column => column.dataType === 'bigint')).toBe(true);
 
-    const canonicalized = await db.rawQuery!<{ id: string; email: string; isActive: boolean }>(
+    const [canonicalOldest, canonicalLater] = requirePair(await db.rawQuery!<{ id: string; email: string; isActive: boolean }>(
       `SELECT id, email, is_active AS "isActive" FROM fortress_user
        WHERE id IN (?, ?) ORDER BY id`,
-      [duplicateUsers[0].id, duplicateUsers[1].id],
-    );
-    expect(canonicalized[0]).toMatchObject({
-      id: duplicateUsers[0].id,
+      [oldestDuplicate.id, laterDuplicate.id],
+    ), 'canonicalized PostgreSQL users ordered by id');
+    expect(canonicalOldest).toMatchObject({
+      id: oldestDuplicate.id,
       email: 'duplicate@example.com',
       isActive: true,
     });
-    expect(canonicalized[1].email).toBe(`fortress-duplicate-${duplicateUsers[1].id}@invalid`);
-    expect(canonicalized[1].isActive).toBe(false);
-    const [duplicateSession] = await db.rawQuery!<{ isRevoked: boolean }>(
+    expect(canonicalLater.email).toBe(`fortress-duplicate-${laterDuplicate.id}@invalid`);
+    expect(canonicalLater.isActive).toBe(false);
+    const duplicateSession = requireRow(await db.rawQuery!<{ isRevoked: boolean }>(
       'SELECT is_revoked AS "isRevoked" FROM fortress_refresh_token WHERE token_hash = ?',
       ['duplicate-session'],
-    );
+    ), 'duplicate PostgreSQL refresh-token session');
     expect(duplicateSession.isRevoked).toBe(true);
     await expect(db.create({
       model: 'user',
@@ -203,17 +229,17 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
     );
     expect(tenantIndexes).toHaveLength(1);
 
-    const familyRows = await db.rawQuery!<{ tokenHash: string; familyCreatedAt: string }>(
+    const [firstFamilyRow, secondFamilyRow] = requirePair(await db.rawQuery!<{ tokenHash: string; familyCreatedAt: string }>(
       `SELECT token_hash AS "tokenHash", family_created_at AS "familyCreatedAt"
        FROM fortress_refresh_token WHERE token_family = ? ORDER BY created_at`,
       ['legacy-pg-family'],
-    );
-    expect(familyRows.map(row => row.tokenHash)).toEqual([
+    ), 'legacy PostgreSQL refresh family ordered by creation time');
+    expect([firstFamilyRow, secondFamilyRow].map(row => row.tokenHash)).toEqual([
       'legacy-pg-hash-1',
       'legacy-pg-hash-2',
     ]);
-    expect(familyRows[0].familyCreatedAt).toBe(familyRows[1].familyCreatedAt);
-    expect(familyRows[0].familyCreatedAt).toContain('2025-01-01');
+    expect(firstFamilyRow.familyCreatedAt).toBe(secondFamilyRow.familyCreatedAt);
+    expect(firstFamilyRow.familyCreatedAt).toContain('2025-01-01');
 
     await db.rawQuery!(
       `INSERT INTO fortress_refresh_token
@@ -221,11 +247,11 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
        VALUES (?, ?, ?, false, ?)`,
       [legacyUser.id, 'default-pg-hash', 'default-pg-family', '2030-01-01T00:00:00Z'],
     );
-    const [defaulted] = await db.rawQuery!<{ recent: boolean }>(
+    const defaulted = requireRow(await db.rawQuery!<{ recent: boolean }>(
       `SELECT family_created_at >= now() - interval '5 seconds' AS recent
        FROM fortress_refresh_token WHERE token_hash = ?`,
       ['default-pg-hash'],
-    );
+    ), 'default PostgreSQL refresh-token family timestamp');
     expect(defaulted.recent).toBe(true);
 
     const after = await getMigrationStatus(db);
@@ -308,7 +334,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
   it('upgrades every recognized v1.0.2 data-step checksum transactionally', async () => {
     const db = adapter();
     await migrateUp(db);
-    const migration6 = getFortressMigrations('pg')[5]!;
+    const migration6 = requireMigration(6);
     const stableChecksum = await computeMigrationChecksum(migration6);
     const legacyChecksums = [
       ['npm/node-esm-cjs', '950057a392a8d3ee0d00ca78a77fff61747e9f223ad53cbcb1b8a43be7a264f7'],
@@ -324,9 +350,9 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
         [legacyChecksum],
       );
       await expect(migrateUp(db), label).resolves.toMatchObject({ applied: [] });
-      const [upgraded] = await db.rawQuery!<{ checksum: string }>(
+      const upgraded = requireRow(await db.rawQuery!<{ checksum: string }>(
         'SELECT checksum FROM fortress_migration_journal WHERE version = 6',
-      );
+      ), 'upgraded PostgreSQL migration 6 journal row');
       expect(upgraded.checksum, label).toBe(stableChecksum);
     }
 
@@ -340,12 +366,12 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
       ['0'.repeat(64)],
     );
     await expect(migrateUp(db)).rejects.toThrow(INTEGRITY_FAILURE_RE);
-    const [rolledBack] = await db.rawQuery!<{ checksum: string }>(
+    const rolledBack = requireRow(await db.rawQuery!<{ checksum: string }>(
       'SELECT checksum FROM fortress_migration_journal WHERE version = 6',
-    );
+    ), 'rolled-back PostgreSQL migration 6 journal row');
     expect(rolledBack.checksum).toBe(rollbackChecksum);
 
-    const migration8 = getFortressMigrations('pg')[7]!;
+    const migration8 = requireMigration(8);
     await db.rawQuery!(
       'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 8',
       [await computeMigrationChecksum(migration8)],
@@ -386,7 +412,7 @@ describe('pg: migration upgrade fixture (bare postgres)', () => {
       await expect(migrateUp(second)).rejects.toThrow(INTEGRITY_FAILURE_RE);
       expect((await getMigrationStatus(first)).currentVersion).toBe(4);
 
-      const migration3 = getFortressMigrations('pg').find(migration => migration.version === 3)!;
+      const migration3 = requireMigration(3);
       await first.rawQuery!(
         'UPDATE fortress_migration_journal SET checksum = ? WHERE version = 3',
         [await computeMigrationChecksum(migration3)],

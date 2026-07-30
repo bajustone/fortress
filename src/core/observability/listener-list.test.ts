@@ -61,7 +61,7 @@ describe('createListenerList (sync)', () => {
     // Emit should NOT throw — error is routed to logger.error.
     expect(() => list.emit({ id: '1' })).not.toThrow();
     expect(logger.errorSpy).toHaveBeenCalledTimes(1);
-    expect(logger.errorSpy.mock.calls[0][0]).toMatchObject({
+    expect(requireAt(logger.errorSpy.mock.calls, 0, 'first listener call')[0]).toMatchObject({
       event: 'boom',
     });
   });
@@ -122,3 +122,10 @@ describe('createListenerList (async)', () => {
     expect(logger.errorSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

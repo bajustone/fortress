@@ -96,6 +96,9 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin<'magic-l
         if (!record)
           throw Errors.notFound('Invalid or expired magic link token');
 
+        if (!ctx.auth)
+          throw Errors.badRequest('Auth service is unavailable');
+
         // Find or create user by email (JIT provisioning)
         let user = await ctx.db.findOne<FortressUser>({
           model: 'user',
@@ -103,10 +106,13 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin<'magic-l
         });
 
         if (!user) {
-          user = await ctx.auth!.createUser({
+          const [name] = record.email.split('@');
+          if (name === undefined)
+            throw Errors.badRequest('Magic link token has an invalid email');
+          user = await ctx.auth.createUser({
             email: record.email,
-            name: record.email.split('@')[0],
-          }) as FortressUser;
+            name,
+          });
         }
 
         // Possession of the single-use link proves control of this address.
@@ -121,8 +127,6 @@ export function magicLink(config: MagicLinkConfig = {}): FortressPlugin<'magic-l
           });
         }
 
-        if (!ctx.auth)
-          throw Errors.badRequest('Auth service is unavailable');
         return ctx.auth.completePluginAuth(user.id, 'magic-link', meta);
       },
     }),

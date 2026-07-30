@@ -356,6 +356,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:examples": "tsc -p tsconfig.examples.json --noEmit",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json --noEmit",
+    "check:strict-indexed": "node scripts/check-strict-indexed.mjs",
     "build": "tsup",
     "version": "bun scripts/changelog.ts",
     "changelog:dry-run": "bun scripts/changelog.ts --dry-run",

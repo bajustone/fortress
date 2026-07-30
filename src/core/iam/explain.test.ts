@@ -61,10 +61,10 @@ describe('explainPermission', () => {
     );
     expect(explain.allowed).toBe(true);
     expect(explain.sources).toHaveLength(1);
-    expect(explain.sources[0].via).toBe('role');
-    expect(explain.sources[0].role).toBe('editor');
-    expect(explain.sources[0].permission.resource).toBe('article');
-    expect(explain.sources[0].permission.action).toBe('create');
+    expect(requireAt(explain.sources, 0, 'first permission explanation source').via).toBe('role');
+    expect(requireAt(explain.sources, 0, 'first permission explanation source').role).toBe('editor');
+    expect(requireAt(explain.sources, 0, 'first permission explanation source').permission.resource).toBe('article');
+    expect(requireAt(explain.sources, 0, 'first permission explanation source').permission.action).toBe('create');
     expect(explain.roleBindings.map(rb => rb.role)).toEqual(['editor']);
   });
 
@@ -86,7 +86,7 @@ describe('explainPermission', () => {
     );
     expect(explain.allowed).toBe(true);
     expect(explain.sources).toHaveLength(1);
-    expect(explain.sources[0].via).toBe('direct-user');
+    expect(requireAt(explain.sources, 0, 'first permission explanation source').via).toBe('direct-user');
   });
 
   it('attributes a permission inherited via a group role binding', async () => {
@@ -112,9 +112,9 @@ describe('explainPermission', () => {
     );
     expect(explain.allowed).toBe(true);
     expect(explain.sources).toHaveLength(1);
-    expect(explain.sources[0].via).toBe('role');
-    expect(explain.sources[0].role).toBe('viewer');
-    expect(explain.sources[0].group).toEqual({ id: group.id, name: 'eng' });
+    expect(requireAt(explain.sources, 0, 'first permission explanation source').via).toBe('role');
+    expect(requireAt(explain.sources, 0, 'first permission explanation source').role).toBe('viewer');
+    expect(requireAt(explain.sources, 0, 'first permission explanation source').group).toEqual({ id: group.id, name: 'eng' });
     expect(explain.groupMemberships).toEqual([{ id: group.id, name: 'eng' }]);
   });
 
@@ -175,3 +175,10 @@ describe('explainPermission', () => {
     expect(explain.sources.some(s => (s.permission.effect ?? 'ALLOW') === 'ALLOW')).toBe(true);
   });
 });
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

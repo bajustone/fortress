@@ -108,8 +108,17 @@ describe('permissionCache', () => {
     const userPerms = cache.get(subjectCacheKey({ type: 'USER', id: '42' }));
     const saPerms = cache.get(subjectCacheKey({ type: 'SERVICE_ACCOUNT', id: '42' }));
     expect(userPerms).toHaveLength(1);
-    expect(userPerms![0].id).toBe('1');
+    expect(requireAt(requireValue(userPerms, 'cached user permissions'), 0, 'cached user permission').id).toBe('1');
     expect(saPerms).toHaveLength(1);
-    expect(saPerms![0].resource).toBe('deploy');
+    expect(requireAt(requireValue(saPerms, 'cached service-account permissions'), 0, 'cached service-account permission').resource).toBe('deploy');
   });
 });
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  return requireValue(values[index], description);
+}
