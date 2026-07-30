@@ -104,8 +104,8 @@ describe('auth admin: user management', () => {
 
       const result = await fortress.auth.listUsers({});
 
-      expect(result.users[0]).not.toHaveProperty('passwordHash');
-      expect(result.users[0].email).toBe('user1@test.com');
+      expect(requireAt(result.users, 0, 'first listed user')).not.toHaveProperty('passwordHash');
+      expect(requireAt(result.users, 0, 'first listed user').email).toBe('user1@test.com');
     });
 
     it('searches by email', async () => {
@@ -114,7 +114,7 @@ describe('auth admin: user management', () => {
       const result = await fortress.auth.listUsers({ search: 'user2' });
 
       expect(result.users).toHaveLength(1);
-      expect(result.users[0].email).toBe('user2@test.com');
+      expect(requireAt(result.users, 0, 'first listed user').email).toBe('user2@test.com');
       expect(result.total).toBe(1);
     });
 
@@ -135,7 +135,7 @@ describe('auth admin: user management', () => {
       await createUsers(1);
 
       const listResult = await fortress.auth.listUsers({});
-      const user = await fortress.auth.getUserById(listResult.users[0].id);
+      const user = await fortress.auth.getUserById(requireAt(listResult.users, 0, 'listed user').id);
 
       expect(user.email).toBe('user1@test.com');
       expect(user.name).toBe('User 1');
@@ -153,7 +153,7 @@ describe('auth admin: user management', () => {
     it('updates user name', async () => {
       await createUsers(1);
       const { users } = await fortress.auth.listUsers({});
-      const userId = users[0].id;
+      const userId = requireAt(users, 0, 'first fixture user').id;
 
       const updated = await fortress.auth.updateUser(userId, { name: 'Updated Name' });
 
@@ -165,7 +165,7 @@ describe('auth admin: user management', () => {
     it('updates user email and login identifier', async () => {
       await createUsers(1);
       const { users } = await fortress.auth.listUsers({});
-      const userId = users[0].id;
+      const userId = requireAt(users, 0, 'first fixture user').id;
 
       const updated = await fortress.auth.updateUser(userId, { email: 'NeW@TEST.COM' });
 
@@ -190,7 +190,7 @@ describe('auth admin: user management', () => {
     it('updates isActive', async () => {
       await createUsers(1);
       const { users } = await fortress.auth.listUsers({});
-      const userId = users[0].id;
+      const userId = requireAt(users, 0, 'first fixture user').id;
 
       const updated = await fortress.auth.updateUser(userId, { isActive: false });
 
@@ -202,20 +202,20 @@ describe('auth admin: user management', () => {
       const { users } = await fortress.auth.listUsers({});
 
       await expect(
-        fortress.auth.updateUser(users[0].id, { email: 'USER2@TEST.COM' }),
+        fortress.auth.updateUser(requireAt(users, 0, 'first fixture user').id, { email: 'USER2@TEST.COM' }),
       ).rejects.toThrow('A user with this email already exists');
     });
 
     it('rolls back the user email when identifier synchronization conflicts', async () => {
       await createUsers(2);
       const { users } = await fortress.auth.listUsers({ sortBy: 'id', sortDirection: 'asc' });
-      await fortress.auth.addLoginIdentifier(users[1].id, 'email', 'claimed@example.com');
+      await fortress.auth.addLoginIdentifier(requireAt(users, 1, 'second fixture user').id, 'email', 'claimed@example.com');
 
       await expect(
-        fortress.auth.updateUser(users[0].id, { email: 'CLAIMED@EXAMPLE.COM' }),
+        fortress.auth.updateUser(requireAt(users, 0, 'first fixture user').id, { email: 'CLAIMED@EXAMPLE.COM' }),
       ).rejects.toMatchObject({ code: 'CONFLICT' });
-      expect((await fortress.auth.getUserById(users[0].id)).email).toBe('user1@test.com');
-      expect((await fortress.auth.getLoginIdentifiers(users[0].id)).map(identifier => identifier.value))
+      expect((await fortress.auth.getUserById(requireAt(users, 0, 'first fixture user').id)).email).toBe('user1@test.com');
+      expect((await fortress.auth.getLoginIdentifiers(requireAt(users, 0, 'first fixture user').id)).map(identifier => identifier.value))
         .toContain('user1@test.com');
     });
 
@@ -232,7 +232,7 @@ describe('auth admin: user management', () => {
     it('deletes user', async () => {
       await createUsers(1);
       const { users } = await fortress.auth.listUsers({});
-      const userId = users[0].id;
+      const userId = requireAt(users, 0, 'first fixture user').id;
 
       await fortress.auth.deleteUser(userId);
 
@@ -245,3 +245,10 @@ describe('auth admin: user management', () => {
     });
   });
 });
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

@@ -161,8 +161,8 @@ describe('getSubjectPermissions', () => {
 
     const permissions = await adapter.getSubjectPermissions({ type: 'USER', id: user.id });
     expect(permissions).toHaveLength(1);
-    expect(permissions[0].resource).toBe('document');
-    expect(permissions[0].action).toBe('read');
+    expect(requireAt(permissions, 0, 'first permission').resource).toBe('document');
+    expect(requireAt(permissions, 0, 'first permission').action).toBe('read');
   });
 
   it('resolves permissions through group role binding', async () => {
@@ -191,8 +191,8 @@ describe('getSubjectPermissions', () => {
 
     const permissions = await adapter.getSubjectPermissions({ type: 'USER', id: user.id });
     expect(permissions).toHaveLength(1);
-    expect(permissions[0].resource).toBe('article');
-    expect(permissions[0].action).toBe('write');
+    expect(requireAt(permissions, 0, 'first permission').resource).toBe('article');
+    expect(requireAt(permissions, 0, 'first permission').action).toBe('write');
   });
 
   it('does not let tenant-scoped role bindings satisfy tenant-less permission resolution', async () => {
@@ -212,7 +212,7 @@ describe('getSubjectPermissions', () => {
     expect(await adapter.getSubjectPermissions({ type: 'USER', id: user.id })).toEqual([]);
     const tenantPermissions = await adapter.getSubjectPermissions({ type: 'USER', id: user.id }, 'tenant-a');
     expect(tenantPermissions).toHaveLength(1);
-    expect(tenantPermissions[0].resource).toBe('invoice');
+    expect(requireAt(tenantPermissions, 0, 'first tenant permission').resource).toBe('invoice');
   });
 
   it('returns empty array for user with no roles', async () => {
@@ -278,8 +278,8 @@ describe('getSubjectPermissions', () => {
 
     const permissions = await adapter.getSubjectPermissions({ type: 'SERVICE_ACCOUNT', id: sa.id });
     expect(permissions).toHaveLength(1);
-    expect(permissions[0].resource).toBe('deploy');
-    expect(permissions[0].action).toBe('run');
+    expect(requireAt(permissions, 0, 'first permission').resource).toBe('deploy');
+    expect(requireAt(permissions, 0, 'first permission').action).toBe('run');
   });
 
   it('resolves direct permission bindings for a SERVICE_ACCOUNT', async () => {
@@ -301,7 +301,7 @@ describe('getSubjectPermissions', () => {
 
     const permissions = await adapter.getSubjectPermissions({ type: 'SERVICE_ACCOUNT', id: sa.id });
     expect(permissions).toHaveLength(1);
-    expect(permissions[0].resource).toBe('audit');
+    expect(requireAt(permissions, 0, 'first permission').resource).toBe('audit');
   });
 
   it('returns empty for an inactive SERVICE_ACCOUNT even with a bound role', async () => {
@@ -387,3 +387,10 @@ describe('findOrCreatePermission', () => {
     expect(first.id).toBe(second.id);
   });
 });
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

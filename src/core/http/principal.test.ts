@@ -263,7 +263,7 @@ describe('resolveRequestPrincipal', () => {
     // replacement). A mid-segment char carries full bits, so flipping it
     // always invalidates the signature.
     const parts = validAccessToken.split('.');
-    const sig = parts[2];
+    const sig = requireAt(parts, 2, 'JWT signature segment');
     parts[2] = (sig[0] === 'A' ? 'B' : 'A') + sig.slice(1);
     const bad = parts.join('.');
     const result = await resolveRequestPrincipal(
@@ -342,3 +342,9 @@ describe('resolveRequestPrincipal — subject shape pass-through', () => {
     expect(result?.subject).toEqual({ type: 'GROUP', id: '99' });
   });
 });
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

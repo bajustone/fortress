@@ -199,7 +199,7 @@ describe('fortress.call', () => {
         (await fortress.auth.verifyToken(accessToken)).sub,
       );
       expect(sessions.length).toBeGreaterThan(0);
-      const sessionId = sessions[0].id;
+      const sessionId = requireAt(sessions, 0, 'active session').id;
 
       await expect(
         fortress.call.auth.revokeSession(
@@ -278,3 +278,9 @@ describe('fortress.call', () => {
     });
   });
 });
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

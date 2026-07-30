@@ -154,13 +154,13 @@ describe('auth integration', () => {
     const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(String(rejected[0].reason)).toMatch(/Token reuse detected/);
+    expect(String(requireAt(rejected, 0, 'rejected refresh result').reason)).toMatch(/Token reuse detected/);
 
     // Fortress deliberately uses strict replay semantics: the losing
     // duplicate invalidates the entire token family, including the winner's
     // freshly issued refresh token. This favours theft detection over a
     // concurrency grace window.
-    await expect(fortress.auth.refresh(fulfilled[0].value.refreshToken)).rejects.toThrow('Token reuse detected');
+    await expect(fortress.auth.refresh(requireAt(fulfilled, 0, 'fulfilled refresh result').value.refreshToken)).rejects.toThrow('Token reuse detected');
   });
 
   it('graces a concurrent double-refresh and returns the same successor', async () => {
@@ -488,8 +488,8 @@ describe('multi-key login', () => {
 
     const identifiers = await fortress.auth.getLoginIdentifiers(user.id);
     expect(identifiers).toHaveLength(1);
-    expect(identifiers[0].type).toBe('email');
-    expect(identifiers[0].value).toBe('multi@example.com');
+    expect(requireAt(identifiers, 0, 'email login identifier').type).toBe('email');
+    expect(requireAt(identifiers, 0, 'email login identifier').value).toBe('multi@example.com');
   });
 
   it('allows login with phone after adding phone identifier', async () => {
@@ -716,3 +716,10 @@ describe('plugin integration', () => {
     expect((result as any).reason).toBe('maintenance');
   });
 });
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

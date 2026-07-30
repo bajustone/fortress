@@ -112,7 +112,7 @@ describe('drizzle adapter: buildWhereCondition edge cases', () => {
     });
 
     expect(results).toHaveLength(1);
-    expect(results[0].email).toBe('alice@test.com');
+    expect(requireAt(results, 0, 'matched adapter user').email).toBe('alice@test.com');
   });
 
   it('aNDs multiple where conditions together', async () => {
@@ -130,7 +130,7 @@ describe('drizzle adapter: buildWhereCondition edge cases', () => {
     });
 
     expect(results).toHaveLength(1);
-    expect(results[0].email).toBe('alice@test.com');
+    expect(requireAt(results, 0, 'matched adapter user').email).toBe('alice@test.com');
   });
 
   it('maps snake_case field names to camelCase columns', async () => {
@@ -483,3 +483,9 @@ describe('drizzle adapter: concurrent transactions (C3)', () => {
     expect(wins).toBe(1);
   });
 });
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  const value = values[index];
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}

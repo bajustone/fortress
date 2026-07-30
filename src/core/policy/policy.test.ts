@@ -79,9 +79,10 @@ describe('policy-as-code', () => {
   it('clears role descriptions and converges', async () => {
     const fortress = freshFortress();
     await applyPolicyPlan(await diffPolicy(basePolicy, fortress.iam), fortress.iam);
+    const editorRole = requireAt(requireValue(basePolicy.roles, 'base policy roles'), 0, 'base editor policy role');
     const cleared: PolicyDocument = {
       ...basePolicy,
-      roles: [{ ...basePolicy.roles![0], description: undefined }],
+      roles: [{ ...editorRole, description: undefined }],
     };
 
     const result = await applyPolicyPlan(await diffPolicy(cleared, fortress.iam), fortress.iam);
@@ -169,13 +170,14 @@ describe('policy-as-code', () => {
     const fortress = freshFortress();
     await applyPolicyPlan(await diffPolicy(basePolicy, fortress.iam), fortress.iam);
 
+    const editorRole = requireAt(requireValue(basePolicy.roles, 'base policy roles'), 0, 'base editor policy role');
     const widened: PolicyDocument = {
       ...basePolicy,
       roles: [
         {
-          ...basePolicy.roles![0],
+          ...editorRole,
           permissions: [
-            ...basePolicy.roles![0].permissions,
+            ...editorRole.permissions,
             { resource: 'article', action: 'delete' },
           ],
         },
@@ -193,11 +195,12 @@ describe('policy-as-code', () => {
     const fortress = freshFortress();
     await applyPolicyPlan(await diffPolicy(basePolicy, fortress.iam), fortress.iam);
 
+    const editorRole = requireAt(requireValue(basePolicy.roles, 'base policy roles'), 0, 'base editor policy role');
     const narrowed: PolicyDocument = {
       ...basePolicy,
       roles: [
         {
-          ...basePolicy.roles![0],
+          ...editorRole,
           permissions: [{ resource: 'article', action: 'create' }],
         },
       ],
@@ -230,3 +233,13 @@ describe('policy-as-code', () => {
     })).inSync).toBe(true);
   });
 });
+
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  return requireValue(values[index], description);
+}

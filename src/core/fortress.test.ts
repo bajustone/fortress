@@ -856,8 +856,8 @@ describe('createFortress', () => {
         ],
       });
       const tree = fortress.call.plugins as Record<string, Record<string, unknown>>;
-      expect(typeof tree['first-plugin'].shared).toBe('function');
-      expect(typeof tree['second-plugin'].shared).toBe('function');
+      expect(typeof requireValue(tree['first-plugin'], 'first plugin call surface').shared).toBe('function');
+      expect(typeof requireValue(tree['second-plugin'], 'second plugin call surface').shared).toBe('function');
     });
   });
 
@@ -887,10 +887,11 @@ describe('createFortress', () => {
 
       expect(spec.openapi).toBe('3.1.0');
       expect(spec.info.title).toBe('REB EdIT API');
-      expect(spec.servers?.[0]?.url).toBe('http://localhost:3001');
+      expect(requireAt(requireValue(spec.servers, 'OpenAPI servers'), 0, 'first OpenAPI server').url).toBe('http://localhost:3001');
       expect(spec.tags).toEqual([{ name: 'Schools' }]);
-      expect(spec.paths['/api/v1/schools/{id}'].get.operationId).toBe('schools.get');
-      expect(spec.paths['/api/v1/schools/{id}'].get.parameters?.[0]).toMatchObject({
+      const schoolOperation = requireValue(requireValue(spec.paths['/api/v1/schools/{id}'], 'school path').get, 'school GET operation');
+      expect(schoolOperation.operationId).toBe('schools.get');
+      expect(requireAt(requireValue(schoolOperation.parameters, 'school GET parameters'), 0, 'school id path parameter')).toMatchObject({
         name: 'id',
         in: 'path',
         required: true,
@@ -912,39 +913,40 @@ describe('createFortress', () => {
 
       const spec = fortress.toOpenAPI({ title: 'Host API', version: '1.0.0', endpoints: [ping] });
       expect(Object.keys(spec.paths)).toEqual(['/ping']);
-      expect(spec.paths['/ping'].get.operationId).toBe('ping');
+      expect(requireValue(requireValue(spec.paths['/ping'], 'ping path').get, 'ping GET operation').operationId).toBe('ping');
     });
 
     it('documents the permission check body as an exactly-one identity union', () => {
-      interface Branch {
-        required?: string[];
-        additionalProperties?: boolean;
-        properties?: Record<string, { properties?: Record<string, { enum?: string[] }> }>;
-      }
       const fortress = createFortress({
         jwt: { key: 'fortress-test-secret-at-least-32!' },
         database: mockDb,
       });
 
       const spec = fortress.toOpenAPI({ title: 'Fortress', version: '0.0.0' });
-      const schema = (spec.paths['/iam/check'] as unknown as {
-        post: { requestBody: { content: Record<string, { schema: { oneOf?: Branch[] } }> } };
-      }).post.requestBody.content['application/json'].schema;
+      const iamPath = requireValue(spec.paths['/iam/check'], 'IAM check path');
+      const iamPost = requireValue(iamPath.post, 'IAM check POST operation');
+      const requestBody = requireValue(iamPost.requestBody, 'IAM check request body');
+      const mediaType = requireValue(requestBody.content['application/json'], 'IAM check JSON request body');
+      const schema = mediaType.schema;
 
       expect(schema.oneOf).toHaveLength(2);
-      const legacy = schema.oneOf!.find(branch => branch.required?.includes('userId'));
-      const subject = schema.oneOf!.find(branch => branch.required?.includes('subject'));
+      const branches = requireValue(schema.oneOf, 'IAM check oneOf branches');
+      const legacy = branches.find(branch => branch.required?.includes('userId'));
+      const subject = branches.find(branch => branch.required?.includes('subject'));
       expect(legacy).toBeDefined();
       expect(subject).toBeDefined();
       // Neither branch may require the other's identity field, which is what
       // makes a body carrying both match both arms and fail `oneOf`.
-      expect(legacy!.required).not.toContain('subject');
-      expect(subject!.required).not.toContain('userId');
+      expect(requireValue(legacy, 'legacy IAM branch').required).not.toContain('subject');
+      expect(requireValue(subject, 'subject IAM branch').required).not.toContain('userId');
       // Both branches must be closed. While they were open, a malformed
       // counterpart disqualified one arm and the body was accepted.
-      expect(legacy!.additionalProperties).toBe(false);
-      expect(subject!.additionalProperties).toBe(false);
-      expect(subject!.properties!.subject.properties!.type.enum)
+      expect(requireValue(legacy, 'legacy IAM branch').additionalProperties).toBe(false);
+      expect(requireValue(subject, 'subject IAM branch').additionalProperties).toBe(false);
+      const subjectProperties = requireValue(requireValue(subject, 'subject IAM branch').properties, 'subject branch properties');
+      const subjectSchema = requireValue(subjectProperties.subject, 'subject property');
+      const typeSchema = requireValue(requireValue(subjectSchema.properties, 'subject property fields').type, 'subject type field');
+      expect(typeSchema.enum)
         .toEqual(['USER', 'GROUP', 'SERVICE_ACCOUNT']);
     });
   });
@@ -994,3 +996,12 @@ describe('post-factory dependency graph revalidation', () => {
     }));
   });
 });
+function requireValue<T>(value: T | undefined, description: string): T {
+  if (value === undefined)
+    throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function requireAt<T>(values: readonly T[], index: number, description: string): T {
+  return requireValue(values[index], description);
+}
