@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   expectedMigrationFiles,
+  normalizePackManifest,
   npmRequiredTargets,
   publicDocumentationFiles,
   readJson,
@@ -32,9 +33,7 @@ try {
     '--pack-destination',
     temporary,
   ]);
-  const [manifest] = JSON.parse(String(packed.stdout));
-  if (!manifest || !Array.isArray(manifest.files) || typeof manifest.filename !== 'string')
-    throw new Error('npm pack returned an invalid JSON manifest');
+  const manifest = normalizePackManifest(JSON.parse(String(packed.stdout)));
   const files = new Set(manifest.files.map(file => file.path));
   const packageJson = readJson(resolve(root, 'package.json'));
   const expectedMigrations = expectedMigrationFiles(root);

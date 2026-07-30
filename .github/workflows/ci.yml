@@ -56,6 +56,13 @@ jobs:
         run: bun run check:repository-publication-policy
       - name: Packed npm publication manifest and CLI
         run: bun run check:package-cli
+      # Last in this job: it repoints the runner's Node/npm toolchain, and the
+      # npm 12 CLI it exercises requires a newer Node than the default runtime.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: npm pack JSON shapes (npm 11 array, npm 12 keyed object)
+        run: bun run check:npm-pack-shapes
 
   # Fail-on-increase ratchet for the staged `noUncheckedIndexedAccess` adoption
   # (issue #28). Production and test diagnostic counts are compared to separate

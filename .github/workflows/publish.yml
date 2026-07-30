@@ -2,6 +2,27 @@ name: Publish
 on:
   push:
     tags: ['v*']
+  # Recovery for a tagged release whose npm upload failed after the rest of the
+  # release already landed. npm trusted publishing is bound to this workflow's
+  # filename, so the recovery cannot live in a separate workflow file.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact released version to publish to npm (for example 2.0.0)
+        required: true
+        type: string
+      confirm:
+        description: Type recover-npm-publication to confirm
+        required: true
+        type: string
+
+# One publication for this package at a time, across both entry points and
+# every version. A version-keyed group would still allow a recovery for one
+# version to run while another version is mid-publish, and whichever finished
+# last would decide what `latest` points at.
+concurrency:
+  group: publish-bajustone-fortress
+  cancel-in-progress: false
 
 jobs:
   # Gate the release on the committed package.json/jsr.json being in sync. The
@@ -9,6 +30,7 @@ jobs:
   # silently mask drift in the committed source; this job surfaces it so a
   # tagged release fails loudly instead. Mirrors the local pre-push hook.
   verify-version:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +55,7 @@ jobs:
       - run: bun run check:version
 
   quality:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,8 +86,16 @@ jobs:
         run: bun run check:declarations:ts50
       - run: bun run check:repository-publication-policy
       - run: bun run check:package-cli
+      # Last in this job: it repoints the runner's Node/npm toolchain, and the
+      # npm 12 CLI it exercises requires a newer Node than this job's default.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: npm pack JSON shapes (npm 11 array, npm 12 keyed object)
+        run: bun run check:npm-pack-shapes
 
   publish-jsr:
+    if: github.event_name == 'push'
     needs: [verify-version, quality]
     runs-on: ubuntu-latest
     permissions:
@@ -86,6 +117,7 @@ jobs:
       - run: deno publish --allow-dirty
 
   publish-npm:
+    if: github.event_name == 'push'
     needs: [verify-version, quality]
     runs-on: ubuntu-latest
     permissions:
@@ -114,3 +146,140 @@ jobs:
             exit 0
           fi
           npm publish --access public
+
+  # Completes the npm half of a release that already exists everywhere else.
+  # It never creates or moves a tag, never republishes JSR, and never publishes
+  # from anything other than the immutable tagged commit.
+  recover-npm:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Runs before the checkout so a malformed version can never be resolved
+      # into an arbitrary ref.
+      - name: Validate recovery request
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          test "$CONFIRM" = 'recover-npm-publication'
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/v${{ github.event.inputs.version }}
+          fetch-depth: 0
+      - name: Verify tag identity and main ancestry
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          TAG="v$VERSION"
+          test "$(node -p 'require("./package.json").version')" = "$VERSION"
+          test "$(node -p 'require("./jsr.json").version')" = "$VERSION"
+          TAG_COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
+          test "$(git rev-parse 'HEAD^{commit}')" = "$TAG_COMMIT"
+          # Compare against the remote tag, so a locally rewritten or stale tag
+          # cannot be the thing that gets published.
+          REMOTE_TAG=$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)
+          if [ -z "$REMOTE_TAG" ]; then
+            REMOTE_TAG=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
+          fi
+          test -n "$REMOTE_TAG"
+          test "$REMOTE_TAG" = "$TAG_COMMIT"
+          git fetch --no-tags --force origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main
+          echo "RELEASE_SHA=$TAG_COMMIT" >> "$GITHUB_ENV"
+      - name: Verify registry state before publishing
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          JSR_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -H 'Accept: application/json' \
+            "https://jsr.io/@bajustone/fortress/${VERSION}_meta.json")
+          test "$JSR_STATUS" = '200'
+          # Every conclusion below is drawn from one successful, well-formed
+          # metadata response, so an outage, an auth error, or a malformed
+          # payload can never be read as "this version is missing". Recovery is
+          # only ever allowed to move `latest` forward: publishing 2.0.0 after
+          # 2.0.1 already shipped would silently downgrade it.
+          PACKAGE_JSON=$(npm view @bajustone/fortress --json)
+          printf '%s' "$PACKAGE_JSON" | node -e '
+            let raw = "";
+            process.stdin.on("data", chunk => { raw += chunk; });
+            process.stdin.on("end", () => {
+              const target = process.env.VERSION;
+              const meta = JSON.parse(raw);
+              if (!meta || typeof meta !== "object" || Array.isArray(meta))
+                throw new Error("npm did not return package metadata");
+              const versions = meta.versions;
+              if (!Array.isArray(versions) || versions.length === 0)
+                throw new Error("npm did not return a version list");
+              if (versions.some(entry => typeof entry !== "string" || entry.length === 0))
+                throw new Error("npm returned an unusable version list");
+              const tags = meta["dist-tags"];
+              if (!tags || typeof tags !== "object" || Array.isArray(tags))
+                throw new Error("npm did not return dist-tags");
+              const latest = tags.latest;
+              if (typeof latest !== "string" || latest.length === 0)
+                throw new Error("npm did not return a latest dist-tag");
+              if (!versions.includes(latest))
+                throw new Error("npm latest " + latest + " is not a served version");
+              const isStable = value => {
+                const parts = value.split(".");
+                return parts.length === 3
+                  && parts.every(part => part.length > 0 && [...part].every(ch => ch >= "0" && ch <= "9"));
+              };
+              // Numeric component comparison: 2.0.0 must not look newer than 10.0.0.
+              const compare = (left, right) => {
+                const a = left.split(".").map(part => BigInt(part));
+                const b = right.split(".").map(part => BigInt(part));
+                for (let index = 0; index < 3; index += 1) {
+                  if (a[index] < b[index]) return -1;
+                  if (a[index] > b[index]) return 1;
+                }
+                return 0;
+              };
+              if (!isStable(target))
+                throw new Error("recovery target " + target + " is not a stable release");
+              if (versions.includes(target))
+                throw new Error("npm already serves " + target + "; nothing to recover.");
+              if (!isStable(latest))
+                throw new Error("npm latest " + latest + " is not a stable release");
+              if (compare(latest, target) >= 0)
+                throw new Error("npm latest " + latest + " is not older than " + target);
+              const newer = versions.filter(entry => isStable(entry) && compare(entry, target) >= 0);
+              if (newer.length > 0)
+                throw new Error("npm already serves newer stable versions: " + newer.join(", "));
+              console.log("npm latest " + latest + " is older than " + target + "; "
+                + versions.length + " versions served, none at or above the target");
+            });
+          '
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      # The tagged commit's own prepublish checker only understands npm 11's
+      # pack JSON. Pinning that CLI lets the immutable release validate itself
+      # against its original contract instead of having its lifecycle bypassed.
+      - name: Pin the npm CLI the tagged release was validated against
+        run: npm install --global npm@11.9.0
+      - run: bun install --frozen-lockfile
+      - run: bun run check:release
+      - run: bun run check:npm-publication
+      - name: Publish to npm
+        run: |
+          test "$(npm --version)" = '11.9.0'
+          npm publish --access public
+      - name: Verify the published npm artifact
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          test "$(npm view "@bajustone/fortress@$VERSION" version)" = "$VERSION"
+          test "$(npm view @bajustone/fortress dist-tags.latest)" = "$VERSION"
+          test "$(npm view "@bajustone/fortress@$VERSION" gitHead)" = "$RELEASE_SHA"

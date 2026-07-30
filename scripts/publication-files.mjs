@@ -11,6 +11,55 @@ export function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+function isPlainObject(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function assertManifestEntry(entry, source) {
+  if (!isPlainObject(entry))
+    throw new Error(`npm pack --json ${source} is not an object manifest`);
+  if (typeof entry.name !== 'string' || entry.name.length === 0)
+    throw new Error(`npm pack --json ${source} has no package name`);
+  if (typeof entry.filename !== 'string' || entry.filename.length === 0)
+    throw new Error(`npm pack --json ${source} has no tarball filename`);
+  if (!Array.isArray(entry.files))
+    throw new Error(`npm pack --json ${source} has no file list`);
+  for (const file of entry.files) {
+    if (!isPlainObject(file) || typeof file.path !== 'string' || file.path.length === 0)
+      throw new Error(`npm pack --json ${source} lists a file without a path`);
+  }
+  return entry;
+}
+
+// npm 11 and earlier print `npm pack --json` as an array of manifests; npm 12
+// prints an object keyed by package name. Only the container changed, so the
+// entry is normalized rather than reinterpreted. Exactly one manifest is
+// required in both shapes: taking the first of several would let a tarball we
+// did not intend to publish satisfy the publication policy.
+export function normalizePackManifest(parsed) {
+  if (Array.isArray(parsed)) {
+    if (parsed.length !== 1)
+      throw new Error(`npm pack --json returned ${parsed.length} manifests; expected exactly 1`);
+    return assertManifestEntry(parsed[0], 'manifest');
+  }
+  if (!isPlainObject(parsed))
+    throw new Error('npm pack --json returned neither a manifest array nor a keyed manifest object');
+
+  // Own enumerable keys only, so a manifest reached through the prototype
+  // chain cannot stand in for a packed package.
+  const names = Object.keys(parsed);
+  if (names.length !== 1)
+    throw new Error(`npm pack --json returned ${names.length} manifests; expected exactly 1`);
+  const [name] = names;
+  const entry = assertManifestEntry(parsed[name], `manifest "${name}"`);
+  if (entry.name !== name)
+    throw new Error(`npm pack --json keyed manifest "${name}" describes package "${entry.name}"`);
+  return entry;
+}
+
 function listFiles(directory, root, files) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const absolute = join(directory, entry.name);
