@@ -18,6 +18,7 @@
  */
 
 import type { FortressAuthRuntime } from '../capabilities';
+import type { RuntimeFortressPlugin } from '../plugin';
 import type { Subject, TokenClaims } from '../types';
 
 /** Result of a successful principal resolution. */
@@ -35,8 +36,13 @@ export interface ResolvedPrincipal {
 export async function tryPluginPrincipal(
   fortress: Pick<FortressAuthRuntime, 'auth' | 'iam' | 'config' | 'extractAccessToken'>,
   request: Request,
+  validatedPlugins?: readonly RuntimeFortressPlugin[],
 ): Promise<ResolvedPrincipal | null> {
-  const plugins = fortress.config.plugins ?? [];
+  // `config.plugins` is live and can be appended to after construction, which
+  // would let a plugin join the credential-resolution chain without having
+  // been validated at startup. Callers inside `createFortress` pass the
+  // validated membership; standalone callers keep the previous behaviour.
+  const plugins = validatedPlugins ?? fortress.config.plugins ?? [];
   for (const plugin of plugins) {
     if (!plugin.resolvePrincipal)
       continue;
@@ -65,8 +71,9 @@ export async function tryPluginPrincipal(
 export async function resolveRequestPrincipal(
   fortress: Pick<FortressAuthRuntime, 'auth' | 'iam' | 'config' | 'extractAccessToken'>,
   request: Request,
+  validatedPlugins?: readonly RuntimeFortressPlugin[],
 ): Promise<ResolvedPrincipal | null> {
-  const plugin = await tryPluginPrincipal(fortress, request);
+  const plugin = await tryPluginPrincipal(fortress, request, validatedPlugins);
   if (plugin)
     return plugin;
 

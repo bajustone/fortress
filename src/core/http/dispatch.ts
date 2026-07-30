@@ -26,7 +26,7 @@ import type {
   InferEndpointBody,
 } from '../endpoint';
 import type { IamEndpointsMap } from '../iam/iam-endpoints';
-import type { PluginMethod, PluginRouteContext, RuntimeFortressPlugin } from '../plugin';
+import type { PluginMethod, PluginRouteContext } from '../plugin';
 import type { PluginCapability } from '../plugin-methods-map';
 import type {
   CreateUserInput,
@@ -43,6 +43,7 @@ import type { ValidatedRequestData } from '../validation';
 import { endpointSuccessStatus } from '../endpoint';
 import { Errors, FortressError } from '../errors';
 import { resolvePluginCapability } from '../plugin-methods-map';
+import { endpointOwner, HOST_ROUTES_PLUGIN_NAME } from '../route-assembly';
 
 /** Auth context resolved by `handleRequest` before dispatch. */
 export interface DispatchAuth {
@@ -77,8 +78,8 @@ export async function dispatchEndpoint(
 ): Promise<DispatchResult> {
   // OAuth protocol/consent routes get form-encoded body parsing + Basic auth
   // handling. Ordinary routes on the same plugin take the normal path.
-  const owningPlugin = findOwningPlugin(fortress, endpoint);
-  if (owningPlugin && isOAuthDispatchRoute(owningPlugin, endpoint)) {
+  const owningPluginName = findOwningPluginName(endpoint);
+  if (owningPluginName !== undefined && isOAuthDispatchRoute(owningPluginName, endpoint)) {
     return dispatchOAuth(fortress, request, endpoint, auth);
   }
 
@@ -87,8 +88,8 @@ export async function dispatchEndpoint(
   const params = objectOrEmpty(input.params);
 
   // Plugin route (non-oauth)
-  if (owningPlugin) {
-    return dispatchPlugin(fortress, owningPlugin, endpoint, body, query, params, request, auth);
+  if (owningPluginName !== undefined) {
+    return dispatchPlugin(fortress, owningPluginName, endpoint, body, query, params, request, auth);
   }
 
   // Core auth / IAM dispatch. Query values are available on every method;
@@ -187,28 +188,35 @@ function isPluginMethodRecord(value: unknown): value is Record<string, PluginMet
  * capabilities under the literal name `oauth`, so matching on metadata alone
  * would dispatch another plugin's route against this plugin's methods.
  */
-function isOAuthDispatchRoute(plugin: RuntimeFortressPlugin, endpoint: EndpointDefinition): boolean {
-  return plugin.name === 'oauth'
+function isOAuthDispatchRoute(pluginName: string, endpoint: EndpointDefinition): boolean {
+  return pluginName === 'oauth'
     && (endpoint.meta?.bearerKind === 'oauth' || endpoint.meta?.dispatchKind === 'oauth');
 }
 
-/** Find the plugin (if any) that owns the given endpoint. */
-function findOwningPlugin(fortress: FortressRuntime, endpoint: EndpointDefinition): RuntimeFortressPlugin | undefined {
-  const plugins = fortress.config.plugins ?? [];
-  for (const plugin of plugins) {
-    if (!plugin.routes)
-      continue;
-    const routes = Object.values(plugin.routes) as EndpointDefinition[];
-    if (routes.some(r => r.method === endpoint.method && r.path === endpoint.path)) {
-      return plugin;
-    }
-  }
-  return undefined;
+/**
+ * Name of the plugin that owns this endpoint, per the validated startup
+ * snapshot.
+ *
+ * Provenance is read from the snapshot rather than re-derived from
+ * `config.plugins`, which is live: a plugin could previously change which
+ * routes it appeared to own — or acquire another plugin's route — by mutating
+ * its `routes` record after construction. Returning the owner *name* rather
+ * than the descriptor keeps that true even if `plugin.name` is later
+ * reassigned, since dispatch resolves the surface through `resolvePlugin`.
+ */
+function findOwningPluginName(endpoint: EndpointDefinition): string | undefined {
+  const owner = endpointOwner(endpoint);
+  // A symbol owner is a Fortress core route (dispatched through the auth/IAM
+  // switches below); `__host` routes are metadata-only and have no plugin
+  // surface to call. Neither is a plugin dispatch target.
+  if (typeof owner !== 'string' || owner === HOST_ROUTES_PLUGIN_NAME)
+    return undefined;
+  return owner;
 }
 
 async function dispatchPlugin(
   fortress: FortressRuntime,
-  plugin: RuntimeFortressPlugin,
+  pluginName: string,
   endpoint: EndpointDefinition,
   body: Record<string, unknown>,
   query: Record<string, unknown>,
@@ -218,7 +226,7 @@ async function dispatchPlugin(
 ): Promise<Response> {
   // OpenAPI Scalar UI returns HTML, not JSON. Use the named capability so
   // this core-owned route cannot silently drift from the plugin contract.
-  if (plugin.name === 'openapi' && endpoint.handler === 'getUI') {
+  if (pluginName === 'openapi' && endpoint.handler === 'getUI') {
     const html = resolvePluginCapability(fortress, 'openapi', 'getUI').getUI();
     return new Response(html, {
       status: 200,
@@ -226,10 +234,10 @@ async function dispatchPlugin(
     });
   }
 
-  const methods = fortress.resolvePlugin(plugin.name, isPluginMethodRecord);
+  const methods = fortress.resolvePlugin(pluginName, isPluginMethodRecord);
   const method = Object.hasOwn(methods, endpoint.handler) ? methods[endpoint.handler] : undefined;
   if (typeof method !== 'function')
-    throw Errors.notFound(`Plugin handler '${plugin.name}.${endpoint.handler}' not found`);
+    throw Errors.notFound(`Plugin handler '${pluginName}.${endpoint.handler}' not found`);
 
   // Call as `methods.<handler>(...)` so the `this` binding is preserved —
   // some plugin methods reference sibling helpers via `this`.

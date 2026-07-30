@@ -4,6 +4,7 @@ import type { MiddlewareDefinition, RuntimeFortressPlugin } from '../plugin';
 import { authEndpoints } from '../auth/auth-endpoints';
 import { resolveCsrfConfig } from '../http/csrf';
 import { iamEndpoints } from '../iam/iam-endpoints';
+import { endpointProvenance } from '../route-assembly';
 
 export type RouteClassification = 'public' | 'authenticated' | 'rbac' | 'oauth-protocol' | 'default-deny';
 
@@ -124,7 +125,17 @@ function collectEndpointOrigins(fortress: Pick<FortressManifestRuntime, 'endpoin
   const byKey = new Map<string, EndpointWithOrigin>();
   for (const endpoint of fortress.endpoints) {
     const key = endpointKey(endpoint);
-    byKey.set(key, origins.get(key) ?? { endpoint, plugin: null });
+    // An assembled snapshot carries its own origin, so the manifest still
+    // reports the validated owner after a plugin rewrites or drops its route
+    // record. Endpoints from an arbitrary, fake, or config-only runtime have
+    // no provenance and keep the live-config derivation above.
+    const provenance = endpointProvenance(endpoint);
+    byKey.set(
+      key,
+      provenance
+        ? { endpoint, plugin: provenance.manifestLabel }
+        : origins.get(key) ?? { endpoint, plugin: null },
+    );
   }
   return [...byKey.values()];
 }
