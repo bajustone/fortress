@@ -1,5 +1,5 @@
 import type { FortressConfig } from './config';
-import type { EndpointDefinition } from './endpoint';
+import type { EndpointDefinition, EndpointMeta, EndpointResponse } from './endpoint';
 import type { FortressPlugin, PluginDependency, RuntimeFortressPlugin } from './plugin';
 import { authEndpoints } from './auth/auth-endpoints';
 import { isHttpMethod } from './endpoint';
@@ -25,6 +25,98 @@ export const CORE_ENDPOINT_OWNER: unique symbol = Symbol('fortress.core-endpoint
 
 /** An endpoint's owner: a built-in route, or the plugin name that declared it. */
 export type EndpointOwner = string | typeof CORE_ENDPOINT_OWNER;
+
+/**
+ * Owner provenance keyed by *cloned* endpoint identity.
+ *
+ * Route-key lookup (`METHOD /path`) is not sufficient: `path` and `method` are
+ * themselves mutable inputs, so a key derived from an endpoint could be made to
+ * name a different owner's route. Snapshot clones are per-instance and never
+ * handed back to plugins, so their identity is a stable primary key.
+ */
+const endpointProvenanceRegistry = new WeakMap<object, EndpointProvenance>();
+
+/**
+ * What the validated snapshot records about one endpoint.
+ *
+ * Readonly and frozen before storage: this record is the authority for
+ * dispatch ownership and for the manifest's `plugin`/`mounted` columns, and
+ * {@link endpointProvenance} hands it straight to callers.
+ */
+export interface EndpointProvenance {
+  /** Stable dispatch owner: the declaring plugin's name, or the core marker. */
+  readonly owner: EndpointOwner;
+  /**
+   * Origin label the route manifest reports: `'auth'` / `'iam'` for built-in
+   * routes, the plugin name for plugin routes, and `null` for top-level host
+   * routes — which are metadata-only and therefore reported unmounted.
+   */
+  readonly manifestLabel: string | null;
+}
+
+/**
+ * Provenance recorded for a snapshot endpoint, or `undefined` for any object
+ * that did not come from {@link assembleEndpoints}.
+ */
+export function endpointProvenance(endpoint: EndpointDefinition): EndpointProvenance | undefined {
+  return endpointProvenanceRegistry.get(endpoint);
+}
+
+/** Stable dispatch owner for a snapshot endpoint. */
+export function endpointOwner(endpoint: EndpointDefinition): EndpointOwner | undefined {
+  return endpointProvenanceRegistry.get(endpoint)?.owner;
+}
+
+/**
+ * Clone an endpoint's routing, auth, and response envelope, then freeze it.
+ *
+ * A plugin keeps references to the route objects it declared, and its
+ * `methods()` factory receives them live. Publishing those same objects made
+ * the validated route set advisory: flipping `bearerKind` or rewriting `path`
+ * after `createFortress()` returned changed dispatch and auth while the cached
+ * manifest kept describing the route as it was validated.
+ *
+ * Bounded on purpose. JSON Schema and Standard Schema objects are carried by
+ * reference because schema *identity* binds `$ref` component context (the
+ * `WeakMap` in `schema-builder.ts`); cloning them would silently break ref
+ * resolution. Schema mutability is therefore a documented non-goal — this
+ * freezes the route contract, not the validation schemas hanging off it.
+ */
+function snapshotEndpoint(endpoint: EndpointDefinition): EndpointDefinition {
+  const clone: EndpointDefinition = { ...endpoint };
+
+  if (endpoint.meta) {
+    const meta: EndpointMeta = { ...endpoint.meta };
+    if (endpoint.meta.tags)
+      meta.tags = Object.freeze([...endpoint.meta.tags]) as unknown as string[];
+    if (endpoint.meta.security)
+      meta.security = Object.freeze([...endpoint.meta.security]) as unknown as EndpointMeta['security'];
+    if (endpoint.meta.permission)
+      meta.permission = Object.freeze({ ...endpoint.meta.permission });
+    clone.meta = Object.freeze(meta);
+  }
+
+  // Container only — `body`/`query`/`params` and their Standard Schema
+  // counterparts stay referentially identical to the declared schemas.
+  if (endpoint.input)
+    clone.input = Object.freeze({ ...endpoint.input });
+
+  // `endpointSuccessStatus` reads this on the request path, so the status map
+  // and each response envelope are part of the frozen contract.
+  if (endpoint.responses) {
+    const source = endpoint.responses as Record<string, EndpointResponse>;
+    // Null-prototype, and copied under the original property key. `Number(key)`
+    // would rewrite a non-numeric key such as `default` to `NaN`; a plain `{}`
+    // target would route an own `__proto__` key into the prototype setter
+    // instead of preserving it. Both would silently drop a declared response.
+    const responses = Object.create(null) as Record<string, EndpointResponse>;
+    for (const [key, response] of Object.entries(source))
+      responses[key] = Object.freeze({ ...response });
+    clone.responses = Object.freeze(responses) as Record<number, EndpointResponse>;
+  }
+
+  return Object.freeze(clone);
+}
 
 /** The declarative half of a Fortress config — everything route assembly reads. */
 export type RouteAssemblyConfig = Pick<FortressConfig, 'plugins' | 'routes'>;
@@ -93,7 +185,12 @@ export function normalizePlugins(config: RouteAssemblyConfig): readonly RuntimeF
   const hostRoutesPlugin: FortressPlugin | null = config.routes
     ? { name: HOST_ROUTES_PLUGIN_NAME, routes: config.routes }
     : null;
-  const plugins = hostRoutesPlugin ? [hostRoutesPlugin, ...userPlugins] : userPlugins;
+  // Always copy: without host routes this used to alias the caller's array, so
+  // a later `config.plugins.push(...)` changed the plugin membership that
+  // request handling and middleware run against.
+  const plugins = Object.freeze(
+    hostRoutesPlugin ? [hostRoutesPlugin, ...userPlugins] : [...userPlugins],
+  );
 
   validatePluginRouteShapes(plugins);
   return plugins;
@@ -294,13 +391,23 @@ function mergeEndpoints(
   const routeKeyOf = (endpoint: EndpointDefinition): string =>
     `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
 
-  const coreEndpoints: EndpointDefinition[] = [
-    ...Object.values(authEndpoints) as EndpointDefinition[],
-    ...Object.values(iamEndpoints) as EndpointDefinition[],
+  const coreEndpoints: { endpoint: EndpointDefinition; label: string }[] = [
+    ...(Object.values(authEndpoints) as EndpointDefinition[])
+      .map(endpoint => ({ endpoint, label: 'auth' })),
+    ...(Object.values(iamEndpoints) as EndpointDefinition[])
+      .map(endpoint => ({ endpoint, label: 'iam' })),
   ];
-  for (const endpoint of coreEndpoints) {
+  // Core endpoints are module singletons shared by every instance in the
+  // process, so they are cloned rather than frozen in place: freezing them
+  // would make constructing one Fortress mutate global state for all others.
+  for (const { endpoint, label } of coreEndpoints) {
     const routeKey = routeKeyOf(endpoint);
-    endpointMap.set(routeKey, endpoint);
+    const snapshot = snapshotEndpoint(endpoint);
+    endpointProvenanceRegistry.set(snapshot, Object.freeze({
+      owner: CORE_ENDPOINT_OWNER,
+      manifestLabel: label,
+    }));
+    endpointMap.set(routeKey, snapshot);
     endpointOwners.set(routeKey, CORE_ENDPOINT_OWNER);
   }
 
@@ -334,7 +441,13 @@ function mergeEndpoints(
         }
         appliedCoreOverrides.add(coreHandler);
       }
-      endpointMap.set(routeKey, endpoint);
+      const snapshot = snapshotEndpoint(endpoint);
+      endpointProvenanceRegistry.set(snapshot, Object.freeze({
+        owner: plugin.name,
+        // Top-level `routes` are reported with no owning plugin.
+        manifestLabel: plugin.name === HOST_ROUTES_PLUGIN_NAME ? null : plugin.name,
+      }));
+      endpointMap.set(routeKey, snapshot);
       endpointOwners.set(routeKey, plugin.name);
     }
     for (const declared of plugin.coreOverrides ?? []) {

@@ -54,6 +54,7 @@ import {
   assertPluginDependencyCapabilities,
   assertPluginDependencyProviders,
   CORE_ENDPOINT_OWNER,
+  endpointOwner,
   HOST_ROUTES_PLUGIN_NAME,
   normalizePlugins,
 } from './route-assembly';
@@ -230,6 +231,21 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // mutate them, so this pass must precede capability dereferencing as well as
   // publication.
   const { endpoints, endpointOwners } = assembleEndpoints(plugins);
+  // The published route set is the authority for dispatch, the manifest,
+  // OpenAPI, and the call tree. Its entries were cloned and frozen during
+  // assembly; freezing the array itself stops a consumer adding or dropping
+  // routes from the validated set after construction.
+  Object.freeze(endpoints);
+
+  // Route key -> snapshot endpoint. Call trees bind these clones rather than
+  // the originals a plugin still holds, so mutating a declared route object
+  // later cannot change what `fortress.call.*` invokes.
+  const snapshotByRouteKey = new Map<string, EndpointDefinition>(
+    endpoints.map(endpoint => [
+      `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`,
+      endpoint,
+    ]),
+  );
   assertPluginDependencyCapabilities(plugins, pluginMethods);
 
   // A Fortress-mounted plugin route is executable only when its handler is
@@ -347,7 +363,14 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     config,
     endpoints,
     get manifest(): RouteManifestEntry[] {
-      routeManifest ??= buildRouteManifest(this);
+      // Derived once and frozen. This is the authoritative view of the
+      // validated route set, so a consumer must not be able to edit the
+      // baseline it is checking against. Only the instance's cached manifest
+      // is frozen; a direct `buildRouteManifest()` result stays a plain array
+      // for callers that legitimately build and adjust their own.
+      routeManifest ??= Object.freeze(
+        buildRouteManifest(this).map(entry => Object.freeze(entry)),
+      ) as RouteManifestEntry[];
       return routeManifest;
     },
     cookies,
@@ -357,7 +380,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     runPluginMiddleware: (phase, ctx): Promise<void> => runPluginMiddlewareFn(plugins, config, phase, ctx),
     extractAccessToken: (request: Request): string | null => extractAccessTokenFn(request, cookies),
     resolvePrincipal: (request: Request): Promise<ResolvedPrincipal | null> =>
-      resolveRequestPrincipalFn(instance, request),
+      resolveRequestPrincipalFn(instance, request, plugins),
     serializeAuthCookies: (payload: AuthCookiePayload): string[] =>
       serializeAuthCookiesFn(payload, cookies, {
         access: config.jwt.accessTokenExpirySeconds ?? 900,
@@ -384,7 +407,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     },
   };
 
-  instance.handleRequest = buildHandleRequest(instance);
+  instance.handleRequest = buildHandleRequest(instance, plugins);
 
   // Assemble the namespaced typed call tree (ADR 0001 §5). Core auth/IAM
   // callables live under fixed namespaces; each plugin with routes gets its
@@ -397,10 +420,15 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   for (const plugin of plugins) {
     if (plugin.name === HOST_ROUTES_PLUGIN_NAME || !plugin.routes)
       continue;
+    // Derived from the validated snapshot, keyed by handler — plugin route
+    // keys are required to equal their handler, so this reproduces the
+    // declared namespace without reading the mutable route record.
     const genericRoutes = Object.create(null) as Record<string, EndpointDefinition>;
-    for (const [name, endpoint] of Object.entries(plugin.routes)) {
+    for (const endpoint of endpoints) {
+      if (endpointOwner(endpoint) !== plugin.name)
+        continue;
       if (endpoint.meta?.bearerKind !== 'oauth')
-        genericRoutes[name] = endpoint;
+        genericRoutes[endpoint.handler] = endpoint;
     }
     pluginCallTree[plugin.name] = buildCall(instance, genericRoutes);
   }
@@ -412,8 +440,11 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
     const effective = Object.create(null) as Record<string, EndpointDefinition>;
     for (const [name, endpoint] of Object.entries(routes)) {
       const key = `${endpoint.method.toUpperCase()} ${canonicalizeRouteShape(endpoint.path)}`;
-      if (endpointOwners.get(key) === CORE_ENDPOINT_OWNER)
-        effective[name] = endpoint;
+      // Core route names come from the built-in maps, but the values bound
+      // into the call tree are the per-instance clones.
+      const snapshot = snapshotByRouteKey.get(key);
+      if (snapshot && endpointOwners.get(key) === CORE_ENDPOINT_OWNER)
+        effective[name] = snapshot;
     }
     return effective;
   };

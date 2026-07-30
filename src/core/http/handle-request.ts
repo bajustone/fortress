@@ -12,6 +12,7 @@
  */
 
 import type { FortressRuntime } from '../capabilities';
+import type { RuntimeFortressPlugin } from '../plugin';
 import type { Subject, TokenClaims } from '../types';
 import type { ValidatedRequestData } from '../validation';
 import type { RouteEntry } from './match';
@@ -43,6 +44,7 @@ import { extractAccessToken } from './token-extraction';
  */
 export function buildHandleRequest(
   fortress: FortressRuntime,
+  validatedPlugins?: readonly RuntimeFortressPlugin[],
 ): (request: Request) => Promise<Response> {
   const mountedRoutes = new Set(
     fortress.manifest
@@ -56,7 +58,10 @@ export function buildHandleRequest(
   // H5: pipeline CSRF check resolved once at startup so per-request cost
   // is just header / cookie inspection.
   const csrfConfig = resolveCsrfConfig(fortress.config.csrf);
-  const plugins = fortress.config.plugins ?? [];
+  // Validated startup membership when constructed by `createFortress`, so a
+  // later `config.plugins` mutation cannot add or remove middleware and
+  // credential resolvers from the request pipeline.
+  const plugins = validatedPlugins ?? fortress.config.plugins ?? [];
   const pluginPathPrefixes = getPluginPathPrefixes(plugins);
   const startActiveSpan = fortress.telemetry.tracer.startActiveSpan?.bind(fortress.telemetry.tracer)
     ?? (async (name, attributes, callback) => callback(
@@ -128,7 +133,7 @@ export function buildHandleRequest(
           const selfManagedBearer = endpoint.meta?.bearerKind === 'oauth';
 
           if (!selfManagedBearer) {
-            const resolved = await tryPluginPrincipal(fortress, request);
+            const resolved = await tryPluginPrincipal(fortress, request, plugins);
             if (resolved) {
               subject = resolved.subject;
               claims = resolved.claims;

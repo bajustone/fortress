@@ -151,7 +151,13 @@ function routeKey(route: Pick<EndpointDefinition, 'method' | 'path'>): string {
 
 function findEndpoint(fortress: FortressProtectRuntime, target: ProtectedRouteTarget, method?: string): EndpointDefinition {
   if (typeof target !== 'string') {
-    return target;
+    // The caller keeps a reference to this object and can mutate it after
+    // `protect()` has returned — flipping `bearerKind` to `'oauth'` would make
+    // an already-built handler skip its auth pipeline. `findManifestEntry`
+    // already requires the route to be registered, so when the target names a
+    // route in the validated snapshot that snapshot entry is authoritative.
+    const key = routeKey(target);
+    return fortress.endpoints.find(endpoint => routeKey(endpoint) === key) ?? target;
   }
 
   const matches = fortress.endpoints.filter(endpoint => endpoint.handler === target);
