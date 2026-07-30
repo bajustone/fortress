@@ -58,6 +58,34 @@ come from the migration definitions rather than the `migrations/` tree, so a
 dropped migration cannot regenerate into a self-consistent short set. CI,
 release validation, and publication workflows run the same checks.
 
+## Tagged publication and recovery
+
+Pushing a `v*` tag publishes both registries from that commit after the shared
+verification and quality gates pass. The tag must equal `v<package version>`
+and its commit must be contained in `main`.
+
+The two registries are published by independent jobs, so a release can land on
+one registry and fail on the other. Because published versions are immutable on
+both, the recovery for that state is to complete the missing half from the same
+tag — never to move the tag or cut a replacement version.
+
+`npm pack --json` returns a manifest array on npm 11 and an object keyed by
+package name on npm 12; the packed-manifest check accepts either and requires
+exactly one manifest. `bun run check:npm-pack-shapes` proves that against both
+pinned CLIs using a synthetic fixture package. It is deliberately excluded from
+`check:package-cli` and `check:release` so the everyday checks stay offline, and
+runs explicitly in CI and in the publish workflow's quality job.
+
+npm recovery runs through the `Publish` workflow's manual `workflow_dispatch`
+input, because npm trusted publishing is bound to that workflow's filename. It
+refuses to run unless the requested version is a well-formed release whose tag,
+remote tag, and checked-out commit agree and are contained in `main`, JSR
+already serves that exact version, and npm demonstrably does not while the
+registry is reachable. It then runs the tagged commit's own `check:release` and
+`check:npm-publication` under the npm CLI that release was validated against, so
+the publish lifecycle executes rather than being bypassed, and finally asserts
+the published version, `latest` tag, and `gitHead` match the tagged commit.
+
 ## TypeScript branch boundary
 
 The Rust rewrite is a separate branch and is not part of the Fortress

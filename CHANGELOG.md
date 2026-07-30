@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Accept `npm pack --json` output from both npm 11 and npm 12. npm 12 replaced the top-level manifest array with an object keyed by package name, so the packed-manifest check threw `TypeError: ... is not iterable` under `npm@latest` and stopped `2.0.0` from reaching npm after JSR had already published it. Both containers now normalize to the same manifest, and the check fails closed on empty, multi-package, mismatched-key, malformed, and prototype-reached results rather than validating a tarball it was not asked to validate. A separate pinned npm 11 / npm 12 lane packs a synthetic fixture to prove the recorded shapes still match the real CLIs, so the everyday package checks stay offline. The publish workflow also gained a manually dispatched recovery path that completes the npm half of an already-tagged release: it publishes only an immutable tag whose commit is contained in `main` and whose remote tag still resolves to it, requires JSR to already serve that exact version while npm demonstrably does not, and runs the tagged commit's own release and publication gates under the npm CLI that release was validated against instead of bypassing its publish lifecycle. The ordinary tagged release path is unchanged.
+
 ## [2.0.0] - 2026-07-30
 
 ### Changed (breaking)
