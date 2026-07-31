@@ -11,12 +11,17 @@ import type {
   FortressPluginRuntime,
   FortressProtectRuntime,
   FortressRuntime,
+  InferEndpointBodyInput,
+  InferEndpointParamsInput,
+  InferEndpointQueryInput,
 } from '@bajustone/fortress';
 import type { ApiKeyMethods } from '@bajustone/fortress/plugins/api-key';
 import type { SvelteKitRequestEvent } from '@bajustone/fortress/sveltekit';
+import { object as fetcherObject, string as fetcherString } from '@bajustone/fetcher/schema';
 import {
   buildCall,
   createFortress,
+  defineEndpoints,
   definePlugin,
   endpoint,
   obj,
@@ -52,6 +57,10 @@ type ExpectedFixtureCall = (
   options?: CallOptions,
 ) => Promise<{ echo: string }>;
 
+type IsUnknown<T> = unknown extends T
+  ? [keyof T] extends [never] ? true : false
+  : false;
+
 /** Compiled unchanged against public source entrypoints and package exports. */
 export function acceptsBrandedPluginFromConsumerContract(
   database: DatabaseAdapter,
@@ -69,6 +78,33 @@ export function acceptsBrandedPluginFromConsumerContract(
   const precise: Fortress<readonly [typeof brandedPlugin]> = fortress;
   void methods;
   void precise;
+
+  // Host-owned request schemas must accept Standard Schema wire inputs that
+  // are `unknown`, just as plugin routes already do. Keep all three request
+  // locations here so source and built-package declaration checks cover the
+  // top-level `FortressConfig.routes` boundary.
+  const hostRequestSchemas = defineEndpoints({
+    hostRequestSchema: endpoint('POST', '/host-request-schema/:id')
+      .body(fetcherObject({ message: fetcherString() }))
+      .query(fetcherObject({ filter: fetcherString() }))
+      .params(fetcherObject({ id: fetcherString() }))
+      .response(200, 'OK', fetcherObject({ result: fetcherString() }))
+      .handler('hostRequestSchema')
+      .build(),
+  });
+  type HostRequestSchema = typeof hostRequestSchemas.hostRequestSchema;
+  const hostInputsRemainUnknown: [
+    IsUnknown<InferEndpointBodyInput<HostRequestSchema>>,
+    IsUnknown<InferEndpointQueryInput<HostRequestSchema>>,
+    IsUnknown<InferEndpointParamsInput<HostRequestSchema>>,
+  ] = [true, true, true];
+  const hostFortress = createFortress({
+    database,
+    jwt: { key: 'x'.repeat(32) },
+    routes: hostRequestSchemas,
+  });
+  void hostInputsRemainUnknown;
+  void hostFortress;
 
   // Dynamic plugin lookup is `unknown` unless a runtime validator proves the
   // surface; caller-selected generic assertions are not expressible.

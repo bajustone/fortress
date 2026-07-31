@@ -1,7 +1,7 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { JwtKeyMaterial } from './auth/jwt';
 import type { PasswordPolicyConfig } from './auth/password-policy';
-import type { EndpointDefinition } from './endpoint';
+import type { AnyEndpointDefinition } from './endpoint';
 import type { CsrfConfig } from './http/csrf';
 import type { FortressLogger } from './observability/logger';
 import type { TelemetryProvider } from './observability/types';
@@ -120,7 +120,7 @@ export interface FortressConfig {
    * The name `__host` is reserved — declaring a plugin called `__host`
    * alongside `routes` is a configuration error.
    */
-  routes?: Record<string, EndpointDefinition>;
+  routes?: Record<string, AnyEndpointDefinition>;
   /** Auth-cookie naming and attributes used by `fortress.handleRequest` and framework adapters. */
   cookies?: CookieConfig;
   /**
