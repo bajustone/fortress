@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Accept host-owned routes with body, query, or params schemas whose Standard Schema input type is `unknown`. Top-level `FortressConfig.routes` now erases endpoint phantom contracts consistently with plugin routes, while preserving runtime route constraints and per-endpoint inference at direct consumers such as `protect()`.
+
 ## [2.0.1] - 2026-07-31
 
 ### Changed
