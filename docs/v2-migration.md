@@ -140,9 +140,23 @@ ISO string) to the declared success response.
 
 Migrating a v1 plugin:
 
-- Ensure every own member returned by `methods()` is callable. This is enforced
-  for direct plugin literals as well as `definePlugin()` definitions and is
-  validated again at startup for JavaScript or widened configurations.
+- Ensure every effective own or inherited member returned by `methods()` is
+  callable. This is enforced for direct plugin literals as well as
+  `definePlugin()` definitions and validated again at startup for JavaScript or
+  widened configurations. After
+  all factories finish, Fortress publishes an immutable facade over captured
+  own and inherited method identities without freezing the returned object.
+  Plugin entries, method slots, and the `resolvePlugin` binding are now exposed
+  as readonly declarations and are non-replaceable at runtime; existing method
+  calls and concrete class/symbol inference are unchanged. This readonly view is
+  shallow, so it does not freeze closures or receiver-owned state.
+- Effective inherited accessors on a returned method object are materialized
+  once during construction. They now run eagerly even when no caller later
+  selects that property, so inherited accessors must be side-effect-safe and
+  return callable capabilities; a throwing accessor fails construction.
+- Captured calls keep the original returned object as `this`; receiver/private/
+  closure state remains live, including any lookup trusted method code performs
+  through `this.other()` or external references.
 - Request body/query/params schemas must accept and return flat, non-array
   objects because dispatch merges declared locations into one handler input.
   Once any input contract is declared, undeclared query/params locations are

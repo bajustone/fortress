@@ -9,6 +9,7 @@ import { oauth } from '../plugins/oauth';
 import { openapi } from '../plugins/openapi';
 import { createFortress } from './fortress';
 import { definePlugin } from './plugin';
+import { resolvePluginCapability } from './plugin-methods-map';
 import { endpoint } from './schema-builder';
 
 // Minimal mock adapter — just enough for createFortress to wire up
@@ -52,6 +53,28 @@ describe('resolvePlugin', () => {
     expect(() => fortress.resolvePlugin('missing')).toThrow('Plugin \'missing\' is not registered');
     expect(() => fortress.resolvePlugin('known', (_value): _value is { nope: true } => false))
       .toThrow('Plugin \'known\' methods failed runtime validation');
+  });
+
+  it('retains inherited built-in capability lookup through the captured facade', () => {
+    class TwoFactorSurface {
+      verify(): Promise<boolean> {
+        return Promise.resolve(true);
+      }
+    }
+    const inherited = {
+      name: 'two-factor',
+      methods: () => new TwoFactorSurface(),
+    } as unknown as RuntimeFortressPlugin;
+    const runtime = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [inherited],
+    });
+
+    const capability = resolvePluginCapability(runtime, 'two-factor', 'verify');
+    const published = runtime.plugins as Record<string, Record<string, unknown>>;
+    expect(Object.hasOwn(published['two-factor']!, 'verify')).toBe(false);
+    expect(capability.verify).toBeTypeOf('function');
   });
 });
 
@@ -417,7 +440,9 @@ describe('createFortress', () => {
       plugins: [poisoned] as const,
     });
 
-    expect(fortress.resolvePlugin('__proto__')).toBe(methods);
+    const published = fortress.plugins as Record<string, unknown>;
+    expect(fortress.resolvePlugin('__proto__')).toBe(Reflect.get(published, '__proto__'));
+    expect(fortress.resolvePlugin('__proto__')).not.toBe(methods);
     expect(Object.getPrototypeOf(fortress.call.plugins)).toBeNull();
     const poisonedCalls = Reflect.get(fortress.call.plugins, '__proto__') as Record<string, (input: object) => Promise<unknown>>;
     expect(Object.getPrototypeOf(poisonedCalls)).toBeNull();
@@ -454,6 +479,164 @@ describe('createFortress', () => {
     const response = await fortress.handleRequest(new Request('http://localhost/bound-runtime'));
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ value: 'bound' });
+  });
+
+  it('uses one captured method facade for direct, dynamic, lazy, HTTP, and call-tree dispatch', async () => {
+    const source: Record<string, (...args: unknown[]) => unknown> = {
+      ping: () => ({ value: 'original' }),
+    };
+    let lazyLookup: (() => Readonly<Record<string, unknown>> | undefined) | undefined;
+    const plugin = {
+      name: 'method-snapshot',
+      methods: (ctx: import('./plugin').PluginContext) => {
+        lazyLookup = () => ctx.getPluginMethods?.('method-snapshot');
+        return source;
+      },
+      routes: {
+        ping: {
+          method: 'GET',
+          path: '/method-snapshot',
+          handler: 'ping',
+          meta: { summary: 'Method snapshot', security: ['none'] },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [plugin] as const,
+    });
+    const published = fortress.plugins as Record<string, Record<string, unknown>>;
+    const facade = published['method-snapshot']!;
+
+    expect(fortress.resolvePlugin('method-snapshot')).toBe(facade);
+    expect(lazyLookup!()).toBe(facade);
+    expect(facade).not.toBe(source);
+
+    const runtimeObject = fortress as unknown as Record<PropertyKey, unknown>;
+    expect(Reflect.set(runtimeObject, 'plugins', {
+      'method-snapshot': { ping: () => ({ value: 'public plugins replacement' }) },
+    })).toBe(false);
+    expect(Reflect.set(runtimeObject, 'resolvePlugin', () => ({
+      ping: () => ({ value: 'public resolver replacement' }),
+    }))).toBe(false);
+    expect(Reflect.deleteProperty(runtimeObject, 'plugins')).toBe(false);
+    expect(Reflect.deleteProperty(runtimeObject, 'resolvePlugin')).toBe(false);
+    expect((facade.ping as () => unknown)()).toEqual({ value: 'original' });
+    expect(fortress.resolvePlugin('method-snapshot')).toBe(facade);
+
+    source.ping = () => ({ value: 'replaced' });
+    source.added = () => ({ value: 'added' });
+    delete source.ping;
+
+    expect((facade.ping as () => unknown)()).toEqual({ value: 'original' });
+    expect(Reflect.get(facade, 'added')).toBeUndefined();
+    const response = await fortress.handleRequest(new Request('http://localhost/method-snapshot'));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ value: 'original' });
+    const callPlugins = fortress.call.plugins as Record<string, Record<string, (input: object) => Promise<unknown>>>;
+    const calls = callPlugins['method-snapshot']!;
+    await expect(calls.ping!({})).resolves.toEqual({ value: 'original' });
+  });
+
+  it('keys method facades from the same validated descriptor snapshot', () => {
+    let factoryFinished = false;
+    let postFactoryNameReads = 0;
+    const surface = { ping: () => 'pong' };
+    const plugin = {
+      get name() {
+        if (!factoryFinished)
+          return 'before-factory';
+        postFactoryNameReads++;
+        return `validated-${postFactoryNameReads}`;
+      },
+      methods() {
+        factoryFinished = true;
+        return surface;
+      },
+    } as unknown as RuntimeFortressPlugin;
+
+    const fortress = createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [plugin],
+    });
+    const published = fortress.plugins as Record<string, Record<string, () => string>>;
+
+    expect(Object.keys(published)).toEqual(['validated-1']);
+    expect(published['validated-1']!.ping!()).toBe('pong');
+    expect(fortress.resolvePlugin('validated-1')).toBe(published['validated-1']);
+    expect(postFactoryNameReads).toBe(1);
+  });
+
+  it('invalidates leaked method lookup after later route validation fails', () => {
+    let context: import('./plugin').PluginContext | undefined;
+    const plugin = {
+      name: 'late-failure',
+      methods: (ctx: import('./plugin').PluginContext) => {
+        context = ctx;
+        return { present: () => true };
+      },
+      routes: {
+        missing: {
+          method: 'GET',
+          path: '/late-failure',
+          handler: 'missing',
+          meta: { summary: 'Missing', security: ['none'] },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [plugin],
+    })).toThrow('route handler "missing" must be an own callable method');
+    expect(() => context!.getPluginMethods?.('late-failure')).toThrow('failed construction');
+  });
+
+  it('keeps inherited route and dependency capabilities own-only', () => {
+    class InheritedSurface {
+      handler(): { ok: boolean } {
+        return { ok: true };
+      }
+    }
+    let providerContext: import('./plugin').PluginContext | undefined;
+    const inheritedProvider = {
+      name: 'inherited-provider',
+      methods: (ctx: import('./plugin').PluginContext) => {
+        providerContext = ctx;
+        return new InheritedSurface();
+      },
+    } as unknown as RuntimeFortressPlugin;
+    const inheritedRoute = {
+      ...inheritedProvider,
+      name: 'inherited-route',
+      routes: {
+        handler: {
+          method: 'GET',
+          path: '/inherited-route',
+          handler: 'handler',
+          meta: { summary: 'Inherited', security: ['none'] },
+        },
+      },
+    } as unknown as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [inheritedRoute],
+    })).toThrow('route handler "handler" must be an own callable method');
+
+    const consumer = {
+      name: 'consumer',
+      dependencies: [{ plugin: 'inherited-provider', methods: ['handler'] }],
+    } as RuntimeFortressPlugin;
+    expect(() => createFortress({
+      jwt: { key: 'fortress-test-secret-at-least-32!' },
+      database: mockDb,
+      plugins: [inheritedProvider, consumer],
+    })).toThrow('requires callable method "inherited-provider.handler"');
+    expect(() => providerContext!.getPluginMethods?.('inherited-provider')).toThrow('failed construction');
   });
 
   it('preserves OAuth method this binding during protocol dispatch', async () => {

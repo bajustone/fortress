@@ -75,10 +75,18 @@ export function acceptsBrandedPluginFromConsumerContract(
   const resolved = fortress.resolvePlugin('api-key');
   // @ts-expect-error -- dynamic lookup is unknown without validation
   resolved.createKey({ name: 'key' });
-  const validated: ApiKeyMethods = fortress.resolvePlugin(
+  const validated: Readonly<ApiKeyMethods> = fortress.resolvePlugin(
     'api-key',
     (value): value is ApiKeyMethods => typeof value === 'object' && value !== null,
   );
+  // @ts-expect-error -- validated dynamic method slots are construction-fixed
+  validated.createKey = undefined as never;
+  // @ts-expect-error -- the authoritative dynamic resolver binding is readonly
+  fortress.resolvePlugin = undefined as never;
+  // @ts-expect-error -- published plugin entries are construction-fixed
+  fortress.plugins['api-key'] = undefined as never;
+  // @ts-expect-error -- published plugin method slots are construction-fixed
+  fortress.plugins['api-key'].createKey = undefined as never;
   void validated;
   // @ts-expect-error -- a bare generic assertion without a validator must not compile
   fortress.resolvePlugin<ApiKeyMethods>('api-key');
