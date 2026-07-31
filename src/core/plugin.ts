@@ -55,17 +55,22 @@ type CallableMethodSurface<TMethods extends object> = {
  * Descriptor slots are construction-time declarations. Fortress invokes every
  * `methods()` factory first, then captures the final names, routes, hooks,
  * middleware, and callable capability identities into an internal validated
- * view. Reassigning, adding, removing, or reordering those caller-owned slots
- * after `createFortress()` returns does not alter a running instance, and
- * Fortress never freezes or rewrites the caller's objects.
+ * view. After every factory returns, Fortress also captures the effective
+ * callable membership and direct callable identities of each returned method
+ * surface into an immutable facade. Reassigning, adding, removing, or
+ * reordering those caller-owned slots after `createFortress()` returns does
+ * not replace Fortress-controlled entry points, and Fortress never freezes or
+ * rewrites the caller's objects.
  *
  * Captured functions and their closures are intentionally live. Each callable
- * is invoked with the original descriptor/hook/middleware object as its
- * receiver for compatibility. Plugins may keep counters, caches, key material,
- * feature state, and other runtime state behind that receiver or closure;
- * changing such retained state remains observable. The fixed boundary is
- * descriptor/container membership and callable-slot identity, not arbitrary
- * objects captured plugin code chooses to read.
+ * is invoked with its original descriptor, hook, middleware, or returned method
+ * object as receiver for compatibility. Plugins may keep counters, caches, key
+ * material, feature state, and other runtime state behind that receiver or
+ * closure; changing such retained state remains observable. The fixed boundary is
+ * descriptor/container membership and directly selected callable identity,
+ * not arbitrary objects captured plugin code chooses to read. In particular,
+ * trusted method code that performs `this.other()`, `super.other()`, or an
+ * external lookup may observe later mutation of that retained state.
  */
 export interface FortressPluginDefinition<
   TName extends string,
@@ -147,8 +152,12 @@ export interface FortressPluginDefinition<
 
 /**
  * Plugin contract. Concrete method surfaces require an implementation and
- * every exposed property must be callable. Runtime-widened and legacy
- * surfaces keep `methods` optional.
+ * every effective own or inherited property must be callable. Fortress
+ * publishes a frozen construction-owned facade that captures own and inherited
+ * callables, including symbols, non-enumerables, and getter-backed methods. Captured
+ * methods run with the original returned object as receiver, preserving
+ * private and receiver-owned state. Runtime-widened and legacy surfaces keep
+ * `methods` optional.
  */
 export type FortressPlugin<
   TName extends string = string,
@@ -445,10 +454,11 @@ export interface PluginContext {
   /** Resolved logger (silent no-op if `config.logger` is unset). */
   logger?: FortressLogger;
   /**
-   * Look up the single runtime method surface created for a registered plugin.
+   * Look up the single captured runtime method facade for a registered plugin.
    * Capture this function during `methods()` initialization and call it lazily
-   * from returned methods; calling it while any plugin factory is still running
-   * is rejected so lookup semantics do not depend on registration order.
+   * from returned methods; calling it before the whole Fortress construction
+   * succeeds is rejected so lookup semantics do not depend on registration
+   * order and failed construction cannot leak a provisional surface.
    *
    * Only `createFortress()` supplies this. A hand-assembled context — calling
    * `plugin.methods(ctx)` directly rather than registering the plugin — will

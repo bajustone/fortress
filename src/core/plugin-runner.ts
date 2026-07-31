@@ -6,13 +6,16 @@ import type { PluginRequestContext } from './http/plugin-middleware';
 import type { IamService } from './iam/iam-service';
 import type { FortressLogger } from './observability/logger';
 import type { FortressPlugin, MiddlewareDefinition, PluginContext, PluginMethod, RuntimeFortressPlugin } from './plugin';
+import type { PluginMethodController } from './plugin-method-capabilities';
 import { Errors } from './errors';
 import { canonicalizePath } from './http/match';
 import { createPluginCapabilityController, materializePluginCapabilities } from './plugin-capabilities';
 import { publishPluginMembership } from './plugin-membership';
+import { createPluginMethodController } from './plugin-method-capabilities';
 
 /**
- * Process registered plugins and return their exposed methods.
+ * Run registered method factories, then publish one captured callable view
+ * after every factory has completed. Caller-owned surfaces remain untouched.
  */
 
 export function processPlugins(
@@ -23,12 +26,14 @@ export function processPlugins(
   iam?: IamService,
   logger?: FortressLogger,
   publishedPlugins?: readonly RuntimeFortressPlugin[],
+  methodController?: PluginMethodController,
 ): Record<string, Record<string, PluginMethod>> {
   const standaloneController = publishedPlugins === undefined
     ? createPluginCapabilityController(plugins)
     : undefined;
   const capabilityView = publishedPlugins ?? standaloneController!.plugins;
-  const result: Record<string, Record<string, PluginMethod>> = Object.create(null) as Record<string, Record<string, PluginMethod>>;
+  const ownedMethodController = methodController ?? createPluginMethodController();
+  const ownsMethodController = methodController === undefined;
   let initializingPlugin: string | undefined;
   const ctx: PluginContext = {
     db,
@@ -36,15 +41,7 @@ export function processPlugins(
     auth,
     iam,
     logger,
-    getPluginMethods: (name) => {
-      if (initializingPlugin) {
-        throw Errors.badRequest(
-          `Plugin "${initializingPlugin}" cannot resolve plugin "${name}" while plugin methods are initializing; defer lookup until a returned method is called`,
-          { details: { plugin: initializingPlugin, requestedPlugin: name } },
-        );
-      }
-      return result[name];
-    },
+    getPluginMethods: name => ownedMethodController.resolveForContext(name, initializingPlugin),
   };
   // The context is construction-owned, unlike `config`. Binding membership to
   // it before the first factory prevents a re-entrant createFortress(config)
@@ -57,25 +54,20 @@ export function processPlugins(
       const methods = plugin.methods ? plugin.methods(ctx) : Object.create(null) as object;
       if (methods === null || typeof methods !== 'object')
         throw Errors.badRequest(`Plugin "${plugin.name}" methods factory must return an object`);
-      for (const key of Reflect.ownKeys(methods)) {
-        if (typeof Reflect.get(methods, key) !== 'function') {
-          throw Errors.badRequest(
-            `Plugin "${plugin.name}" method "${String(key)}" must be callable`,
-          );
-        }
-      }
-      // Keep each surface's own properties and `this` identity intact. Dispatch
-      // performs own-property checks, so inherited names can never become route
-      // handlers accidentally.
-      result[plugin.name] = methods as Record<string, PluginMethod>;
+      ownedMethodController.record(methods);
     }
     initializingPlugin = undefined;
-    if (standaloneController)
-      standaloneController.finalize(materializePluginCapabilities(plugins));
-    return result;
+    if (standaloneController || ownsMethodController) {
+      const materializedPlugins = materializePluginCapabilities(plugins);
+      ownedMethodController.materialize(materializedPlugins);
+      standaloneController?.finalize(materializedPlugins);
+      ownedMethodController.activate();
+    }
+    return ownedMethodController.methods;
   }
   catch (error) {
     standaloneController?.fail();
+    ownedMethodController.fail();
     throw error;
   }
 }

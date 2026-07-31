@@ -162,6 +162,24 @@ const composedPlugin = definePlugin({
   routes: composedRoutes,
 });
 
+const classSurfaceSymbol = Symbol('class-surface');
+class InferredClassSurface {
+  increment(): number {
+    return 1;
+  }
+
+  [classSurfaceSymbol](): 'symbol' {
+    return 'symbol';
+  }
+}
+const _inferredClassPlugin = definePlugin({
+  name: 'inferred-class',
+  methods: () => new InferredClassSurface(),
+});
+type InferredClassPlugins = InferPlugins<readonly [typeof _inferredClassPlugin]>;
+export type InferredClassMethodContract = Assert<Has<InferredClassPlugins, 'inferred-class', 'increment'>>;
+export type InferredSymbolMethodContract = Assert<Has<InferredClassPlugins, 'inferred-class', typeof classSurfaceSymbol>>;
+
 const thirdParty = definePlugin({
   name: 'third-party',
   methods: () => ({
@@ -361,7 +379,7 @@ const _interfacePlugin: FortressPlugin<'interface-methods', InterfaceMethods> = 
 void _interfacePlugin;
 
 declare const _legacyPlugin: FortressPlugin<'legacy'>;
-export type LegacyContract = Assert<Equal<InferPlugins<readonly [typeof _legacyPlugin]>['legacy'], LegacyMethods>>;
+export type LegacyContract = Assert<Equal<InferPlugins<readonly [typeof _legacyPlugin]>['legacy'], Readonly<LegacyMethods>>>;
 
 const exactLegacyName = definePlugin({ name: 'legacy' });
 export type ExactEmptyContract = Assert<Equal<keyof InferPlugins<readonly [typeof exactLegacyName]>['legacy'], never>>;

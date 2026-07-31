@@ -135,9 +135,9 @@ export interface FortressPluginRuntime {
    * pass a type-guard to prove the surface at runtime. Caller-selected
    * generic assertions are intentionally not expressible.
    */
-  resolvePlugin: {
+  readonly resolvePlugin: {
     (name: string): unknown;
-    <T>(name: string, validator: PluginMethodsValidator<T>): T;
+    <T>(name: string, validator: PluginMethodsValidator<T>): Readonly<T>;
   };
 }
 

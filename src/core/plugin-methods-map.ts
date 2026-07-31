@@ -61,9 +61,14 @@ type MethodsForPlugin<P extends RuntimeFortressPlugin> = string extends P['name'
 
 type IsAny<T> = 0 extends (1 & T) ? true : false;
 
-/** Infer the typed plugin-methods record from a `plugins` tuple passed to createFortress. */
+/**
+ * Infer the published plugin-methods record from a `plugins` tuple passed to
+ * `createFortress`. Readonly is deliberately shallow: Fortress fixes plugin
+ * membership and callable slots, while closures and receiver-owned state used
+ * by those functions remain live.
+ */
 export type InferPlugins<T extends readonly RuntimeFortressPlugin[]> = {
-  [P in T[number] as IsAny<P['name']> extends true ? never : string extends P['name'] ? never : P['name']]: MethodsForPlugin<P>;
+  readonly [P in T[number] as IsAny<P['name']> extends true ? never : string extends P['name'] ? never : P['name']]: Readonly<MethodsForPlugin<P>>;
 };
 
 /** Names with a method surface known to the core dispatcher. */
@@ -117,6 +122,6 @@ export function resolvePluginCapability<
   runtime: Pick<FortressPluginRuntime, 'resolvePlugin'>,
   name: K,
   requiredMethod: M,
-): Pick<PluginCapability<K>, M> {
+): Readonly<Pick<PluginCapability<K>, M>> {
   return runtime.resolvePlugin(name, value => isPluginCapability(name, value, requiredMethod));
 }

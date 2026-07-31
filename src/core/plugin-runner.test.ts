@@ -1,10 +1,12 @@
 import type { DatabaseAdapter } from '../adapters/database';
 import type { FortressConfig } from './config';
-import type { FortressPlugin, PluginContext, RuntimeFortressPlugin } from './plugin';
+import type { FortressPlugin, PluginContext, PluginMethod, RuntimeFortressPlugin } from './plugin';
 
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import { definePlugin } from './plugin';
 import { snapshotPluginMembership } from './plugin-membership';
+import { createPluginMethodController } from './plugin-method-capabilities';
 import {
   chainAdapterWrappers,
   collectScopeRules,
@@ -131,6 +133,329 @@ describe('processPlugins', () => {
     ];
     const result = processPlugins(plugins, mockDb, mockConfig);
     expect(Object.keys(result)).toEqual(['a', 'b']);
+  });
+
+  it('publishes one frozen facade while leaving caller and closure state live', () => {
+    let closureState = 'initial';
+    const source = { ping: () => 'original', readState: () => closureState };
+    let lazyLookup: (() => Readonly<Record<string, unknown>> | undefined) | undefined;
+    const plugin = definePlugin({
+      name: 'surface',
+      methods: (ctx) => {
+        lazyLookup = () => ctx.getPluginMethods?.('surface');
+        return source;
+      },
+    });
+    const result = processPlugins([plugin], mockDb, mockConfig);
+    const facade = result.surface!;
+
+    expect(lazyLookup!()).toBe(facade);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(facade)).toBe(true);
+    expect(facade).not.toBe(source);
+    expect(Reflect.get(facade, 'toString')).toBeUndefined();
+    expect(Object.isFrozen(source)).toBe(false);
+    expect(Object.isExtensible(source)).toBe(true);
+
+    source.ping = () => 'replaced';
+    closureState = 'updated';
+    Object.assign(source, { added: () => 'added' });
+    expect(facade.ping!()).toBe('original');
+    expect(facade.readState!()).toBe('updated');
+    expect(Reflect.get(facade, 'added')).toBeUndefined();
+    expect(Reflect.set(facade, 'ping', () => 'facade replacement')).toBe(false);
+    expect(Reflect.set(result, 'surface', Object.create(null))).toBe(false);
+    expect(facade.ping!()).toBe('original');
+  });
+
+  it('materializes an owned method controller with an external capability view', () => {
+    const plugin = definePlugin({ name: 'external-view', methods: () => ({ ping: () => 'pong' }) });
+    const result = processPlugins(
+      [plugin],
+      mockDb,
+      mockConfig,
+      undefined,
+      undefined,
+      undefined,
+      [plugin],
+    );
+
+    expect(Object.keys(result)).toEqual(['external-view']);
+    expect(result['external-view']!.ping!()).toBe('pong');
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it('defers a caller-supplied controller until explicit materialization and activation', () => {
+    const plugin = definePlugin({ name: 'deferred', methods: () => ({ ping: () => 'pong' }) });
+    const controller = createPluginMethodController();
+    const result = processPlugins(
+      [plugin],
+      mockDb,
+      mockConfig,
+      undefined,
+      undefined,
+      undefined,
+      [plugin],
+      controller,
+    );
+
+    expect(result).toBe(controller.methods);
+    expect(Object.keys(result)).toEqual([]);
+    expect(() => controller.resolveForContext('deferred')).toThrow('until construction succeeds');
+    controller.materialize([plugin]);
+    expect(Object.keys(result)).toEqual(['deferred']);
+    expect(() => result.deferred!.ping!()).toThrow('until construction succeeds');
+    controller.activate();
+    expect(result.deferred!.ping!()).toBe('pong');
+  });
+
+  it('captures surfaces after all factories and ignores later source mutation', () => {
+    const source = { ping: () => 'initial' };
+    const first = definePlugin({ name: 'first', methods: () => source });
+    const second = definePlugin({
+      name: 'second',
+      methods: () => {
+        source.ping = () => 'during construction';
+        return {};
+      },
+    });
+
+    const result = processPlugins([first, second], mockDb, mockConfig);
+    expect(result.first!.ping!()).toBe('during construction');
+    source.ping = () => 'after construction';
+    expect(result.first!.ping!()).toBe('during construction');
+  });
+
+  it('captures inherited, symbol, non-enumerable, and getter-backed methods once', () => {
+    const symbolMethod = Symbol('symbolMethod');
+    let ownGetterReads = 0;
+    let inheritedGetterReads = 0;
+    let shadowedGetterReads = 0;
+
+    class Surface {
+      #count = 0;
+
+      increment(): number {
+        return ++this.#count;
+      }
+
+      receiver(source: Surface): boolean {
+        return this === source;
+      }
+    }
+    Object.defineProperty(Surface.prototype, 'inheritedGetter', {
+      configurable: true,
+      get(this: Surface) {
+        inheritedGetterReads++;
+        return () => this.increment();
+      },
+    });
+
+    const source = new Surface();
+    Object.defineProperty(source, 'hidden', {
+      value: () => 'hidden',
+      configurable: true,
+      writable: true,
+      enumerable: false,
+    });
+    Object.defineProperty(source, symbolMethod, {
+      value: () => 'symbol',
+      configurable: true,
+      writable: true,
+      enumerable: false,
+    });
+    Object.defineProperty(source, 'ownGetter', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        ownGetterReads++;
+        Object.defineProperty(source, 'addedByGetter', { value: () => 'late', configurable: true });
+        return () => 'getter';
+      },
+    });
+
+    class BaseSurface {}
+    Object.defineProperty(BaseSurface.prototype, 'shadowed', {
+      get() {
+        shadowedGetterReads++;
+        throw new Error('shadowed getter must not run');
+      },
+    });
+    class DerivedSurface extends BaseSurface {
+      shadowed(): string {
+        return 'nearest';
+      }
+    }
+
+    const plugin = { name: 'class-surface', methods: () => source } as unknown as RuntimeFortressPlugin;
+    const shadowedPlugin = { name: 'shadowed', methods: () => new DerivedSurface() } as unknown as RuntimeFortressPlugin;
+    const result = processPlugins([plugin, shadowedPlugin], mockDb, mockConfig);
+    const facade = result['class-surface']! as Record<PropertyKey, (...args: unknown[]) => unknown>;
+
+    expect(ownGetterReads).toBe(1);
+    expect(inheritedGetterReads).toBe(1);
+    expect(shadowedGetterReads).toBe(0);
+    expect(result.shadowed!.shadowed!()).toBe('nearest');
+    expect(facade.increment!()).toBe(1);
+    expect(facade.increment!()).toBe(2);
+    expect(facade.receiver!(source)).toBe(true);
+    expect(facade.hidden!()).toBe('hidden');
+    expect(facade[symbolMethod]!()).toBe('symbol');
+    expect(facade.ownGetter!()).toBe('getter');
+    expect(facade.inheritedGetter!()).toBe(3);
+    const extractedIncrement = facade.increment!;
+    expect(Reflect.apply(extractedIncrement, { increment: () => 99 }, [])).toBe(4);
+    expect(Reflect.get(facade, 'addedByGetter')).toBeUndefined();
+    expect(Object.hasOwn(facade, 'increment')).toBe(false);
+    expect(Object.hasOwn(facade, 'hidden')).toBe(true);
+  });
+
+  it('rejects non-callable effective inherited properties', () => {
+    const dataPrototype = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(dataPrototype, 'inheritedData', { value: 42 });
+    const dataSurface = Object.create(dataPrototype) as Record<string, PluginMethod>;
+    expect(() => processPlugins([
+      testPlugin({ name: 'inherited-data', methods: () => dataSurface }),
+    ], mockDb, mockConfig)).toThrow('Plugin "inherited-data" method "inheritedData" must be callable');
+
+    const getterPrototype = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(getterPrototype, 'inheritedGetter', { get: () => 42 });
+    const getterSurface = Object.create(getterPrototype) as Record<string, PluginMethod>;
+    expect(() => processPlugins([
+      testPlugin({ name: 'inherited-getter', methods: () => getterSurface }),
+    ], mockDb, mockConfig)).toThrow('Plugin "inherited-getter" method "inheritedGetter" must be callable');
+  });
+
+  it('fixes direct inherited identities while documenting live sibling lookups', () => {
+    class Surface {
+      sibling(): string {
+        return 'captured';
+      }
+
+      outer(): string {
+        return this.sibling();
+      }
+    }
+    const source = new Surface();
+    const originalSibling = Surface.prototype.sibling;
+    const plugin = { name: 'siblings', methods: () => source } as unknown as RuntimeFortressPlugin;
+    const result = processPlugins([plugin], mockDb, mockConfig);
+    const facade = result.siblings! as unknown as Surface;
+
+    Surface.prototype.sibling = () => 'prototype replaced';
+    expect(facade.sibling()).toBe('captured');
+    expect(facade.outer()).toBe('prototype replaced');
+    Surface.prototype.sibling = originalSibling;
+  });
+
+  it('retains custom terminal capabilities but excludes a real cross-realm Object.prototype', () => {
+    const customTerminal = Object.create(null) as Record<PropertyKey, unknown>;
+    const CustomTerminal = function CustomTerminal(): void {};
+    CustomTerminal.prototype = customTerminal;
+    Reflect.defineProperty(customTerminal, 'constructor', { value: CustomTerminal });
+    Reflect.defineProperty(customTerminal, 'inherited', { value: () => 'retained' });
+    const customSource = Object.create(customTerminal) as Record<string, () => string>;
+    customSource.ping = () => 'pong';
+
+    const foreignSource = runInNewContext('({ ping() { return "foreign pong"; } })') as Record<string, () => string>;
+    const result = processPlugins([
+      testPlugin({ name: 'custom-terminal', methods: () => customSource }),
+      testPlugin({ name: 'foreign-realm', methods: () => foreignSource }),
+    ], mockDb, mockConfig);
+
+    expect(result['custom-terminal']!.ping!()).toBe('pong');
+    expect(result['custom-terminal']!.inherited!()).toBe('retained');
+    expect(result['foreign-realm']!.ping!()).toBe('foreign pong');
+    expect(Reflect.get(result['foreign-realm']!, 'toString')).toBeUndefined();
+  });
+
+  it('supports own constructor and __proto__ capabilities safely', () => {
+    const source = Object.create(null) as Record<string, () => string>;
+    Reflect.defineProperty(source, 'constructor', { value: () => 'constructor', enumerable: true, configurable: true, writable: true });
+    Reflect.defineProperty(source, '__proto__', { value: () => 'proto', enumerable: true, configurable: true, writable: true });
+    const result = processPlugins([
+      testPlugin({ name: '__proto__', methods: () => source }),
+    ], mockDb, mockConfig);
+    const facade = Reflect.get(result, '__proto__') as Record<string, () => string>;
+
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(facade.constructor()).toBe('constructor');
+    expect(Reflect.get(facade, '__proto__')()).toBe('proto');
+  });
+
+  it('fails closed for intrinsic prototypes, non-callable effective values, and accessor exceptions', () => {
+    expect(() => processPlugins([
+      testPlugin({ name: 'object-prototype', methods: () => Object.prototype as unknown as Record<string, PluginMethod> }),
+    ], mockDb, mockConfig)).toThrow('methods factory must not return Object.prototype');
+
+    const foreignObjectPrototype = runInNewContext('Object.prototype') as Record<string, PluginMethod>;
+    expect(() => processPlugins([
+      testPlugin({ name: 'foreign-object-prototype', methods: () => foreignObjectPrototype }),
+    ], mockDb, mockConfig)).toThrow('methods factory must not return Object.prototype');
+
+    const nonCallable = { method: 42 };
+    expect(() => processPlugins([
+      testPlugin({ name: 'non-callable', methods: () => nonCallable as unknown as Record<string, PluginMethod> }),
+    ], mockDb, mockConfig)).toThrow('Plugin "non-callable" method "method" must be callable');
+
+    const throwing = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(throwing, 'explode', {
+      enumerable: true,
+      get() {
+        throw new Error('getter exploded');
+      },
+    });
+    expect(() => processPlugins([
+      testPlugin({ name: 'throwing', methods: () => throwing as Record<string, PluginMethod> }),
+    ], mockDb, mockConfig)).toThrow('getter exploded');
+
+    const cycle: { value?: object } = {};
+    const cyclic = new Proxy(Object.create(null) as object, { getPrototypeOf: () => cycle.value! });
+    cycle.value = cyclic;
+    expect(() => processPlugins([
+      testPlugin({ name: 'cyclic', methods: () => cyclic as Record<string, PluginMethod> }),
+    ], mockDb, mockConfig)).toThrow('methods object has a cyclic prototype chain');
+  });
+
+  it('invalidates leaked method lookup when construction fails', () => {
+    let context: PluginContext | undefined;
+    const surface = { invalid: 42 };
+    const plugin = testPlugin({
+      name: 'invalid-surface',
+      methods: (ctx) => {
+        context = ctx;
+        return surface as unknown as Record<string, PluginMethod>;
+      },
+    });
+
+    expect(() => processPlugins([plugin], mockDb, mockConfig)).toThrow('must be callable');
+    expect(() => context!.getPluginMethods?.('invalid-surface')).toThrow('failed construction');
+  });
+
+  it('invalidates a captured wrapper when later construction fails', () => {
+    const controller = createPluginMethodController();
+    controller.record({ ping: () => 'captured' });
+    controller.materialize([testPlugin({ name: 'valid' })]);
+    const leaked = controller.methods.valid!.ping!;
+
+    controller.fail();
+    expect(() => leaked()).toThrow('failed construction');
+    expect(() => controller.resolveForContext('valid')).toThrow('failed construction');
+  });
+
+  it('publishes no partial map when materialization fails', () => {
+    const controller = createPluginMethodController();
+    controller.record({ ping: () => 'captured' });
+    const invalid = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(invalid, 'broken', { value: 42, enumerable: true });
+    controller.record(invalid);
+
+    expect(() => controller.materialize([
+      testPlugin({ name: 'valid' }),
+      testPlugin({ name: 'invalid' }),
+    ])).toThrow('method "broken" must be callable');
+    expect(Object.keys(controller.methods)).toEqual([]);
+    expect(() => controller.resolveForContext('valid')).toThrow('failed construction');
   });
 });
 

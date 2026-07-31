@@ -54,6 +54,7 @@ import {
   materializePluginCapabilities,
 } from './plugin-capabilities';
 import { publishPluginMembership } from './plugin-membership';
+import { createPluginMethodController } from './plugin-method-capabilities';
 import { processPlugins } from './plugin-runner';
 import {
   assembleEndpoints,
@@ -204,6 +205,7 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
   // facades read live declarations during factories, then switch atomically to
   // the validated post-factory snapshots before the instance is published.
   const capabilityController = createPluginCapabilityController(plugins);
+  const methodController = createPluginMethodController();
 
   try {
     // Composition check, deliberately not shared with `describeRouteSurface()`:
@@ -236,11 +238,24 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
 
     const auth = createAuthService(db, config, capabilityController.plugins, { logger, telemetry, tokenVerifyDuration });
     const iam = createIamService(db, config, { logger, telemetry });
-    const pluginMethods = processPlugins(plugins, db, config, auth, iam, logger, capabilityController.plugins);
+    processPlugins(
+      plugins,
+      db,
+      config,
+      auth,
+      iam,
+      logger,
+      capabilityController.plugins,
+      methodController,
+    );
 
     // Materialize each known descriptor field exactly once after every factory
-    // returns, then validate and assemble routes from that single candidate view.
+    // returns. Key the method facades from that same candidate view so stateful
+    // descriptor access cannot desynchronize method ownership from routes and
+    // dependencies.
     const materializedPlugins = materializePluginCapabilities(plugins);
+    methodController.materialize(materializedPlugins);
+    const pluginMethods = methodController.methods;
     const { endpoints, endpointOwners } = assembleEndpoints(materializedPlugins);
     // The published route set is the authority for dispatch, the manifest,
     // OpenAPI, and the call tree. Its entries were cloned and frozen during
@@ -427,6 +442,24 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
       },
     };
 
+    // These public bindings are also used by dispatch and adapter helpers. Keep
+    // the single construction-owned method view authoritative even if a caller
+    // attempts to replace a property on the otherwise mutable Fortress object.
+    Object.defineProperties(instance, {
+      plugins: {
+        value: pluginMethods as InferPlugins<T>,
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      },
+      resolvePlugin: {
+        value: resolvePlugin,
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      },
+    });
+
     // Publish only after every startup validation has succeeded. A global-symbol
     // property plus the shared registry keeps the snapshot visible when an
     // instance crosses independently loaded ESM/CJS adapter bundles.
@@ -478,10 +511,12 @@ export function createFortress<const T extends readonly RuntimeFortressPlugin[]>
       plugins: pluginCallTree,
     });
 
+    methodController.activate();
     return instance;
   }
   catch (error) {
     capabilityController.fail();
+    methodController.fail();
     throw error;
   }
 }

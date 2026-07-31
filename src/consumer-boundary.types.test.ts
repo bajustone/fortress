@@ -88,7 +88,7 @@ function acceptsBrandedPluginAtEverySourceBoundary(
   // instantiation; the created instance keeps the plugin brand and precise
   // built-in method surface (ADR 0001 §1).
   expectTypeOf(fortress).toMatchTypeOf<Fortress>();
-  expectTypeOf(fortress.plugins['api-key']).toEqualTypeOf<ApiKeyMethods>();
+  expectTypeOf(fortress.plugins['api-key']).toEqualTypeOf<Readonly<ApiKeyMethods>>();
   expectTypeOf(fortress).toEqualTypeOf<Fortress<readonly [typeof brandedPlugin]>>();
 
   // Dynamic plugin access is `unknown` unless a runtime validator proves the
@@ -96,9 +96,12 @@ function acceptsBrandedPluginAtEverySourceBoundary(
   expectTypeOf(fortress.resolvePlugin('api-key')).toBeUnknown();
   const isApiKeyMethods = (value: unknown): value is ApiKeyMethods =>
     typeof value === 'object' && value !== null;
-  expectTypeOf(fortress.resolvePlugin('api-key', isApiKeyMethods)).toEqualTypeOf<ApiKeyMethods>();
+  const validatedApiKey = fortress.resolvePlugin('api-key', isApiKeyMethods);
+  expectTypeOf(validatedApiKey).toEqualTypeOf<Readonly<ApiKeyMethods>>();
   // @ts-expect-error -- a bare generic assertion without a validator must not compile
   fortress.resolvePlugin<ApiKeyMethods>('api-key');
+  // @ts-expect-error -- validated dynamic method slots are construction-fixed
+  validatedApiKey.createKey = undefined as never;
 
   // Exercise a concrete plugin call through the namespaced tree without
   // deriving the expected type from the instance itself. Ownership is
@@ -133,6 +136,12 @@ function acceptsBrandedPluginAtEverySourceBoundary(
 
   const precisePlugins = fortress.plugins;
   const preciseCall = fortress.call;
+  // @ts-expect-error -- published plugin entries are construction-fixed
+  fortress.plugins['api-key'] = undefined as never;
+  // @ts-expect-error -- published plugin method slots are construction-fixed
+  fortress.plugins['api-key'].createKey = undefined as never;
+  // @ts-expect-error -- dynamic lookup itself is an authoritative fixed binding
+  fortress.resolvePlugin = undefined as never;
   // @ts-expect-error -- the created plugin surface is constructed once and readonly
   fortress.plugins = precisePlugins;
   // @ts-expect-error -- the created call surface is constructed once and readonly

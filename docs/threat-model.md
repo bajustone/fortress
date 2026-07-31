@@ -139,7 +139,24 @@ Mitigations:
 
 Residual risks:
 - Captured plugin code is trusted. Callables retain their original descriptor/hook/middleware receiver for compatibility; state on that receiver, inside a closure, or in any external object the callable chooses to consult remains dynamic.
-- The object returned by `methods()` has a separate identity/dispatch compatibility boundary tracked independently; replacing the descriptor's `methods` factory after construction is already ineffective.
+
+### Plugin method-surface mutation
+
+Threats:
+- A caller adds, removes, or replaces a callable on the object returned by `methods()` after route and dependency validation.
+- Direct plugin APIs, dynamic resolution, dependency lookup, and HTTP dispatch observe different method membership or identities.
+
+Mitigations:
+- After every method factory returns, Fortress captures effective own and inherited properties into one construction-owned method view. String, symbol, non-enumerable, and getter-backed callables are captured; effective inherited accessors are materialized once during construction and a throw fails startup.
+- Frozen per-plugin facades and a frozen null-prototype plugin map are shared by `fortress.plugins`, `resolvePlugin()`, lazy dependency lookup, validation, dispatch, observers, and call-tree termination. Published plugin entries, callable slots, and the `resolvePlugin` binding are shallow-readonly and non-replaceable; closure and receiver-owned state is not frozen.
+- Route handlers and declared dependency methods remain own-callable capabilities; built-in capability resolution can retain inherited prototype methods.
+- Caller-owned method objects remain mutable and unfrozen. Captured calls use the original returned object as receiver so class private fields, receiver state, and closures keep working.
+- A failed construction invalidates lazy lookup and any captured method wrapper before publication.
+
+Residual risks:
+- This fixes Fortress-controlled entry-point membership and directly selected callable identity; it does not sandbox trusted plugin code. A captured method's own `this.other()`, `super.other()`, closure, global, or external-object lookup may still observe later mutation.
+- Published facades intentionally do not preserve source identity, prototype identity, accessor descriptors, `instanceof`, or original function equality.
+- This boundary covers caller-owned objects returned by `methods()` and their authoritative published bindings. Directly replacing unrelated public APIs such as `handleRequest` or generated call-tree functions is ordinary mutation outside this threat boundary; Fortress does not freeze the entire runtime object.
 
 ### Tenancy and data isolation
 
